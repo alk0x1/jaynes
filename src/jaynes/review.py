@@ -47,14 +47,19 @@ class Stage:
     name: str
     state: StageState
     detail: str
+    seconds: float | None = None  # from the step's first event to its last, once it is released
 
 
-def stages(names: Iterable[str], events: list[Event], st: RunState) -> list[Stage]:
+def stages(names: Iterable[str], events: list[Event], st: RunState, now: float) -> list[Stage]:
     """How each step of a run was released, in role order."""
     last_answer: dict[str, str] = {}
     skipped: set[str] = set()
+    span: dict[str, tuple[float, float]] = {}
     for ev in events:
         step = ev.payload.get("step")
+        if step is not None:
+            first = span.get(str(step), (ev.ts, ev.ts))[0]
+            span[str(step)] = (first, ev.ts)
         if ev.type == "StopAnswered":
             last_answer[str(step)] = str(ev.payload["answer"])
         elif ev.type == "StopSkipped":
@@ -62,27 +67,49 @@ def stages(names: Iterable[str], events: list[Event], st: RunState) -> list[Stag
     out: list[Stage] = []
     for name in names:
         s = st.steps.get(name, StepState())
+        took = span[name][1] - span[name][0] if name in span else None
+        tries = f"{s.turns} attempt{'s' if s.turns != 1 else ''}"
         if st.blocked is not None and st.blocked["step"] == name:
-            out.append(Stage(name, "blocked", "blocked"))
+            out.append(Stage(name, "blocked", f"blocked, {tries}"))
         elif s.open_stop is not None:
-            out.append(Stage(name, "waiting", "waiting"))
+            again = f", round {s.round}" if s.round > 1 else ""
+            out.append(Stage(name, "waiting", f"waiting {age(now - s.open_stop[0])}{again}"))
         elif s.in_flight is not None:
-            out.append(Stage(name, "running", f"attempt {s.in_flight['attempt']}"))
+            out.append(Stage(name, "running", f"running, attempt {s.in_flight['attempt']}"))
         elif s.checked is not None:
             answered = last_answer.get(name) if s.resolved else None
             if s.resolved and name in skipped:
-                out.append(Stage(name, "sampled", "sampled"))
+                out.append(Stage(name, "sampled", "not asked, sampled", took))
             elif answered == "accept":
-                out.append(Stage(name, "accepted", "accepted"))
+                out.append(Stage(name, "accepted", "you accepted", took))
             elif answered == "change":
-                out.append(Stage(name, "changed", "changed"))
+                out.append(Stage(name, "changed", "you changed it", took))
             elif s.checked["source"] == "jaynes":
-                out.append(Stage(name, "jaynes", "by jaynes"))
+                out.append(Stage(name, "jaynes", "by jaynes", took))
             else:
-                out.append(Stage(name, "checked", "checked"))
+                out.append(Stage(name, "checked", f"checked, {tries}", took))
         else:
             out.append(Stage(name, "todo", ""))
     return out
+
+
+@dataclass(frozen=True)
+class Totals:
+    turns: int
+    tokens_in: int
+    tokens_out: int
+    seconds: float
+    stops: int
+    answered: int
+
+
+def totals(events: list[Event]) -> Totals:
+    return Totals(turns=sum(1 for ev in events if ev.type == "StepStarted"),
+                  tokens_in=sum(int(ev.payload.get("tokens_in", 0)) for ev in events if ev.type == "TurnFinished"),
+                  tokens_out=sum(int(ev.payload.get("tokens_out", 0)) for ev in events if ev.type == "TurnFinished"),
+                  seconds=events[-1].ts - events[0].ts if events else 0.0,
+                  stops=sum(1 for ev in events if ev.type == "StopOpened"),
+                  answered=sum(1 for ev in events if ev.type == "StopAnswered"))
 
 
 def age(seconds: float) -> str:
@@ -119,10 +146,39 @@ aside { border-right: 1px solid var(--line); display: flex; flex-direction: colu
 .brand nav { margin-left: auto; display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--dim); }
 .brand nav a:hover, .crumbs a:hover { color: var(--ink); }
 .qhead { padding: 14px 18px 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; }
-.item { padding: 12px 18px; border-left: 2px solid transparent; display: grid; gap: 3px; }
-.item:hover { background: var(--panel); }
-.item.on { background: var(--panel-2); border-left-color: var(--amber); }
+.item { padding: 12px 18px; border-left: 2px solid transparent; display: grid; gap: 6px; }
+.item:hover { background: rgba(255, 255, 255, .025); }
+.item.on { border-left-color: var(--amber); padding-bottom: 16px; }
+.item.on:hover { background: none; }
 .item.on.blocked { border-left-color: var(--red); }
+.item.on.idle { border-left-color: var(--blue); }
+.strip { display: flex; gap: 3px; margin-top: 2px; }
+.strip i { width: 14px; height: 4px; border-radius: 2px; background: var(--green); display: block; }
+.strip i.waiting { background: var(--amber); }
+.strip i.blocked { background: var(--red); }
+.strip i.running { background: var(--blue); }
+.strip i.todo { background: var(--line-2); }
+.strip i.sampled { background: none; box-shadow: inset 0 0 0 1px var(--green); }
+.stages { list-style: none; margin: 8px 0 0; padding: 0; }
+.stages li { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding: 5px 0; position: relative; }
+.stages li::before { content: ""; position: absolute; left: 6px; top: 18px; bottom: -6px; width: 1px; background: var(--line-2); }
+.stages li:last-child::before { display: none; }
+.stages .dot { width: 9px; height: 9px; border-radius: 50%; margin: 6px 0 0 2px; background: var(--green); position: relative; z-index: 1; }
+.stages .waiting .dot { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); }
+.stages .blocked .dot { background: var(--red); box-shadow: 0 0 0 4px var(--red-soft); }
+.stages .running .dot { background: var(--blue); box-shadow: 0 0 0 4px var(--blue-soft); }
+.stages .todo .dot { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-2); }
+.stages .sampled .dot { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--green); }
+.stages .accepted .dot, .stages .changed .dot { box-shadow: 0 0 0 3px var(--green-soft); }
+.stages .r { display: flex; justify-content: space-between; gap: 8px; }
+.stages b { font-family: var(--mono); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stages em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.stages small { font-family: var(--mono); font-size: 11px; color: var(--dim); display: block; }
+.stages .todo b { color: var(--faint); font-weight: 400; }
+.stages .waiting b, .stages .waiting small { color: var(--amber); }
+.stages .blocked b, .stages .blocked small { color: var(--red); }
+.foot { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--dim); display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
+.foot b { color: var(--ink); font-weight: 500; text-align: right; }
 .item .t { font-size: 14px; }
 .item .m { font-family: var(--mono); font-size: 11px; color: var(--dim); display: flex; gap: 8px; align-items: center; white-space: nowrap; }
 .item .m .s { overflow: hidden; text-overflow: ellipsis; }
@@ -270,6 +326,22 @@ def timeline(items: list[Stage]) -> str:
         for s in items) + "</div>"
 
 
+def stage_list(items: list[Stage]) -> str:
+    """The open queue item's stages, top to bottom, each with how it was released and how long it took."""
+    rows = "".join(
+        f'<li class="{s.state}"><span class="dot"></span><div><div class="r"><b>{esc(s.name)}</b>'
+        f'<em>{"" if s.seconds is None else "under 1s" if s.seconds < 1 else age(s.seconds)}</em></div>'
+        + (f"<small>{esc(s.detail)}</small>" if s.detail else "") + "</div></li>"
+        for s in items)
+    return f'<ul class="stages">{rows}</ul>'
+
+
+def stage_strip(items: list[Stage]) -> str:
+    """One mark per stage, for queue items that are not open."""
+    return '<div class="strip">' + "".join(
+        f'<i class="{s.state}" title="{esc(s.name)}"></i>' for s in items) + "</div>"
+
+
 # --- the application ---------------------------------------------------------------
 
 @dataclass
@@ -322,18 +394,28 @@ class Review:
         items = self.queue()
         now = self.c.clock()
         rows: list[str] = []
+        foot = ""
         for w in items:
-            on = " on" if selected == (w.run_id, w.step) else ""
+            on = selected == (w.run_id, w.step)
+            events = list(self.c.store.events(run_id=w.run_id))
+            run_stages = stages(self.names(self.role_of(w.run_id), events), events, project(events), now)
             chip = {"stop": '<span class="chip amber">stop</span>', "blocked": '<span class="chip red">blocked</span>',
                     "idle": '<span class="chip blue">idle</span>'}[w.kind]
-            rows.append(f'<a class="item{on} {w.kind}" href="/stop/{q(w.run_id)}/{q(w.step)}">'
+            rows.append(f'<a class="item{" on" if on else ""} {w.kind}" href="/stop/{q(w.run_id)}/{q(w.step)}">'
                         f'<div class="t">{esc(w.task)}</div>'
                         f'<div class="m">{chip}<span class="s">{esc(w.step)}</span>'
-                        f'<span>{age(now - w.since)}</span></div></a>')
+                        f'<span>{age(now - w.since)}</span></div>'
+                        f'{stage_list(run_stages) if on else stage_strip(run_stages)}</a>')
+            if on:
+                t = totals(events)
+                foot = (f'<div class="foot"><span>started</span><b>{age(now - events[0].ts)} ago</b>'
+                        f'<span>turns</span><b>{t.turns}</b>'
+                        f'<span>tokens</span><b>{tokens(t.tokens_in)} in, {tokens(t.tokens_out)} out</b>'
+                        f'<span>you answered</span><b>{t.answered} of {t.stops} stops</b></div>')
         body = "".join(rows) or '<div class="empty-q">Nothing is waiting.</div>'
         return ('<aside><div class="brand"><a href="/">Jaynes</a> <span>review</span><nav>'
                 '<a href="/">Queue</a><a href="/roles">Roles</a><a href="/log">Log</a></nav></div>'
-                f'<div class="qhead"><span>Waiting</span><span>{len(items)}</span></div>{body}</aside>')
+                f'<div class="qhead"><span>Waiting</span><span>{len(items)}</span></div>{body}{foot}</aside>')
 
     # pages ------------------------------------------------------------------
 
@@ -353,12 +435,11 @@ class Review:
         events = list(self.c.store.events(run_id=run_id))
         st = project(events)
         role = self.role_of(run_id)
-        names = self.names(role, events)
         target = next((s for s in role.steps if s.name == step), None) if role else None
         s = st.steps.get(step, StepState())
         crumbs = (f'<div class="crumbs"><span>{esc(w.role)}</span>/<a href="/run/{q(run_id)}">{esc(w.task)}</a>/'
                   f'<b>{esc(step)}</b><span class="r">{esc(self._where(s))}</span></div>')
-        parts = [timeline(stages(names, events, st))]
+        parts: list[str] = []
         if w.kind == "idle":
             log = self.c.home / "runs" / run_id / "continue.log"
             tail = log.read_text(errors="replace")[-1500:] if log.exists() else ""
@@ -429,17 +510,14 @@ class Review:
                  "waiting" if any(x.open_stop for x in st.steps.values()) else
                  "paused" if st.paused_until and st.paused_until > self.c.clock() else
                  "running" if self.c._held(run_id) else "idle")  # pyright: ignore[reportPrivateUsage]
-        tin = sum(int(ev.payload.get("tokens_in", 0)) for ev in events if ev.type == "TurnFinished")
-        tout = sum(int(ev.payload.get("tokens_out", 0)) for ev in events if ev.type == "TurnFinished")
-        turns = sum(1 for ev in events if ev.type == "StepStarted")
-        span = events[-1].ts - events[0].ts
+        t = totals(events)
         crumbs = (f'<div class="crumbs"><a href="/role/{q(str(started.get("role", "")))}">{esc(str(started.get("role", "")))}</a>/'
                   f'<b>{esc(str(started.get("task", "")))}</b><span class="r">{esc(run_id)}</span></div>')
         rows = "".join(self._event_row(ev) for ev in events)
-        body = (timeline(stages(names, events, st))
+        body = (timeline(stages(names, events, st, self.c.clock()))
                 + f'<div class="tiles"><div><div class="n">{esc(state)}</div><p>run</p></div>'
-                f'<div><div class="n">{turns}<small>turns</small></div><p>{tokens(tin)} tokens in, {tokens(tout)} out</p></div>'
-                f'<div><div class="n">{age(span)}</div><p>from start to last event</p></div></div>'
+                f'<div><div class="n">{t.turns}<small>turns</small></div><p>{tokens(t.tokens_in)} tokens in, {tokens(t.tokens_out)} out</p></div>'
+                f'<div><div class="n">{age(t.seconds)}</div><p>from start to last event</p></div></div>'
                 f'<div><div class="label">Events <span><a href="/log?run={q(run_id)}">raw log</a></span></div>'
                 f'<div class="box"><table><tr><th>time</th><th>event</th><th>step</th><th>detail</th></tr>{rows}</table></div></div>')
         main = crumbs + f'<div class="body">{body}</div>'

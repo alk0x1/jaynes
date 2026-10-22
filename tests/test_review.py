@@ -61,7 +61,9 @@ def test_a_stop_answered_from_the_page_continues_the_run(served: tuple[str, Path
     page = get(base + "/")
     assert "Ship &#x27;draft one&#x27;?" in page  # the question, escaped
     assert "draft" in page and "write the draft" in page
-    assert re.search(r'class="step here".*?draft', page, re.S)  # the stage timeline marks where the run waits
+    # the open queue item unfolds into the run's stages, marking where it waits and how earlier ones were released
+    assert re.search(r'<li class="waiting">.*?draft.*?waiting', page, re.S)
+    assert 'class="timeline"' not in page
 
     status, _ = post(base + "/answer", {**form(page), "answer": "accept", "note": ""})
 
