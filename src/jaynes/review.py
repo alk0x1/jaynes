@@ -201,16 +201,6 @@ h2 { font-size: 18px; font-weight: 500; margin: 0; }
 .sub { color: var(--dim); margin-top: 8px; }
 .label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; display: flex; justify-content: space-between; gap: 12px; }
 .label span { text-transform: none; letter-spacing: 0; color: var(--faint); }
-.timeline { display: flex; font-family: var(--mono); font-size: 11px; overflow-x: auto; }
-.step { flex: 1; min-width: 96px; padding: 8px 10px; border: 1px solid var(--line); margin-left: -1px; color: var(--dim); display: grid; gap: 2px; }
-.step:first-child { margin-left: 0; }
-.step b { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.step.done { border-top: 2px solid var(--green); }
-.step.here { border-top: 2px solid var(--amber); background: var(--panel); color: var(--amber); }
-.step.blocked { border-top: 2px solid var(--red); background: var(--panel); color: var(--red); }
-.step.running { border-top: 2px solid var(--blue); color: var(--blue); }
-.step.todo { color: var(--faint); }
-.step.todo b { color: var(--faint); }
 .box { border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-family: var(--mono); font-size: 10.5px; font-weight: 400; color: var(--faint); padding: 9px 16px; }
@@ -317,13 +307,6 @@ def _cell(v: Any, first: bool) -> str:
     if isinstance(v, (int, float)) or (isinstance(v, str) and len(v) <= 24):
         return f'<td class="m">{esc(str(v))}</td>'
     return f"<td>{render_value(v)}</td>"
-
-
-def timeline(items: list[Stage]) -> str:
-    cls = {"waiting": "here", "blocked": "blocked", "running": "running", "todo": "todo"}
-    return '<div class="timeline">' + "".join(
-        f'<div class="step {cls.get(s.state, "done")}"><b>{esc(s.name)}</b>{esc(s.detail) or "&nbsp;"}</div>'
-        for s in items) + "</div>"
 
 
 def stage_list(items: list[Stage]) -> str:
@@ -514,7 +497,7 @@ class Review:
         crumbs = (f'<div class="crumbs"><a href="/role/{q(str(started.get("role", "")))}">{esc(str(started.get("role", "")))}</a>/'
                   f'<b>{esc(str(started.get("task", "")))}</b><span class="r">{esc(run_id)}</span></div>')
         rows = "".join(self._event_row(ev) for ev in events)
-        body = (timeline(stages(names, events, st, self.c.clock()))
+        body = (stage_list(stages(names, events, st, self.c.clock()))
                 + f'<div class="tiles"><div><div class="n">{esc(state)}</div><p>run</p></div>'
                 f'<div><div class="n">{t.turns}<small>turns</small></div><p>{tokens(t.tokens_in)} tokens in, {tokens(t.tokens_out)} out</p></div>'
                 f'<div><div class="n">{age(t.seconds)}</div><p>from start to last event</p></div></div>'

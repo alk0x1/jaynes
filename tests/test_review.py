@@ -78,6 +78,7 @@ def test_a_stop_answered_from_the_page_continues_the_run(served: tuple[str, Path
     assert "Nothing is waiting" in get(base + "/")
     run_page = get(f"{base}/run/{run}")
     assert "accepted" in run_page and "finished" in run_page
+    assert 'class="stages"' in run_page and 'class="timeline"' not in run_page
     role_page = get(base + "/role/stopped")
     assert re.search(r"draft.*?1 label", role_page, re.S)
     assert "StopAnswered" in get(f"{base}/log?run={run}")
