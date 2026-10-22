@@ -5,7 +5,9 @@ description = "AI agents earn autonomy: they act without human approval only whe
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic>=2.9",
+]
 
 [project.scripts]
 jaynes = "jaynes.cli:main"

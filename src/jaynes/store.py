@@ -7,6 +7,9 @@ Events (one row each, payload as JSON):
 * ``Executed``        action_id, ok
 * ``HumanLabeled``    action_id, label (correct | error | context | none), source, note
 
+Conductor events carry a ``run_id`` instead; their payloads are listed in SPEC
+section 8 and written by ``jaynes.conductor``.
+
 State is never stored: the window of a category is the set of labels whose
 decision carried the category's current fingerprint.
 """
@@ -30,11 +33,15 @@ create table if not exists events (
   type text not null,
   action_id text,
   session text,
-  payload text not null
+  payload text not null,
+  run_id text
 );
 create index if not exists events_action on events(action_id);
 create index if not exists events_type on events(type);
 """
+# Logs created before the conductor existed have no run_id column.
+MIGRATE = "alter table events add column run_id text"
+INDEXES = "create index if not exists events_run on events(run_id)"
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,7 @@ class Event:
     action_id: str | None
     session: str | None
     payload: dict[str, Any]
+    run_id: str | None = None
 
 
 class Store:
@@ -55,25 +63,47 @@ class Store:
         self.db = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
         self.db.execute("pragma journal_mode=wal")
         self.db.executescript(SCHEMA)
+        if "run_id" not in {row[1] for row in self.db.execute("pragma table_info(events)")}:
+            try:
+                self.db.execute(MIGRATE)
+            except sqlite3.OperationalError as err:  # another process migrated first
+                if "duplicate column" not in str(err):
+                    raise
+        self.db.execute(INDEXES)
 
     def close(self) -> None:
         self.db.close()
 
     def append(self, type_: str, payload: dict[str, Any], *, action_id: str | None = None,
-               session: str | None = None, ts: float | None = None) -> None:
+               session: str | None = None, run_id: str | None = None, ts: float | None = None) -> None:
         self.db.execute(
-            "insert into events(ts, type, action_id, session, payload) values (?, ?, ?, ?, ?)",
-            (time.time() if ts is None else ts, type_, action_id, session, json.dumps(payload, sort_keys=True)),
+            "insert into events(ts, type, action_id, session, payload, run_id) values (?, ?, ?, ?, ?, ?)",
+            (time.time() if ts is None else ts, type_, action_id, session, json.dumps(payload, sort_keys=True),
+             run_id),
         )
 
-    def events(self, type_: str | None = None) -> Iterator[Event]:
-        q = "select seq, ts, type, action_id, session, payload from events"
-        args: tuple[Any, ...] = ()
+    def append_all(self, rows: Iterable[tuple[str, dict[str, Any], str | None, float | None]]) -> None:
+        """Append (type, payload, run_id, ts) rows in one transaction: all of them or none."""
+        encoded = [(time.time() if ts is None else ts, t, json.dumps(p, sort_keys=True), rid)
+                   for t, p, rid, ts in rows]
+        with self.db:
+            self.db.execute("begin")
+            self.db.executemany("insert into events(ts, type, payload, run_id) values (?, ?, ?, ?)", encoded)
+
+    def events(self, type_: str | None = None, *, run_id: str | None = None) -> Iterator[Event]:
+        q = "select seq, ts, type, action_id, session, payload, run_id from events"
+        where: list[str] = []
+        args: list[Any] = []
         if type_:
-            q += " where type = ?"
-            args = (type_,)
-        for seq, ts, t, aid, sess, payload in self.db.execute(q + " order by seq", args):
-            yield Event(seq, ts, t, aid, sess, json.loads(payload))
+            where.append("type = ?")
+            args.append(type_)
+        if run_id is not None:
+            where.append("run_id = ?")
+            args.append(run_id)
+        if where:
+            q += " where " + " and ".join(where)
+        for seq, ts, t, aid, sess, payload, rid in self.db.execute(q + " order by seq", args):
+            yield Event(seq, ts, t, aid, sess, json.loads(payload), rid)
 
     # --- projections ---------------------------------------------------------
 

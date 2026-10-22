@@ -1,6 +1,9 @@
 """Safety properties of the gate and consistency of the log projection."""
 
 import itertools
+import sqlite3
+from pathlib import Path
+from typing import Any
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -86,3 +89,29 @@ def test_a_certified_category_runs_and_one_error_in_a_small_window_takes_it_back
     assert gate.decide(cat, gate.Window(need - 1, 0), POLICY, not_audited).verdict == "defer"
     assert gate.decide(cat, gate.Window(need, 0), POLICY, not_audited).verdict == "allow"
     assert gate.decide(cat, gate.Window(need + 1, 1), POLICY, not_audited).verdict == "defer"
+
+
+def test_log_from_before_the_conductor_gains_a_run_column(tmp_path: Path) -> None:
+    db = sqlite3.connect(tmp_path / "old.sqlite3")
+    db.executescript("""create table events (seq integer primary key autoincrement, ts real not null,
+        type text not null, action_id text, session text, payload text not null);
+        insert into events(ts, type, action_id, session, payload) values (1, 'Executed', 'a1', 's', '{"ok": true}');""")
+    db.commit()
+    db.close()
+    store = Store(tmp_path / "old.sqlite3")
+    store.append("RunStarted", {"role": "x"}, run_id="r1")
+    assert [(e.type, e.action_id, e.run_id) for e in store.events()] == [("Executed", "a1", None), ("RunStarted", None, "r1")]
+    assert [e.type for e in store.events(run_id="r1")] == ["RunStarted"]
+
+
+def test_append_all_writes_every_row_or_none(tmp_path: Path) -> None:
+    store = Store(tmp_path / "log.sqlite3")
+    rows: list[tuple[str, dict[str, Any], str | None, float | None]] = [
+        ("StopAnswered", {"step": "a"}, "r1", None), ("Checked", {"bad": object()}, "r1", None)]
+    try:
+        store.append_all(rows)
+    except TypeError:
+        pass
+    assert list(store.events()) == []
+    store.append_all(rows[:1] + [("Checked", {"step": "a"}, "r1", None)])
+    assert [e.type for e in store.events(run_id="r1")] == ["StopAnswered", "Checked"]

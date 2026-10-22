@@ -5,21 +5,27 @@
   jaynes history  [--config P]      classify past tool calls from transcripts; audit load estimate
   jaynes parity HOOK [--config P]   compare floors against an existing deny hook on past Bash calls
   jaynes simulate                   Monte Carlo check of the certification guarantee
+  jaynes run --role M:R --task T    start a run of role R from module M
+  jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
 """
 
 from __future__ import annotations
 
 import argparse
 import collections
+import importlib
 import json
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 from jaynes import bounds, gate, hook
+from jaynes.conductor import Conductor, new_run_id
 from jaynes.history import past_calls
-from jaynes.policy import Policy, classify, find_policy, load_policy
+from jaynes.policy import Policy, classify, find_policy, jaynes_home, load_policy
+from jaynes.role import Role
 from jaynes.sim import simulate
 from jaynes.store import Store
 
@@ -143,6 +149,44 @@ def cmd_simulate(args: argparse.Namespace) -> None:
             print(f"{p:>10.1%} {rule:>8} {o.certified_fraction:>10.1%} {med:>14}{flag}")
 
 
+DEFAULT_RUNTIMES = {"claude": "jaynes.runtimes:ClaudeRuntime", "codex": "jaynes.runtimes:CodexRuntime"}
+
+
+def load_ref(ref: str) -> Any:
+    module, _, attr = ref.partition(":")
+    if not module or not attr:
+        sys.exit(f"expected module:attribute, got {ref!r}")
+    return getattr(importlib.import_module(module), attr)
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    home = Path(args.home) if args.home else jaynes_home()
+    c = Conductor(home)
+    if args.id:
+        first = next(iter(c.store.events("RunStarted", run_id=args.id)), None)
+        if first is None:
+            sys.exit(f"no run {args.id} in {home}")
+        if "ref" not in first.payload:
+            sys.exit(f"run {args.id} was started from Python; continue it with Conductor.run")
+        ref, task, extra = str(first.payload["ref"]), str(first.payload["task"]), dict(first.payload["runtimes"])
+        run_id = args.id
+    else:
+        if not args.role or args.task is None:
+            sys.exit("a new run needs --role and --task")
+        ref, task, run_id = args.role, args.task, new_run_id()
+        if any("=" not in pair for pair in args.runtime):
+            sys.exit("--runtime takes name=module:attribute")
+        extra = dict(pair.split("=", 1) for pair in args.runtime)
+    r = load_ref(ref)
+    if not isinstance(r, Role):
+        sys.exit(f"{ref} is not a role")
+    # imported on first use, so a run that never calls an agent needs neither CLI installed
+    c.runtimes = {name: (lambda t=target: load_ref(t)()) for name, target in {**DEFAULT_RUNTIMES, **extra}.items()}
+    result = c.run(r, task, run_id, started={"ref": ref, "runtimes": extra})
+    print(json.dumps({"run": run_id, "status": result.status, "step": result.step, "until": result.until,
+                      "reasons": list(result.reasons)}))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="jaynes")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -167,10 +211,17 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--horizon", type=int, default=2000)
     s.add_argument("--seed", type=int, default=1)
     s.add_argument("--p", type=float, nargs="+", default=[0.0, 0.01, 0.02, 0.03, 0.05, 0.06, 0.08])
+    r = sub.add_parser("run")
+    r.add_argument("id", nargs="?")
+    r.add_argument("--role", help="module:attribute of the role")
+    r.add_argument("--task")
+    r.add_argument("--runtime", action="append", default=[], help="name=module:attribute, overrides a runtime")
+    r.add_argument("--home")
     args = ap.parse_args(argv)
     if args.cmd == "hook":
         return hook.main()
-    {"autonomy": cmd_autonomy, "history": cmd_history, "parity": cmd_parity, "simulate": cmd_simulate}[args.cmd](args)
+    {"autonomy": cmd_autonomy, "history": cmd_history, "parity": cmd_parity, "simulate": cmd_simulate,
+     "run": cmd_run}[args.cmd](args)
     return 0
 
 

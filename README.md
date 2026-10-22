@@ -4,8 +4,8 @@ Make your AI agents follow the method, check what they deliver, and call you
 only where it matters. For people who run a team of agents in Claude Code and
 Codex.
 
-> Status: early. The action gate works today. The step conductor and the
-> review page are being built. See [Status](#status).
+> Status: early. The action gate and the step conductor work today. The
+> review page is being built. See [Status](#status).
 
 ## The problem
 
@@ -83,7 +83,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 |---|---|
 | Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works today |
 | History report and guarantee simulation | Works today |
-| Step conductor for Claude Code and Codex | In progress |
+| Step conductor for Claude Code and Codex: role API, write boundary, checks, retries, resume after a crash, quota pause, stops through the Python API | Works today |
 | Review page | In progress |
 | Judges calibrated on your labels, fewer labels needed | Next |
 
@@ -95,6 +95,12 @@ Read-only, on your own Claude Code history:
 uv sync
 uv run jaynes history --config examples/agent-team.jaynes.toml --days 30
 uv run jaynes simulate
+```
+
+A two-step role through the conductor (uses your Claude Code login, one short turn):
+
+```sh
+PYTHONPATH=. uv run jaynes run --role examples.count_words:ROLE --task "lighthouses in fog"
 ```
 
 To install the action gate as a Claude Code hook, copy a policy to

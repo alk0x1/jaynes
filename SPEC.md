@@ -1,6 +1,6 @@
 # Jaynes specification
 
-Version 0.2, 2026-10-21. Supersedes 0.1, which described only the action gate.
+Version 0.3, 2026-10-21. 0.2 added the conductor design; 0.3 records M2 as built.
 Product framing: `docs/specs/2026-10-21-landing-and-readme-design.md`.
 
 ## 1. Purpose
@@ -18,8 +18,10 @@ It does this in four layers:
 | Attention | A stop asks the person less only when its error rate is shown, with anytime-valid evidence, to be within its budget | Statistical |
 | Safety | Every tool action goes through a gate; floors never run without a person | Deterministic plus statistical audits |
 
-Status: the Safety layer works today for Claude Code (section 9, appendix A).
-Everything else in this document is the design to build next.
+Status: the Safety layer works for Claude Code (section 9, appendix A). The
+Method and Checks layers work through the conductor (sections 4 and 5, appendix
+B). Stops open, skip by audit coin and take answers through the Python API; the
+review page and CLI answers are next (M3).
 
 ## 2. Concepts
 
@@ -32,7 +34,7 @@ Everything else in this document is the design to build next.
 | Output | A JSON document validated against the step's schema |
 | Check | A function from the output and the needed witnesses to a pass or a list of failures |
 | Witness | `Checked[T]`, a record that a step's output of type `T` passed its check, identified by the hash of the output and the check code. Only the conductor creates witnesses |
-| Executor | Who produces the output: an agent (`claude` or `codex`) or Jaynes itself (`run_by="jaynes"`) for evidence an agent could fake |
+| Executor | Who produces the output: an agent (`claude` or `codex`) or Jaynes itself, through a trusted executor function (`run_by=fn`), for evidence an agent could fake |
 | Stop | A step whose output a person must review before the run continues |
 | Answer | The person's response at a stop: `accept`, `change`, `return`, or `context` |
 | Label | The statistical reading of an answer: `accept` is correct; `change` and `return` are errors; `context` is not counted |
@@ -57,11 +59,11 @@ person ── review page (local web) ── answers
 
 | Component | Responsibility | Status |
 |---|---|---|
-| Role definitions | Python modules declaring steps, schemas, checks and stops | to build |
-| Conductor | Runs a task through a role, one step at a time; owns workspaces, write boundaries, retries and resumption | to build |
-| Runtimes | Run one bounded agent turn in a workspace: Claude Code (`claude -p`) and Codex (app server) | to build; prototype exists in the first user's factory |
-| Trusted executors | Steps Jaynes runs itself, such as a read-only browser walkthrough or the test suite | to build |
-| Event log | Append-only record of everything; all state is a projection | works (`jaynes.store`), to extend |
+| Role definitions | Python modules declaring steps, schemas, checks and stops | works (`jaynes.role`) |
+| Conductor | Runs a task through a role, one step at a time; owns workspaces, write boundaries, retries and resumption | works (`jaynes.conductor`) |
+| Runtimes | Run one bounded agent turn in a workspace: Claude Code (`claude -p`) and Codex (`codex exec`) | works (`jaynes.runtimes`) |
+| Trusted executors | Steps Jaynes runs itself, such as a read-only browser walkthrough or the test suite | the mechanism works; no executors shipped yet |
+| Event log | Append-only record of everything; all state is a projection | works (`jaynes.store`), conductor events keyed by `run_id` |
 | Attention engine | Decides, per stop, mandatory, sampled, or refuted | works (`jaynes.bounds`, `jaynes.gate`) |
 | Review page | Local web page where stops wait for answers | to build |
 | Action gate | Claude Code hook that classifies and gates each tool call | works |
@@ -78,15 +80,15 @@ from pydantic import BaseModel
 class Moments(BaseModel):
     moments: list[Moment]            # each cites snapshot evidence
 
-design = role("screen-design", agent="codex", method="method.md")
+design = role("screen-design", agent="codex", method=Path("method.md"))
 
-snapshot = design.step("snapshot", output=Snapshot, run_by="jaynes")
+snapshot = design.step("snapshot", output=Snapshot, run_by=take_snapshot)
 moments  = design.step("moments", output=Moments, needs=[snapshot],
                        check=cites_snapshot, stop=stop(budget=0.20))
 objects  = design.step("object-map", output=ObjectMap, needs=[moments, snapshot],
                        check=[cites_snapshot, counts_match_data], stop=stop(budget=0.20))
 paths    = design.step("paths", output=Paths, needs=[objects])
-walk     = design.step("walkthrough", output=Captures, needs=[paths], run_by="jaynes")
+walk     = design.step("walkthrough", output=Captures, needs=[paths], run_by=walk_paths)
 breaks   = design.step("breaks", output=Breaks, needs=[walk], check=breaks_cite_captures)
 reqs     = design.step("requirements", output=Requirements, needs=[breaks],
                        check=one_requirement_per_break, stop=stop(budget=0.10))
@@ -97,12 +99,20 @@ accept   = design.step("accept", needs=[build], stop=stop(budget=0.05, sampled=F
 
 Rules:
 
-- `needs` must form a directed acyclic graph; v0 runs it in topological order,
-  one step at a time.
-- A check returns `Pass` or `Fail(reasons)`. Reasons are shown to the agent on
-  retry and to the person at a stop.
-- A step with `run_by="jaynes"` names a trusted executor; the agent never
-  writes its output.
+- A step can only need steps defined before it, so `needs` is acyclic by
+  construction and v0 runs steps in definition order, one at a time.
+- A check is `check(output, needs) -> Pass() | Fail(*reasons)`, where
+  `needs[step]` is that step's `Checked` witness. Reasons are shown to the
+  agent on retry and to the person at a stop. A check that raises, or returns
+  anything other than `Pass` or `Fail`, counts as a failure.
+- `method` is the method text, or a `Path` to it; a relative path is resolved
+  next to the module that calls `role`.
+- `run_by=fn` makes the step a trusted executor: Jaynes calls
+  `fn(StepContext(run_id, task, needs, workspace))` and the agent never writes
+  its output. The function's source is part of the step's fingerprint.
+- A step with no `output` is a pure stop over its needs, like `accept` above.
+- Per step: `agent` overrides the role's agent, `max_turns` (default 3),
+  `deadline` in seconds per turn (default 900).
 - `stop(budget, sampled=True, audit_rate=0.1)`: `sampled=False` makes it a
   floor.
 - The role's prompt for each agent step is built from the method text, the
@@ -113,23 +123,30 @@ Rules:
 
 For each step, the conductor:
 
-1. **Prepares a workspace**: a fresh directory containing read-only copies of
-   the needed outputs and any snapshot data, plus the empty output path. It
-   records a manifest (path and hash of every file).
+1. **Prepares a workspace**: a fresh directory `runs/<run>/<step>/turn-<k>/workspace`
+   containing `step.json`, read-only copies of the needed outputs in
+   `inputs/<step>.json` and, after a `return`, the returned output in
+   `inputs/previous.json`. A sibling `scratch` directory is the turn's TMPDIR.
+   It records a manifest: every file, directory and symlink with its hash.
 2. **Runs one agent turn** through the runtime, with a deadline and a token
    meter read from the runtime, never from the agent's own report.
    - Claude Code: `claude -p` with settings that allow writes only inside the
      workspace, OS sandbox on, no network tools, no subagents, permission mode
      `dontAsk`.
-   - Codex: app server thread with `workspaceWrite` sandbox rooted at the
-     workspace and network off.
+   - Codex: `codex exec --json` with the `workspace-write` sandbox rooted at the
+     workspace, network off, user config, rules and project docs ignored,
+     ephemeral session. The app server (which can read the quota before a turn
+     and names the model) is the production path; `exec` was chosen as the
+     smallest verified slice. `exec` does not name the model, so the stop
+     fingerprint uses the pinned model or, without one, the CLI version.
 3. **Enforces the write boundary**: after the turn, any created, changed or
    deleted file other than the output path invalidates the turn. The runtime
    sandbox prevents most violations; the manifest catches the rest.
 4. **Validates**: parse the output, validate the schema, run the check against
    the output and the needed witnesses.
 5. **Retries** up to `max_turns` (default 3) with the failures appended to the
-   prompt. After that the run is `BLOCKED` and appears in the review page.
+   prompt. A runtime failure or a missed deadline counts as a rejected turn.
+   After that the run is `BLOCKED` and appears in the review page.
 6. **Records the witness**: `Checked[T]` with the output hash and the check
    code hash.
 7. **Opens the stop**, if the step has one (section 6).
@@ -137,13 +154,29 @@ For each step, the conductor:
 Trusted executors follow steps 1, 4, 6 and 7; they have no write boundary to
 enforce because Jaynes wrote them.
 
-Durability: every transition is an event. `jaynes run <id>` after a crash, a
-quota pause or a reboot resumes from the last recorded witness. A turn that
-was in flight is discarded and rerun; its partial workspace is kept for
-inspection.
+Durability: every transition is an event, and the conductor's only state is
+the fold of a run's events. `jaynes run <id>` after a crash, a quota pause or a
+reboot resumes from the log. A turn that was in flight is recorded as
+`TurnInterrupted`, does not count as an attempt, and is rerun in a new
+workspace; the old workspace is kept for inspection. A lock file keeps two
+processes off the same run. A `change` answer and the witness of the edited
+output are written in one transaction, so a crash cannot keep the label and
+drop the edit.
 
-Quota: before each turn, the runtime's quota reading is checked. A turn that
-would start inside an exhausted window pauses the run until the window resets.
+Quota: a runtime that reports an exhausted window raises a quota error; the
+turn is interrupted (not counted) and the run pauses until the reported reset,
+or 30 minutes when none is reported. Before each turn the conductor checks the
+latest pause for that agent across all runs, so no turn starts inside a window
+known to be exhausted.
+
+Known limits of v0: `kill -9` of the conductor leaves the agent process (its
+own session) running until its deadline, writing only into the abandoned
+workspace; nothing restarts a paused run by itself, it continues when
+`jaynes run <id>` is called after the reset; outputs are JSON only, without
+attached files; the action gate is not installed inside conductor turns yet
+(hooks are off in the turn settings); resuming a run does not check that the
+role's fingerprint is unchanged; `OutcomeObserved` (section 6.2) is not
+recorded yet.
 
 ## 6. Stops and attention
 
@@ -245,15 +278,16 @@ Conductor events:
 
 | Event | Payload |
 |---|---|
-| `RunStarted` | role, task, role fingerprint |
-| `StepStarted` | step, attempt, executor, workspace manifest hash |
-| `TurnFinished` | step, attempt, files changed, tokens in and out from the runtime meter, seconds |
-| `TurnRejected` | step, attempt, reason: `write_boundary`, `schema`, `check`, `deadline` |
-| `Checked` | step, output hash, check hash |
-| `StopOpened` | step, status, coin, n, k, evidence |
-| `StopSkipped` | step, status `certified`, coin |
-| `StopAnswered` | step, answer, label, note, seconds waited, seconds spent |
-| `RunPaused` | reason `quota`, until |
+| `RunStarted` | role, task, role fingerprint, role reference and runtime overrides (for `jaynes run <id>`) |
+| `StepStarted` | step, round, attempt, executor, workspace manifest hash |
+| `TurnFinished` | step, attempt, files changed, tokens in and out from the runtime meter, model, seconds |
+| `TurnRejected` | step, attempt, reason: `write_boundary`, `schema`, `check`, `deadline`, `runtime`, `executor`; reasons |
+| `TurnInterrupted` | step, attempt, reason `crash` or `quota`; not an attempt |
+| `Checked` | step, round, attempt, output hash, check hash, source (agent, `jaynes`, `person`), model |
+| `StopOpened` | step, round, status, coin, n, k, log evidence, stop fingerprint |
+| `StopSkipped` | step, status `certified`, coin, stop fingerprint |
+| `StopAnswered` | step, answer, label, note, stop fingerprint, seconds waited, seconds spent |
+| `RunPaused` | reason `quota`, agent, until |
 | `RunBlocked` | step, reasons |
 | `RunFinished` | outcome |
 | `OutcomeObserved` | step, kind `changed_after_delivery`, evidence |
@@ -306,7 +340,7 @@ an error rate stated per stop.
 | Milestone | Scope | Exit evidence |
 |---|---|---|
 | M1, done | Action gate, bounds, history report, simulation | Appendix A |
-| M2 | Conductor, role API, both runtimes, write boundary, durability, quota pause | A role with a fake agent passes property tests (no step without its witnesses, no turn accepted after an out-of-bounds write, resume after `kill -9` reproduces the same events); one real step each with Claude Code and Codex |
+| M2, done | Conductor, role API, both runtimes, write boundary, durability, quota pause | Appendix B |
 | M3 | Review page and CLI answers | A run waits at a stop, is answered from the page, and continues; labels land in the window |
 | M4 | `screen-design` role on the first user's product | Two screens end to end with real stops; measures from section 10 recorded |
 | M5 | Dogfood | Several weeks of use; at least one stop certified with real labels; comparison against the baseline |
@@ -328,6 +362,8 @@ outbound integrations.
 - Whether `change` answers should feed the agent's examples for the step
   automatically.
 - Turn deadline and `max_turns` defaults per step type.
+- Whether resuming a run whose role fingerprint changed should continue, block,
+  or restart the affected steps.
 
 ## Appendix A. M1 evidence
 
@@ -343,3 +379,19 @@ outbound integrations.
 
 Not yet verified: the transcript record when a person answers a hook-forced
 prompt in an interactive session.
+
+## Appendix B. M2 evidence
+
+| Criterion | Result |
+|---|---|
+| Generated roles (1 to 5 steps, random needs, stops, `max_turns`) with an agent drawing from valid, failing check, invalid JSON, stray write, edited input, no output, crash and timeout, and drawn answers at stops | 300 cases, pass: no step started without the checked and reviewed outputs it needs; every turn that wrote outside its output (by the drawn behaviour, not the conductor's report) was rejected for the write boundary and never checked; every witness hash matches its stored bytes; turns per round within `max_turns`; settled runs are stable |
+| Same generator, the log made to fail at a random write (a stand-in for SIGKILL that no handler catches), then a fresh conductor resumes | 300 cases, pass: same final status and the same events as an uninterrupted run, except each interrupted turn (`StepStarted` through `TurnInterrupted`) |
+| `jaynes run` killed with SIGKILL mid-turn, then `jaynes run <id>` (one fixed kill point, real processes) | same events except the interrupted turn; old workspace kept |
+| The property tests catch seeded faults (seeded by hand during development, not kept as a script) | write boundary removed, `max_turns` off by one, stops ignored, interrupted turn not marked, a change written as two separate writes: each fails |
+| Stops | waits and continues on accept; change rechecked and replaces the output; return reruns with the note; context not counted; certified stop waits exactly when the coin is under `audit_rate`; floor waits after 20 clean labels; repeated errors refute; a changed check opens a new window |
+| Quota | pause without spending an attempt; another run on the same agent pauses too; resumes after the reset |
+| One real step, Claude Code 2.1.307 | finished in one turn, 6.7 s, 42,492 tokens in, 346 out, model `claude-sonnet-5-5` from the meter |
+| One real step, Codex CLI 0.162.1 | finished in one turn, 16.5 s, 59,004 tokens in, 344 out |
+| Escape probe, both runtimes, the agent told to write `../` by shell and by file tool, and `~/` by shell | none written; the file inside the workspace written |
+| End to end by hand, `jaynes run --role examples.count_words:ROLE` with Claude Code | trusted step then agent step, finished; rerun of the finished run added no events |
+| `pytest`, `pyright --strict` | 75 pass plus 4 live tests opt-in with `JAYNES_LIVE` (all 4 pass when run), 0 errors |
