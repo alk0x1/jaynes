@@ -21,6 +21,8 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
+import sys
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
@@ -49,6 +51,20 @@ class RunResult:
     status: Literal["finished", "waiting", "blocked", "paused"]
     step: str | None = None
     until: float | None = None
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Waiting:
+    """Something in the queue: a stop waiting for its answer, or a blocked run."""
+
+    run_id: str
+    kind: Literal["stop", "blocked", "idle"]  # idle: unfinished, not waiting, and no process holds it
+    step: str
+    since: float
+    role: str
+    task: str
+    question: str | None = None
     reasons: tuple[str, ...] = ()
 
 
@@ -172,6 +188,16 @@ def canonical(value: BaseModel) -> bytes:
                       ensure_ascii=False).encode()
 
 
+def continue_in_background(home: Path, run_id: str) -> subprocess.Popen[bytes]:
+    """Start ``jaynes run <id>`` detached, logging to ``runs/<id>/continue.log``."""
+    log_path = Path(home) / "runs" / run_id / "continue.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [os.getcwd(), os.environ.get("PYTHONPATH")])))
+    with log_path.open("ab") as log:
+        return subprocess.Popen([sys.executable, "-m", "jaynes.cli", "run", "--home", str(home), run_id],
+                                stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, start_new_session=True)
+
+
 def coin(run_id: str, step: str) -> float:
     """Deterministic uniform draw per run and step, so a replay reproduces every decision."""
     h = hashlib.sha256(f"{run_id}:{step}".encode()).digest()
@@ -216,6 +242,8 @@ class Conductor:
         """Record the person's answer at an open stop. ``change`` needs the edited output, which must pass the checks."""
         if answer not in LABELS:
             raise ValueError(f"unknown answer {answer!r}")
+        if answer in ("return", "context") and not (note or "").strip():
+            raise AnswerRejected([f"{answer} needs a note for the agent"])
         with self._lock(run_id):
             st = project(self.store.events(run_id=run_id))
             s = st.step(step)
@@ -250,6 +278,41 @@ class Conductor:
             return None
         return step.output.model_validate_json(self._object(str(checked["output_hash"])))
 
+    def queue(self, idle_after: float = 10.0) -> list[Waiting]:
+        """Stops waiting, blocked runs and idle runs, oldest first.
+
+        A run counts as idle only after ``idle_after`` seconds without events, so one that a background
+        process is about to pick up after an answer does not flicker into the queue.
+        """
+        items: list[Waiting] = []
+        for run_id in self.store.runs():
+            events = list(self.store.events(run_id=run_id))
+            st = project(events)
+            if st.started is None or st.finished:
+                continue
+            role, task = str(st.started["role"]), str(st.started["task"])
+            if st.blocked is not None:
+                since = max(e.ts for e in events if e.type == "RunBlocked")
+                items.append(Waiting(run_id, "blocked", str(st.blocked["step"]), since, role, task,
+                                     reasons=tuple(st.blocked["reasons"])))
+            opened = [(name, s.open_stop) for name, s in st.steps.items() if s.open_stop is not None]
+            for name, (opened_at, payload) in opened:
+                items.append(Waiting(run_id, "stop", name, opened_at, role, task, payload.get("question")))
+            paused = st.paused_until is not None and st.paused_until > self.clock()
+            quiet = self.clock() - events[-1].ts >= idle_after
+            if st.blocked is None and not opened and not paused and quiet and not self._held(run_id):
+                step = next((str(ev.payload["step"]) for ev in reversed(events) if "step" in ev.payload), "")
+                items.append(Waiting(run_id, "idle", step, events[-1].ts, role, task))
+        return sorted(items, key=lambda w: w.since)
+
+    def _held(self, run_id: str) -> bool:
+        """Whether a process holds the run's lock right now."""
+        try:
+            with self._lock(run_id):
+                return False
+        except RunBusy:
+            return True
+
     def window(self, fingerprint: str) -> Window:
         """Labels recorded under a stop fingerprint, across all runs."""
         n = k = 0
@@ -280,7 +343,7 @@ class Conductor:
             if s.open_stop is not None:
                 return RunResult("waiting", step.name)
             if s.checked is not None:
-                self._decide_stop(run_id, step, s)
+                self._decide_stop(run_id, step, s, st)
                 return None
             if s.attempts >= step.max_turns:
                 self._emit(run_id, "RunBlocked", {"step": step.name, "reasons": list(s.reasons)})
@@ -354,7 +417,7 @@ class Conductor:
         self._accept(run_id, step, s, value, source=step.executor, model=model, attempt=attempt)
         return None
 
-    def _decide_stop(self, run_id: str, step: Step[Any], s: StepState) -> None:
+    def _decide_stop(self, run_id: str, step: Step[Any], s: StepState, st: RunState) -> None:
         assert step.stop is not None and s.checked is not None
         fp = step.stop_fingerprint(str(s.checked["model"]))
         w = self.window(fp)
@@ -370,13 +433,25 @@ class Conductor:
             status = "undetermined"
         u = coin(run_id, step.name)
         if status == "certified" and u >= sp.audit_rate:
-            self._emit(run_id, "StopSkipped", {"step": step.name, "status": status, "coin": u, "fingerprint": fp})
+            self._emit(run_id, "StopSkipped", {"step": step.name, "status": status, "coin": u, "fingerprint": fp,
+                                               "budget": sp.budget, "delta": sp.delta})
             return
         self._emit(run_id, "StopOpened", {
             "step": step.name, "round": s.round, "status": status, "coin": u, "n": n, "k": k,
-            "log_e": bounds.log_certify_evalue(n, k, sp.budget) if n else 0.0, "fingerprint": fp})
+            "log_e": bounds.log_certify_evalue(n, k, sp.budget) if n else 0.0, "fingerprint": fp,
+            "budget": sp.budget, "delta": sp.delta, "question": self._question(step, s, st)})
 
     # helpers ------------------------------------------------------------------
+
+    def _question(self, step: Step[Any], s: StepState, st: RunState) -> str | None:
+        if step.question is None or s.checked is None:
+            return None
+        value = None if step.output is None else step.output.model_validate_json(
+            self._object(str(s.checked["output_hash"])))
+        try:
+            return str(step.question(value, self._witnesses(step, st)))[:2000]
+        except Exception as err:  # a broken question must not hide the stop
+            return f"(the step's question failed: {type(err).__name__}: {err})"[:500]
 
     def prompt(self, role: Role, step: Step[Any], task: str, s: StepState) -> str:
         lines: list[str] = []

@@ -108,6 +108,7 @@ class Step(Generic[T]):
     instructions: str
     max_turns: int
     deadline: float  # seconds per turn
+    question: Callable[[Any, Witnesses], str] | None = None  # what the person is asked at the stop
 
     @property
     def executor(self) -> str:
@@ -131,7 +132,8 @@ class Step(Generic[T]):
     def stop_fingerprint(self, model: str) -> str:
         assert self.stop is not None
         s = self.stop
-        return _sha("\0".join([self.role.name, self.name, self.prompt_hash(), self.check_hash(),
+        question = [code_hash(self.question)] if self.question else []  # absent, so older windows are kept
+        return _sha("\0".join([self.role.name, self.name, self.prompt_hash(), self.check_hash(), *question,
                                repr(s.budget), repr(s.delta), repr(s.sampled), model]))[:16]
 
 
@@ -148,7 +150,8 @@ class Role:
     def step(self, name: str, output: type[T] | None = None, *, needs: Sequence[Step[Any]] = (),
              check: Check | Sequence[Check] = (), stop: Stop | None = None,
              run_by: Callable[[StepContext], T] | None = None, agent: str | None = None,
-             instructions: str = "", max_turns: int = 3, deadline: float = 900.0) -> Step[T]:
+             instructions: str = "", max_turns: int = 3, deadline: float = 900.0,
+             question: Callable[[T, Witnesses], str] | None = None) -> Step[T]:
         if any(s.name == name for s in self.steps):
             raise ValueError(f"step {name!r} defined twice")
         for n in needs:
@@ -158,9 +161,11 @@ class Role:
             raise ValueError(f"step {name!r} has an executor but no output type")
         if output is None and stop is None:
             raise ValueError(f"step {name!r} has no output and no stop; it would do nothing")
+        if question is not None and stop is None:
+            raise ValueError(f"step {name!r} has a question but no stop to ask it at")
         checks = tuple(cast(Sequence[Check], check)) if isinstance(check, Sequence) else (check,)
         s: Step[T] = Step(self, name, output, tuple(needs), checks, stop, run_by, agent or self.agent,
-                          instructions, max_turns, deadline)
+                          instructions, max_turns, deadline, cast(Callable[[Any, Witnesses], str] | None, question))
         self.steps.append(s)
         return s
 

@@ -1,6 +1,6 @@
 # Jaynes specification
 
-Version 0.3, 2026-10-21. 0.2 added the conductor design; 0.3 records M2 as built.
+Version 0.4, 2026-10-22. 0.2 added the conductor design; 0.3 recorded M2 as built; 0.4 records M3.
 Product framing: `docs/specs/2026-10-21-landing-and-readme-design.md`.
 
 ## 1. Purpose
@@ -20,8 +20,9 @@ It does this in four layers:
 
 Status: the Safety layer works for Claude Code (section 9, appendix A). The
 Method and Checks layers work through the conductor (sections 4 and 5, appendix
-B). Stops open, skip by audit coin and take answers through the Python API; the
-review page and CLI answers are next (M3).
+B). Stops open, skip by audit coin, and take answers from the review page, the
+CLI or the Python API; after an answer the run continues by itself (appendix C).
+Runs started from Python, without a role reference, are answered from Python.
 
 ## 2. Concepts
 
@@ -65,7 +66,7 @@ person ── review page (local web) ── answers
 | Trusted executors | Steps Jaynes runs itself, such as a read-only browser walkthrough or the test suite | the mechanism works; no executors shipped yet |
 | Event log | Append-only record of everything; all state is a projection | works (`jaynes.store`), conductor events keyed by `run_id` |
 | Attention engine | Decides, per stop, mandatory, sampled, or refuted | works (`jaynes.bounds`, `jaynes.gate`) |
-| Review page | Local web page where stops wait for answers | to build |
+| Review page | Local web page where stops wait for answers | works (`jaynes.review`) |
 | Action gate | Claude Code hook that classifies and gates each tool call | works |
 
 ## 4. Role definition
@@ -113,6 +114,10 @@ Rules:
 - A step with no `output` is a pure stop over its needs, like `accept` above.
 - Per step: `agent` overrides the role's agent, `max_turns` (default 3),
   `deadline` in seconds per turn (default 900).
+- `question=fn(output, needs) -> str` writes what the person is asked at the
+  stop. It is recorded in `StopOpened` and is part of the stop's fingerprint.
+  Without it the page asks whether the output is right, or, for a step with
+  no output, whether the person accepts the result of the steps it needs.
 - `stop(budget, sampled=True, audit_rate=0.1)`: `sampled=False` makes it a
   floor.
 - The role's prompt for each agent step is built from the method text, the
@@ -216,7 +221,8 @@ shown on the role page; it does not enter the window in v0.
 
 A stop's labels count only under its current fingerprint: hash of the role
 name, the step's prompt inputs (method text, instructions, schema), its check
-code, the stop's budget and δ, and the agent model. Changing any of them opens
+code, the code of its question function when it has one, the stop's budget and
+δ, and the agent model. Changing any of them opens
 a new window. This is the declared-change half of the stationarity assumption.
 
 ### 6.4 The guarantee
@@ -254,20 +260,35 @@ planned in section 11.
 
 ## 7. Review page
 
-A local web server started with `jaynes review`, bound to 127.0.0.1.
+A local web server started with `jaynes review` (port 8740), bound to
+127.0.0.1, built with the standard library. The layout keeps the queue on the
+left and the open item on the right; every page shows the run's steps in
+order with how each was released (`by jaynes`, `checked`, `accepted`,
+`changed`, `sampled`, `waiting`, `blocked`).
 
 | View | Content |
 |---|---|
-| Queue | Stops waiting, blocked runs, oldest first |
-| Stop | The question generated from the step output, the evidence it cites, check results, the before and after where relevant; answer buttons; a note field |
-| Run | Step timeline with witnesses, refusals, turns, tokens and time |
-| Role | Per stop: status, labels, evidence against the threshold, audit history; per week: steps fulfilled, rounds until acceptance, tokens per task, the person's minutes |
-| Log | The raw event stream, filterable |
+| Queue (`/`) | Stops waiting, blocked runs, and idle runs (unfinished, not waiting, no process holds them, no event for 10 s), oldest first; the oldest opens. An idle run shows the end of its `continue.log` and a Continue button |
+| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, and no Change |
+| Blocked | The last rejection reasons and the turns of the round |
+| Run (`/run/<run>`) | Step timeline, state, turns, tokens, time, every event; witnesses by output hash |
+| Role (`/role/<name>`) | Per stop: status, labels, evidence against 1/δ with the budget and δ logged at the stop, audits and skips, and each audit with its answer; per week: runs, distinct steps checked, rounds until accepted, tokens per finished run, the person's minutes; the runs |
+| Log (`/log`) | The latest 500 events, payloads cut at 600 characters, filterable by type and run |
 
-The CLI mirrors the essentials: `jaynes queue`, `jaynes answer <run> <step>
-accept|change|return|context [--note]`.
+After an answer the server starts `jaynes run <id>` in the background, logging
+to `runs/<id>/continue.log`, and the page reloads when the log grows, unless
+the person is typing. Return and context need a note, from every entry point.
+The person's minutes are the time from the first view of the open stop to the
+answer, across reloads; answers from the CLI record none. Role modules are
+imported once per server; restart it after editing a role.
 
-The visual language follows `site/index.html`.
+Answers are accepted only with the server's per-process token and a local
+Host and Origin, so another site open in the same browser cannot answer a
+stop or send a run on.
+
+The CLI mirrors the essentials: `jaynes queue`, and `jaynes answer <run>
+<step> accept|change|return|context [--note] [--output JSON|@file]`, which
+also continues the run.
 
 ## 8. Events
 
@@ -284,8 +305,8 @@ Conductor events:
 | `TurnRejected` | step, attempt, reason: `write_boundary`, `schema`, `check`, `deadline`, `runtime`, `executor`; reasons |
 | `TurnInterrupted` | step, attempt, reason `crash` or `quota`; not an attempt |
 | `Checked` | step, round, attempt, output hash, check hash, source (agent, `jaynes`, `person`), model |
-| `StopOpened` | step, round, status, coin, n, k, log evidence, stop fingerprint |
-| `StopSkipped` | step, status `certified`, coin, stop fingerprint |
+| `StopOpened` | step, round, status, coin, n, k, log evidence, stop fingerprint, budget, δ, question |
+| `StopSkipped` | step, status `certified`, coin, stop fingerprint, budget, δ |
 | `StopAnswered` | step, answer, label, note, stop fingerprint, seconds waited, seconds spent |
 | `RunPaused` | reason `quota`, agent, until |
 | `RunBlocked` | step, reasons |
@@ -341,7 +362,7 @@ an error rate stated per stop.
 |---|---|---|
 | M1, done | Action gate, bounds, history report, simulation | Appendix A |
 | M2, done | Conductor, role API, both runtimes, write boundary, durability, quota pause | Appendix B |
-| M3 | Review page and CLI answers | A run waits at a stop, is answered from the page, and continues; labels land in the window |
+| M3, done | Review page and CLI answers | Appendix C |
 | M4 | `screen-design` role on the first user's product | Two screens end to end with real stops; measures from section 10 recorded |
 | M5 | Dogfood | Several weeks of use; at least one stop certified with real labels; comparison against the baseline |
 | M6 | Judges with prediction-powered and active inference | A simulation on the first user's labels shows fewer labels for the same guarantee before anything ships |
@@ -364,6 +385,9 @@ outbound integrations.
 - Turn deadline and `max_turns` defaults per step type.
 - Whether resuming a run whose role fingerprint changed should continue, block,
   or restart the affected steps.
+- What `return` means at a stop with no output, such as `accept`: today it
+  only reopens the same stop; it should probably rerun the steps it needs,
+  which v0 cannot do because downstream steps never rerun.
 
 ## Appendix A. M1 evidence
 
@@ -395,3 +419,17 @@ prompt in an interactive session.
 | Escape probe, both runtimes, the agent told to write `../` by shell and by file tool, and `~/` by shell | none written; the file inside the workspace written |
 | End to end by hand, `jaynes run --role examples.count_words:ROLE` with Claude Code | trusted step then agent step, finished; rerun of the finished run added no events |
 | `pytest`, `pyright --strict` | 75 pass plus 4 live tests opt-in with `JAYNES_LIVE` (all 4 pass when run), 0 errors |
+
+## Appendix C. M3 evidence
+
+| Criterion | Result |
+|---|---|
+| A run waits at a stop, is answered from the page over HTTP, and continues | pass: the answer is recorded with its label and the person's seconds, the run finishes in the background, the queue empties, and the run, role and log pages show it |
+| Change from the page | invalid JSON refused with the reason; a valid edit is checked and replaces the output (`source: person`) |
+| Return without a note | refused, nothing recorded |
+| Answers from another site | wrong token, foreign Origin or foreign Host: 403, nothing recorded |
+| CLI | `jaynes queue` lists the stop with its question; `jaynes answer ... change --output` records it and the run finishes in the background |
+| By hand in Chrome, `examples.review_demo` with two runs | R with an empty note asks for the note; Return with a note reruns the step as round 2 and the page moves to the next item; A accepts and the run continues to the `accept` floor, which shows the result of `implement` without Change; Accept finishes the run; the role page shows 2 labels and 1 error on `requirements` |
+| Reviewed before commit (standards and spec) | fixed: stop fingerprints without a question changed, resetting every window (a test pins the M2 value); return and context without a note passed the CLI and API; time spent restarted on reload; a run whose continuation failed vanished from the queue (now idle, with Continue); a busy run, a malformed request or a server error got no answer; path segments unquoted in links |
+| `jaynes hook` cost | importing the CLI 38 ms, against 49 ms at M2: the conductor is imported only by the commands that use it |
+| `pytest`, `pyright --strict` | 90 pass plus 4 live tests opt-in, 0 errors |

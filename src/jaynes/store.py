@@ -105,6 +105,17 @@ class Store:
         for seq, ts, t, aid, sess, payload, rid in self.db.execute(q + " order by seq", args):
             yield Event(seq, ts, t, aid, sess, json.loads(payload), rid)
 
+    def max_seq(self) -> int:
+        return int(self.db.execute("select coalesce(max(seq), 0) from events").fetchone()[0])
+
+    def kinds(self) -> list[str]:
+        return sorted(str(r[0]) for r in self.db.execute("select distinct type from events"))
+
+    def runs(self) -> list[str]:
+        """Conductor runs in the order they started."""
+        rows = self.db.execute("select run_id from events where type = 'RunStarted' order by seq").fetchall()
+        return [str(r[0]) for r in rows]
+
     # --- projections ---------------------------------------------------------
 
     def window(self, fingerprint: str) -> Window:

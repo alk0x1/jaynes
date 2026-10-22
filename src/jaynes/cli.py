@@ -7,6 +7,9 @@
   jaynes simulate                   Monte Carlo check of the certification guarantee
   jaynes run --role M:R --task T    start a run of role R from module M
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
+  jaynes queue                      stops waiting for an answer and blocked runs, oldest first
+  jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
+  jaynes review [--port 8740]       the review page on 127.0.0.1: queue, stops, runs, roles, log
 """
 
 from __future__ import annotations
@@ -19,15 +22,17 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jaynes import bounds, gate, hook
-from jaynes.conductor import Conductor, new_run_id
 from jaynes.history import past_calls
 from jaynes.policy import Policy, classify, find_policy, jaynes_home, load_policy
-from jaynes.role import Role
 from jaynes.sim import simulate
 from jaynes.store import Store
+
+if TYPE_CHECKING:  # the conductor pulls in pydantic; `jaynes hook` runs on every tool call and needs none of it
+    from jaynes.conductor import Conductor
+    from jaynes.role import Role
 
 
 def _policy(path: str | None) -> Policy:
@@ -159,32 +164,84 @@ def load_ref(ref: str) -> Any:
     return getattr(importlib.import_module(module), attr)
 
 
+def _home(args: argparse.Namespace) -> Path:
+    return Path(args.home) if args.home else jaynes_home()
+
+
+def _started(c: Conductor, run_id: str) -> tuple[Role, str, str, dict[str, str]]:
+    """The role, its reference, the task and the runtime overrides a CLI run was started with."""
+    first = next(iter(c.store.events("RunStarted", run_id=run_id)), None)
+    if first is None:
+        sys.exit(f"no run {run_id} in {c.home}")
+    if "ref" not in first.payload:
+        sys.exit(f"run {run_id} was started from Python; continue it with Conductor.run")
+    ref = str(first.payload["ref"])
+    return _role(ref), ref, str(first.payload["task"]), dict(first.payload["runtimes"])
+
+
+def _role(ref: str) -> Role:
+    from jaynes.role import Role
+    r = load_ref(ref)
+    if not isinstance(r, Role):
+        sys.exit(f"{ref} is not a role")
+    return r
+
+
 def cmd_run(args: argparse.Namespace) -> None:
-    home = Path(args.home) if args.home else jaynes_home()
-    c = Conductor(home)
+    from jaynes.conductor import Conductor, new_run_id
+    c = Conductor(_home(args))
     if args.id:
-        first = next(iter(c.store.events("RunStarted", run_id=args.id)), None)
-        if first is None:
-            sys.exit(f"no run {args.id} in {home}")
-        if "ref" not in first.payload:
-            sys.exit(f"run {args.id} was started from Python; continue it with Conductor.run")
-        ref, task, extra = str(first.payload["ref"]), str(first.payload["task"]), dict(first.payload["runtimes"])
+        r, ref, task, extra = _started(c, args.id)
         run_id = args.id
     else:
         if not args.role or args.task is None:
             sys.exit("a new run needs --role and --task")
-        ref, task, run_id = args.role, args.task, new_run_id()
         if any("=" not in pair for pair in args.runtime):
             sys.exit("--runtime takes name=module:attribute")
+        ref, task, run_id = args.role, args.task, new_run_id()
         extra = dict(pair.split("=", 1) for pair in args.runtime)
-    r = load_ref(ref)
-    if not isinstance(r, Role):
-        sys.exit(f"{ref} is not a role")
+        r = _role(ref)
     # imported on first use, so a run that never calls an agent needs neither CLI installed
     c.runtimes = {name: (lambda t=target: load_ref(t)()) for name, target in {**DEFAULT_RUNTIMES, **extra}.items()}
     result = c.run(r, task, run_id, started={"ref": ref, "runtimes": extra})
     print(json.dumps({"run": run_id, "status": result.status, "step": result.step, "until": result.until,
                       "reasons": list(result.reasons)}))
+
+
+def cmd_queue(args: argparse.Namespace) -> None:
+    from jaynes.conductor import Conductor
+    from jaynes.review import age
+    c = Conductor(_home(args))
+    items = c.queue()
+    if not items:
+        print("nothing is waiting")
+    now = c.clock()
+    for w in items:
+        print(f"{w.run_id}  {w.kind}  {w.step}  {age(now - w.since)} ago  {w.role}: {w.task}")
+        for line in ([w.question] if w.question else []) + list(w.reasons):
+            print(f"    {line}")
+
+
+def cmd_answer(args: argparse.Namespace) -> None:
+    from jaynes.conductor import Answer, AnswerRejected, Conductor, RunBusy, continue_in_background
+    c = Conductor(_home(args))
+    r, _, _, _ = _started(c, args.run)
+    output = None
+    if args.output is not None:
+        text = Path(args.output[1:]).read_text() if args.output.startswith("@") else args.output
+        try:
+            output = json.loads(text)
+        except ValueError as err:
+            sys.exit(f"--output is not JSON: {err}")
+    answer: Answer = args.answer
+    try:
+        c.answer(r, args.run, args.step, answer, note=args.note, output=output)
+    except AnswerRejected as err:
+        sys.exit("answer not recorded: " + "; ".join(err.reasons))
+    except RunBusy:
+        sys.exit(f"run {args.run} is busy in another process; try again in a moment")
+    continue_in_background(c.home, args.run)
+    print(json.dumps({"run": args.run, "step": args.step, "answer": answer, "continuing": True}))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,11 +274,27 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--task")
     r.add_argument("--runtime", action="append", default=[], help="name=module:attribute, overrides a runtime")
     r.add_argument("--home")
+    q = sub.add_parser("queue")
+    q.add_argument("--home")
+    w = sub.add_parser("answer")
+    w.add_argument("run")
+    w.add_argument("step")
+    w.add_argument("answer", choices=["accept", "change", "return", "context"])
+    w.add_argument("--note")
+    w.add_argument("--output", help="the edited output for change: JSON, or @file")
+    w.add_argument("--home")
+    v = sub.add_parser("review")
+    v.add_argument("--port", type=int, default=8740)
+    v.add_argument("--home")
     args = ap.parse_args(argv)
     if args.cmd == "hook":
         return hook.main()
+    if args.cmd == "review":
+        from jaynes.review import serve
+        serve(_home(args), args.port)
+        return 0
     {"autonomy": cmd_autonomy, "history": cmd_history, "parity": cmd_parity, "simulate": cmd_simulate,
-     "run": cmd_run}[args.cmd](args)
+     "run": cmd_run, "queue": cmd_queue, "answer": cmd_answer}[args.cmd](args)
     return 0
 
 

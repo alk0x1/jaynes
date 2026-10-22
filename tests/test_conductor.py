@@ -267,3 +267,72 @@ def test_a_stop_that_keeps_failing_is_refuted_and_waits(tmp_path: Path) -> None:
     assert c.run(r, "t", run_id="x").status == "waiting"
     assert payloads(c, "x", "StopOpened")[0]["status"] == "refuted"
 
+
+
+def test_a_stop_records_the_question_written_by_the_step(tmp_path: Path) -> None:
+    r = role("q", agent="fake")
+    r.step("a", output=Note, stop=stop(0.2), question=lambda out, _: f"Is {out.text!r} the right note?")
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": "hi"})})
+    c.run(r, "t", run_id="r1")
+    assert payloads(c, "r1", "StopOpened")[0]["question"] == "Is 'hi' the right note?"
+
+
+def test_queue_lists_waiting_stops_and_blocked_runs_oldest_first(tmp_path: Path) -> None:
+    now = [100.0]
+    r, _, _ = reviewed()
+    blocking = role("b", agent="fake")
+    blocking.step("x", output=Note, max_turns=1)
+    agent = Scripted({("x", 1): raw("nope")}, default=lambda s: {"text": s})
+    c = Conductor(tmp_path, runtimes={"fake": lambda: agent}, clock=lambda: now[0])
+    c.run(r, "first task", run_id="r1")
+    now[0] = 200.0
+    c.run(blocking, "second task", run_id="r2")
+    now[0] = 300.0
+    c.run(r, "third task", run_id="r3")
+    c.answer(r, "r3", "a", "accept")
+    c.run(r, "third task", run_id="r3")
+
+    assert [(q.run_id, q.kind, q.step, q.since, q.task) for q in c.queue()] == [
+        ("r1", "stop", "a", 100.0, "first task"), ("r2", "blocked", "x", 200.0, "second task")]
+
+
+def test_a_stop_without_a_question_keeps_its_m2_fingerprint() -> None:
+    r = role("fp", agent="fake", method="Be brief.")
+    s = r.step("a", output=Note, instructions="Write a note.", stop=stop(0.2))
+    assert s.stop_fingerprint("fake-1") == "8b1cf87a40d501db"  # computed with the code of commit 00f69bb
+
+
+def test_return_and_context_need_a_note(tmp_path: Path) -> None:
+    r, _, _ = reviewed()
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    c.run(r, "t", run_id="r1")
+    for answer in ("return", "context"):
+        with pytest.raises(AnswerRejected, match="needs a note"):
+            c.answer(r, "r1", "a", answer, note="  ")  # type: ignore[arg-type]
+
+
+def test_a_question_on_a_stop_without_output_is_asked(tmp_path: Path) -> None:
+    r = role("q", agent="fake")
+    a = r.step("a", output=Note)
+    r.step("ok", needs=[a], stop=stop(0.2), question=lambda _, needs: f"Ship {needs[a].value.text}?")
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": "it"})})
+    c.run(r, "t", run_id="r1")
+    assert payloads(c, "r1", "StopOpened")[0]["question"] == "Ship it?"
+
+
+class Killed(BaseException):
+    pass
+
+
+def test_a_run_left_without_a_process_is_in_the_queue_as_idle(tmp_path: Path) -> None:
+    def die(ws: Path) -> None:
+        raise Killed()
+    r, _, _ = chain()
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted({("a", 1): die})})
+    with pytest.raises(Killed):
+        c.run(r, "t", run_id="r1")
+    assert c.queue() == []  # within the grace period it may still be picked up
+    [item] = c.queue(idle_after=0)
+    assert (item.run_id, item.kind, item.step) == ("r1", "idle", "a")
+    with c._lock("r1"):  # pyright: ignore[reportPrivateUsage]  # a process that holds the run is not idle
+        assert c.queue(idle_after=0) == []
