@@ -1,0 +1,167 @@
+# Jaynes policy for a team of agents in Claude Code (the first user's setup).
+#
+# Day-1 rule: nothing that runs today gets blocked and nothing new asks, except
+# random audits. Floors reproduce ~/.claude/hooks/block-irreversible.sh; the
+# allowlist in ~/.claude/settings.json stays as is. Categories are tried in file
+# order; for a Bash line, each simple command takes the first category it
+# matches, and the line takes the strongest effect among them.
+
+[policy]
+budget = 0.05          # error rate allowed among actions that run without a person
+delta = 0.05           # chance of certifying a category whose true error rate exceeds the budget
+audit_rate = 0.10      # share of non-pure calls that still ask, to measure
+undetermined = "defer" # until certified or refuted, the host decides (auto mode, rules)
+
+# --- floors: never automatic ---------------------------------------------------
+
+[[category]]
+name = "git_remote"
+effect = "irreversible"
+floor = "deny"
+bash_regex = [
+  '(^|[;&|\s])git\s+push(\s|$)',
+  '(^|[;&|\s])git\s+merge(\s|$)',
+  '(^|[;&|\s])git\s+reset\s+--hard(\s|$)',
+  '(^|[;&|\s])git\s+clean(\s|$)',
+  '(^|[;&|\s])git\s+branch\s+(-D|-d)(\s|$)',
+  '(^|[;&|\s])git\s+tag\s+-d(\s|$)',
+  '(^|[;&|\s])git\s+remote\s+(add|remove|rename|set-url)(\s|$)',
+]
+
+[[category]]
+name = "gh_external"
+effect = "irreversible"
+floor = "deny"
+bash_regex = [
+  '(^|[;&|\s])gh\s+pr\s+(create|merge|close)(\s|$)',
+  '(^|[;&|\s])gh\s+repo\s+(create|delete|archive)(\s|$)',
+]
+
+# --- shell: most specific first ------------------------------------------------
+
+[[category]]
+name = "fs_delete"
+effect = "irreversible"
+bash = ["rm *", "rm", "rmdir *", "unlink *", "trash *"]
+bash_regex = [
+  '^find\b.*\s-(delete|exec\s+rm)\b',
+  '^git\s+(-C\s+\S+\s+)?(rm|restore)\b',
+  '^git\s+(-C\s+\S+\s+)?checkout\s+(.*\s)?--(\s|$)',
+  '^git\s+(-C\s+\S+\s+)?stash\s+(drop|clear)\b',
+]
+
+[[category]]
+name = "secrets"
+effect = "irreversible"
+bash = ["security *", "op *", "gpg *"]
+
+[[category]]
+name = "shell_write"
+effect = "reversible"
+bash = ["cp *", "mv *", "mkdir *", "touch *", "ln *", "chmod *", "tee *", "install *", "rsync *", "unzip *", "tar *"]
+bash_regex = [
+  '^sed\s+(-[a-zA-Z]*i|--in-place)',
+  '^perl\s+-[a-zA-Z]*i',
+  '(^|[^0-9&>])>{1,2}\s*(?!&|/dev/null)[^\s>]',
+]
+
+[[category]]
+name = "read"
+effect = "pure"
+tools = ["Read", "Grep", "Glob", "LS", "NotebookRead"]
+bash = [
+  "ls", "ls *", "cat *", "head *", "tail *", "wc *", "grep *", "rg *", "cut *", "sort", "sort *", "uniq", "uniq *",
+  "tr *", "awk *", "sed *", "cd", "cd *", "pwd", "find *", "diff *", "cmp *", "comm *", "date", "date *",
+  "seq *", "which *", "type *", "du *", "df *", "ps", "ps *", "pgrep *", "lsof *", "sleep *", "test *", "[ *",
+  "[[ *", "echo", "echo *", "printf *", "jq *", "basename *", "dirname *", "realpath *", "readlink *", "file *",
+  "stat *", "shasum *", "md5 *", "xxd *", "od *", "column *", "nl *", "tree *", "less *", "set *", "true", "false",
+  "uname *", "sw_vers", "whoami", "id", "id *", "hostname", "printenv*", "env", "wait", "exit *", "exit", "return *",
+  "head", "tail", "cat", "sort", "uniq", "wc", "strings", "strings *", "rev", "fold *", "paste *", "join *",
+  "read *", "* --version", "* -V", "* --help", "gofmt -l*", "go vet *", "sips -g *", "codesign -d*", "pdftotext *",
+  "plutil -p *", "log show *", "/usr/bin/log show *", "mdls *", "otool *", "nm *", "lipo -info *", "ai-memory status*",
+  "git for-each-ref*", "git grep*", "git rev-list*", "git merge-base*", "git cat-file*", "git ls-tree*",
+  "git shortlog*", "git describe*", "git reflog*", "git count-objects*", "git name-rev*", "git var *",
+  "git status*", "git diff*", "git log*", "git show*", "git ls-files*", "git check-ignore*", "git rev-parse*",
+  "git blame*", "git branch", "git branch -a*", "git branch --list*", "git branch -v*", "git remote -v",
+  "git -C * status*", "git -C * diff*", "git -C * log*", "git -C * show*", "git -C * rev-parse*",
+  "git -C * ls-files*", "git -C * branch", "git config --get*", "git worktree list*", "git stash list*",
+  "brew list*", "brew info*", "uv --version", "node --version", "npm --version", "cargo --version",
+  "rustc --version", "python3 --version", "python --version", "gh auth status*", "gh pr view*", "gh pr list*",
+  "gh pr diff*", "gh issue view*", "gh issue list*", "gh run view*", "gh run list*", "gh api *",
+]
+
+[[category]]
+name = "git_local"
+effect = "reversible"
+bash = [
+  "git add*", "git commit*", "git stash*", "git worktree*", "git checkout*", "git switch*", "git branch *",
+  "git init*", "git mv*", "git tag*", "git fetch*", "git pull*", "git rebase*", "git cherry-pick*",
+  "git -C *", "git config *", "git clone *", "git bundle *", "git apply *", "git merge-tree *", "git am *",
+  "git notes *", "git update-index *", "git submodule *",
+]
+
+[[category]]
+name = "run_code"
+effect = "reversible"
+bash = [
+  "python *", "python3 *", ".venv/bin/*", "*/bin/python*", "uv *", "pip *", "pytest*", "node *", "npm *",
+  "npx *", "pnpm *", "bun *", "yarn *", "cargo *", "go *", "just *", "make*", "xcodebuild *", "swift *",
+  "source *", ". *", "bash *", "sh *", "zsh *", "magick *", "ffmpeg *", "sqlite3 *", "psql *", "lean *",
+  "lake *", "*/scripts/*", "./*", "gofmt *", "go *", "*/go *", "swiftc *", "claude *", "codex *", "d2 *",
+  "apps *", "nvim *", "openssl *", "*/scratchpad/*", "/private/tmp/*", "deno *", "ruby *", "java *",
+]
+
+[[category]]
+name = "processes"
+effect = "irreversible"
+bash = ["kill *", "pkill *", "killall *", "launchctl *", "docker *", "docker-compose *", "brew services *",
+        "open *", "osascript *", "tmux *", "tccutil *", "defaults write *", "shortcuts *", "caffeinate *",
+        "*/Google Chrome*"]
+
+[[category]]
+name = "network"
+effect = "irreversible"
+tools = ["WebFetch", "WebSearch"]
+bash = ["curl *", "wget *", "ssh *", "scp *", "gh *", "brew install *", "brew upgrade *"]
+
+# --- other tools ---------------------------------------------------------------
+
+[[category]]
+name = "internal"
+effect = "pure"
+tools = [
+  "ToolSearch", "AskUserQuestion", "Skill", "Agent", "Task", "SendMessage", "ListAgents", "TaskCreate",
+  "TaskUpdate", "TaskList", "TaskGet", "TaskStop", "TaskOutput", "TodoWrite", "Monitor", "ScheduleWakeup",
+  "EnterPlanMode", "ExitPlanMode", "BashOutput", "KillShell", "mcp__ai-memory__memory_query",
+  "mcp__ai-memory__memory_recent", "mcp__ai-memory__memory_read_page", "mcp__ai-memory__memory_status",
+  "mcp__claude-in-chrome__tabs_context_mcp", "mcp__claude-in-chrome__read_page",
+  "mcp__claude-in-chrome__get_page_text", "mcp__claude-in-chrome__find",
+  "mcp__claude-in-chrome__read_console_messages", "mcp__claude-in-chrome__read_network_requests",
+  "mcp__*__read_*", "mcp__*__search_*", "mcp__*__list_*", "mcp__*__get_*",
+]
+
+[[category]]
+name = "edit_docs"
+effect = "reversible"
+tools = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+paths = ["**/*.md", "**/*.org", "**/*.txt", "work/**"]
+
+[[category]]
+name = "edit_code"
+effect = "reversible"
+tools = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+
+[[category]]
+name = "browser"
+effect = "irreversible"
+tools = ["mcp__claude-in-chrome__*", "mcp__Claude_Browser__*"]
+
+[[category]]
+name = "publish"
+effect = "irreversible"
+tools = ["Artifact", "ArtifactData", "ArtifactComments", "mcp__claude_ai_*", "mcp__*__send_*", "mcp__*__create_*"]
+
+[[category]]
+name = "app_write"
+effect = "irreversible"
+tools = ["mcp__*"]
