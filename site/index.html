@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jaynes</title>
+<meta name="description" content="Jaynes makes your AI agents follow the method, checks what they deliver, and calls you only where your judgment is still needed. For Claude Code and Codex.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Graphite instrument panel. Split hero with live evidence; a scroll-driven section where a fixed ring
+   tracks the four layers (method, checks, attention, safety) while each layer shows a working piece. */
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --blue-soft: rgba(111, 180, 255, .12);
+  --amber: #ffb35c; --amber-soft: rgba(255, 179, 92, .13);
+  --green: #69dba0; --green-soft: rgba(105, 219, 160, .13);
+  --red: #ff6f6f; --red-soft: rgba(255, 111, 111, .12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 17px; line-height: 1.55; }
+body { padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); }
+.grid-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 64px 64px; opacity: .55;
+  -webkit-mask-image: radial-gradient(80% 60% at 50% 0%, #000 0%, transparent 75%); mask-image: radial-gradient(80% 60% at 50% 0%, #000 0%, transparent 75%); }
+main, header, footer { position: relative; z-index: 1; }
+.wrap { max-width: 1200px; margin: 0 auto; }
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.03em; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+a { color: var(--blue); }
+code { font-family: var(--mono); font-size: .85em; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.mono { font-family: var(--mono); }
+.tag { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.btn { font-family: var(--mono); font-size: 13px; padding: 12px 16px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); cursor: pointer; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--dim); }
+.btn.solid { background: var(--blue); color: #04101f; border-color: var(--blue); font-weight: 500; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+.chip.amber { background: var(--amber-soft); color: var(--amber); }
+.chip.green { background: var(--green-soft); color: var(--green); }
+.chip.blue { background: var(--blue-soft); color: var(--blue); }
+.chip.red { background: var(--red-soft); color: var(--red); }
+.chip.plain { background: var(--panel-2); color: var(--dim); }
+.card { border: 1px solid var(--line); border-radius: 12px; background: rgba(14, 18, 24, .92); }
+
+/* nav */
+header.bar { position: sticky; top: 0; z-index: 20; padding-top: env(safe-area-inset-top, 0px); background: rgba(7, 9, 13, .78); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding-inline: max(16px, env(safe-area-inset-left, 0px)); }
+header.bar .wrap { display: flex; align-items: center; gap: 24px; height: 62px; }
+.logo { font-weight: 600; font-size: 19px; letter-spacing: -0.01em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.logo svg { width: 20px; height: 20px; }
+.logo span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); }
+header nav { margin-left: auto; display: flex; gap: 24px; font-family: var(--mono); font-size: 12px; }
+header nav a { color: var(--dim); text-decoration: none; }
+header nav a:hover { color: var(--ink); }
+
+/* hero */
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: center; padding: 88px 0 72px; }
+.hero h1 { font-size: clamp(40px, 5.4vw, 66px); line-height: 1.03; margin: 14px 0 20px; }
+.hero .lede { font-size: 19px; color: var(--dim); max-width: 40ch; margin-bottom: 28px; }
+.ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+.works { display: flex; gap: 10px; margin-top: 28px; flex-wrap: wrap; align-items: center; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.works b { color: var(--ink); font-weight: 500; border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 10px; }
+.inst { padding: 18px; display: grid; gap: 14px; }
+.inst-top { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 12px; color: var(--dim); flex-wrap: wrap; align-items: center; }
+.inst-top b { color: var(--ink); font-weight: 500; }
+svg { display: block; width: 100%; height: auto; }
+.axis { stroke: var(--line-2); }
+.svl { font-family: var(--mono); font-size: 10px; fill: var(--dim); }
+.thr { stroke: var(--green); stroke-dasharray: 5 5; }
+.curve { fill: none; stroke: var(--blue); stroke-width: 2.2; }
+.pt-err { fill: var(--red); }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.controls label { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--dim); display: grid; gap: 4px; }
+input[type=range] { accent-color: var(--blue); width: 160px; }
+.readout { font-family: var(--mono); font-size: 12px; color: var(--dim); line-height: 1.6; min-height: 3.2em; }
+.readout b { color: var(--ink); font-weight: 500; }
+
+/* problem */
+.problem { padding: 72px 0; border-top: 1px solid var(--line); display: grid; gap: 40px; }
+.problem-head { display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 5fr); gap: 40px; align-items: end; }
+.problem h2 { font-size: clamp(32px, 4.2vw, 50px); line-height: 1.06; }
+.problem-head p { color: var(--dim); font-size: 18px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; }
+.stat { display: grid; gap: 8px; border-top: 1px solid var(--line-2); padding-top: 18px; }
+.stat .n { font-size: clamp(38px, 4.6vw, 58px); font-weight: 500; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat .n small { font-size: .38em; color: var(--dim); letter-spacing: 0; font-family: var(--mono); font-weight: 400; margin-left: 6px; }
+.stat p { font-family: var(--mono); font-size: 12px; color: var(--dim); line-height: 1.55; }
+.source { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* layers (scroll-driven) */
+.layers-head { padding: 72px 0 8px; border-top: 1px solid var(--line); display: grid; gap: 14px; }
+.layers-head > * { max-width: 760px; }
+.layers-head h2 { font-size: clamp(32px, 4.2vw, 50px); line-height: 1.06; }
+.layers-head p { color: var(--dim); font-size: 18px; }
+.layers { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 48px; }
+.ring-col { position: relative; }
+.ring { position: sticky; top: 110px; height: 420px; }
+.ring svg .orbit { fill: none; stroke: var(--line-2); }
+.ring svg .orbit-on { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-linecap: round; transition: stroke-dasharray .6s ease; }
+.ring .rn circle { fill: var(--panel); stroke: var(--line-2); transition: all .3s; }
+.ring .rn text { font-family: var(--mono); font-size: 11px; fill: var(--dim); transition: fill .3s; }
+.ring .rn.on circle { fill: var(--blue-soft); stroke: var(--blue); }
+.ring .rn.on text { fill: var(--ink); }
+.ring .center { font-family: var(--mono); font-size: 11px; fill: var(--faint); }
+.layer { min-height: 92vh; display: grid; align-content: center; gap: 22px; padding: 56px 0; scroll-margin-top: 80px; }
+.layer .head { display: grid; gap: 10px; max-width: 58ch; }
+.layer h3 { font-size: clamp(28px, 3.2vw, 40px); line-height: 1.08; }
+.layer .head p { color: var(--dim); font-size: 18px; }
+.layer .head p b { color: var(--ink); font-weight: 500; }
+
+/* method graph */
+.stage { padding: 18px; display: grid; gap: 12px; }
+.stage-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; color: var(--dim); align-items: center; }
+.stage-top b { color: var(--ink); font-weight: 500; }
+.node rect { fill: var(--panel-2); stroke: var(--line-2); stroke-width: 1.2; transition: all .3s; }
+.node text { font-family: var(--mono); font-size: 13px; fill: var(--dim); transition: fill .3s; }
+.node .sub { font-size: 10.5px; }
+.node.done rect { stroke: var(--blue); fill: #0f1d31; }
+.node.done text { fill: var(--ink); }
+.node.active rect { stroke: var(--blue); fill: var(--blue-soft); filter: drop-shadow(0 0 10px rgba(111, 180, 255, .45)); }
+.node.active text { fill: var(--ink); }
+.node.stop rect { stroke: var(--amber); fill: var(--amber-soft); filter: drop-shadow(0 0 12px rgba(255, 179, 92, .35)); }
+.node.stop text { fill: var(--amber); }
+.edge { stroke: var(--line-2); stroke-width: 1.4; fill: none; stroke-dasharray: 3 5; }
+.edge.on { stroke: var(--blue); stroke-dasharray: none; }
+.skip { stroke: var(--red); stroke-width: 1.6; fill: none; stroke-dasharray: 4 4; opacity: 0; transition: opacity .3s; }
+.skip.show { opacity: 1; }
+.skip-x { fill: var(--red); opacity: 0; transition: opacity .3s; font-family: var(--mono); font-size: 13px; }
+.skip-x.show { opacity: 1; }
+.console { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: rgba(7, 9, 13, .7); min-height: 58px; }
+.console .msg { font-family: var(--mono); font-size: 12.5px; color: var(--dim); }
+.console .msg b { color: var(--ink); font-weight: 500; }
+.console .warn { color: var(--red); }
+.console .wait { color: var(--amber); }
+.console .ok { color: var(--green); }
+
+/* checks */
+.checks-ui { padding: 18px; display: grid; gap: 14px; }
+.checklist { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.checklist div { display: flex; justify-content: space-between; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--line); font-size: 15px; flex-wrap: wrap; }
+.checklist div:last-child { border-bottom: 0; }
+.checklist span:last-child { font-family: var(--mono); font-size: 12px; }
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ba figure { margin: 0; display: grid; gap: 6px; }
+.ba figcaption { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.shot { aspect-ratio: 16 / 10; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-2); padding: 10px; display: grid; grid-template-columns: 28% 1fr; gap: 8px; }
+.shot i { display: block; border-radius: 2px; background: var(--line-2); }
+.shot .s { display: grid; gap: 5px; align-content: start; }
+.shot .s i { height: 6px; }
+.shot .m { display: grid; gap: 6px; align-content: start; }
+.shot .m i { height: 10px; }
+.shot.before .m i:nth-child(2) { outline: 2px solid var(--red); outline-offset: 2px; }
+.shot.after .m i:first-child { background: var(--blue); opacity: .55; height: 13px; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mini { font-family: var(--mono); font-size: 12px; padding: 8px 12px; border-radius: 4px; border: 1px solid var(--line-2); background: transparent; color: var(--ink); cursor: pointer; }
+.mini.go { background: var(--blue); border-color: var(--blue); color: #04101f; font-weight: 500; }
+.mini:hover { border-color: var(--dim); }
+
+/* attention */
+.att { padding: 18px; display: grid; gap: 18px; }
+.meter { display: grid; gap: 6px; }
+.meter .r { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 15px; align-items: center; }
+.meter .r small { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.track { position: relative; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.track .fill { position: absolute; inset: 0 auto 0 0; background: var(--blue); border-radius: 4px; transition: width .4s ease; }
+.track .fill.done { background: var(--green); }
+.log { display: grid; font-size: 14px; }
+.log div { display: grid; grid-template-columns: 5.4rem minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.log div:last-child { border-bottom: 0; }
+.log time { font-family: var(--mono); font-size: 11px; color: var(--dim); padding-top: 2px; }
+
+/* try it: queue */
+.section { padding: 80px 0; border-top: 1px solid var(--line); display: grid; gap: 28px; scroll-margin-top: 70px; }
+.section-head { display: grid; gap: 12px; max-width: 64ch; }
+.section-head h2 { font-size: clamp(32px, 4.2vw, 50px); line-height: 1.06; }
+.section-head p { color: var(--dim); font-size: 18px; }
+.app-top { display: flex; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+.app-top b { color: var(--ink); font-weight: 500; }
+.app-top .live { margin-left: auto; color: var(--green); }
+.cols { display: grid; grid-template-columns: 250px minmax(0, 1fr) 270px; min-height: 360px; }
+.qlist { border-right: 1px solid var(--line); }
+.qitem { padding: 14px 16px; border-bottom: 1px solid var(--line); cursor: pointer; display: grid; gap: 4px; }
+.qitem:hover { background: var(--panel-2); }
+.qitem.sel { background: #111b2a; box-shadow: inset 2px 0 0 var(--blue); }
+.qitem b { font-weight: 500; font-size: 15px; }
+.qitem small { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.qdetail { padding: 20px 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.q { font-size: 21px; font-weight: 500; letter-spacing: -0.01em; }
+.ev { display: grid; gap: 9px; }
+.ev div { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; font-size: 15px; }
+.ev i { width: 14px; height: 14px; border: 1.5px solid var(--faint); border-radius: 3px; margin-top: 4px; }
+.ev cite { display: block; font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.qmeta { border-left: 1px solid var(--line); padding: 20px; display: grid; gap: 16px; align-content: start; }
+.kv { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.kv b { color: var(--ink); font-weight: 500; }
+.toast { font-family: var(--mono); font-size: 12px; color: var(--dim); padding: 11px 18px; border-top: 1px solid var(--line); min-height: 42px; }
+
+/* guarantee */
+.gx { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 40px; align-items: start; }
+.gx .text { display: grid; gap: 14px; }
+.gx .text p { color: var(--dim); font-size: 18px; }
+.gx .text p b { color: var(--ink); font-weight: 500; }
+.simu { padding: 20px; display: grid; gap: 18px; }
+.bars { display: grid; gap: 16px; }
+.barrow { display: grid; gap: 6px; }
+.barrow .r { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 15px; }
+.barrow .r b { font-family: var(--mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.btrack { position: relative; height: 26px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.btrack .bf { position: absolute; inset: 0 auto 0 0; border-radius: 4px; transition: width .25s linear; }
+.btrack .bf.naive { background: var(--red); }
+.btrack .bf.any { background: var(--green); }
+.btrack .promise { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
+.simu .foot { font-family: var(--mono); font-size: 11px; color: var(--dim); display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; align-items: center; }
+
+/* foundations */
+.refs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; }
+.refs li { display: grid; gap: 6px; padding: 18px 0; border-top: 1px solid var(--line); }
+.refs .layer-tag { font-family: var(--mono); font-size: 11px; color: var(--blue); }
+.refs .what { font-size: 18px; font-weight: 500; letter-spacing: -0.01em; }
+.refs p { color: var(--dim); font-size: 15px; }
+.refs cite { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* start */
+.start { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 40px; align-items: start; }
+pre.code { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--ink); }
+pre.code .c { color: var(--faint); }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+td, th { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--mono); font-size: 11px; color: var(--dim); font-weight: 400; text-transform: uppercase; letter-spacing: .06em; }
+tr:last-child td { border-bottom: 0; }
+td:last-child { white-space: nowrap; }
+
+/* final band */
+.final { margin: 40px 0 0; padding: 72px 0; border-top: 1px solid var(--line); display: grid; justify-items: center; text-align: center; gap: 22px; }
+.final h2 { font-size: clamp(34px, 4.6vw, 56px); line-height: 1.04; max-width: 18ch; }
+.final h2 span { color: var(--blue); }
+footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--dim); font-family: var(--mono); font-size: 12px; }
+footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wrap: wrap; }
+
+@media (max-width: 980px) {
+  .hero, .problem-head, .gx, .start { grid-template-columns: minmax(0, 1fr); }
+  .hero { padding-top: 48px; gap: 36px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layers { grid-template-columns: minmax(0, 1fr); }
+  .ring-col { display: none; }
+  .layer { min-height: 0; }
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .qlist, .qmeta { border: 0; border-bottom: 1px solid var(--line); }
+  .refs { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  header nav { display: none; }
+  .stats { grid-template-columns: minmax(0, 1fr); }
+  .console { grid-template-columns: minmax(0, 1fr); }
+  .controls label { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="logo" href="#top"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="3" fill="#6fb4ff"/><circle cx="15" cy="5" r="2.2" fill="#eef2f7"/><circle cx="15" cy="15" r="2.2" fill="#eef2f7"/><path d="M7.5 9 13 5.8M7.5 11 13 14.2" stroke="#6fb4ff" stroke-width="1.4"/></svg>Jaynes <span>v0 · open source</span></a>
+    <nav aria-label="Sections"><a href="#layers">How it works</a><a href="#try">Try it</a><a href="#guarantee">Guarantee</a><a href="#foundations">Foundations</a><a href="#start">Get started</a></nav>
+  </div>
+</header>
+
+<main class="wrap" id="top">
+
+<section class="hero">
+  <div>
+    <span class="tag">// for people who run a team of AI agents</span>
+    <h1>Stop reviewing everything your agents do.</h1>
+    <p class="lede">Jaynes makes your agents follow the method and checks what they deliver. Your answers become evidence, and each checkpoint stops asking you only once the evidence says it can.</p>
+    <div class="ctas"><a class="btn solid" href="#start">Get started</a><a class="btn" href="#layers">See how it works</a></div>
+    <div class="works">Works with <b>Claude Code</b><b>Codex</b></div>
+  </div>
+  <div class="card inst" aria-label="Live evidence for one checkpoint">
+    <div class="inst-top"><span>stop <b>moments-of-use</b> · role screen-design</span><span class="chip amber" id="h-state">asks every time</span></div>
+    <svg viewBox="0 0 560 250" role="img" aria-label="Evidence for this stop over answers, with a threshold line at 20.">
+      <line class="axis" x1="44" y1="214" x2="548" y2="214"/>
+      <line class="axis" x1="44" y1="14" x2="44" y2="214"/>
+      <line class="thr" id="h-thr" x1="44" x2="548" y1="60" y2="60"/>
+      <text class="svl" x="548" y="52" text-anchor="end" id="h-thrl">evidence 20 · stop becomes sampled</text>
+      <text class="svl" x="44" y="232">0</text>
+      <text class="svl" x="548" y="232" text-anchor="end" id="h-xmax">answers</text>
+      <path class="curve" id="h-curve" d=""/>
+      <g id="h-errs"></g>
+    </svg>
+    <div class="controls">
+      <button class="btn solid" type="button" id="h-acc">Accept</button>
+      <button class="btn" type="button" id="h-chg">Change it</button>
+      <label for="h-bud">budget <output id="h-bo">20%</output><input type="range" id="h-bud" min="5" max="30" step="5" value="20"></label>
+    </div>
+    <div class="readout" id="h-read"></div>
+  </div>
+</section>
+
+<section class="problem" aria-labelledby="p-h">
+  <div class="problem-head">
+    <h2 id="p-h">"Done," says the agent. It skipped half the process, the checks passed, and the work is still wrong.</h2>
+    <p>So you review everything and become the bottleneck, or you let it run and have no idea how often it gets things wrong. One person running a company of agents measured it.</p>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="n">25<small>of 11,894</small></span><p>tool calls by the agents were seen by the person</p></div>
+    <div class="stat"><span class="n">0<small>of 8</small></span><p>design screens followed the first four steps of the method</p></div>
+    <div class="stat"><span class="n">3<small>rounds</small></span><p>of a screen passing every automated check and still being sent back</p></div>
+    <div class="stat"><span class="n">480k<small>tokens</small></span><p>for one screen, against a method budget of 150k</p></div>
+  </div>
+  <p class="source">Source: a one-person company run by agents, Sep 1 to Oct 21, 2026. This is the baseline Jaynes is measured against.</p>
+</section>
+
+<section class="layers-head" id="layers" aria-labelledby="l-h">
+  <span class="label">How it works</span>
+  <h2 id="l-h">Four layers between your agents and the world.</h2>
+  <p>The method makes skipping impossible. Checks catch what a machine can see. Your answers decide where your attention goes. A gate underneath keeps every action in bounds.</p>
+</section>
+
+<div class="layers">
+  <div class="ring-col" aria-hidden="true">
+    <div class="ring">
+      <svg viewBox="0 0 300 420">
+        <circle class="orbit" cx="150" cy="210" r="118"/>
+        <circle class="orbit-on" id="orbit-on" cx="150" cy="210" r="118" transform="rotate(-90 150 210)" stroke-dasharray="0 742"/>
+        <text class="center" x="150" y="206" text-anchor="middle">your</text>
+        <text class="center" x="150" y="222" text-anchor="middle">agents</text>
+        <g class="rn" id="rn0"><circle cx="150" cy="92" r="9"/><text x="150" y="70" text-anchor="middle">Method</text></g>
+        <g class="rn" id="rn1"><circle cx="268" cy="210" r="9"/><text x="262" y="244" text-anchor="middle">Checks</text></g>
+        <g class="rn" id="rn2"><circle cx="150" cy="328" r="9"/><text x="150" y="358" text-anchor="middle">Attention</text></g>
+        <g class="rn" id="rn3"><circle cx="32" cy="210" r="9"/><text x="38" y="244" text-anchor="middle">Safety</text></g>
+      </svg>
+    </div>
+  </div>
+  <div>
+    <article class="layer" data-layer="0" id="method">
+      <div class="head">
+        <span class="label">1 · Method</span>
+        <h3>The agent cannot skip a step.</h3>
+        <p>A role is a sequence of steps, each with a required output and a check. Jaynes runs Claude Code or Codex for <b>one step at a time</b>, with write access to that step's output and nothing else. Evidence the agent could invent, like a walkthrough of a screen, is produced by Jaynes.</p>
+      </div>
+      <div class="card stage">
+        <div class="stage-top"><span>role <b>screen-design</b> · task <b>People screen</b> · agent <b>codex</b></span><button class="btn solid" type="button" id="m-run">Run the method</button></div>
+        <svg viewBox="0 0 760 300" role="img" aria-label="Six steps in two rows: moments, object map, walkthrough, then requirements, implement, accept. Moments, requirements and accept are stops.">
+          <path class="edge" id="e0" d="M220 74 H270"/>
+          <path class="edge" id="e1" d="M470 74 H520"/>
+          <path class="edge" id="e2" d="M620 106 V194"/>
+          <path class="edge" id="e3" d="M520 226 H470"/>
+          <path class="edge" id="e4" d="M270 226 H220"/>
+          <path class="skip" id="skip" d="M370 106 C 330 140, 330 160, 370 194"/>
+          <text class="skip-x" id="skip-x" x="318" y="156" text-anchor="end">refused</text>
+          <g class="node" id="n0"><rect x="20" y="42" width="200" height="64" rx="8"/><text x="120" y="70" text-anchor="middle">moments</text><text class="sub" x="120" y="90" text-anchor="middle">stop · budget 20%</text></g>
+          <g class="node" id="n1"><rect x="270" y="42" width="200" height="64" rx="8"/><text x="370" y="70" text-anchor="middle">object-map</text><text class="sub" x="370" y="90" text-anchor="middle">check: every count cites data</text></g>
+          <g class="node" id="n2"><rect x="520" y="42" width="200" height="64" rx="8"/><text x="620" y="70" text-anchor="middle">walkthrough</text><text class="sub" x="620" y="90" text-anchor="middle">run by jaynes, not the agent</text></g>
+          <g class="node" id="n3"><rect x="520" y="194" width="200" height="64" rx="8"/><text x="620" y="222" text-anchor="middle">requirements</text><text class="sub" x="620" y="242" text-anchor="middle">stop · budget 10%</text></g>
+          <g class="node" id="n4"><rect x="270" y="194" width="200" height="64" rx="8"/><text x="370" y="222" text-anchor="middle">implement</text><text class="sub" x="370" y="242" text-anchor="middle">check: tests, contrast, tokens</text></g>
+          <g class="node" id="n5"><rect x="20" y="194" width="200" height="64" rx="8"/><text x="120" y="222" text-anchor="middle">accept</text><text class="sub" x="120" y="242" text-anchor="middle">stop · always asks</text></g>
+        </svg>
+        <div class="console"><div class="msg" id="m-msg">Press <b>Run the method</b> to send one task through the screen-design role.</div><div id="m-act"></div></div>
+      </div>
+    </article>
+
+    <article class="layer" data-layer="1" id="checks">
+      <div class="head">
+        <span class="label">2 · Checks</span>
+        <h3>Checks first, then your call.</h3>
+        <p>A delivery reaches you only after passing what a machine can verify: tests written before the code, contrast, design tokens, and a comparison with the last version you approved. <b>You decide the rest</b>, and your note goes back to the agent.</p>
+      </div>
+      <div class="card checks-ui">
+        <div class="stage-top"><span>delivery <b>People screen</b> · attempt 2</span><span class="chip amber">waiting for you</span></div>
+        <div class="checklist">
+          <div><span>Tests written first, failing before and passing after</span><span style="color:var(--green)">12 / 12</span></div>
+          <div><span>Contrast, WCAG AA</span><span style="color:var(--green)">min 4.9 : 1</span></div>
+          <div><span>Only design tokens, no raw colors</span><span style="color:var(--green)">pass</span></div>
+          <div><span>Against the last approved version</span><span style="color:var(--green)">no regression</span></div>
+          <div><span>Tokens spent, measured by the system</span><span>138k</span></div>
+        </div>
+        <div class="ba">
+          <figure><div class="shot before"><div class="s"><i></i><i></i><i></i><i></i></div><div class="m"><i></i><i></i><i></i><i></i><i></i></div></div><figcaption>approved, Oct 18</figcaption></figure>
+          <figure><div class="shot after"><div class="s"><i></i><i></i><i></i><i></i></div><div class="m"><i></i><i></i><i></i><i></i><i></i></div></div><figcaption>this delivery</figcaption></figure>
+        </div>
+        <div class="row-actions"><span class="mini go">Accept</span><span class="mini">Return with a note</span></div>
+      </div>
+    </article>
+
+    <article class="layer" data-layer="2" id="attention">
+      <div class="head">
+        <span class="label">3 · Attention</span>
+        <h3>Your attention moves to where it is still needed.</h3>
+        <p>Every answer at a stop is a label. Keep accepting a stop without changes and it becomes <b>sampled</b>: it asks one time in ten. That takes 20 accepts in a row at a 20% budget, 43 at 10%, 88 at 5%. Change a sampled answer and it asks every time again.</p>
+      </div>
+      <div class="card att">
+        <div class="stage-top"><span>role <b>screen-design</b> · week 4</span><span class="chip plain">illustration</span></div>
+        <div class="meter"><div class="r"><span>Moments of use <small>budget 20%</small></span><span class="chip green">sampled · 1 in 10</span></div><div class="track"><div class="fill done" style="width:100%"></div></div><small class="mono" style="font-size:11px;color:var(--dim)">22 accepts in a row · evidence 29.3 of 20</small></div>
+        <div class="meter"><div class="r"><span>Requirements <small>budget 10%</small></span><span class="chip blue">collecting evidence</span></div><div class="track"><div class="fill" style="width:69%"></div></div><small class="mono" style="font-size:11px;color:var(--dim)">31 accepts in a row · 12 more to go</small></div>
+        <div class="meter"><div class="r"><span>Final acceptance <small>budget 5%</small></span><span class="chip amber">always asks, by choice</span></div><div class="track"><div class="fill" style="width:3%"></div></div><small class="mono" style="font-size:11px;color:var(--dim)">39 accepts, 1 change</small></div>
+        <div class="log">
+          <div><time>Nov 6 09:12</time><span>Audit drawn for <b>Moments of use</b> on the Billing screen</span></div>
+          <div><time>Nov 6 09:40</time><span>You changed it: the agent missed "a payment failed"</span></div>
+          <div><time>Nov 6 09:40</time><span><span class="chip amber">asks every time again</span> evidence 29.3 → 5.9</span></div>
+        </div>
+      </div>
+    </article>
+
+    <article class="layer" data-layer="3" id="safety">
+      <div class="head">
+        <span class="label">4 · Safety · works today</span>
+        <h3>Every action goes through a gate.</h3>
+        <p>Each tool call is classified before it runs. Reading runs. Pushing to a remote, deleting history or sending a message <b>never runs without you</b>. Everything else is audited by sample, with the same guarantee. This layer works today with Claude Code.</p>
+      </div>
+      <div class="card stage">
+        <div class="stage-top"><span><b>jaynes</b> · action gate</span><span class="chip green">running</span></div>
+        <div class="log" style="font-size:13px">
+          <div><time>11:02:14</time><span><code>Read work/object-map.json</code> <span class="chip green">runs · read</span></span></div>
+          <div><time>11:02:31</time><span><code>Edit src/screens/People.tsx</code> <span class="chip blue">audit · asks you</span></span></div>
+          <div><time>11:03:05</time><span><code>uv run pytest -q</code> <span class="chip plain">runs · run_code</span></span></div>
+          <div><time>11:04:48</time><span><code>git push origin main</code> <span class="chip red">denied · floor</span></span></div>
+        </div>
+      </div>
+    </article>
+  </div>
+</div>
+
+<section class="section" id="try" aria-labelledby="t-h">
+  <div class="section-head">
+    <span class="label">Try it</span>
+    <h2 id="t-h">The review queue, live.</h2>
+    <p>Three items are waiting. Each stop keeps its own evidence, computed with the same test Jaynes uses. "Moments of use" is three accepts away from being sampled.</p>
+  </div>
+  <div class="card" style="overflow:hidden">
+    <div class="app-top"><span><b>jaynes review</b> · localhost:7317</span><span id="q-count">3 waiting</span><span class="live">● 4 agents running</span></div>
+    <div class="cols"><div class="qlist" id="q-list"></div><div class="qdetail" id="q-detail" aria-live="polite"></div><div class="qmeta" id="q-meta"></div></div>
+    <div class="toast" id="q-toast">Accept or change an answer and watch the stop earn, or lose, its autonomy.</div>
+  </div>
+</section>
+
+<section class="section" id="guarantee" aria-labelledby="g-h">
+  <div class="gx">
+    <div class="text">
+      <span class="label">The guarantee</span>
+      <h2 id="g-h" style="font-size:clamp(32px,4.2vw,50px);line-height:1.06">A stop is sampled only when the evidence says so.</h2>
+      <p>If the real rate at which you would change a stop's answer is at or above its budget, the chance Jaynes ever makes that stop sampled is <b>at most 5%</b>, no matter how often it checks.</p>
+      <p>The usual shortcut, recomputing a confidence bound after every answer and switching the first time it fits, quietly breaks that promise. Run both and see.</p>
+    </div>
+    <div class="card simu">
+      <div class="stage-top"><span>true change rate <b>5%</b> · budget <b>5%</b> · up to <b>2,000</b> answers</span><button class="btn solid" type="button" id="s-run">Run 1,000 simulations</button></div>
+      <div class="bars">
+        <div class="barrow"><div class="r"><span>Bound recomputed after every answer</span><b id="s-naive">0.0%</b></div><div class="btrack"><div class="bf naive" id="s-nb" style="width:0%"></div><div class="promise" style="left:calc(16.67% - 1px)"></div></div></div>
+        <div class="barrow"><div class="r"><span>Jaynes, anytime-valid test</span><b id="s-any">0.0%</b></div><div class="btrack"><div class="bf any" id="s-ab" style="width:0%"></div><div class="promise" style="left:calc(16.67% - 1px)"></div></div></div>
+      </div>
+      <div class="foot"><span>share of runs where a stop that should keep asking was wrongly sampled · scale to 30%</span><span>white line: the 5% promise</span></div>
+      <div class="foot"><span id="s-status">In 4,000 runs offline: 27.4% against 3.7%. Run it here, or with <code>jaynes simulate</code>.</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="foundations" aria-labelledby="f-h">
+  <div class="section-head">
+    <span class="label">Foundations</span>
+    <h2 id="f-h">Built on results with proofs behind them.</h2>
+  </div>
+  <ul class="refs">
+    <li><span class="layer-tag">method</span><span class="what">The method as a type</span><p>Which steps are valid depends on the state the work is in.</p><cite>Strom and Yemini, "Typestate", IEEE TSE 12(1), 1986</cite></li>
+    <li><span class="layer-tag">method</span><span class="what">Your stops as one side of a protocol</span><p>An exchange between parties, checked as a type.</p><cite>Honda, "Types for Dyadic Interaction", CONCUR 1993</cite></li>
+    <li><span class="layer-tag">method</span><span class="what">Write access per step</span><p>An agent can only touch what it was handed.</p><cite>Miller, "Robust Composition", PhD thesis, Johns Hopkins, 2006</cite></li>
+    <li><span class="layer-tag">method · safety</span><span class="what">One mechanism for gating, auditing and replay</span><p>An action is an effect; a handler decides to run it, ask, record it, or replay it.</p><cite>Plotkin and Pretnar, "Handlers of Algebraic Effects", ESOP 2009</cite></li>
+    <li><span class="layer-tag">attention</span><span class="what">A guarantee you can check after every answer</span><p>Test martingales and e-values stay valid under continuous monitoring.</p><cite>Ramdas, Grünwald, Vovk and Shafer, Statistical Science 38(4), 2023; Grünwald, de Heide and Koolen, "Safe Testing", JRSS B 86(5), 2024</cite></li>
+    <li><span class="layer-tag">attention · next</span><span class="what">Fewer of your answers for the same guarantee</span><p>A judge labels everything; your answers correct its bias.</p><cite>Angelopoulos, Bates, Fannjiang, Jordan and Zrnic, "Prediction-Powered Inference", Science, 2023</cite></li>
+    <li><span class="layer-tag">attention · next</span><span class="what">Ask you about what is most uncertain</span><p>Choose which items a person labels to reduce uncertainty the most.</p><cite>Zrnic and Candès, "Active Statistical Inference", ICML 2024</cite></li>
+    <li><span class="layer-tag">attention · next</span><span class="what">Notice when a role gets worse</span><p>Sequential change detection with a guarantee on false alarms.</p><cite>Shin, Ramdas and Rinaldo, "E-detectors", NEJSDS 2(2), 2024</cite></li>
+  </ul>
+</section>
+
+<section class="section" id="start" aria-labelledby="st-h">
+  <div class="start">
+    <div style="display:grid;gap:16px">
+      <span class="label">Get started</span>
+      <h2 id="st-h" style="font-size:clamp(32px,4.2vw,50px);line-height:1.06">Early, and measured in the open.</h2>
+      <p style="color:var(--dim);font-size:18px">The action gate works today with Claude Code. The step conductor for Claude Code and Codex and the review page are being built against the baseline above.</p>
+<pre class="code"><span class="c"># read-only, on your own Claude Code history</span>
+uv sync
+uv run jaynes history --config examples/agent-team.jaynes.toml
+uv run jaynes simulate</pre>
+    </div>
+    <div class="card" style="padding:8px 14px">
+      <table>
+        <thead><tr><th>Part</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td>Action gate for Claude Code: floors, sampled audits, anytime-valid certification</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>History report and guarantee simulation</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>Step conductor for Claude Code and Codex</td><td><span class="chip blue">in progress</span></td></tr>
+          <tr><td>Review page</td><td><span class="chip blue">in progress</span></td></tr>
+          <tr><td>Judges calibrated on your answers</td><td><span class="chip plain">next</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="final" aria-labelledby="fin-h">
+  <h2 id="fin-h">Spend your attention <span>where the evidence says it is needed.</span></h2>
+  <div class="ctas"><a class="btn solid" href="#start">Get started</a><a class="btn" href="#try">Try the review queue</a></div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap"><span>Named after E. T. Jaynes, who treated probability as the logic of reasoning with incomplete information.</span><span>Apache-2.0</span></div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var DELTA = 0.05, T = Math.log(1 / DELTA);
+
+  // ---- statistics shared by every widget (same test as jaynes.bounds) ----
+  function binomCdf(k, n, p) {
+    if (p <= 0) return 1;
+    if (p >= 1) return k >= n ? 1 : 0;
+    var lt = n * Math.log(1 - p), s = 0;
+    for (var i = 0; i <= k; i++) { s += Math.exp(lt); lt += Math.log((n - i) / (i + 1)) + Math.log(p) - Math.log(1 - p); }
+    return Math.min(1, s);
+  }
+  function logChoose(n, k) { var s = 0; for (var i = 1; i <= k; i++) s += Math.log(n - k + i) - Math.log(i); return s; }
+  // Mixture likelihood ratio against "rate >= b", q uniform on [0, b]. Valid at any stopping time (Ville).
+  function logE(n, k, b) {
+    if (!n) return 0;
+    var t = 1 - binomCdf(k, n + 1, b);
+    if (t <= 0) return -20;
+    return Math.log(t) - Math.log(n + 1) - logChoose(n, k) - (k + 1) * Math.log(b) - (n - k) * Math.log(1 - b);
+  }
+  function needed(k, b) { for (var n = k + 1; n <= 5000; n++) if (logE(n, k, b) >= T) return n; return null; }
+  // Clopper-Pearson upper bound, for the naive rule in the simulator.
+  function cpUpper(n, k, conf) {
+    if (k >= n) return 1;
+    var lo = 0, hi = 1;
+    for (var i = 0; i < 50; i++) { var mid = (lo + hi) / 2; if (binomCdf(k, n, mid) > 1 - conf) lo = mid; else hi = mid; }
+    return hi;
+  }
+
+  // ---- hero: live evidence chart ----
+  (function hero() {
+    var answers = [], budget = 0.2, X0 = 44, X1 = 548, Y0 = 214, Y1 = 14, LMAX = Math.log(200);
+    function y(le) { var v = Math.max(0, Math.min(LMAX, le)); return Y0 - (v / LMAX) * (Y0 - Y1); }
+    function $(id) { return document.getElementById(id); }
+    function draw() {
+      var nMax = Math.max(40, answers.length + 5), d = "M" + X0 + " " + Y0, k = 0, errs = "";
+      $("h-xmax").textContent = nMax + " answers";
+      for (var i = 0; i < answers.length; i++) {
+        if (answers[i]) k++;
+        var x = X0 + ((i + 1) / nMax) * (X1 - X0), yy = y(logE(i + 1, k, budget));
+        d += " L" + x.toFixed(1) + " " + yy.toFixed(1);
+        if (answers[i]) errs += '<circle class="pt-err" cx="' + x.toFixed(1) + '" cy="' + yy.toFixed(1) + '" r="4"/>';
+      }
+      $("h-curve").setAttribute("d", d);
+      $("h-errs").innerHTML = errs;
+      var ty = y(T); $("h-thr").setAttribute("y1", ty); $("h-thr").setAttribute("y2", ty); $("h-thrl").setAttribute("y", ty - 8);
+      var n = answers.length, le = logE(n, k, budget), ok = le >= T, st = $("h-state");
+      st.className = "chip " + (ok ? "green" : "amber"); st.textContent = ok ? "sampled · asks 1 in 10" : "asks every time";
+      var nd = needed(k, budget);
+      $("h-read").innerHTML = "<b>" + n + "</b> answers, <b>" + k + "</b> changed · evidence <b>" + Math.exp(le).toFixed(1) + "</b> of 20 at a " + Math.round(budget * 100) + "% budget. " +
+        (ok ? "This stop now asks one time in ten. Change one and it comes back." : (nd === null ? "At this rate it keeps asking." : "Keeps asking: " + Math.max(0, nd - n) + " more accepts without a change."));
+    }
+    $("h-acc").addEventListener("click", function () { answers.push(false); draw(); });
+    $("h-chg").addEventListener("click", function () { answers.push(true); draw(); });
+    $("h-bud").addEventListener("input", function (e) { budget = e.target.value / 100; $("h-bo").textContent = e.target.value + "%"; draw(); });
+    for (var i = 0; i < 14; i++) answers.push(false);
+    draw();
+  })();
+
+  // ---- method run ----
+  (function method() {
+    var stops = { 0: "Which moments must the People screen serve first? 3 candidates, each citing the real data.", 3: "Approve 5 requirements, one per break found in the walkthrough.", 5: "Accept the delivery? Tests 12/12, contrast 4.9:1, no regression." };
+    var checks = { 1: "<span class=\"ok\">Checked[ObjectMap]</span> 6 objects, every count cites the data.", 2: "<span class=\"ok\">Checked[Walkthrough]</span> Jaynes walked the screen itself: 14 screenshots, 5 breaks.", 4: "<span class=\"ok\">Checked[Patch]</span> tests 12/12 · contrast AA · tokens only." };
+    var names = ["moments", "object-map", "walkthrough", "requirements", "implement", "accept"];
+    var step = -1, busy = false, timers = [];
+    var msg = document.getElementById("m-msg"), act = document.getElementById("m-act");
+    function node(i) { return document.getElementById("n" + i); }
+    function later(fn, ms) { timers.push(setTimeout(fn, ms)); }
+    function say(html, button) { msg.innerHTML = html; act.innerHTML = ""; if (button) act.appendChild(button); }
+    function btn(label, fn) { var b = document.createElement("button"); b.className = "mini go"; b.type = "button"; b.textContent = label; b.addEventListener("click", fn); return b; }
+    function skipShown(on) { ["skip", "skip-x"].forEach(function (id) { var el = document.getElementById(id); el.setAttribute("class", (id === "skip" ? "skip" : "skip-x") + (on ? " show" : "")); }); }
+    function reset() {
+      timers.forEach(clearTimeout); timers = [];
+      for (var i = 0; i < 6; i++) { node(i).setAttribute("class", "node"); if (i < 5) document.getElementById("e" + i).setAttribute("class", "edge"); }
+      skipShown(false); step = -1; busy = false;
+    }
+    function advance() {
+      if (busy) return; busy = true;
+      if (step >= 0) { node(step).setAttribute("class", "node done"); if (step < 5) document.getElementById("e" + step).setAttribute("class", "edge on"); }
+      step += 1;
+      if (step > 5) { say("<b>Delivered.</b> Every step left a checked output in the log. You answered 3 stops; as they earn evidence, they ask less.", btn("Run again", function () { reset(); advance(); })); busy = false; return; }
+      if (stops[step] !== undefined) { node(step).setAttribute("class", "node stop"); say('<span class="wait">Waiting for you.</span> ' + stops[step], btn("Accept", function () { busy = false; advance(); })); return; }
+      node(step).setAttribute("class", "node active");
+      say("Agent working on <b>" + names[step] + "</b>…");
+      if (step === 1) {
+        later(function () {
+          skipShown(true);
+          say('<span class="warn">Refused.</span> The agent tried to write <b>src/screens/People.tsx</b> during object-map. It can only write work/object-map.json.');
+          later(function () { skipShown(false); say(checks[1]); later(function () { busy = false; advance(); }, 1400); }, 2600);
+        }, 900);
+        return;
+      }
+      later(function () { say(checks[step]); later(function () { busy = false; advance(); }, 1400); }, 1100);
+    }
+    document.getElementById("m-run").addEventListener("click", function () { reset(); advance(); });
+  })();
+
+  // ---- ring follows the layer in view ----
+  (function ring() {
+    var layers = document.querySelectorAll(".layer"), orbit = document.getElementById("orbit-on"), C = 2 * Math.PI * 118;
+    function setActive(i) {
+      for (var j = 0; j < 4; j++) document.getElementById("rn" + j).setAttribute("class", "rn" + (j === i ? " on" : ""));
+      var arc = C * (i + 1) / 4; orbit.setAttribute("stroke-dasharray", arc.toFixed(1) + " " + C.toFixed(1));
+    }
+    // The active layer is the last one whose top has passed the middle of the screen,
+    // so a fast scroll can never leave the ring on a layer that is no longer in view.
+    var current = -1, queued = false;
+    function update() {
+      queued = false;
+      var mid = window.innerHeight * 0.5, idx = 0;
+      layers.forEach(function (l, i) { if (l.getBoundingClientRect().top < mid) idx = i; });
+      if (idx !== current) { current = idx; setActive(idx); }
+    }
+    window.addEventListener("scroll", function () { if (!queued) { queued = true; requestAnimationFrame(update); } }, { passive: true });
+    window.addEventListener("resize", update);
+    update();
+  })();
+
+  // ---- review queue ----
+  (function queue() {
+    var seed = [17, 40, 12];
+    var items = [
+      { t: "People screen", r: "screen-design", s: "moments of use", b: .2, n: 17, k: 0, q: "Which moments must the People screen serve first?",
+        ev: [["A recruiter writes back and you need the role and the client", "snapshot · contacts[12]"], ["You check who is overdue for a follow-up", "snapshot · 34 pending next steps"], ["You return to a contact with no open role", "snapshot · contacts[27]"]] },
+      { t: "Pricing page copy", r: "copy-review", s: "final copy", b: .05, n: 40, k: 0, q: "Approve the final copy for the pricing page?",
+        ev: [["Headline and three plan descriptions", "diff · 41 lines"], ["No forbidden terms, reading level 8", "check · passed"], ["Compared with the copy live today", "before and after"]] },
+      { t: "CSV export bug", r: "bug-fix", s: "delivery", b: .1, n: 12, k: 0, q: "Accept the fix for names with commas?",
+        ev: [["Failing test written first, now passing", "tests · 12/12"], ["3 real exports compared byte by byte", "check · passed"], ["No other test changed", "check · passed"]] }
+    ];
+    var sel = 0;
+    function sampled(it) { return logE(it.n, it.k, it.b) >= T; }
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+    function render() {
+      var list = document.getElementById("q-list"); list.innerHTML = "";
+      items.forEach(function (it, i) {
+        var d = el("div", "qitem" + (i === sel ? " sel" : "")); d.tabIndex = 0; d.setAttribute("role", "button");
+        d.appendChild(el("b", "", it.t)); d.appendChild(el("small", "", it.r + " · " + (sampled(it) ? "sampled, 1 in 10" : "waiting for you")));
+        d.addEventListener("click", function () { sel = i; render(); });
+        d.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sel = i; render(); } });
+        list.appendChild(d);
+      });
+      document.getElementById("q-count").textContent = items.filter(function (it) { return !sampled(it); }).length + " waiting";
+      var it = items[sel], ok = sampled(it), le = logE(it.n, it.k, it.b), nd = needed(it.k, it.b);
+      var det = document.getElementById("q-detail"); det.innerHTML = "";
+      det.appendChild(el("span", "chip " + (ok ? "green" : "amber"), ok ? "sampled · asks 1 in 10" : "stop · waiting for you"));
+      det.lastChild.style.justifySelf = "start";
+      det.appendChild(el("p", "q", it.q));
+      var ev = el("div", "ev");
+      it.ev.forEach(function (e) { var row = el("div"); row.appendChild(el("i")); var sp = el("span", "", e[0]); sp.appendChild(el("cite", "", e[1])); row.appendChild(sp); ev.appendChild(row); });
+      det.appendChild(ev);
+      var acts = el("div", "row-actions");
+      [["Accept", false, "mini go"], ["Change", true, "mini"], ["Return with a note", true, "mini"], ["Reset", null, "mini"]].forEach(function (a) {
+        var b = el("button", a[2], a[0]); b.type = "button";
+        b.addEventListener("click", function () { if (a[1] === null) { it.n = seed[sel]; it.k = 0; toast("Reset " + it.s + "."); render(); } else answer(a[1]); });
+        acts.appendChild(b);
+      });
+      det.appendChild(acts);
+      var meta = document.getElementById("q-meta"), frac = Math.max(0, Math.min(1, le / T));
+      meta.innerHTML = '<span class="label">stop · ' + it.s + '</span>' +
+        '<div style="display:grid;gap:6px"><div class="kv"><span>evidence</span><b>' + Math.exp(le).toFixed(1) + ' / 20</b></div><div class="track"><div class="fill' + (ok ? " done" : "") + '" style="width:' + (frac * 100).toFixed(0) + '%"></div></div></div>' +
+        '<div class="kv"><span>budget</span><b>' + Math.round(it.b * 100) + '%</b></div>' +
+        '<div class="kv"><span>answers</span><b>' + it.n + '</b></div>' +
+        '<div class="kv"><span>changed</span><b>' + it.k + '</b></div>' +
+        '<div class="kv"><span>to sampled</span><b>' + (ok ? "done" : (nd === null ? "not at this rate" : (nd - it.n) + " accepts")) + '</b></div>';
+    }
+    function toast(t) { document.getElementById("q-toast").textContent = t; }
+    function answer(changed) {
+      var it = items[sel], before = sampled(it); it.n++; if (changed) it.k++; var after = sampled(it);
+      toast(before !== after ? (after ? it.s + " crossed the threshold. It now asks one time in ten." : "You changed a sampled answer. " + it.s + " asks every time again.")
+        : (changed ? "Changed. The agent works from your note, and the stop's evidence drops." : "Accepted. Evidence for " + it.s + " went up."));
+      render();
+    }
+    render();
+  })();
+
+  // ---- guarantee simulator ----
+  (function simulator() {
+    var B = 0.05, P = 0.05, H = 2000, RUNS = 1000, SCALE = 0.30, tables = null;
+    function buildTables() {
+      var maxK = Math.floor(H * B) + 6, naive = [], any = [];
+      for (var k = 0; k <= maxK; k++) {
+        var lo = k + 1, hi = H;
+        if (cpUpper(hi, k, 1 - DELTA) > B) naive.push(Infinity);
+        else { while (lo < hi) { var mid = (lo + hi) >> 1; if (cpUpper(mid, k, 1 - DELTA) <= B) hi = mid; else lo = mid + 1; } naive.push(lo); }
+        lo = k + 1; hi = H;
+        if (logE(hi, k, B) < T) any.push(Infinity);
+        else { while (lo < hi) { var m2 = (lo + hi) >> 1; if (logE(m2, k, B) >= T) hi = m2; else lo = m2 + 1; } any.push(lo); }
+      }
+      return { naive: naive, any: any };
+    }
+    function oneRun(table, rnd) {
+      var k = 0;
+      for (var n = 1; n <= H; n++) { if (rnd() < P) { k++; if (k >= table.length) return false; } if (n >= table[k]) return true; }
+      return false;
+    }
+    function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+    var running = false;
+    document.getElementById("s-run").addEventListener("click", function () {
+      if (running) return; running = true;
+      var status = document.getElementById("s-status");
+      status.textContent = "Preparing thresholds…";
+      setTimeout(function () {
+        if (!tables) tables = buildTables();
+        var done = 0, hitN = 0, hitA = 0, rnd = mulberry((Math.random() * 1e9) | 0);
+        function batch() {
+          for (var i = 0; i < 50 && done < RUNS; i++, done++) {
+            var seed = (rnd() * 4294967296) >>> 0;
+            if (oneRun(tables.naive, mulberry(seed))) hitN++;
+            if (oneRun(tables.any, mulberry(seed))) hitA++;
+          }
+          var fn = hitN / done, fa = hitA / done;
+          document.getElementById("s-naive").textContent = (100 * fn).toFixed(1) + "%";
+          document.getElementById("s-any").textContent = (100 * fa).toFixed(1) + "%";
+          document.getElementById("s-nb").style.width = Math.min(100, 100 * fn / SCALE) + "%";
+          document.getElementById("s-ab").style.width = Math.min(100, 100 * fa / SCALE) + "%";
+          status.textContent = done + " of " + RUNS + " runs" + (done === RUNS ? ". Same answer sequences fed to both rules." : "…");
+          if (done < RUNS) requestAnimationFrame(batch); else running = false;
+        }
+        batch();
+      }, 30);
+    });
+  })();
+})();
+</script>
+</body>
+</html>
