@@ -4,8 +4,9 @@ Make your AI agents follow the method, check what they deliver, and call you
 only where it matters. For people who run a team of agents in Claude Code and
 Codex.
 
-> Status: early. The action gate, the step conductor and the review page work
-> today. See [Status](#status).
+> **Alpha.** Jaynes runs end to end on macOS with Claude Code, but its role
+> API and stored formats will still change, and it is not on PyPI yet. See
+> [Status and roadmap](#status-and-roadmap).
 
 ## The problem
 
@@ -77,16 +78,34 @@ at most 5%. With a 5% budget that takes 88 accepts in a row; with 20%, it
 takes 20. The test is a mixture likelihood ratio, valid at any stopping time
 by Ville's inequality. Details in [SPEC.md](SPEC.md).
 
-## Status
+## Status and roadmap
 
 | Part | State |
 |---|---|
-| Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works today |
-| History report and guarantee simulation | Works today |
-| Step conductor for Claude Code and Codex: role API, write boundary, checks, retries, resume after a crash, quota pause, stops through the Python API | Works today |
-| Review page and CLI answers: queue, stops, runs, roles, log; the run continues after an answer | Works today |
-| First real role, `screen-design`, measured against the first user's baseline | In progress |
-| Judges calibrated on your labels, fewer labels needed | Next |
+| Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works |
+| History report and guarantee simulation | Works |
+| Step conductor for Claude Code and Codex: role API, write boundary, checks, retries, resume after a crash, quota pause | Works |
+| Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step | Works |
+| Real projects: steps on copies, previews before and after, a branch at the end | Works |
+| Box for previews on macOS; web access per step, with every address recorded | Works |
+| Built-in roles: visual-identity, redesign (from references) | Works, first real runs in progress |
+
+Missing, roughly in order:
+
+- **Published package.** Not on PyPI yet; install from a clone with
+  `uv tool install .`.
+- **A first real case**, measured against the first user's baseline.
+- **More built-in roles** that need no design taste to check: fix a bug (a
+  failing test first), build a feature (a spec stop, then tests), upgrade
+  dependencies. They need checks that run the project's tests in the box.
+- **Choosing among two or three directions** at a stop, instead of one.
+- **Dismissing a blocked run** from the page.
+- **A box on Linux.** There, previews refuse to run unless
+  `JAYNES_UNBOXED=1`.
+- **Codex web search**, wired but not yet verified in a live run.
+- **Roles without Python**, for people who don't write code.
+- **Judges calibrated on your labels**, so fewer answers are needed.
+- **SPEC.md** brought up to date with projects, references and web steps.
 
 ## Get started
 
