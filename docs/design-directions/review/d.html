@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review D: Inbox with evidence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --blue-soft: rgba(111, 180, 255, .12);
+  --amber: #ffb35c; --amber-soft: rgba(255, 179, 92, .13);
+  --green: #69dba0; --green-soft: rgba(105, 219, 160, .13);
+  --red: #ff6f6f; --red-soft: rgba(255, 111, 111, .12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 15px; line-height: 1.5; }
+.app { display: grid; grid-template-columns: 256px 1fr 300px; height: 100vh; }
+
+/* queue */
+aside.queue { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 600; height: 53px; }
+.brand span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); }
+.brand nav { margin-left: auto; display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--dim); }
+.qhead { padding: 14px 18px 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; }
+.item { padding: 12px 18px; border-left: 2px solid transparent; cursor: pointer; display: grid; gap: 3px; }
+.item:hover { background: var(--panel); }
+.item.on { background: var(--panel-2); border-left-color: var(--amber); }
+.item .t { font-size: 14px; }
+.item .m { font-family: var(--mono); font-size: 11px; color: var(--dim); display: flex; gap: 8px; }
+.chip { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.amber { color: var(--amber); background: var(--amber-soft); }
+.red { color: var(--red); background: var(--red-soft); }
+.green { color: var(--green); background: var(--green-soft); }
+
+/* main */
+main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.crumbs { padding: 0 32px; height: 53px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--dim); display: flex; gap: 10px; align-items: center; }
+.crumbs b { color: var(--ink); font-weight: 500; }
+.body { flex: 1; overflow: auto; padding: 24px 32px 40px; display: grid; gap: 28px; align-content: start; }
+.steps { display: flex; gap: 6px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
+.steps span { padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
+.steps span i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: block; }
+.steps span.here { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+.steps span.here i { background: var(--amber); }
+.steps span.todo { color: var(--faint); border-style: dashed; }
+.steps span.todo i { background: var(--line-2); }
+h1 { font-size: 26px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.2; margin: 0; text-wrap: balance; max-width: 30ch; }
+.label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; display: flex; justify-content: space-between; }
+.label span { text-transform: none; letter-spacing: 0; color: var(--faint); }
+.box { border: 1px solid var(--line); border-radius: 6px; }
+.row { display: grid; grid-template-columns: 44px 1fr 56px 88px; gap: 14px; padding: 13px 16px; border-top: 1px solid var(--line); align-items: baseline; }
+.row:first-child { border-top: 0; }
+.row .id { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.row .m { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.row.head { padding-top: 9px; padding-bottom: 9px; }
+.row.head span { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.turn { display: grid; grid-template-columns: 76px 1fr auto; gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line); align-items: baseline; }
+.turn:first-child { border-top: 0; }
+.turn .k { font-family: var(--mono); font-size: 11px; }
+.turn .m { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* answer bar */
+.bar { border-top: 1px solid var(--line); background: rgba(7, 9, 13, .96); padding: 14px 32px; display: flex; gap: 10px; align-items: center; }
+.bar input { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 10px 12px; }
+.btn { font-family: var(--mono); font-size: 12.5px; padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); cursor: pointer; white-space: nowrap; }
+.btn kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: 6px; }
+.btn.solid { background: var(--green); border-color: var(--green); color: #04150c; font-weight: 500; }
+.btn.solid kbd { color: #0b3a22; }
+
+/* evidence rail */
+aside.rail { border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.rail .top { height: 53px; border-bottom: 1px solid var(--line); padding: 0 22px; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.rail .in { padding: 22px; display: grid; gap: 26px; align-content: start; overflow: auto; }
+.big { font-size: 30px; font-weight: 500; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.big small { font-size: 14px; color: var(--dim); letter-spacing: 0; margin-left: 4px; font-weight: 400; }
+.track { height: 6px; border-radius: 3px; background: var(--line); position: relative; overflow: hidden; margin: 12px 0 8px; }
+.track i { position: absolute; left: 0; top: 0; bottom: 0; width: 3.9%; background: var(--blue); border-radius: 3px; }
+.track b { position: absolute; left: 5%; top: -2px; bottom: -2px; width: 1px; background: var(--dim); }
+.note { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--dim); line-height: 1.6; }
+.note b { color: var(--ink); font-weight: 500; }
+.labels { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; margin-bottom: 10px; }
+.labels i { aspect-ratio: 1; border-radius: 2px; background: var(--green-soft); border: 1px solid rgba(105,219,160,.4); }
+.labels i.e { background: var(--red-soft); border-color: rgba(255,111,111,.55); }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+.kv b { color: var(--ink); font-weight: 500; text-align: right; }
+.tag { position: fixed; right: 14px; bottom: 12px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="queue">
+    <div class="brand">Jaynes <span>review</span><nav><span>Queue</span><span>Roles</span><span>Log</span></nav></div>
+    <div class="qhead"><span>Waiting</span><span>3</span></div>
+    <div class="item on">
+      <div class="t">Requirements for the People screen</div>
+      <div class="m"><span class="chip amber">stop</span><span>screen-design</span><span>12m</span></div>
+    </div>
+    <div class="item">
+      <div class="t">Object map for the Processes screen</div>
+      <div class="m"><span class="chip amber">stop</span><span>screen-design</span><span>1h</span></div>
+    </div>
+    <div class="item">
+      <div class="t">Walkthrough of the Billing screen</div>
+      <div class="m"><span class="chip red">blocked</span><span>screen-design</span><span>3h</span></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="crumbs"><span>screen-design</span>/<span>Redesign the People screen</span>/<b>requirements</b></div>
+    <div class="body">
+      <div class="steps">
+        <span><i></i>snapshot</span><span><i></i>moments</span><span><i></i>object-map</span><span><i></i>paths</span><span><i></i>walkthrough</span><span><i></i>breaks</span><span class="here"><i></i>requirements</span><span class="todo"><i></i>implement</span><span class="todo"><i></i>accept</span>
+      </div>
+      <h1>Each of these 5 requirements fixes one break from the walkthrough. Are they the right fixes?</h1>
+      <div>
+        <div class="label">Output <span>attempt 2</span></div>
+        <div class="box">
+          <div class="row head"><span></span><span>Requirement</span><span>Fixes</span><span>Evidence</span></div>
+          <div class="row"><span class="id">R1</span><span>Search keeps the typed query after opening a person and going back.</span><span class="m">B1</span><span class="m">capture 03</span></div>
+          <div class="row"><span class="id">R2</span><span>The empty list says why it is empty and offers Add person.</span><span class="m">B2</span><span class="m">capture 05</span></div>
+          <div class="row"><span class="id">R3</span><span>The role filter shows the count per role before it is applied.</span><span class="m">B3</span><span class="m">capture 06</span></div>
+          <div class="row"><span class="id">R4</span><span>Bulk selection survives moving to the next page.</span><span class="m">B4</span><span class="m">capture 09</span></div>
+          <div class="row"><span class="id">R5</span><span>Secondary text meets AA contrast, 4.5 to 1.</span><span class="m">B5</span><span class="m">capture 02</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="label">Checks and turns <span>2 turns, 61k tokens in, 3.1k out, 2 min, codex</span></div>
+        <div class="box">
+          <div class="turn"><span class="k" style="color:var(--green)">passed</span><span>one_requirement_per_break, cites_captures</span><span class="m">attempt 2</span></div>
+          <div class="turn"><span class="k" style="color:var(--red)">rejected</span><span>R4 cited break B7, which does not exist</span><span class="m">attempt 1</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="bar">
+      <input placeholder="Note for the agent (needed for return and context)">
+      <button class="btn">Context<kbd>X</kbd></button>
+      <button class="btn">Return<kbd>R</kbd></button>
+      <button class="btn">Change<kbd>C</kbd></button>
+      <button class="btn solid">Accept<kbd>A</kbd></button>
+    </div>
+  </main>
+
+  <aside class="rail">
+    <div class="top"><span class="chip amber">undetermined</span><span>waits every run</span></div>
+    <div class="in">
+      <div>
+        <div class="label">Evidence</div>
+        <div class="big">0.77<small>of 20</small></div>
+        <div class="track"><i></i><b></b></div>
+        <p class="note">At <b>20</b> this stop has shown it errs under <b>10%</b>, with at most a <b>5%</b> chance of being wrong. The tick marks the start, 1.</p>
+      </div>
+      <div>
+        <div class="label">Your answers here <span>12</span></div>
+        <div class="labels"><i></i><i></i><i></i><i class="e"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <p class="note"><b>54</b> more clean answers and it waits only on <b>10%</b> of runs, drawn at random.</p>
+      </div>
+      <div>
+        <div class="label">Stop</div>
+        <div class="kv"><span>budget</span><b>10%</b><span>errors so far</span><b>1 of 12</b><span>audit share once sampled</span><b>10%</b><span>waiting</span><b>12 min</b></div>
+      </div>
+    </div>
+  </aside>
+</div>
+<div class="tag">Direction D: A's layout with C's evidence</div>
+</body>
+</html>

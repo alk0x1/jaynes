@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review C: Evidence ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --blue-soft: rgba(111, 180, 255, .12);
+  --amber: #ffb35c; --amber-soft: rgba(255, 179, 92, .13);
+  --green: #69dba0; --green-soft: rgba(105, 219, 160, .13);
+  --red: #ff6f6f; --red-soft: rgba(255, 111, 111, .12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 15px; line-height: 1.5; }
+header { display: flex; gap: 16px; align-items: center; padding: 14px 28px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--dim); }
+header .logo { font-family: var(--display); font-weight: 600; font-size: 16px; color: var(--ink); }
+header .q { margin-left: auto; color: var(--amber); }
+.grid { display: grid; grid-template-columns: 1fr 340px; min-height: calc(100vh - 49px); }
+.left { padding: 24px 28px; border-right: 1px solid var(--line); display: grid; gap: 22px; align-content: start; }
+.timeline { display: flex; gap: 0; font-family: var(--mono); font-size: 11px; }
+.timeline div { flex: 1; padding: 8px 10px; border: 1px solid var(--line); margin-left: -1px; color: var(--dim); display: grid; gap: 2px; }
+.timeline div b { font-weight: 500; color: var(--ink); }
+.timeline .ok { border-top: 2px solid var(--green); }
+.timeline .here { border-top: 2px solid var(--amber); background: var(--panel); }
+.timeline .todo { color: var(--faint); }
+.timeline .todo b { color: var(--faint); }
+h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.25; margin: 0; text-wrap: balance; }
+.label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--faint); padding: 0 10px 8px 0; }
+td { border-top: 1px solid var(--line); padding: 10px 10px 10px 0; vertical-align: top; }
+td.id { font-family: var(--mono); font-size: 12px; color: var(--blue); width: 44px; }
+td.m { font-family: var(--mono); font-size: 11.5px; color: var(--dim); white-space: nowrap; }
+.ok { color: var(--green); }
+.right { padding: 24px 24px; display: grid; gap: 22px; align-content: start; background: var(--panel); }
+.state { font-family: var(--mono); font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 4px; }
+.amber { color: var(--amber); background: var(--amber-soft); }
+.meter { display: grid; gap: 8px; }
+.track { height: 8px; border-radius: 4px; background: var(--line); position: relative; overflow: hidden; }
+.track i { position: absolute; left: 0; top: 0; bottom: 0; width: 3.9%; background: var(--blue); }
+.meter p, .dl p { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--dim); line-height: 1.6; }
+.meter p b, .dl p b { color: var(--ink); font-weight: 500; }
+.labels { display: flex; gap: 3px; flex-wrap: wrap; }
+.labels i { width: 12px; height: 12px; border-radius: 2px; background: var(--green-soft); border: 1px solid rgba(105,219,160,.35); }
+.labels i.e { background: var(--red-soft); border-color: rgba(255,111,111,.5); }
+.btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn { font-family: var(--mono); font-size: 12.5px; padding: 11px 12px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel-2); cursor: pointer; text-align: left; }
+.btn.solid { background: var(--green); border-color: var(--green); color: #04150c; font-weight: 500; grid-column: span 2; }
+textarea { width: 100%; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 10px; min-height: 56px; }
+.tag { position: fixed; left: 14px; bottom: 12px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+</style>
+</head>
+<body>
+<header><span class="logo">Jaynes</span><span>screen-design / Redesign the People screen</span><span class="q">3 waiting</span></header>
+<div class="grid">
+  <div class="left">
+    <div class="timeline">
+      <div class="ok"><b>snapshot</b>jaynes</div>
+      <div class="ok"><b>moments</b>accepted</div>
+      <div class="ok"><b>object-map</b>sampled</div>
+      <div class="ok"><b>paths</b>checked</div>
+      <div class="ok"><b>walkthrough</b>jaynes</div>
+      <div class="ok"><b>breaks</b>checked</div>
+      <div class="here"><b>requirements</b>waiting</div>
+      <div class="todo"><b>implement</b></div>
+      <div class="todo"><b>accept</b></div>
+    </div>
+    <h1>Each of these 5 requirements fixes one break from the walkthrough. Are they the right fixes?</h1>
+    <div>
+      <div class="label">Output, attempt 2</div>
+      <table>
+        <tr><th></th><th>Requirement</th><th>Fixes</th><th>Evidence</th></tr>
+        <tr><td class="id">R1</td><td>Search keeps the typed query after opening a person and going back.</td><td class="m">B1</td><td class="m">capture 03</td></tr>
+        <tr><td class="id">R2</td><td>The empty list says why it is empty and offers Add person.</td><td class="m">B2</td><td class="m">capture 05</td></tr>
+        <tr><td class="id">R3</td><td>The role filter shows the count per role before it is applied.</td><td class="m">B3</td><td class="m">capture 06</td></tr>
+        <tr><td class="id">R4</td><td>Bulk selection survives moving to the next page.</td><td class="m">B4</td><td class="m">capture 09</td></tr>
+        <tr><td class="id">R5</td><td>Secondary text meets AA contrast, 4.5 to 1.</td><td class="m">B5</td><td class="m">capture 02</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="label">Checks and turns</div>
+      <table>
+        <tr><td class="m ok">passed</td><td>one_requirement_per_break, cites_captures</td><td class="m">attempt 2</td></tr>
+        <tr><td class="m" style="color:var(--red)">rejected</td><td>R4 cited break B7, which does not exist</td><td class="m">attempt 1</td></tr>
+        <tr><td class="m">cost</td><td>2 turns, 61k tokens in, 3.1k out, 2 min</td><td class="m">codex</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="right">
+    <div class="state"><span class="chip amber">undetermined</span><span style="color:var(--dim)">waits every run</span></div>
+    <div class="meter">
+      <div class="label" style="margin:0">Evidence that errors stay under 10%</div>
+      <div class="track"><i></i></div>
+      <p><b>0.77</b> of the <b>20</b> needed (1/δ, δ = 5%)</p>
+    </div>
+    <div class="dl">
+      <div class="label">Your last 12 answers here</div>
+      <div class="labels"><i></i><i></i><i></i><i class="e"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <p style="margin-top:8px"><b>54</b> more clean answers and this stop is sampled: it waits on 10% of runs.</p>
+    </div>
+    <div>
+      <div class="label">Answer</div>
+      <div class="btns">
+        <button class="btn solid">Accept</button>
+        <button class="btn">Change</button>
+        <button class="btn">Return</button>
+        <button class="btn">Context</button>
+      </div>
+      <textarea placeholder="Note for the agent" style="margin-top:8px"></textarea>
+    </div>
+  </div>
+</div>
+<div class="tag">Direction C: evidence ledger, run and statistics beside the output</div>
+</body>
+</html>

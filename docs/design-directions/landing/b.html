@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jaynes · Direction B · Evidence you can watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Direction B: graphite and instrument panel. Split hero: claim on the left, a live evidence chart on the right. */
+:root {
+  --bg: #07090d; --panel: #0e1218; --line: #222a36; --ink: #eef2f7; --dim: #93a0b2;
+  --blue: #6fb4ff; --amber: #ffb35c; --green: #69dba0; --red: #ff6f6f;
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); }
+body { padding-inline: max(16px, env(safe-area-inset-left)); min-height: 100vh; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 64px 64px; background-position: -1px -1px; background-attachment: fixed; }
+body::before { content: ""; position: fixed; inset: 0; background: radial-gradient(70% 60% at 30% 20%, transparent 0%, var(--bg) 70%); pointer-events: none; z-index: 0; }
+.wrap { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; }
+.bar { display: flex; align-items: center; gap: 24px; padding: 20px 0; }
+.logo { font-weight: 600; font-size: 19px; letter-spacing: -0.01em; }
+.logo span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); margin-left: 8px; }
+.bar nav { margin-left: auto; display: flex; gap: 24px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: center; padding: 72px 0 96px; }
+.tag { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+h1 { font-weight: 500; font-size: clamp(38px, 5vw, 62px); line-height: 1.04; letter-spacing: -0.03em; margin: 14px 0 20px; }
+.lede { font-size: 19px; color: var(--dim); line-height: 1.55; margin: 0 0 28px; max-width: 40ch; }
+.btn { font-family: var(--mono); font-size: 13px; padding: 12px 16px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink); background: var(--panel); cursor: pointer; }
+.btn.solid { background: var(--blue); color: #04101f; border-color: var(--blue); font-weight: 500; }
+.ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+.inst { border: 1px solid var(--line); border-radius: 12px; background: rgba(14, 18, 24, 0.92); padding: 18px; display: grid; gap: 14px; }
+.inst-top { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+.inst-top b { color: var(--ink); font-weight: 500; }
+.state { font-family: var(--mono); font-size: 11px; padding: 4px 9px; border-radius: 4px; }
+.state.must { background: rgba(255, 179, 92, .14); color: var(--amber); }
+.state.samp { background: rgba(105, 219, 160, .14); color: var(--green); }
+svg { width: 100%; height: auto; display: block; }
+.axis { stroke: var(--line); }
+.lbl { font-family: var(--mono); font-size: 10px; fill: var(--dim); }
+.thr { stroke: var(--green); stroke-dasharray: 5 5; }
+.curve { fill: none; stroke: var(--blue); stroke-width: 2.2; }
+.pt-err { fill: var(--red); }
+.controls { display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: center; }
+.controls label { font-family: var(--mono); font-size: 11px; color: var(--dim); display: grid; gap: 4px; justify-self: end; }
+input[type=range] { accent-color: var(--blue); width: 160px; }
+.read { font-family: var(--mono); font-size: 12px; color: var(--dim); line-height: 1.6; min-height: 3.2em; }
+.read b { color: var(--ink); font-weight: 500; }
+@media (max-width: 860px) { .hero { grid-template-columns: 1fr; padding-top: 32px; } .bar nav { display: none; } .controls { grid-template-columns: 1fr 1fr; } .controls label { justify-self: start; grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar"><div class="logo">Jaynes<span>v0 · open source</span></div><nav><span>Method</span><span>Checks</span><span>Attention</span><span>Foundations</span></nav></header>
+  <section class="hero">
+    <div>
+      <span class="tag">// for teams of agents in Claude Code and Codex</span>
+      <h1>Stop reviewing everything your agents do.</h1>
+      <p class="lede">Jaynes makes agents follow the method and checks what they deliver. Your answers become evidence, and each checkpoint stops asking you only once the evidence says it can.</p>
+      <div class="ctas"><button class="btn solid" type="button">Get started</button><button class="btn" type="button">How the guarantee works</button></div>
+    </div>
+    <div class="inst" aria-label="Live evidence for one checkpoint">
+      <div class="inst-top"><span>stop <b>moments-of-use</b> · role screen-design</span><span class="state must" id="st">asks every time</span></div>
+      <svg viewBox="0 0 560 260" id="chart" role="img" aria-label="Evidence over answers, with the threshold line at 20.">
+        <line class="axis" x1="44" y1="220" x2="548" y2="220"/>
+        <line class="axis" x1="44" y1="16" x2="44" y2="220"/>
+        <line class="thr" id="thr" x1="44" x2="548" y1="60" y2="60"/>
+        <text class="lbl" x="548" y="52" text-anchor="end" id="thrl">threshold 20 · stop becomes sampled</text>
+        <text class="lbl" x="44" y="238">0</text><text class="lbl" x="548" y="238" text-anchor="end" id="xmax">answers</text>
+        <text class="lbl" x="36" y="224" text-anchor="end">1</text>
+        <path class="curve" id="curve" d=""/>
+        <g id="errs"></g>
+      </svg>
+      <div class="controls">
+        <button class="btn solid" type="button" id="acc">Accept</button>
+        <button class="btn" type="button" id="chg">Change it</button>
+        <label>budget <output id="bo">20%</output><input type="range" id="bud" min="5" max="30" step="5" value="20"></label>
+      </div>
+      <div class="read" id="read">Every time you accept this stop's answer without changes, its evidence grows. Cross the line and it asks one time in ten.</div>
+    </div>
+  </section>
+</div>
+<script>
+(function () {
+  var DELTA = 0.05, T = Math.log(1 / DELTA);
+  function binomCdf(k, n, p) { var lt = n * Math.log(1 - p), s = 0; for (var i = 0; i <= k; i++) { s += Math.exp(lt); lt += Math.log((n - i) / (i + 1)) + Math.log(p) - Math.log(1 - p); } return Math.min(1, s); }
+  function lc(n, k) { var s = 0; for (var i = 1; i <= k; i++) s += Math.log(n - k + i) - Math.log(i); return s; }
+  function logE(n, k, b) { if (!n) return 0; var t = 1 - binomCdf(k, n + 1, b); if (t <= 0) return -20; return Math.log(t) - Math.log(n + 1) - lc(n, k) - (k + 1) * Math.log(b) - (n - k) * Math.log(1 - b); }
+  var answers = [], budget = 0.2;
+  var X0 = 44, X1 = 548, Y0 = 220, Y1 = 16, LMAX = Math.log(200);
+  function y(le) { var v = Math.max(0, Math.min(LMAX, le)); return Y0 - (v / LMAX) * (Y0 - Y1); }
+  function draw() {
+    var nMax = Math.max(40, answers.length + 5);
+    document.getElementById("xmax").textContent = nMax + " answers";
+    var d = "M" + X0 + " " + Y0, k = 0, errs = "";
+    for (var i = 0; i < answers.length; i++) {
+      if (answers[i]) k++;
+      var x = X0 + ((i + 1) / nMax) * (X1 - X0), yy = y(logE(i + 1, k, budget));
+      d += " L" + x.toFixed(1) + " " + yy.toFixed(1);
+      if (answers[i]) errs += '<circle class="pt-err" cx="' + x.toFixed(1) + '" cy="' + yy.toFixed(1) + '" r="4"/>';
+    }
+    document.getElementById("curve").setAttribute("d", d);
+    document.getElementById("errs").innerHTML = errs;
+    var ty = y(T); ["thr"].forEach(function (id) { var l = document.getElementById(id); l.setAttribute("y1", ty); l.setAttribute("y2", ty); });
+    document.getElementById("thrl").setAttribute("y", ty - 8);
+    var n = answers.length, le = logE(n, k, budget), ok = le >= T, st = document.getElementById("st");
+    st.className = "state " + (ok ? "samp" : "must"); st.textContent = ok ? "sampled · asks 1 in 10" : "asks every time";
+    var read = document.getElementById("read");
+    if (!n) return;
+    read.innerHTML = "<b>" + n + "</b> answers, <b>" + k + "</b> changed · evidence <b>" + Math.exp(Math.max(le, -20)).toFixed(1) + "</b> of 20 at a " + Math.round(budget * 100) + "% budget. " +
+      (ok ? "The stop now asks one time in ten. Change one and it comes back." : "Keeps asking until the evidence crosses the line.");
+  }
+  document.getElementById("acc").onclick = function () { answers.push(false); draw(); };
+  document.getElementById("chg").onclick = function () { answers.push(true); draw(); };
+  document.getElementById("bud").oninput = function (e) { budget = e.target.value / 100; document.getElementById("bo").textContent = e.target.value + "%"; draw(); };
+  // seed a short history so the chart is alive on load
+  for (var i = 0; i < 14; i++) answers.push(false);
+  draw();
+})();
+</script>
+</body>
+</html>

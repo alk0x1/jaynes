@@ -17,7 +17,7 @@ document is approved.
 | Where review happens | A local web page (`jaynes review`), plus a CLI command to approve quickly |
 | Page form | A story told in scenes over a few weeks, with one interactive element at the end |
 | Language | English, for the page, the README and the code |
-| Name of the first user | "A one-person company run by agents" (never "Helm") |
+| Name of the first user | "A one-person company run by agents", never the company's name |
 | Agents supported | Claude Code and Codex, both promised from the first release |
 | Theory | A "Foundations" section near the end of the page, verified citations only |
 
@@ -37,8 +37,8 @@ The answer has three layers, and the page is built around them:
 
 ## 3. The problem, from the first user's baseline
 
-Measured on the one-person company before Jaynes (source:
-`helm/work/jaynes-baseline.md`, 2026-10-21):
+Measured on the one-person company before Jaynes (source: the company's
+baseline notes, 2026-10-21):
 
 | Measure | Value |
 |---|---|
@@ -113,7 +113,7 @@ screen stays at 5% or is never sampled.
 To make skipping impossible, Jaynes has to be the conductor: it invokes the
 agent per step and owns the write permissions. A hook alone cannot stop an
 agent from not doing something. The first user already has a working
-prototype of this layer (`helm/work/factory-pipeline/design_flow.py`): fixed
+prototype of this layer (a design pipeline in its own repository): fixed
 step order, JSON schemas with checks, writes limited to the step's file, stops
 that wait, walkthrough executed by the coordinator, Codex as the agent. It is
 the reference for layer 1.

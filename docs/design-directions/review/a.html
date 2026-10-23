@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review A: Inbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --blue-soft: rgba(111, 180, 255, .12);
+  --amber: #ffb35c; --amber-soft: rgba(255, 179, 92, .13);
+  --green: #69dba0; --green-soft: rgba(105, 219, 160, .13);
+  --red: #ff6f6f; --red-soft: rgba(255, 111, 111, .12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 15px; line-height: 1.5; }
+.mono { font-family: var(--mono); }
+.app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.brand span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); }
+.brand nav { margin-left: auto; display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--dim); }
+.qhead { padding: 14px 18px 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; }
+.item { padding: 12px 18px; border-left: 2px solid transparent; cursor: pointer; display: grid; gap: 3px; }
+.item:hover { background: var(--panel); }
+.item.on { background: var(--panel-2); border-left-color: var(--amber); }
+.item .t { font-size: 14px; }
+.item .m { font-family: var(--mono); font-size: 11px; color: var(--dim); display: flex; gap: 8px; }
+.chip { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.amber { color: var(--amber); background: var(--amber-soft); }
+.red { color: var(--red); background: var(--red-soft); }
+.green { color: var(--green); background: var(--green-soft); }
+.blue { color: var(--blue); background: var(--blue-soft); }
+main { display: flex; flex-direction: column; min-height: 0; }
+.crumbs { padding: 16px 32px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--dim); display: flex; gap: 10px; align-items: center; }
+.crumbs b { color: var(--ink); font-weight: 500; }
+.body { overflow: auto; padding: 28px 32px 120px; display: grid; gap: 26px; max-width: 900px; }
+h1 { font-size: 26px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.2; margin: 0; text-wrap: balance; }
+.sub { color: var(--dim); margin-top: 8px; }
+.label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+.reqs { border: 1px solid var(--line); border-radius: 6px; }
+.req { display: grid; grid-template-columns: 52px 1fr auto; gap: 14px; padding: 14px 16px; border-top: 1px solid var(--line); align-items: baseline; }
+.req:first-child { border-top: 0; }
+.req .id { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.req .cite { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.checks { display: flex; gap: 8px; flex-wrap: wrap; }
+.status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.status div { background: var(--panel); padding: 14px 16px; }
+.status .n { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.status p { margin: 2px 0 0; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.bar { position: sticky; bottom: 0; margin-top: auto; border-top: 1px solid var(--line); background: rgba(7, 9, 13, .94); backdrop-filter: blur(6px); padding: 14px 32px; display: flex; gap: 10px; align-items: center; }
+.bar input { flex: 1; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 10px 12px; }
+.btn { font-family: var(--mono); font-size: 12.5px; padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); cursor: pointer; }
+.btn kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: 6px; }
+.btn.solid { background: var(--green); border-color: var(--green); color: #04150c; font-weight: 500; }
+.btn.solid kbd { color: #0b3a22; }
+.tag { position: fixed; right: 14px; bottom: 76px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">Jaynes <span>review</span><nav><span>Queue</span><span>Roles</span><span>Log</span></nav></div>
+    <div class="qhead"><span>Waiting</span><span>3</span></div>
+    <div class="item on">
+      <div class="t">Requirements for the People screen</div>
+      <div class="m"><span class="chip amber">stop</span><span>screen-design</span><span>12m</span></div>
+    </div>
+    <div class="item">
+      <div class="t">Object map for the Processes screen</div>
+      <div class="m"><span class="chip amber">stop</span><span>screen-design</span><span>1h</span></div>
+    </div>
+    <div class="item">
+      <div class="t">Walkthrough of the Billing screen</div>
+      <div class="m"><span class="chip red">blocked</span><span>screen-design</span><span>3h</span></div>
+    </div>
+  </aside>
+  <main>
+    <div class="crumbs"><span>screen-design</span>/<span>Redesign the People screen</span>/<b>requirements</b><span style="margin-left:auto">round 1, attempt 2</span></div>
+    <div class="body">
+      <div>
+        <h1>Each of these 5 requirements fixes one break from the walkthrough. Are they the right fixes?</h1>
+        <div class="sub">One earlier attempt was rejected by a check: R4 cited break B7, which does not exist.</div>
+      </div>
+      <div>
+        <div class="label">Output</div>
+        <div class="reqs">
+          <div class="req"><span class="id">R1</span><span>Search keeps the typed query after opening a person and going back.</span><span class="cite">B1, capture 03</span></div>
+          <div class="req"><span class="id">R2</span><span>The empty list says why it is empty and offers Add person.</span><span class="cite">B2, capture 05</span></div>
+          <div class="req"><span class="id">R3</span><span>The role filter shows the count per role before it is applied.</span><span class="cite">B3, capture 06</span></div>
+          <div class="req"><span class="id">R4</span><span>Bulk selection survives moving to the next page.</span><span class="cite">B4, capture 09</span></div>
+          <div class="req"><span class="id">R5</span><span>Secondary text meets AA contrast, 4.5 to 1.</span><span class="cite">B5, capture 02</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="label">Checks</div>
+        <div class="checks"><span class="chip green">one_requirement_per_break passed</span><span class="chip green">cites_captures passed</span></div>
+      </div>
+      <div>
+        <div class="label">This stop</div>
+        <div class="status">
+          <div><div class="n">12 <span style="font-size:14px;color:var(--dim)">labels</span></div><p>1 error, budget 10%</p></div>
+          <div><div class="n">0.77 <span style="font-size:14px;color:var(--dim)">of 20</span></div><p>evidence to sample it</p></div>
+          <div><div class="n">54</div><p>more clean answers needed</p></div>
+        </div>
+      </div>
+    </div>
+    <div class="bar">
+      <input placeholder="Note for the agent (needed for return and context)">
+      <button class="btn">Context<kbd>X</kbd></button>
+      <button class="btn">Return<kbd>R</kbd></button>
+      <button class="btn">Change<kbd>C</kbd></button>
+      <button class="btn solid">Accept<kbd>A</kbd></button>
+    </div>
+  </main>
+</div>
+<div class="tag">Direction A: inbox, queue always visible</div>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Review F: The side is the run</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"><style>
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --amber: #ffb35c; --amber-soft: rgba(255,179,92,.13);
+  --green: #69dba0; --green-soft: rgba(105,219,160,.13); --red: #ff6f6f; --red-soft: rgba(255,111,111,.12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 15px; line-height: 1.5; }
+.app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+.app.full { grid-template-columns: 1fr; }
+aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 18px; height: 53px; border-bottom: 1px solid var(--line); font-weight: 600; flex: none; }
+.brand span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); }
+.brand nav { margin-left: auto; display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--dim); }
+.qhead { padding: 14px 18px 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; }
+.item { padding: 12px 18px; border-left: 2px solid transparent; display: grid; gap: 6px; }
+.item:hover { background: var(--panel); }
+.item.on { background: var(--panel-2); border-left-color: var(--amber); }
+.item .t { font-size: 14px; }
+.item .m { font-family: var(--mono); font-size: 11px; color: var(--dim); display: flex; gap: 8px; align-items: center; }
+.chip { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.amber { color: var(--amber); background: var(--amber-soft); }
+.red { color: var(--red); background: var(--red-soft); }
+/* the tiny strip: one mark per stage */
+.dots { display: flex; gap: 3px; }
+.dots i { width: 14px; height: 4px; border-radius: 2px; background: var(--green); display: block; }
+.dots i.here { background: var(--amber); } .dots i.blocked { background: var(--red); }
+.dots i.todo { background: var(--line-2); } .dots i.skip { background: transparent; box-shadow: inset 0 0 0 1px var(--green); }
+/* a vertical stage list */
+.stages { list-style: none; margin: 4px 0 0; padding: 0; position: relative; }
+.stages li { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding: 5px 0; position: relative; }
+.stages li::before { content: ""; position: absolute; left: 6px; top: 18px; bottom: -6px; width: 1px; background: var(--line-2); }
+.stages li:last-child::before { display: none; }
+.stages .dot { width: 9px; height: 9px; border-radius: 50%; margin: 6px 0 0 2px; background: var(--green); position: relative; z-index: 1; }
+.stages .here .dot { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); }
+.stages .blocked .dot { background: var(--red); }
+.stages .todo .dot { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-2); }
+.stages .skip .dot { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--green); }
+.stages .you .dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.stages b { font-family: var(--mono); font-size: 12px; font-weight: 500; display: block; }
+.stages .todo b { color: var(--faint); font-weight: 400; }
+.stages .here b { color: var(--amber); }
+.stages small { font-family: var(--mono); font-size: 11px; color: var(--dim); display: block; }
+.stages .r { display: flex; justify-content: space-between; gap: 8px; }
+.stages .r em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.crumbs { padding: 0 32px; height: 53px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--dim); display: flex; gap: 10px; align-items: center; flex: none; }
+.crumbs b { color: var(--ink); font-weight: 500; }
+.crumbs .r { margin-left: auto; }
+.path { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-family: var(--mono); font-size: 11.5px; }
+.path span { color: var(--dim); display: inline-flex; align-items: center; gap: 6px; }
+.path span i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: block; }
+.path span.here { color: var(--amber); } .path span.here i { background: var(--amber); }
+.path span.todo { color: var(--faint); } .path span.todo i { background: var(--line-2); }
+.path span.skip i { background: transparent; box-shadow: inset 0 0 0 1px var(--green); }
+.path u { text-decoration: none; color: var(--line-2); }
+.body { flex: 1; overflow: auto; padding: 28px 32px 48px; }
+.body > * { max-width: 920px; }
+.body > * + * { margin-top: 26px; }
+h1 { font-size: 26px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.2; margin: 0; text-wrap: balance; }
+.sub { color: var(--dim); margin-top: 8px; }
+.label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; display: flex; justify-content: space-between; }
+.label span { text-transform: none; letter-spacing: 0; color: var(--faint); }
+.box { border: 1px solid var(--line); border-radius: 6px; }
+.row { display: grid; grid-template-columns: 44px 1fr 56px 88px; gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line); align-items: baseline; }
+.row:first-child { border-top: 0; }
+.row .id { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.row .m { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.row.head span { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.turn { display: grid; grid-template-columns: 76px 1fr auto; gap: 14px; padding: 11px 16px; border-top: 1px solid var(--line); align-items: baseline; }
+.turn:first-child { border-top: 0; }
+.turn .k { font-family: var(--mono); font-size: 11px; } .turn .m { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.bar { border-top: 1px solid var(--line); padding: 14px 32px; display: flex; gap: 10px; flex: none; }
+.bar input { flex: 1; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 10px 12px; }
+.btn { font-family: var(--mono); font-size: 12.5px; padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); }
+.btn kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: 6px; }
+.btn.solid { background: var(--green); border-color: var(--green); color: #04150c; font-weight: 500; }
+.foot { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--dim); display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
+.foot b { color: var(--ink); font-weight: 500; text-align: right; }
+.switch { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.switch .k { border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 6px; color: var(--ink); }
+.tag { position: fixed; right: 14px; bottom: 76px; font-family: var(--mono); font-size: 11px; color: var(--faint); background: var(--bg); padding: 2px 6px; }
+</style></head><body><div class="app "><aside><div class="brand">Jaynes <span>review</span><nav><span>Queue</span><span>Roles</span><span>Log</span></nav></div><div class="qhead"><span>This run</span><span>7 of 9</span></div><div style="padding:0 18px 12px"><ul class="stages"><li class="done"><span class="dot"></span><div><div class="r"><b>snapshot</b><em>1s</em></div><small>by jaynes</small></div></li><li class="done"><span class="dot"></span><div><div class="r"><b>moments</b><em>3 min</em></div><small>checked, 1 attempt</small></div></li><li class="you"><span class="dot"></span><div><div class="r"><b>object-map</b><em>4 min</em></div><small>you accepted</small></div></li><li class="done"><span class="dot"></span><div><div class="r"><b>paths</b><em>6 min</em></div><small>checked, 2 attempts</small></div></li><li class="skip"><span class="dot"></span><div><div class="r"><b>walkthrough</b><em>2 min</em></div><small>not asked, sampled</small></div></li><li class="done"><span class="dot"></span><div><div class="r"><b>breaks</b><em>3 min</em></div><small>checked, 1 attempt</small></div></li><li class="here"><span class="dot"></span><div><div class="r"><b>requirements</b><em></em></div><small>waiting 12 min</small></div></li><li class="todo"><span class="dot"></span><div><div class="r"><b>implement</b><em></em></div></div></li><li class="todo"><span class="dot"></span><div><div class="r"><b>accept</b><em></em></div></div></li></ul></div><div class="foot"><span>started</span><b>34 min ago</b><span>turns</span><b>11</b><span>tokens</span><b>212k in, 9k out</b><span>you answered</span><b>1 of 2 stops</b></div></aside><main><div class="crumbs"><span>screen-design</span>/<span>Redesign the People screen</span>/<b>requirements</b><span class="r switch">3 waiting <span class="k">&lsaquo; J</span><span>1 of 3</span><span class="k">K &rsaquo;</span></span></div><div class="body"><h1>Each of these 5 requirements fixes one break from the walkthrough. Are they the right fixes?</h1><div class="sub">1 earlier attempt rejected by Jaynes before you saw it: R4 cited break B7, which does not exist.</div><div><div class="label">Output <span>attempt 2</span></div><div class="box"><div class="row head"><span></span><span>Requirement</span><span>Fixes</span><span>Evidence</span></div><div class="row"><span class="id">R1</span><span>Search keeps the typed query after opening a person and going back.</span><span class="m">B1</span><span class="m">capture 03</span></div><div class="row"><span class="id">R2</span><span>The empty list says why it is empty and offers Add person.</span><span class="m">B2</span><span class="m">capture 05</span></div><div class="row"><span class="id">R3</span><span>The role filter shows the count per role before it is applied.</span><span class="m">B3</span><span class="m">capture 06</span></div><div class="row"><span class="id">R4</span><span>Bulk selection survives moving to the next page.</span><span class="m">B4</span><span class="m">capture 09</span></div><div class="row"><span class="id">R5</span><span>Secondary text meets AA contrast, 4.5 to 1.</span><span class="m">B5</span><span class="m">capture 02</span></div></div></div><div><div class="label">Checks and turns <span>61k tokens in, 3.1k out, 2 min, codex</span></div><div class="box"><div class="turn"><span class="k" style="color:var(--green)">passed</span><span>one_requirement_per_break</span><span class="m">attempt 2</span></div><div class="turn"><span class="k" style="color:var(--red)">rejected</span><span>R4 cited break B7, which does not exist</span><span class="m">attempt 1</span></div></div></div></div><div class="bar"><input placeholder="Note for the agent (needed for return and context)"><span class="btn">Context<kbd>X</kbd></span><span class="btn">Return<kbd>R</kbd></span><span class="btn">Change<kbd>C</kbd></span><span class="btn solid">Accept<kbd>A</kbd></span></div></main></div><div class="tag">F: the side is the run, the queue is a switcher</div></body></html>

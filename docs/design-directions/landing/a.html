@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jaynes · Direction A · The method, running</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Direction A: night navy, ice text, one sky accent. The hero IS the product: the method as a live graph. */
+:root {
+  --bg: #040814; --panel: #0a1222; --line: #1c2a44; --ink: #e6f3ff; --dim: #8fa6c4;
+  --sky: #82c8ff; --sky-soft: rgba(130, 200, 255, 0.14); --amber: #ffb86b; --red: #ff7a7a; --green: #7ee2a8;
+  --display: "Geist", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Geist Mono", ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); }
+body { padding-inline: max(16px, env(safe-area-inset-left)); min-height: 100vh; }
+.bar { max-width: 1200px; margin: 16px auto 0; display: flex; align-items: center; gap: 24px; padding: 12px 18px; border: 1px solid var(--line); border-radius: 10px; background: rgba(10, 18, 34, 0.7); backdrop-filter: blur(8px); }
+.logo { font-weight: 500; letter-spacing: -0.02em; font-size: 19px; display: flex; align-items: center; gap: 10px; }
+.logo svg { width: 20px; height: 20px; }
+.bar nav { display: flex; gap: 26px; margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--dim); }
+.btn { font-family: var(--mono); font-size: 13px; padding: 11px 16px; border-radius: 6px; border: 1px solid var(--line); color: var(--ink); background: transparent; cursor: pointer; text-decoration: none; }
+.btn.solid { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.hero { max-width: 1200px; margin: 0 auto; padding: 88px 0 40px; display: grid; gap: 28px; justify-items: center; text-align: center; }
+.kicker { font-family: var(--mono); font-size: 12px; color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; }
+h1 { font-weight: 300; font-size: clamp(40px, 6.4vw, 76px); line-height: 1.02; letter-spacing: -0.035em; margin: 0; max-width: 15ch; }
+h1 em { font-style: normal; color: var(--sky); }
+.lede { font-size: 20px; font-weight: 300; color: var(--dim); max-width: 46ch; line-height: 1.5; margin: 0; }
+.ctas { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.stage { max-width: 1200px; margin: 24px auto 80px; border: 1px solid var(--line); border-radius: 14px; background: radial-gradient(120% 90% at 50% 0%, #0d1830 0%, var(--panel) 55%); padding: 22px; position: relative; overflow: hidden; }
+.stage-top { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 12px; color: var(--dim); gap: 12px; flex-wrap: wrap; }
+.stage-top b { color: var(--ink); font-weight: 500; }
+svg.graph { width: 100%; height: auto; display: block; margin-top: 8px; }
+.node rect { fill: #0e1a30; stroke: var(--line); stroke-width: 1.2; transition: all .3s; }
+.node text { font-family: var(--mono); font-size: 12px; fill: var(--dim); transition: fill .3s; }
+.node .sub { font-size: 10px; }
+.node.done rect { stroke: var(--sky); fill: #0f223d; }
+.node.done text { fill: var(--ink); }
+.node.active rect { stroke: var(--sky); fill: var(--sky-soft); filter: drop-shadow(0 0 10px rgba(130, 200, 255, .45)); }
+.node.active text { fill: var(--ink); }
+.node.stop rect { stroke: var(--amber); fill: rgba(255, 184, 107, .1); filter: drop-shadow(0 0 12px rgba(255, 184, 107, .4)); }
+.node.stop text { fill: var(--amber); }
+.edge { stroke: var(--line); stroke-width: 1.4; fill: none; stroke-dasharray: 3 5; }
+.edge.on { stroke: var(--sky); stroke-dasharray: none; }
+.skip { stroke: var(--red); stroke-width: 1.4; fill: none; stroke-dasharray: 4 4; opacity: 0; transition: opacity .3s; }
+.skip.show { opacity: 1; }
+.token { fill: var(--sky); filter: drop-shadow(0 0 8px var(--sky)); }
+.panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: rgba(4, 8, 20, .6); min-height: 64px; }
+.panel .msg { font-family: var(--mono); font-size: 13px; color: var(--dim); text-align: left; }
+.panel .msg b { color: var(--ink); font-weight: 500; }
+.panel .msg .warn { color: var(--red); }
+.panel .msg .wait { color: var(--amber); }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--dim); margin-top: 12px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+@media (max-width: 720px) { .bar nav { display: none; } .hero { padding-top: 48px; } .panel { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="logo"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="3" fill="#82c8ff"/><circle cx="15" cy="5" r="2.2" fill="#e6f3ff"/><circle cx="15" cy="15" r="2.2" fill="#e6f3ff"/><path d="M7.5 9 13 5.8M7.5 11 13 14.2" stroke="#82c8ff" stroke-width="1.4"/></svg>Jaynes</div>
+  <nav><span>How it works</span><span>Guarantee</span><span>Foundations</span><span>Docs</span></nav>
+  <a class="btn" href="#">GitHub</a>
+</header>
+
+<section class="hero">
+  <span class="kicker">For people who run a team of agents · Claude Code and Codex</span>
+  <h1>Your agents follow the method. <em>You step in where it matters.</em></h1>
+  <p class="lede">Jaynes runs your agents one step at a time, checks every output, and stops for you only where your judgment is needed.</p>
+  <div class="ctas"><button class="btn solid" id="run" type="button">Run the method</button><a class="btn" href="#">Read the guarantee</a></div>
+</section>
+
+<section class="stage" aria-label="A live run of the screen-design method">
+  <div class="stage-top"><span>role <b>screen-design</b> · task <b>People screen</b> · agent <b>codex</b></span><span id="clock">step 0 of 6</span></div>
+  <svg class="graph" viewBox="0 0 1160 230" role="img" aria-label="Six steps: moments, object map, walkthrough, requirements, implement, accept. Moments, requirements and accept are stops.">
+    <path class="edge" id="e0" d="M150 115 H210"/>
+    <path class="edge" id="e1" d="M340 115 H400"/>
+    <path class="edge" id="e2" d="M530 115 H590"/>
+    <path class="edge" id="e3" d="M720 115 H780"/>
+    <path class="edge" id="e4" d="M910 115 H970"/>
+    <path class="skip" id="skip" d="M275 85 C 420 10, 700 10, 845 85"/>
+    <g class="node" id="n0"><rect x="20" y="80" width="130" height="70" rx="8"/><text x="85" y="110" text-anchor="middle">moments</text><text class="sub" x="85" y="130" text-anchor="middle">stop · 20%</text></g>
+    <g class="node" id="n1"><rect x="210" y="80" width="130" height="70" rx="8"/><text x="275" y="110" text-anchor="middle">object-map</text><text class="sub" x="275" y="130" text-anchor="middle">check: cites data</text></g>
+    <g class="node" id="n2"><rect x="400" y="80" width="130" height="70" rx="8"/><text x="465" y="110" text-anchor="middle">walkthrough</text><text class="sub" x="465" y="130" text-anchor="middle">run by jaynes</text></g>
+    <g class="node" id="n3"><rect x="590" y="80" width="130" height="70" rx="8"/><text x="655" y="110" text-anchor="middle">requirements</text><text class="sub" x="655" y="130" text-anchor="middle">stop · 10%</text></g>
+    <g class="node" id="n4"><rect x="780" y="80" width="130" height="70" rx="8"/><text x="845" y="110" text-anchor="middle">implement</text><text class="sub" x="845" y="130" text-anchor="middle">tests · contrast</text></g>
+    <g class="node" id="n5"><rect x="970" y="80" width="170" height="70" rx="8"/><text x="1055" y="110" text-anchor="middle">accept</text><text class="sub" x="1055" y="130" text-anchor="middle">stop · always</text></g>
+    <circle class="token" id="token" r="6" cx="85" cy="186" opacity="0"/>
+  </svg>
+  <div class="panel"><div class="msg" id="msg">Press <b>Run the method</b> to watch one task go through the screen-design role.</div><div id="act"></div></div>
+  <div class="legend"><span><i style="background:#82c8ff"></i>checked step</span><span><i style="background:#ffb86b"></i>stop, waits for you</span><span><i style="background:#ff7a7a"></i>refused</span></div>
+</section>
+
+<script>
+(function () {
+  var stops = { 0: "Which moments must the People screen serve first? 3 candidates, each citing the real data.", 3: "Approve 5 requirements, one per break found in the walkthrough.", 5: "Accept the delivery? 12/12 tests, contrast 4.9:1, no regression." };
+  var checks = { 1: "Checked[ObjectMap] · 6 objects, every count cites the data", 2: "Jaynes walked the screen itself · 14 screenshots · 5 breaks", 4: "Checked[Patch] · tests 12/12 · contrast AA · tokens only" };
+  var step = -1, busy = false;
+  var msg = document.getElementById("msg"), act = document.getElementById("act"), clock = document.getElementById("clock");
+  function node(i) { return document.getElementById("n" + i); }
+  function say(html, button) { msg.innerHTML = html; act.innerHTML = ""; if (button) act.appendChild(button); }
+  function btn(label, fn) { var b = document.createElement("button"); b.className = "btn solid"; b.type = "button"; b.textContent = label; b.onclick = fn; return b; }
+  function reset() {
+    for (var i = 0; i < 6; i++) { node(i).setAttribute("class", "node"); if (i < 5) document.getElementById("e" + i).setAttribute("class", "edge"); }
+    document.getElementById("skip").setAttribute("class", "skip"); step = -1; busy = false;
+  }
+  function advance() {
+    if (busy) return; busy = true;
+    if (step >= 0) { node(step).setAttribute("class", "node done"); if (step < 5) document.getElementById("e" + step).setAttribute("class", "edge on"); }
+    step += 1;
+    clock.textContent = "step " + Math.min(step + 1, 6) + " of 6";
+    if (step > 5) { say("<b>Delivered.</b> Every step left a checked output in the log. You answered 3 stops; as they earn evidence, they will ask less.", btn("Run again", function () { reset(); advance(); })); busy = false; return; }
+    if (stops[step] !== undefined) {
+      node(step).setAttribute("class", "node stop");
+      say('<span class="wait">Waiting for you.</span> ' + stops[step], btn("Accept", function () { busy = false; advance(); }));
+      return;
+    }
+    node(step).setAttribute("class", "node active");
+    if (step === 1) {
+      say("Agent working on <b>object-map</b>…");
+      setTimeout(function () {
+        document.getElementById("skip").setAttribute("class", "skip show");
+        say('<span class="warn">Refused.</span> The agent tried to write <b>src/screens/People.tsx</b> during object-map. It can only write work/object-map.json.');
+        setTimeout(function () { document.getElementById("skip").setAttribute("class", "skip"); say(checks[1]); setTimeout(function () { busy = false; advance(); }, 1300); }, 2200);
+      }, 900);
+      return;
+    }
+    say("Running <b>" + ["", "", "walkthrough", "", "implement"][step] + "</b>…");
+    setTimeout(function () { say(checks[step]); setTimeout(function () { busy = false; advance(); }, 1300); }, 1100);
+  }
+  document.getElementById("run").addEventListener("click", function () { reset(); advance(); });
+})();
+</script>
+</body>
+</html>

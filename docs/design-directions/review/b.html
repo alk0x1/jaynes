@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review B: One at a time</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --blue-soft: rgba(111, 180, 255, .12);
+  --amber: #ffb35c; --amber-soft: rgba(255, 179, 92, .13);
+  --green: #69dba0; --green-soft: rgba(105, 219, 160, .13);
+  --red: #ff6f6f; --red-soft: rgba(255, 111, 111, .12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 16px; line-height: 1.55; }
+header { display: flex; align-items: center; gap: 14px; padding: 18px 28px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+header .logo { font-family: var(--display); font-weight: 600; font-size: 17px; color: var(--ink); }
+.dots { display: flex; gap: 6px; margin-left: auto; align-items: center; }
+.dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); display: block; }
+.dots i.on { background: var(--amber); }
+.dots i.red { background: var(--red); }
+.wrap { max-width: 720px; margin: 36px auto 120px; padding: 0 24px; }
+.kicker { font-family: var(--mono); font-size: 12px; color: var(--amber); display: flex; gap: 10px; }
+.kicker span { color: var(--dim); }
+h1 { font-size: clamp(30px, 4vw, 40px); font-weight: 500; letter-spacing: -0.03em; line-height: 1.1; margin: 14px 0 14px; text-wrap: balance; }
+.lede { color: var(--dim); font-size: 17px; margin: 0 0 34px; }
+ol { list-style: none; padding: 0; margin: 0 0 30px; counter-reset: r; }
+li { padding: 16px 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: 40px 1fr; gap: 6px 12px; }
+li:last-child { border-bottom: 1px solid var(--line); }
+li .id { font-family: var(--mono); font-size: 13px; color: var(--blue); padding-top: 2px; }
+li .cite { grid-column: 2; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.meta { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; color: var(--dim); margin-bottom: 40px; }
+.meta b { color: var(--green); font-weight: 500; }
+.meta em { font-style: normal; color: var(--ink); }
+.answers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.answer { border: 1px solid var(--line-2); background: var(--panel); border-radius: 6px; padding: 14px; text-align: left; color: var(--ink); font: inherit; cursor: pointer; display: grid; gap: 4px; }
+.answer b { font-weight: 500; font-size: 16px; }
+.answer span { font-family: var(--mono); font-size: 11px; color: var(--dim); line-height: 1.45; }
+.answer.accept { border-color: var(--green); background: var(--green-soft); }
+.answer.accept b { color: var(--green); }
+textarea { width: 100%; margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); font: inherit; font-size: 15px; padding: 12px 14px; min-height: 64px; resize: vertical; }
+.foot { margin-top: 26px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); line-height: 1.7; }
+.tag { position: fixed; right: 14px; bottom: 12px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+</style>
+</head>
+<body>
+<header><span class="logo">Jaynes</span><span>1 of 3 waiting</span><div class="dots"><i class="on"></i><i></i><i class="red"></i></div></header>
+<div class="wrap">
+  <div class="kicker">STOP<span>screen-design / Redesign the People screen / requirements</span></div>
+  <h1>Each of these 5 requirements fixes one break from the walkthrough. Are they the right fixes?</h1>
+  <p class="lede">Waiting 12 minutes. One earlier attempt was rejected by a check before you saw it.</p>
+  <ol>
+    <li><span class="id">R1</span><span>Search keeps the typed query after opening a person and going back.</span><span class="cite">fixes B1, capture 03</span></li>
+    <li><span class="id">R2</span><span>The empty list says why it is empty and offers Add person.</span><span class="cite">fixes B2, capture 05</span></li>
+    <li><span class="id">R3</span><span>The role filter shows the count per role before it is applied.</span><span class="cite">fixes B3, capture 06</span></li>
+    <li><span class="id">R4</span><span>Bulk selection survives moving to the next page.</span><span class="cite">fixes B4, capture 09</span></li>
+    <li><span class="id">R5</span><span>Secondary text meets AA contrast, 4.5 to 1.</span><span class="cite">fixes B5, capture 02</span></li>
+  </ol>
+  <div class="meta"><span><b>2 checks passed</b></span><span>this stop: <em>12 labels, 1 error</em></span><span>sampled after <em>54</em> more clean answers</span></div>
+  <div class="answers">
+    <button class="answer accept"><b>Accept</b><span>Right as it is. Counts as correct.</span></button>
+    <button class="answer"><b>Change</b><span>Edit it yourself. Counts as an error.</span></button>
+    <button class="answer"><b>Return</b><span>The agent redoes it with your note. Error.</span></button>
+    <button class="answer"><b>Context</b><span>Redo with new facts. Not the agent's fault.</span></button>
+  </div>
+  <textarea placeholder="Note for the agent"></textarea>
+  <div class="foot">After you answer, the run continues by itself and the next stop opens here.</div>
+</div>
+<div class="tag">Direction B: one stop at a time, focus</div>
+</body>
+</html>
