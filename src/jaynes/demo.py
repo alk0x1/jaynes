@@ -1,8 +1,6 @@
 """A screen-design shaped role with a scripted agent, to see the review page without spending quota.
 
-    PYTHONPATH=. uv run jaynes run --role examples.review_demo:ROLE --task "Redesign the People screen" \\
-        --runtime scripted=examples.review_demo:Agent
-    PYTHONPATH=. uv run jaynes review
+    jaynes demo
 """
 
 import json
@@ -72,7 +70,7 @@ BREAKS = ROLE.step("breaks", output=Breaks, needs=[SNAPSHOT], check=breaks_cite_
 REQUIREMENTS = ROLE.step("requirements", output=Requirements, needs=[BREAKS], check=one_requirement_per_break,
                          stop=stop(0.10), question=ask)
 IMPLEMENT = ROLE.step("implement", output=Patch, needs=[REQUIREMENTS])
-ACCEPT = ROLE.step("accept", needs=[IMPLEMENT], stop=stop(0.05, sampled=False))
+ROLE.step("accept", needs=[IMPLEMENT], stop=stop(0.05, sampled=False))
 
 PROBLEMS = [
     ("B1", "Search loses the typed query after opening a person and going back.", "capture 03",
