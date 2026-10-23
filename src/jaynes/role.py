@@ -18,7 +18,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -53,10 +53,11 @@ class Checked(Generic[T]):
 
 
 class Witnesses:
-    """The checked outputs a step needs, read by step."""
+    """The checked outputs a step needs, read by step, and the step's copy of the project if it has one."""
 
-    def __init__(self, by_name: Mapping[str, Checked[Any]]) -> None:
+    def __init__(self, by_name: Mapping[str, Checked[Any]], project: Path | None = None) -> None:
         self._by_name = dict(by_name)
+        self.project = project
 
     def __getitem__(self, step: Step[T]) -> Checked[T]:
         return cast(Checked[T], self._by_name[step.name])
@@ -109,6 +110,9 @@ class Step(Generic[T]):
     max_turns: int
     deadline: float  # seconds per turn
     question: Callable[[Any, Witnesses], str] | None = None  # what the person is asked at the stop
+    project: Literal["read", "write"] | None = None  # a copy of the run's project, to read or to change
+    may_change: tuple[str, ...] = ()  # globs of project paths a changing step may touch; empty means any
+    web: bool = False  # the agent may read the web during this step
 
     @property
     def executor(self) -> str:
@@ -127,6 +131,10 @@ class Step(Generic[T]):
         parts = [self.role.method_text(), self.instructions, json.dumps(self.schema(), sort_keys=True)]
         if self.run_by is not None:
             parts.append(code_hash(self.run_by))
+        if self.project:  # appended only when set, so older roles keep their fingerprints
+            parts.append(f"project:{self.project}:{','.join(self.may_change)}")
+        if self.web:
+            parts.append("web")
         return _sha("\0".join(parts))
 
     def stop_fingerprint(self, model: str) -> str:
@@ -151,7 +159,9 @@ class Role:
              check: Check | Sequence[Check] = (), stop: Stop | None = None,
              run_by: Callable[[StepContext], T] | None = None, agent: str | None = None,
              instructions: str = "", max_turns: int = 3, deadline: float = 900.0,
-             question: Callable[[T, Witnesses], str] | None = None) -> Step[T]:
+             question: Callable[[T, Witnesses], str] | None = None,
+             project: Literal["read", "write"] | None = None, may_change: Sequence[str] = (),
+             web: bool = False) -> Step[T]:
         if any(s.name == name for s in self.steps):
             raise ValueError(f"step {name!r} defined twice")
         for n in needs:
@@ -163,9 +173,16 @@ class Role:
             raise ValueError(f"step {name!r} has no output and no stop; it would do nothing")
         if question is not None and stop is None:
             raise ValueError(f"step {name!r} has a question but no stop to ask it at")
+        if may_change and project != "write":
+            raise ValueError(f"step {name!r} lists may_change but does not change the project")
+        if project is not None and output is None:
+            raise ValueError(f"step {name!r} works on the project but has no output")
+        if web and (output is None or run_by is not None):
+            raise ValueError(f"step {name!r} reads the web but no agent runs it")
         checks = tuple(cast(Sequence[Check], check)) if isinstance(check, Sequence) else (check,)
         s: Step[T] = Step(self, name, output, tuple(needs), checks, stop, run_by, agent or self.agent,
-                          instructions, max_turns, deadline, cast(Callable[[Any, Witnesses], str] | None, question))
+                          instructions, max_turns, deadline, cast(Callable[[Any, Witnesses], str] | None, question),
+                          project, tuple(may_change), web)
         self.steps.append(s)
         return s
 

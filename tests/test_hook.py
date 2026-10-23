@@ -17,9 +17,9 @@ PUSH = "git " + "push"
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    project = tmp_path / "helm"
+    project = tmp_path / "project"
     project.mkdir()
-    (project / "jaynes.toml").write_text((ROOT / "examples" / "agent-team.jaynes.toml").read_text())
+    (project / "jaynes.toml").write_text((ROOT / "src" / "jaynes" / "agent-team.jaynes.toml").read_text())
     monkeypatch.setenv("JAYNES_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("HOME", str(tmp_path / "userhome"))
     return project

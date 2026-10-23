@@ -18,6 +18,7 @@ import pytest
 from jaynes import cli
 from jaynes.review import make_server
 from jaynes.store import Store
+from tests.pictured import PNG
 
 
 @pytest.fixture
@@ -151,3 +152,59 @@ def test_an_idle_run_can_be_continued_from_the_page(served: tuple[str, Path, str
     while not list(store.events("RunFinished", run_id=run)):
         assert time.monotonic() < deadline
         time.sleep(0.05)
+
+
+def test_after_an_answer_the_page_follows_the_run_it_continues(served: tuple[str, Path, str]) -> None:
+    base, _, run = served
+    fields = urllib.parse.urlencode({**form(get(base + "/")), "answer": "return", "note": "shorter"}).encode()
+    try:
+        build_opener = urllib.request.build_opener(NoRedirect())
+        build_opener.open(urllib.request.Request(base + "/answer", data=fields), timeout=10)
+        raise AssertionError("expected a redirect")
+    except urllib.error.HTTPError as err:
+        assert err.code == 303 and err.headers["Location"] == f"/run/{run}"
+
+
+def test_a_stop_offers_to_return_an_earlier_step_and_the_answer_goes_there(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.two_stops:ROLE", "--task", "t",
+              "--runtime", "quick=tests.two_stops:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    server = make_server(tmp_path, port=0, idle_after=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        post(base + "/answer", {**form(get(base + "/")), "answer": "accept"})
+        store = Store(tmp_path / "jaynes.sqlite3")
+        deadline = time.monotonic() + 30
+        while '<option value="outline">' not in (page := get(base + "/")):
+            assert time.monotonic() < deadline, (tmp_path / "runs" / run / "continue.log").read_text()
+            time.sleep(0.05)
+        assert '<option value="outline">back to outline</option>' in page
+        status, _ = post(base + "/answer", {**form(page), "answer": "return", "note": "shorter", "to": "outline"})
+        assert status == 303
+        answered = [e.payload for e in store.events("StopAnswered", run_id=run)][-1]
+        assert answered["to"] == "outline" and answered["reset"] == ["outline", "draft"]
+        assert "return to outline (error for outline): shorter" in get(base + f"/run/{run}")
+    finally:
+        server.shutdown()
+
+
+def test_a_stop_shows_the_pictures_its_inputs_left_and_what_it_read_on_the_web(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.pictured:ROLE", "--task", "t",
+              "--runtime", "quick=tests.pictured:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    server = make_server(tmp_path, port=0, idle_after=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        page = get(base + f"/stop/{run}/direction")
+        assert f'<img src="/file/{run}/look/ref-1.png"' in page and "ref-2.svg" not in page
+        assert "read https://linear.app, search: dark fonts" in page
+        with urllib.request.urlopen(base + f"/file/{run}/look/ref-1.png", timeout=10) as r:
+            assert r.headers["Content-Type"] == "image/png" and r.read() == PNG
+        for path in (f"/file/{run}/look/ref-2.svg", f"/file/{run}/look/other.png", f"/file/{run}/direction/x.png"):
+            with pytest.raises(urllib.error.HTTPError) as err:
+                urllib.request.urlopen(base + path, timeout=10)
+            assert err.value.code == 404
+    finally:
+        server.shutdown()

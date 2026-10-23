@@ -336,3 +336,21 @@ def test_a_run_left_without_a_process_is_in_the_queue_as_idle(tmp_path: Path) ->
     assert (item.run_id, item.kind, item.step) == ("r1", "idle", "a")
     with c._lock("r1"):  # pyright: ignore[reportPrivateUsage]  # a process that holds the run is not idle
         assert c.queue(idle_after=0) == []
+
+
+def test_empty_folders_a_runtime_creates_for_itself_are_not_writes_but_files_in_them_are(tmp_path: Path) -> None:
+    def own_dir(ws: Path) -> None:
+        (ws / ".claude" / ".cc-writes").mkdir(parents=True)
+        write({"text": "hi"})(ws)
+
+    def own_file(ws: Path) -> None:
+        own_dir(ws)
+        (ws / ".claude" / "notes.md").write_text("x")
+
+    r = role("echo", agent="fake")
+    r.step("draft", output=Note)
+    agent = Scripted({("draft", 1): own_file, ("draft", 2): own_dir}, scratch_dirs=(".claude",))
+    c = Conductor(tmp_path, runtimes={"fake": lambda: agent})
+    assert c.run(r, "t", "r1").status == "finished"
+    [rejected] = [e.payload for e in c.store.events("TurnRejected", run_id="r1")]
+    assert rejected["reasons"] == ["only output.json may be written; the turn changed: .claude/notes.md"]

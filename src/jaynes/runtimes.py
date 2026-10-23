@@ -7,7 +7,9 @@ deadline. Both use the person's subscription login; neither copies credentials.
 The runtime sandbox is the first wall; the conductor's manifest comparison is
 the second. Claude Code's file tools are bounded by its permission layer and
 its Bash by the OS sandbox; Codex runs its commands in its workspace-write
-sandbox with network off. Settings ported from the first user's qualified
+sandbox with network off. A step marked ``web`` may read the web through the
+agent's own web tools (fetch and search), which the runtime records; shell
+commands stay offline either way. Settings ported from the first user's qualified
 factory runtime.
 """
 
@@ -20,7 +22,7 @@ import shutil
 import signal
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from jaynes.runtime import QuotaExhausted, RuntimeFailure, TurnResult, TurnTimeout
 
@@ -70,11 +72,14 @@ def _reset_epoch(text: str) -> float | None:
 
 # --- Claude Code ----------------------------------------------------------------
 
-def claude_settings(workspace: Path) -> dict[str, Any]:
+WEB_TOOLS = ["WebFetch", "WebSearch"]
+
+
+def claude_settings(workspace: Path, web: bool = False) -> dict[str, Any]:
     return {
         "permissions": {"defaultMode": "dontAsk",
-                        "allow": ["Read(./**)", "Edit(./**)", "Write(./**)", "Bash"],
-                        "deny": ["WebFetch", "WebSearch", "Agent", "Task", "NotebookEdit"],
+                        "allow": ["Read(./**)", "Edit(./**)", "Write(./**)", "Bash"] + (WEB_TOOLS if web else []),
+                        "deny": ([] if web else WEB_TOOLS) + ["Agent", "Task", "NotebookEdit"],
                         "blockReadsOutsideWorkingDirectories": True,
                         "disableBypassPermissionsMode": "disable"},
         "sandbox": {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True,
@@ -86,27 +91,50 @@ def claude_settings(workspace: Path) -> dict[str, Any]:
     }
 
 
+def claude_result(out: str) -> tuple[dict[str, Any], list[str]]:
+    """The final result of a ``stream-json`` turn, and the addresses and searches its web tools read."""
+    result: dict[str, Any] = {"is_error": True, "result": out[-400:]}
+    read: list[str] = []
+    for line in out.splitlines():
+        try:
+            event: dict[str, Any] = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("type") == "result":
+            result = event
+        elif event.get("type") == "assistant":
+            message: dict[str, Any] = event.get("message") or {}
+            blocks = cast(list[dict[str, Any]], message.get("content") or [])
+            for block in blocks:
+                if block.get("type") != "tool_use":
+                    continue
+                args: dict[str, Any] = block.get("input") or {}
+                if block.get("name") == "WebFetch" and args.get("url"):
+                    read.append(str(args["url"]))
+                elif block.get("name") == "WebSearch" and args.get("query"):
+                    read.append(f"search: {args['query']}")
+    return result, read
+
+
 class ClaudeRuntime:
     name = "claude"
+    scratch_dirs = (".claude",)  # Claude Code 2.1 creates .claude/.cc-writes in its working directory
 
     def __init__(self, model: str | None = None, max_turns: int = 60) -> None:
         self.model = model or os.environ.get("JAYNES_CLAUDE_MODEL")
         self.max_turns = max_turns
 
-    def command(self, workspace: Path) -> list[str]:
-        args = [_binary("claude"), "-p", "--output-format", "json", "--setting-sources", "",
-                "--settings", json.dumps(claude_settings(workspace)), "--strict-mcp-config",
+    def command(self, workspace: Path, web: bool = False) -> list[str]:
+        args = [_binary("claude"), "-p", "--output-format", "stream-json", "--verbose", "--setting-sources", "",
+                "--settings", json.dumps(claude_settings(workspace, web)), "--strict-mcp-config",
                 "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
                 "--permission-mode", "dontAsk", "--max-turns", str(self.max_turns)]
         return args + (["--model", self.model] if self.model else [])
 
-    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
-        code, out, err = _run(self.command(workspace), workspace, scratch, prompt, deadline,
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
+        code, out, err = _run(self.command(workspace, web), workspace, scratch, prompt, deadline,
                               {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"})
-        try:
-            result: dict[str, Any] = json.loads(out)
-        except ValueError:
-            result = {"is_error": True, "result": out[-400:]}
+        result, read = claude_result(out)
         text = f"{result.get('result') or ''} {err[-400:]}"
         if result.get("is_error") or code != 0:
             if LIMIT.search(text):
@@ -115,7 +143,7 @@ class ClaudeRuntime:
         usage: dict[str, Any] = result.get("usage") or {}
         tokens_in = sum(int(usage.get(k) or 0) for k in
                         ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), self._model(result))
+        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), self._model(result), tuple(read))
 
     def _model(self, result: dict[str, Any]) -> str:
         per_model: dict[str, dict[str, Any]] = result.get("modelUsage") or {}
@@ -132,16 +160,17 @@ class CodexRuntime:
     def __init__(self, model: str | None = None) -> None:
         self.model = model or os.environ.get("JAYNES_CODEX_MODEL")
 
-    def command(self, workspace: Path) -> list[str]:
+    def command(self, workspace: Path, web: bool = False) -> list[str]:
         args = [_binary("codex"), "exec", "--json", "--sandbox", "workspace-write", "--cd", str(workspace),
                 "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
                 "-c", "sandbox_workspace_write.network_access=false", "-c", "project_doc_max_bytes=0",
-                "-c", 'web_search="disabled"', "-c", 'approval_policy="never"']
+                "-c", f'web_search="{"live" if web else "disabled"}"', "-c", 'approval_policy="never"']
         return args + (["--model", self.model] if self.model else []) + ["-"]
 
-    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
-        code, out, err = _run(self.command(workspace), workspace, scratch, prompt, deadline)
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
+        code, out, err = _run(self.command(workspace, web), workspace, scratch, prompt, deadline)
         usage: dict[str, Any] = {}
+        read: list[str] = []
         model = self.model or self._default_model()
         failure = ""
         for line in out.splitlines():
@@ -152,6 +181,10 @@ class CodexRuntime:
             kind = event.get("type")
             if kind == "turn.completed":
                 usage = event.get("usage") or {}
+            elif kind == "item.completed":
+                item: dict[str, Any] = event.get("item") or {}
+                if item.get("type") == "web_search":
+                    read.append(f"search: {item.get('query', '')}")
             elif kind in ("turn.failed", "error"):
                 failure += " " + json.dumps(event.get("error") or event.get("message") or event)[:400]
         if failure or code != 0 or not usage:
@@ -160,7 +193,7 @@ class CodexRuntime:
                 raise QuotaExhausted(_reset_epoch(text))
             raise RuntimeFailure(f"codex turn did not complete ({code}): {text.strip()[:300]}")
         tokens_in = int(usage.get("input_tokens") or 0)  # cached input is a subset of input for Codex
-        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), model)
+        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), model, tuple(read))
 
     @staticmethod
     def _default_model() -> str:

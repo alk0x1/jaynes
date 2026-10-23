@@ -85,15 +85,20 @@ class Scripted:
     model: str = "fake-1"
     prompts: list[str] = field(default_factory=list[str])
     counts: dict[str, int] = field(default_factory=dict[str, int])
+    scratch_dirs: tuple[str, ...] = ()  # folders the runtime itself creates in the workspace
+    web_read: dict[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])  # by step, on web turns
+    webs: list[bool] = field(default_factory=list[bool])
 
-    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
         step = json.loads((workspace / "step.json").read_text())["step"]
         self.counts[step] = self.counts.get(step, 0) + 1
         self.prompts.append(prompt)
+        self.webs.append(web)
         action = self.plan.get((step, self.counts[step]))
         if action is None:
             if self.default is None:
                 raise RuntimeFailure(f"no plan for {step} turn {self.counts[step]}")
             action = write(self.default(step))
         action(workspace)
-        return TurnResult(tokens_in=100, tokens_out=10, model=self.model)
+        return TurnResult(tokens_in=100, tokens_out=10, model=self.model,
+                          web=self.web_read.get(step, ()) if web else ())

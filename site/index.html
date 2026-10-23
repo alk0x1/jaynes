@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Jaynes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">
 <meta name="description" content="Jaynes makes your AI agents follow the method, checks what they deliver, and calls you only where your judgment is still needed. For Claude Code and Codex.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -60,6 +61,7 @@ header.bar .wrap { display: flex; align-items: center; gap: 24px; height: 62px; 
 header nav { margin-left: auto; display: flex; gap: 24px; font-family: var(--mono); font-size: 12px; }
 header nav a { color: var(--dim); text-decoration: none; }
 header nav a:hover { color: var(--ink); }
+header .gh { font-family: var(--mono); font-size: 12px; padding: 7px 12px; }
 
 /* hero */
 .hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: center; padding: 88px 0 72px; }
@@ -229,6 +231,15 @@ input[type=range] { accent-color: var(--blue); width: 160px; }
 .refs cite { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 
 /* start */
+.aside { margin-top: 16px; color: var(--dim); font-size: 15px; }
+.aside a { color: var(--blue); text-decoration: none; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: step; }
+.steps li { display: grid; gap: 8px; counter-increment: step; }
+.steps h3 { font-size: 17px; font-weight: 500; display: flex; gap: 10px; align-items: baseline; }
+.steps h3::before { content: counter(step); font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.steps p { color: var(--dim); font-size: 15px; }
+.steps a, .links a { color: var(--blue); text-decoration: none; }
+.links { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; padding: 14px 10px 6px; }
 .start { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 40px; align-items: start; }
 pre.code { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--ink); }
 pre.code .c { color: var(--faint); }
@@ -258,6 +269,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
 }
 @media (max-width: 640px) {
   header nav { display: none; }
+  header .gh { margin-left: auto; }
   .stats { grid-template-columns: minmax(0, 1fr); }
   .console { grid-template-columns: minmax(0, 1fr); }
   .controls label { margin-left: 0; }
@@ -272,6 +284,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
   <div class="wrap">
     <a class="logo" href="#top"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="3" fill="#6fb4ff"/><circle cx="15" cy="5" r="2.2" fill="#eef2f7"/><circle cx="15" cy="15" r="2.2" fill="#eef2f7"/><path d="M7.5 9 13 5.8M7.5 11 13 14.2" stroke="#6fb4ff" stroke-width="1.4"/></svg>Jaynes <span>v0 · open source</span></a>
     <nav aria-label="Sections"><a href="#layers">How it works</a><a href="#try">Try it</a><a href="#guarantee">Guarantee</a><a href="#foundations">Foundations</a><a href="#start">Get started</a></nav>
+    <a class="btn gh" href="https://github.com/alk0x1/jaynes">GitHub</a>
   </div>
 </header>
 
@@ -437,10 +450,11 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
     <p>Three items are waiting. Each stop keeps its own evidence, computed with the same test Jaynes uses. "Moments of use" is three accepts away from being sampled.</p>
   </div>
   <div class="card" style="overflow:hidden">
-    <div class="app-top"><span><b>jaynes review</b> · localhost:7317</span><span id="q-count">3 waiting</span><span class="live">● 4 agents running</span></div>
+    <div class="app-top"><span><b>jaynes review</b> · 127.0.0.1:8740</span><span id="q-count">3 waiting</span><span class="live">● 4 agents running</span></div>
     <div class="cols"><div class="qlist" id="q-list"></div><div class="qdetail" id="q-detail" aria-live="polite"></div><div class="qmeta" id="q-meta"></div></div>
     <div class="toast" id="q-toast">Accept or change an answer and watch the stop earn, or lose, its autonomy.</div>
   </div>
+  <p class="aside">This queue runs in your browser. The real one opens on your machine with <a href="#start"><code>jaynes</code></a>.</p>
 </section>
 
 <section class="section" id="guarantee" aria-labelledby="g-h">
@@ -481,15 +495,32 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
 </section>
 
 <section class="section" id="start" aria-labelledby="st-h">
+  <div style="display:grid;gap:16px;margin-bottom:36px">
+    <span class="label">Get started</span>
+    <h2 id="st-h" style="font-size:clamp(32px,4.2vw,50px);line-height:1.06">Install once. The rest happens in the page.</h2>
+  </div>
   <div class="start">
-    <div style="display:grid;gap:16px">
-      <span class="label">Get started</span>
-      <h2 id="st-h" style="font-size:clamp(32px,4.2vw,50px);line-height:1.06">Early, and measured in the open.</h2>
-      <p style="color:var(--dim);font-size:18px">The action gate works today with Claude Code. The step conductor for Claude Code and Codex and the review page are being built against the baseline above.</p>
-<pre class="code"><span class="c"># read-only, on your own Claude Code history</span>
-uv sync
-uv run jaynes history --config examples/agent-team.jaynes.toml
-uv run jaynes simulate</pre>
+    <div style="display:grid;gap:22px">
+<pre class="code"><span class="c"># Python 3.12 or later</span>
+uv tool install jaynes-ai
+<span class="c"># or: pip install jaynes-ai</span>
+
+<span class="c"># then open the page</span>
+jaynes</pre>
+      <ol class="steps">
+        <li>
+          <h3>Watch the method hold</h3>
+          <p>Start the demo from New run. A scripted agent works through a screen-design role, a check sends one step back, and the run stops for your answer. No API key, no quota.</p>
+        </li>
+        <li>
+          <h3>Measure what your agents already do without you</h3>
+          <p>History reads your Claude Code transcripts and shows how many tool calls a person approved. It changes nothing.</p>
+        </li>
+        <li>
+          <h3>Put the gate in front of your agents</h3>
+          <p>Setup installs it in Claude Code in one click. Your other hooks stay, and your settings file is backed up first.</p>
+        </li>
+      </ol>
     </div>
     <div class="card" style="padding:8px 14px">
       <table>
@@ -497,11 +528,13 @@ uv run jaynes simulate</pre>
         <tbody>
           <tr><td>Action gate for Claude Code: floors, sampled audits, anytime-valid certification</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>History report and guarantee simulation</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Step conductor for Claude Code and Codex</td><td><span class="chip blue">in progress</span></td></tr>
-          <tr><td>Review page</td><td><span class="chip blue">in progress</span></td></tr>
+          <tr><td>Step conductor for Claude Code and Codex: checks, retries, resume after a crash</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>Review page and CLI answers</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>First real role, screen-design, measured against the baseline above</td><td><span class="chip blue">in progress</span></td></tr>
           <tr><td>Judges calibrated on your answers</td><td><span class="chip plain">next</span></td></tr>
         </tbody>
       </table>
+      <div class="links"><a href="https://github.com/alk0x1/jaynes">GitHub</a><a href="https://pypi.org/project/jaynes-ai/">PyPI</a><a href="https://github.com/alk0x1/jaynes#write-a-role">Write your own role</a></div>
     </div>
   </div>
 </section>
@@ -514,7 +547,7 @@ uv run jaynes simulate</pre>
 </main>
 
 <footer>
-  <div class="wrap"><span>Named after E. T. Jaynes, who treated probability as the logic of reasoning with incomplete information.</span><span>Apache-2.0</span></div>
+  <div class="wrap"><span>Named after E. T. Jaynes, who treated probability as the logic of reasoning with incomplete information.</span><span><a href="https://github.com/alk0x1/jaynes" style="color:inherit">GitHub</a> · Apache-2.0</span></div>
 </footer>
 
 <script>

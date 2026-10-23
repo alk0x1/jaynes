@@ -5,11 +5,15 @@
   jaynes history  [--config P]      classify past tool calls from transcripts; audit load estimate
   jaynes parity HOOK [--config P]   compare floors against an existing deny hook on past Bash calls
   jaynes simulate                   Monte Carlo check of the certification guarantee
-  jaynes run --role M:R --task T    start a run of role R from module M
+  jaynes                            the review page, opened in the browser
+  jaynes run [ID] --role M:R --task T [--project DIR] [--preview CMD]
+                                    start a run of role R from module M, on the git repository at DIR
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
   jaynes queue                      stops waiting for an answer and blocked runs, oldest first
   jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
   jaynes review [--port 8740]       the review page on 127.0.0.1: queue, stops, runs, roles, log
+  jaynes policy                     print the built-in policy, a starting point for ~/.jaynes/jaynes.toml
+  jaynes demo [--port 8740]         a scripted run that stops for you, then the review page
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import argparse
 import collections
 import importlib
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -25,7 +30,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from jaynes import bounds, gate, hook
-from jaynes.history import past_calls
+from jaynes.history import past_calls, report
+from jaynes.install import BUILT_IN_POLICY
 from jaynes.policy import Policy, classify, find_policy, jaynes_home, load_policy
 from jaynes.sim import simulate
 from jaynes.store import Store
@@ -36,10 +42,9 @@ if TYPE_CHECKING:  # the conductor pulls in pydantic; `jaynes hook` runs on ever
 
 
 def _policy(path: str | None) -> Policy:
+    """--config, else jaynes.toml found from cwd, else the built-in policy (these commands only read)."""
     found = Path(path) if path else find_policy(str(Path.cwd()))
-    if found is None:
-        sys.exit("no jaynes.toml found; pass --config")
-    return load_policy(found)
+    return load_policy(found or BUILT_IN_POLICY)
 
 
 def cmd_autonomy(args: argparse.Namespace) -> None:
@@ -82,39 +87,22 @@ def cmd_history(args: argparse.Namespace) -> None:
     calls = past_calls(days=args.days)
     if args.cwd:
         calls = [c for c in calls if c.cwd.startswith(args.cwd)]
-    if not calls:
+    r = report(policy, calls, args.top)
+    if r is None:
         sys.exit("no calls found")
-    weeks = max((calls[-1].ts - calls[0].ts).total_seconds() / (7 * 86400), 1 / 7)
-    per_cat: collections.Counter[str] = collections.Counter()
-    who: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
-    unknown: collections.Counter[str] = collections.Counter()
-    for c in calls:
-        cat = classify(policy, c.tool, c.tool_input, c.cwd or "/")
-        per_cat[cat.name] += 1
-        who[cat.name][c.decided_by.split("/")[0]] += 1
-        if cat.name == "unknown":
-            key = c.tool if c.tool != "Bash" else "Bash: " + str(c.tool_input.get("command", ""))[:70].replace("\n", " ")
-            unknown[key] += 1
-    human = sum(1 for c in calls if c.label in ("correct", "error", "context"))
-    print(f"{len(calls)} calls over {weeks:.1f} weeks; {human} answered by a person "
-          f"({human / weeks:.1f} per week)\n")
+    print(f"{r.calls} calls over {r.weeks:.1f} weeks; {r.answered} answered by a person "
+          f"({r.answered / r.weeks:.1f} per week)\n")
     print(f"{'category':14} {'status':10} {'calls':>6} {'/week':>7} {'audits/wk':>9} {'weeks to certify':>16}  approved by today")
-    need0 = bounds.labels_to_certify(0, policy.budget, policy.delta) or 0
-    audits = 0.0
-    for name, count in per_cat.most_common():
-        c = policy.category(name)
-        kind = "floor" if c.floor else ("pure" if c.effect == 0 else ("unknown" if name == "unknown" else "learns"))
-        rate = count / weeks
-        aud = rate * policy.audit_rate if kind == "learns" else 0.0
-        audits += aud
-        wk = f"{need0 / aud:.1f}" if aud else ""
-        approvers = ", ".join(f"{k} {v}" for k, v in who[name].most_common(3))
-        print(f"{name:14} {kind:10} {count:>6} {rate:>7.0f} {aud:>9.1f} {wk:>16}  {approvers}")
-    print(f"\naudit prompts per week at {policy.audit_rate:.0%}: {audits:.0f} "
-          f"(weeks to certify assume zero errors: {need0} labels)")
-    share = per_cat['unknown'] / len(calls)
-    print(f"unknown: {per_cat['unknown']} calls ({share:.1%})")
-    for k, v in unknown.most_common(args.top):
+    for row in r.rows:
+        wk = "" if row.weeks_to_certify is None else f"{row.weeks_to_certify:.1f}"
+        approvers = ", ".join(f"{k} {v}" for k, v in row.approvers)
+        print(f"{row.category:14} {row.kind:10} {row.calls:>6} {row.per_week:>7.0f} {row.audits_per_week:>9.1f} "
+              f"{wk:>16}  {approvers}")
+    print(f"\naudit prompts per week at {policy.audit_rate:.0%}: {r.audits_per_week:.0f} "
+          f"(weeks to certify assume zero errors: {r.labels_to_certify} labels)")
+    unknown = sum(row.calls for row in r.rows if row.category == "unknown")
+    print(f"unknown: {unknown} calls ({unknown / r.calls:.1%})")
+    for k, v in r.unknown:
         print(f"  {v:5}  {k}")
 
 
@@ -161,6 +149,8 @@ def load_ref(ref: str) -> Any:
     module, _, attr = ref.partition(":")
     if not module or not attr:
         sys.exit(f"expected module:attribute, got {ref!r}")
+    if os.getcwd() not in sys.path:  # a role in the current folder, as continue_in_background already allows
+        sys.path.insert(0, os.getcwd())
     return getattr(importlib.import_module(module), attr)
 
 
@@ -190,7 +180,7 @@ def _role(ref: str) -> Role:
 def cmd_run(args: argparse.Namespace) -> None:
     from jaynes.conductor import Conductor, new_run_id
     c = Conductor(_home(args))
-    if args.id:
+    if args.id and not args.role:
         r, ref, task, extra = _started(c, args.id)
         run_id = args.id
     else:
@@ -198,12 +188,22 @@ def cmd_run(args: argparse.Namespace) -> None:
             sys.exit("a new run needs --role and --task")
         if any("=" not in pair for pair in args.runtime):
             sys.exit("--runtime takes name=module:attribute")
-        ref, task, run_id = args.role, args.task, new_run_id()
+        ref, task, run_id = args.role, args.task, args.id or new_run_id()
         extra = dict(pair.split("=", 1) for pair in args.runtime)
         r = _role(ref)
     # imported on first use, so a run that never calls an agent needs neither CLI installed
     c.runtimes = {name: (lambda t=target: load_ref(t)()) for name, target in {**DEFAULT_RUNTIMES, **extra}.items()}
-    result = c.run(r, task, run_id, started={"ref": ref, "runtimes": extra})
+    started: dict[str, Any] = {"ref": ref, "runtimes": extra}
+    if not args.id or args.role:
+        if args.preview:
+            started["preview"] = {"command": args.preview, "path": args.preview_path or "/",
+                                  "ports": _ports(args.preview_ports or "")}
+    from jaynes.project import ProjectError
+    try:
+        result = c.run(r, task, run_id, started=started,
+                       project=Path(args.project) if args.project and args.role else None)
+    except ProjectError as err:
+        sys.exit(str(err))
     print(json.dumps({"run": run_id, "status": result.status, "step": result.step, "until": result.until,
                       "reasons": list(result.reasons)}))
 
@@ -222,6 +222,16 @@ def cmd_queue(args: argparse.Namespace) -> None:
             print(f"    {line}")
 
 
+def _ports(text: str) -> list[int]:
+    try:
+        ports = [int(p) for p in text.replace(",", " ").split()]
+    except ValueError:
+        sys.exit(f"--preview-ports takes port numbers, not {text!r}")
+    if any(not 0 < p < 65536 for p in ports):
+        sys.exit(f"--preview-ports takes port numbers, not {text!r}")
+    return ports
+
+
 def cmd_answer(args: argparse.Namespace) -> None:
     from jaynes.conductor import Answer, AnswerRejected, Conductor, RunBusy, continue_in_background
     c = Conductor(_home(args))
@@ -235,7 +245,7 @@ def cmd_answer(args: argparse.Namespace) -> None:
             sys.exit(f"--output is not JSON: {err}")
     answer: Answer = args.answer
     try:
-        c.answer(r, args.run, args.step, answer, note=args.note, output=output)
+        c.answer(r, args.run, args.step, answer, note=args.note, output=output, to=args.to)
     except AnswerRejected as err:
         sys.exit("answer not recorded: " + "; ".join(err.reasons))
     except RunBusy:
@@ -244,9 +254,31 @@ def cmd_answer(args: argparse.Namespace) -> None:
     print(json.dumps({"run": args.run, "step": args.step, "answer": answer, "continuing": True}))
 
 
+def cmd_demo(args: argparse.Namespace) -> None:
+    from jaynes.conductor import Conductor, new_run_id
+    from jaynes.demo import ROLE
+    home = _home(args)
+    c = Conductor(home)
+    c.runtimes = {"scripted": lambda: load_ref("jaynes.demo:Agent")()}
+    run_id = new_run_id()
+    result = c.run(ROLE, "Redesign the People screen", run_id,
+                   started={"ref": "jaynes.demo:ROLE", "runtimes": {"scripted": "jaynes.demo:Agent"}})
+    print(json.dumps({"run": run_id, "status": result.status, "step": result.step}), flush=True)
+    if not args.no_serve:
+        _open_page(home, args.port)
+
+
+def _open_page(home: Path, port: int) -> None:
+    import threading
+    import webbrowser
+    from jaynes.review import serve
+    threading.Timer(0.5, webbrowser.open, [f"http://127.0.0.1:{port}"]).start()
+    serve(home, port)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="jaynes")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("hook")
     a = sub.add_parser("autonomy")
     a.add_argument("--config")
@@ -273,6 +305,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--role", help="module:attribute of the role")
     r.add_argument("--task")
     r.add_argument("--runtime", action="append", default=[], help="name=module:attribute, overrides a runtime")
+    r.add_argument("--project", help="a folder in a git repository, for steps that work on a project")
+    r.add_argument("--preview", help="a command that serves the project on {port}, shown at stops")
+    r.add_argument("--preview-path", help="the path to open in the preview, / by default")
+    r.add_argument("--preview-ports", help="local ports the preview may connect to, such as a backend: 8789,5432")
     r.add_argument("--home")
     q = sub.add_parser("queue")
     q.add_argument("--home")
@@ -282,19 +318,31 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("answer", choices=["accept", "change", "return", "context"])
     w.add_argument("--note")
     w.add_argument("--output", help="the edited output for change: JSON, or @file")
+    w.add_argument("--to", help="with return or context: an earlier step to run again, with every step after it")
     w.add_argument("--home")
     v = sub.add_parser("review")
     v.add_argument("--port", type=int, default=8740)
     v.add_argument("--home")
+    sub.add_parser("policy")
+    d = sub.add_parser("demo")
+    d.add_argument("--port", type=int, default=8740)
+    d.add_argument("--home")
+    d.add_argument("--no-serve", action="store_true", help="start the run and exit, without the review page")
     args = ap.parse_args(argv)
+    if args.cmd is None:
+        _open_page(jaynes_home(), 8740)
+        return 0
     if args.cmd == "hook":
         return hook.main()
+    if args.cmd == "policy":
+        print(BUILT_IN_POLICY.read_text(), end="")
+        return 0
     if args.cmd == "review":
         from jaynes.review import serve
         serve(_home(args), args.port)
         return 0
     {"autonomy": cmd_autonomy, "history": cmd_history, "parity": cmd_parity, "simulate": cmd_simulate,
-     "run": cmd_run, "queue": cmd_queue, "answer": cmd_answer}[args.cmd](args)
+     "run": cmd_run, "queue": cmd_queue, "answer": cmd_answer, "demo": cmd_demo}[args.cmd](args)
     return 0
 
 

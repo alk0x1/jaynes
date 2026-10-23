@@ -6,6 +6,7 @@ so the report can say who approved what before Jaynes existed.
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 from collections.abc import Iterator
@@ -14,7 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from jaynes import labels
+from jaynes import bounds, labels
+from jaynes.policy import Policy, classify
 
 
 @dataclass(frozen=True)
@@ -108,3 +110,53 @@ def past_calls(days: int = 30, root: Path | None = None) -> list[PastCall]:
             seen.add(c.action_id)
             unique.append(c)
     return unique
+
+
+@dataclass(frozen=True)
+class Row:
+    category: str
+    kind: str  # floor | pure | learns | unknown
+    calls: int
+    per_week: float
+    audits_per_week: float
+    weeks_to_certify: float | None  # assuming zero errors
+    approvers: list[tuple[str, int]]  # who approved these calls before Jaynes, top three
+
+
+@dataclass(frozen=True)
+class Report:
+    calls: int
+    weeks: float
+    answered: int  # calls a person answered
+    rows: list[Row]
+    audits_per_week: float
+    labels_to_certify: int
+    unknown: list[tuple[str, int]]  # the commonest calls no category matched
+
+
+def report(policy: Policy, calls: list[PastCall], top: int = 25) -> Report | None:
+    """Classify past calls by the policy: what each category would cost in audits and how long it takes to certify."""
+    if not calls:
+        return None
+    weeks = max((calls[-1].ts - calls[0].ts).total_seconds() / (7 * 86400), 1 / 7)
+    per_cat: collections.Counter[str] = collections.Counter()
+    who: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
+    unknown: collections.Counter[str] = collections.Counter()
+    for c in calls:
+        cat = classify(policy, c.tool, c.tool_input, c.cwd or "/")
+        per_cat[cat.name] += 1
+        who[cat.name][c.decided_by.split("/")[0]] += 1
+        if cat.name == "unknown":
+            key = c.tool if c.tool != "Bash" else "Bash: " + str(c.tool_input.get("command", ""))[:70].replace("\n", " ")
+            unknown[key] += 1
+    need0 = bounds.labels_to_certify(0, policy.budget, policy.delta) or 0
+    rows: list[Row] = []
+    for name, count in per_cat.most_common():
+        c = policy.category(name)
+        kind = "floor" if c.floor else ("pure" if c.effect == 0 else ("unknown" if name == "unknown" else "learns"))
+        rate = count / weeks
+        aud = rate * policy.audit_rate if kind == "learns" else 0.0
+        rows.append(Row(name, kind, count, rate, aud, need0 / aud if aud else None, who[name].most_common(3)))
+    answered = sum(1 for c in calls if c.label in ("correct", "error", "context"))
+    return Report(len(calls), weeks, answered, rows, sum(r.audits_per_week for r in rows), need0,
+                  unknown.most_common(top))

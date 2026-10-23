@@ -35,7 +35,12 @@ were still sent back.
 5. **Underneath, every tool action goes through a gate.** Some actions, like
    pushing or deleting history, never run without you.
 
-A role, in the planned API (subject to change):
+The whole flow, from a role to the evidence behind each stop, is in
+[docs/how-it-works.png](docs/how-it-works.png) (source:
+[how-it-works.drawio](docs/how-it-works.drawio)).
+
+A sketch of the `screen-design` role (a working role is under
+[Write a role](#write-a-role)):
 
 ```python
 from jaynes import role, stop
@@ -49,11 +54,6 @@ walk = design.step("walkthrough", output=Walkthrough, needs=objects, run_by="jay
 reqs = design.step("requirements", output=Requirements, needs=walk, stop=stop(budget=0.10))
 build = design.step("implement", output=Patch, needs=reqs, check=[tests_pass, contrast_aa, tokens_only])
 done = design.step("accept", needs=build, stop=stop(budget=0.05, sampled=False))
-```
-
-```sh
-jaynes run screen-design --task "Redesign the People screen"
-jaynes review          # opens the review page
 ```
 
 ## Concepts
@@ -85,37 +85,107 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 | History report and guarantee simulation | Works today |
 | Step conductor for Claude Code and Codex: role API, write boundary, checks, retries, resume after a crash, quota pause, stops through the Python API | Works today |
 | Review page and CLI answers: queue, stops, runs, roles, log; the run continues after an answer | Works today |
+| First real role, `screen-design`, measured against the first user's baseline | In progress |
 | Judges calibrated on your labels, fewer labels needed | Next |
 
-## Try what works today
+## Get started
 
-Read-only, on your own Claude Code history:
+Python 3.12 or later.
+
+```sh
+uv tool install jaynes-ai      # or: pip install jaynes-ai
+jaynes                         # opens the page on http://127.0.0.1:8740
+```
+
+Everything else happens in the page:
+
+- **New run** starts a run: pick a role, write the task, and point it at a git
+  repository. The demo needs no repository, API key or quota: a scripted agent
+  works through a screen-design role, a check sends one step back, and the run
+  stops for your answer. **visual-identity** comes with Jaynes: the agent reads
+  the project's current colours and fonts, proposes a direction (Jaynes checks
+  its contrast), and applies it to the style files. **redesign** goes further:
+  it also changes motion and the markup of the screens (HTML, JSX, TSX, Vue,
+  Svelte), keeping what each screen does. It starts from references: put one
+  or more links or image paths of interfaces you like in the task. Jaynes
+  captures each link with headless Chrome and gives the pictures to the agent,
+  and the direction must say what it takes from each one. Agents run without
+  the web unless a step allows it (`web=True`); the direction step does, so
+  the agent can read the references' sites and look up fonts, and the stop
+  lists every address it read. Shell commands stay offline. With a preview command, such as
+  `npm run dev -- --port {port}`, each stop shows the project before and after.
+  The preview runs the agent's changes, so on macOS it runs in a box: it writes
+  only to its copy, cannot read where secrets live, and reaches no network but
+  the local ports you list (a backend it needs). Elsewhere previews refuse to
+  start unless `JAYNES_UNBOXED=1` accepts running them unboxed.
+  At a stop, return and context can go back to an earlier step: it runs again
+  with your note, and so does every step after it. Steps work on copies of the
+  last commit; when the run finishes, the accepted changes are a branch,
+  `jaynes/<run>`, and your checkout is untouched.
+- **History** reads your Claude Code transcripts and shows how many tool calls a
+  person approved. It changes nothing.
+- **Setup** installs the action gate in Claude Code: `jaynes hook` on
+  `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop` and `SessionStart`,
+  with the policy in `~/.jaynes/jaynes.toml`. Your other hooks stay, and
+  `settings.json` is copied to `settings.json.jaynes-backup` first. On an
+  internal error the hook prints nothing and Claude Code decides as if Jaynes
+  were not installed.
+
+The same from a terminal or an agent: `jaynes demo`, `jaynes history`,
+`jaynes simulate`, `jaynes policy` (prints the built-in policy), `jaynes queue`
+and `jaynes answer`. `jaynes --help` lists them all.
+
+### Write a role
+
+A role is a Python module. Save this as `count_words.py`:
+
+```python
+from pydantic import BaseModel
+
+from jaynes.role import Fail, Pass, StepContext, Witnesses, role
+
+
+class Topic(BaseModel):
+    topic: str
+    words: int
+
+
+class Sentence(BaseModel):
+    sentence: str
+
+
+def read_topic(ctx: StepContext) -> Topic:
+    return Topic(topic=ctx.task, words=len(ctx.task.split()) + 5)
+
+
+def matches(out: Sentence, needs: Witnesses) -> Pass | Fail:
+    want = needs[TOPIC].value.words
+    got = len(out.sentence.split())
+    return Pass() if got == want else Fail(f"the sentence has {got} words; it must have exactly {want}")
+
+
+ROLE = role("count-words", agent="claude")
+TOPIC = ROLE.step("topic", output=Topic, run_by=read_topic)
+SENTENCE = ROLE.step("sentence", output=Sentence, needs=[TOPIC], check=matches,
+                     instructions="Write one sentence about the topic in inputs/topic.json with exactly "
+                                  "the number of words given there.")
+```
+
+Jaynes runs the first step itself; Claude Code (with your login) writes the
+sentence, and the check sends it back until the count is right. Use
+`agent="codex"` for Codex. Start `jaynes` from the folder that holds the file,
+then pick the role under New run (type `count_words:ROLE` the first time), or:
+
+```sh
+jaynes run --role count_words:ROLE --task "lighthouses in fog"
+```
+
+### From a clone
 
 ```sh
 uv sync
-uv run jaynes history --config examples/agent-team.jaynes.toml --days 30
-uv run jaynes simulate
+uv run pytest
 ```
-
-A two-step role through the conductor (uses your Claude Code login, one short turn):
-
-```sh
-PYTHONPATH=. uv run jaynes run --role examples.count_words:ROLE --task "lighthouses in fog"
-```
-
-The review page with a scripted agent (no quota spent):
-
-```sh
-PYTHONPATH=. uv run jaynes run --role examples.review_demo:ROLE --task "Redesign the People screen" \
-    --runtime scripted=examples.review_demo:Agent
-PYTHONPATH=. uv run jaynes review     # http://127.0.0.1:8740
-```
-
-To install the action gate as a Claude Code hook, copy a policy to
-`~/.jaynes/jaynes.toml` and add `jaynes hook` to `PreToolUse`, `PostToolUse`,
-`PostToolUseFailure`, `Stop` and `SessionStart` in `~/.claude/settings.json`.
-Keep any deny hook you already have. On an internal error the hook prints
-nothing and Claude Code decides as if Jaynes were not installed.
 
 ## Foundations
 

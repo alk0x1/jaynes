@@ -12,7 +12,11 @@ import html
 import importlib
 import json
 import math
+import hashlib
+import re
 import secrets
+import shutil
+import signal
 import sys
 import time
 import urllib.parse
@@ -24,16 +28,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from jaynes import bounds
+from jaynes import bounds, install, sandbox
+from jaynes import project as repo
 from jaynes.conductor import (LABELS, Answer, AnswerRejected, Conductor, RunBusy, RunState, StepState, Waiting,
-                              continue_in_background, project)
+                              continue_in_background, new_run_id, project, start_in_background)
+from jaynes.history import Report, past_calls, report
+from jaynes.preview import Previews
+from jaynes.policy import find_policy, load_policy
 from jaynes.role import Role, Step
 from jaynes.store import Event
 
 esc = html.escape
 CHIP = {"certified": "green", "refuted": "red", "floor": "blue"}  # any other status is amber
+DEMO = "jaynes.demo:ROLE"
+BUILT_IN = {DEMO: {"scripted": "jaynes.demo:Agent"}, "jaynes.roles.visual_identity:ROLE": {},
+            "jaynes.roles.redesign:ROLE": {}}
 StageState = Literal["jaynes", "checked", "accepted", "changed", "sampled", "waiting", "blocked", "running", "todo"]
 
+PICTURES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+            ".gif": "image/gif"}  # no SVG: it can carry scripts
 
 def q(segment: str) -> str:
     """One URL path segment."""
@@ -141,9 +154,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); 
 a { color: inherit; text-decoration: none; }
 .app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
 aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
-.brand { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.brand { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 10px; padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
 .brand span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); }
-.brand nav { margin-left: auto; display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--dim); }
+.brand nav { flex-basis: 100%; display: flex; gap: 12px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--dim); white-space: nowrap; }
 .brand nav a:hover, .crumbs a:hover { color: var(--ink); }
 .qhead { padding: 14px 18px 8px; font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; }
 .item { padding: 12px 18px; border-left: 2px solid transparent; display: grid; gap: 6px; }
@@ -220,6 +233,7 @@ pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wra
 .bar { border-top: 1px solid var(--line); background: rgba(7, 9, 13, .96); padding: 14px 32px; display: grid; gap: 10px; }
 .bar .row { display: flex; gap: 10px; align-items: center; }
 .bar input[type=text] { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 10px 12px; }
+.bar select { background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font-family: var(--mono); font-size: 12.5px; padding: 10px 8px; }
 .bar textarea { width: 100%; min-height: 160px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font-family: var(--mono); font-size: 12.5px; padding: 10px 12px; }
 .btn { font-family: var(--mono); font-size: 12.5px; padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); cursor: pointer; white-space: nowrap; }
 .btn kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: 6px; }
@@ -232,7 +246,24 @@ pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wra
 .filters { display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
 .filters a { padding: 3px 8px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--dim); }
 .filters a.on { color: var(--ink); border-color: var(--blue); }
+.form { display: grid; gap: 20px; max-width: 640px; }
+.form label { display: grid; }
+.form select, .form input[type=text], .form textarea { background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 10px 12px; }
+.form textarea { min-height: 96px; resize: vertical; }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18); }
+.previews { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.previews figure { margin: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; display: grid; grid-template-rows: auto 1fr; }
+.previews figcaption { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.previews iframe { width: 100%; height: 520px; border: 0; background: #fff; }
+.body > .wide { max-width: none; }
+.pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.pictures a { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; display: grid; }
+.pictures img { width: 100%; height: 220px; object-fit: cover; object-position: top; display: block; background: var(--panel); }
+.pictures span { padding: 8px 12px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.btn.go { background: var(--blue); border-color: var(--blue); color: #04101f; font-weight: 500; justify-self: start; }
 """
+
+ICON = ('<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">')
 
 FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -243,7 +274,7 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
 SCRIPT = """
 <script>
 const seq = %d;
-const busy = () => { const f = document.activeElement; return f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA"); };
+const busy = () => { const f = document.activeElement; return f && ["INPUT", "TEXTAREA", "SELECT"].includes(f.tagName); };
 setInterval(async () => {
   try {
     const r = await fetch("/seq"); const now = Number(await r.text());
@@ -272,7 +303,7 @@ if (form) {
 
 def page(title: str, sidebar: str, main: str, seq: int) -> str:
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width, initial-scale=1"><title>{esc(title)}</title>'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1"><title>{esc(title)}</title>{ICON}'
             f'{FONTS}<style>{CSS}</style></head><body><div class="app">{sidebar}<main>{main}</main></div>'
             f'{SCRIPT % seq}</body></html>')
 
@@ -296,7 +327,17 @@ def render_value(v: Any) -> str:
         return "".join(f'<div class="field"><div class="label">{esc(k)}</div>{render_value(x)}</div>' for k, x in fields.items())
     if v is None:
         return '<span class="m">none</span>'
-    return esc(str(v))
+    return swatch(v)
+
+
+HEX = re.compile(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?")
+
+
+def swatch(v: Any) -> str:
+    """A scalar as text, with a colour sample when it is a hex colour."""
+    text = str(v)
+    return (f'<span class="sw" style="background:{text}"></span>{esc(text)}' if isinstance(v, str) and HEX.fullmatch(text)
+            else esc(text))
 
 
 def _cell(v: Any, first: bool) -> str:
@@ -305,7 +346,7 @@ def _cell(v: Any, first: bool) -> str:
     if isinstance(v, (dict, list)):
         return f"<td><pre>{esc(json.dumps(v, indent=1, ensure_ascii=False))}</pre></td>"
     if isinstance(v, (int, float)) or (isinstance(v, str) and len(v) <= 24):
-        return f'<td class="m">{esc(str(v))}</td>'
+        return f'<td class="m">{swatch(v)}</td>'
     return f"<td>{render_value(v)}</td>"
 
 
@@ -335,6 +376,8 @@ class Shared:
     idle_after: float = 10.0
     roles: dict[str, Role] = field(default_factory=dict[str, Role])
     first_seen: dict[tuple[str, str, float], float] = field(default_factory=dict[tuple[str, str, float], float])
+    history: tuple[float, Report | None, str] | None = None  # when it was read, the report, the policy used
+    previews: Previews = field(default_factory=Previews)
 
 
 class Review:
@@ -353,7 +396,9 @@ class Review:
     def role_of(self, run_id: str) -> Role | None:
         """The role a run was started with, if its module can be imported here. Edits need a restart."""
         started = next(iter(self.c.store.events("RunStarted", run_id=run_id)), None)
-        ref = str(started.payload.get("ref", "")) if started else ""
+        return self.import_role(str(started.payload.get("ref", "")) if started else "")
+
+    def import_role(self, ref: str) -> Role | None:
         if ref not in self.shared.roles:
             module, _, attr = ref.partition(":")
             try:
@@ -397,7 +442,7 @@ class Review:
                         f'<span>you answered</span><b>{t.answered} of {t.stops} stops</b></div>')
         body = "".join(rows) or '<div class="empty-q">Nothing is waiting.</div>'
         return ('<aside><div class="brand"><a href="/">Jaynes</a> <span>review</span><nav>'
-                '<a href="/">Queue</a><a href="/roles">Roles</a><a href="/log">Log</a></nav></div>'
+                '<a href="/">Queue</a><a href="/new">New run</a><a href="/roles">Roles</a><a href="/history">History</a><a href="/log">Log</a><a href="/setup">Setup</a></nav></div>'
                 f'<div class="qhead"><span>Waiting</span><span>{len(items)}</span></div>{body}{foot}</aside>')
 
     # pages ------------------------------------------------------------------
@@ -408,7 +453,7 @@ class Review:
             return self.stop_page(items[0].run_id, items[0].step)
         main = ('<div class="crumbs"><b>Queue</b></div><div class="body" style="display:flex">'
                 '<div class="empty"><h1>Nothing is waiting</h1><p>Runs that stop or block will appear here.</p>'
-                '</div></div>')
+                '<p><a class="btn go" href="/new">Start a run</a></p></div></div>')
         return page("Jaynes review", self.sidebar(None), main, self.seq())
 
     def stop_page(self, run_id: str, step: str, error: str = "", fields: dict[str, str] | None = None) -> str:
@@ -460,6 +505,8 @@ class Review:
         if s.note:
             sub += f'<div class="sub">You returned round {s.round - 1} with: {esc(s.note)}</div>'
         parts.append(f"<div><h1>{esc(question)}</h1>{sub}</div>")
+        parts.append(self._project_part(run_id, st, role))
+        parts.append(self._pictures_part(run_id, st, target))
         if pure and target is not None:
             for need in target.needs:
                 parts.append(self._output(f"From {need.name}", self._value(st.steps.get(need.name, StepState()), need)))
@@ -478,11 +525,100 @@ class Review:
             parts.append(self._turns(events, step, s.round))
         parts.append(self._tiles(s, target))
         main = (crumbs + f'<div class="body">{"".join(parts)}</div>'
-                + self._answer_bar(run_id, step, value, error, fields, editable=not pure))
+                + self._answer_bar(run_id, step, value, error, fields, editable=not pure,
+                                   earlier=self._earlier(role, step)))
         return page(f"Stop: {step}", self.sidebar((run_id, step)), main, self.seq())
+
+    def _project_part(self, run_id: str, st: RunState, role: Role | None) -> str:
+        """What the run changed in its project so far, and the preview before and after, when there is one."""
+        info = (st.started or {}).get("project")
+        changed = sorted({f for x in st.steps.values() if x.checked for f in x.checked.get("changed", [])})
+        if not info or not changed:
+            return ""
+        out = ""
+        if (st.started or {}).get("preview") and role is not None:
+            frames = "".join(
+                f'<figure><figcaption><span>{label}</span><a href="/preview/{q(run_id)}/{which}" target="_blank">'
+                f'open</a></figcaption><iframe src="/preview/{q(run_id)}/{which}" loading="lazy"></iframe></figure>'
+                for label, which in (("Before", "before"), ("After", "after")))
+            out += f'<div class="wide"><div class="label">Preview <span>your preview command, on copies of the project</span></div><div class="previews">{frames}</div></div>'
+        files = "".join(f'<tr><td class="m">{esc(f)}</td></tr>' for f in changed)
+        out += (f'<div><div class="label">Changed in the project <span>{esc(str(info["root"]))}, from '
+                f'{esc(str(info["base"])[:8])}</span></div><div class="box"><table>{files}</table></div></div>')
+        return out
+
+    def _pictures_part(self, run_id: str, st: RunState, target: Step[Any] | None) -> str:
+        """The pictures the stop's step and the steps it needs left, such as references."""
+        out = ""
+        for x in [*target.needs, target] if target else []:
+            files = self._files(st, x.name)
+            pics = "".join(f'<a href="/file/{q(run_id)}/{q(x.name)}/{q(rel)}" target="_blank"><img src="/file/'
+                           f'{q(run_id)}/{q(x.name)}/{q(rel)}" alt="{esc(rel)}" loading="lazy"><span>{esc(rel)}</span></a>'
+                           for rel in files if Path(rel).suffix.lower() in PICTURES)
+            if pics:
+                out += (f'<div class="wide"><div class="label">Pictures from {esc(x.name)}</div>'
+                        f'<div class="pictures">{pics}</div></div>')
+        return out
+
+    @staticmethod
+    def _files(st: RunState, step: str) -> dict[str, str]:
+        """The files a step's checked output carries: path to object."""
+        checked = st.steps.get(step, StepState()).checked or {}
+        return cast(dict[str, str], checked.get("files") or {})
+
+    def picture(self, run_id: str, step: str, rel: str) -> tuple[bytes, str] | None:
+        """A picture a step of the run left, with its type; other files are not served."""
+        kind = PICTURES.get(Path(rel).suffix.lower())
+        files = self._files(project(self.c.store.events(run_id=run_id)), step)
+        if kind is None or rel not in files:
+            return None
+        return (self.c.home / "objects" / str(files[rel])).read_bytes(), kind
+
+    def preview(self, run_id: str, which: str) -> tuple[int, str]:
+        """Redirects to the run's preview once it answers; until then, a page that reloads itself."""
+        st = project(self.c.store.events(run_id=run_id))
+        info, spec = (st.started or {}).get("project"), (st.started or {}).get("preview")
+        role = self.role_of(run_id)
+        if not info or not spec or role is None or which not in ("before", "after"):
+            return 404, "no preview for this run"
+        patches = [] if which == "before" else [p for _, p in self.c.patches(role, st)]
+        key = f"{run_id}-{which}-{hashlib.sha256(b''.join(patches)).hexdigest()[:12]}"
+        folder = self.c.home / "runs" / run_id / "preview" / key
+
+        def prepare() -> Path:
+            if folder.exists():
+                shutil.rmtree(folder)
+            folder.parent.mkdir(parents=True, exist_ok=True)
+            repo.prepare(Path(info["root"]), str(info["base"]), patches, folder,
+                         cache=self.c.home / "runs" / run_id / "base")
+            return folder
+
+        try:
+            p = self.shared.previews.ensure(key, prepare, Path(info["root"]), str(spec["command"]),
+                                            str(spec.get("path", "/")), hidden=(self.c.home,),
+                                            ports=tuple(int(x) for x in spec.get("ports", [])))
+        except sandbox.Unavailable as err:
+            state, text = "failed", str(err)
+        else:
+            state, text = Previews.state(p)
+        if state == "ready":
+            return 302, text
+        head = "Starting the preview" if state == "starting" else "The preview failed"
+        refresh = '<meta http-equiv="refresh" content="1">' if state == "starting" else ""
+        return 200, (f'<!doctype html><html><head><meta charset="utf-8">{refresh}<style>body{{margin:0;padding:20px;'
+                     f'font:13px/1.5 ui-monospace,Menlo,monospace;color:#5d6a7c;background:#fff}}pre{{white-space:pre-wrap}}'
+                     f'</style></head><body><b>{head}</b><pre>{esc(text)}</pre></body></html>')
 
     def run_page(self, run_id: str) -> str:
         events = list(self.c.store.events(run_id=run_id))
+        log = self.c.home / "runs" / run_id / "continue.log"
+        if not events and log.is_file():  # started from the page; the page reloads on its first event
+            out = log.read_text(errors="replace")[-4000:]
+            main = (f'<div class="crumbs"><b>Starting</b><span class="r">{esc(run_id)}</span></div><div class="body">'
+                    + (f'<div><div class="label">Output</div><div class="box" style="padding:14px 16px"><pre>{esc(out)}'
+                       '</pre></div></div>' if out else '<div class="sub">Waiting for the run\'s first event.</div>')
+                    + '</div>')
+            return page(f"Run {run_id}", self.sidebar(None), main, self.seq())
         if not events:
             return self.not_found(f"No run {run_id}")
         st = project(events)
@@ -497,7 +633,10 @@ class Review:
         crumbs = (f'<div class="crumbs"><a href="/role/{q(str(started.get("role", "")))}">{esc(str(started.get("role", "")))}</a>/'
                   f'<b>{esc(str(started.get("task", "")))}</b><span class="r">{esc(run_id)}</span></div>')
         rows = "".join(self._event_row(ev) for ev in events)
-        body = (stage_list(stages(names, events, st, self.c.clock()))
+        made = (f'<div class="box"><table class="kv"><tr><td>branch</td><td class="m">{esc(str(st.branch["branch"]))} '
+                f'in {esc(str(st.branch["root"]))}, at {esc(str(st.branch["commit"])[:8])}</td></tr></table></div>'
+                if st.branch else "")
+        body = (stage_list(stages(names, events, st, self.c.clock())) + made
                 + f'<div class="tiles"><div><div class="n">{esc(state)}</div><p>run</p></div>'
                 f'<div><div class="n">{t.turns}<small>turns</small></div><p>{tokens(t.tokens_in)} tokens in, {tokens(t.tokens_out)} out</p></div>'
                 f'<div><div class="n">{age(t.seconds)}</div><p>from start to last event</p></div></div>'
@@ -505,6 +644,124 @@ class Review:
                 f'<div class="box"><table><tr><th>time</th><th>event</th><th>step</th><th>detail</th></tr>{rows}</table></div></div>')
         main = crumbs + f'<div class="body">{body}</div>'
         return page(f"Run {run_id}", self.sidebar(None), main, self.seq())
+
+    def known_roles(self) -> dict[str, dict[str, str]]:
+        """Roles a run can be started with and their runtime overrides: those that come with Jaynes, then each one run."""
+        known = {k: dict(v) for k, v in BUILT_IN.items()}
+        for ev in self.c.store.events("RunStarted"):
+            if "ref" in ev.payload:
+                known[str(ev.payload["ref"])] = {str(k): str(v) for k, v in dict(ev.payload["runtimes"]).items()}
+        return known
+
+    @staticmethod
+    def default_project() -> str:
+        """The folder the page was opened from, when it is in a git repository."""
+        try:
+            return str(repo.resolve(Path.cwd())[0])
+        except repo.ProjectError:
+            return ""
+
+    def new_page(self, error: str = "", fields: dict[str, str] | None = None) -> str:
+        f = fields or {}
+        chosen = f.get("role", DEMO)
+        options = "".join(f'<option value="{esc(ref)}"{" selected" if ref == chosen else ""}>'
+                          f'{esc(f"{r.name} ({ref})" if (r := self.import_role(ref)) else ref)}</option>'
+                          for ref in self.known_roles())
+        main = ('<div class="crumbs"><b>New run</b></div><div class="body">'
+                f'<form class="form" method="post" action="/start"><input type="hidden" name="token" value="{self.shared.token}">'
+                f'<label><span class="label">Role</span><select name="role">{options}</select></label>'
+                f'<label><span class="label">Or a role in this folder</span>'
+                f'<input type="text" name="ref" placeholder="my_role:ROLE" value="{esc(f.get("ref", ""))}">'
+                f'<span class="m" style="margin-top:6px">{esc(str(Path.cwd()))}</span></label>'
+                f'<label><span class="label">Task</span><textarea name="task" placeholder="Redesign the People screen">'
+                f'{esc(f.get("task", ""))}</textarea></label>'
+                f'<label><span class="label">Project folder</span>'
+                f'<input type="text" name="project" placeholder="/path/to/repository" '
+                f'value="{esc(f.get("project", self.default_project()))}"><span class="m" style="margin-top:6px">'
+                f'A git repository. Steps get copies of its last commit; accepted changes come back as a branch.'
+                f'</span></label>'
+                f'<label><span class="label">Preview command</span>'
+                f'<input type="text" name="preview" placeholder="npm run dev -- --port {{port}}" '
+                f'value="{esc(f.get("preview", ""))}"><span class="m" style="margin-top:6px">Optional. Serves the '
+                f'project on {{port}}; stops show it before and after.</span></label>'
+                f'<label><span class="label">Preview path</span>'
+                f'<input type="text" name="preview_path" placeholder="/" value="{esc(f.get("preview_path", ""))}">'
+                f'</label>'
+                f'<label><span class="label">Local ports the preview may reach</span>'
+                f'<input type="text" name="preview_ports" placeholder="8789" '
+                f'value="{esc(f.get("preview_ports", ""))}"><span class="m" style="margin-top:6px">Optional. The '
+                f'preview runs the agent\'s changes in a box with no network; list the ports of local servers it '
+                f'needs, such as a backend.</span></label>'
+                + (f'<div class="err">{esc(error)}</div>' if error else '')
+                + '<button class="btn go" type="submit">Start the run</button></form></div>')
+        return page("New run", self.sidebar(None), main, self.seq())
+
+    def history_page(self) -> str:
+        if self.shared.history is None or time.time() - self.shared.history[0] > 300:  # reading takes seconds
+            policy = load_policy(find_policy(str(Path.cwd())) or install.BUILT_IN_POLICY)
+            self.shared.history = (time.time(), report(policy, past_calls(days=30)), policy.source)
+        _, r, source = self.shared.history
+        crumbs = '<div class="crumbs"><b>History</b><span class="r">last 30 days</span></div>'
+        if r is None:
+            main = crumbs + ('<div class="body" style="display:flex"><div class="empty"><h1>No tool calls found</h1>'
+                             '<p>Claude Code transcripts from the last 30 days appear here.</p></div></div>')
+            return page("History", self.sidebar(None), main, self.seq())
+        alone = 1 - r.answered / r.calls
+        kinds = {"floor": "blue", "pure": "green", "learns": "amber", "unknown": "red"}
+        rows = "".join(
+            f'<tr><td class="m">{esc(x.category)}</td><td><span class="chip {kinds[x.kind]}">{x.kind}</span></td>'
+            f'<td class="m">{x.calls}</td><td class="m">{x.per_week:.0f}</td>'
+            f'<td class="m">{esc(", ".join(f"{k} {v}" for k, v in x.approvers))}</td>'
+            f'<td class="m">{x.audits_per_week:.0f}</td>'
+            f'<td class="m">{"" if x.weeks_to_certify is None else f"{x.weeks_to_certify:.1f}"}</td></tr>'
+            for x in r.rows)
+        unknown = "".join(f'<tr><td class="m">{v}</td><td class="m">{esc(k)}</td></tr>' for k, v in r.unknown[:10])
+        body = (f'<div><h1>What your agents did</h1><div class="sub">Read from your Claude Code transcripts and '
+                f'classified by {esc(source)}. Nothing is changed.</div></div>'
+                f'<div class="tiles"><div><div class="n">{r.calls}<small>tool calls</small></div>'
+                f'<p>{r.calls / r.weeks:.0f} per week</p></div>'
+                f'<div><div class="n">{r.answered}<small>answered by you</small></div>'
+                f'<p>{r.answered / r.weeks:.1f} per week</p></div>'
+                f'<div><div class="n">{alone:.1%}</div><p>ran without a person</p></div></div>'
+                f'<div><div class="label">By category <span>with the gate: {r.audits_per_week:.0f} audit prompts '
+                f'a week; a category is certified after {r.labels_to_certify} answers with no error</span></div>'
+                f'<div class="box"><table><tr><th>category</th><th>kind</th><th>calls</th><th>per week</th>'
+                f'<th>approved today by</th><th>audits per week</th><th>weeks to certify</th></tr>{rows}</table></div></div>'
+                + (f'<div><div class="label">No category matches <span>add these to the policy</span></div>'
+                   f'<div class="box"><table>{unknown}</table></div></div>' if unknown else ''))
+        main = crumbs + f'<div class="body">{body}</div>'
+        return page("History", self.sidebar(None), main, self.seq())
+
+    def setup_page(self) -> str:
+        g = install.status(self.c.home)
+        chip = ('<span class="chip green">installed</span>' if g.installed else
+                f'<span class="chip amber">partly installed, {len(g.hooked)} of {len(install.EVENTS)} events</span>'
+                if g.hooked else '<span class="chip amber">not installed</span>')
+        buttons = ('' if g.installed else '<button class="btn go" name="action" value="install">Install</button>') + \
+            ('<button class="btn" name="action" value="remove">Remove</button>' if g.hooked else '')
+        main = ('<div class="crumbs"><b>Setup</b></div><div class="body">'
+                '<div><h1>Action gate in Claude Code</h1><div class="sub">Every tool call your Claude Code agents make '
+                'goes through Jaynes. Actions that cannot be undone, like pushing, never run without you. Everything '
+                'else runs as it does today, except a random one in ten that asks you, so Jaynes can measure.</div></div>'
+                f'<div class="box"><table class="kv"><tr><td>state</td><td>{chip}</td></tr>'
+                f'<tr><td>settings</td><td class="m">{esc(str(g.settings))}</td></tr>'
+                f'<tr><td>policy</td><td class="m">{esc(str(g.policy))}'
+                f'{"" if g.policy.is_file() else " (written on install)"}</td></tr></table></div>'
+                + ('<div class="err">Jaynes is running from a temporary environment, so the hook would stop working '
+                   'when it is cleaned. Install it first with uv tool install jaynes-ai (or pip install jaynes-ai), '
+                   'then open this page with jaynes.</div>' if install.temporary() and not g.installed else '')
+                + f'<form method="post" action="/setup" class="checks"><input type="hidden" name="token" value="{self.shared.token}">'
+                f'{buttons}</form>'
+                f'<div class="sub">Install and Remove rewrite {esc(str(g.settings))} and keep the previous file as '
+                f'{esc(g.settings.name)}.jaynes-backup. Your other hooks and settings stay as they are.</div></div>')
+        return page("Setup", self.sidebar(None), main, self.seq())
+
+    def setup(self, fields: dict[str, str]) -> tuple[int, str]:
+        action = fields.get("action", "")
+        if action not in ("install", "remove"):
+            return 400, self.setup_page()
+        (install.install if action == "install" else install.remove)(self.c.home)
+        return 303, "/setup"
 
     def roles_page(self) -> str:
         names = sorted({str(ev.payload["role"]) for ev in self.c.store.events("RunStarted")})
@@ -631,13 +888,39 @@ class Review:
         seen = self.shared.first_seen.get((run_id, step, opened[0])) if opened else None
         spent = round(max(0.0, time.time() - seen), 3) if seen else None  # from the first view, across reloads
         try:
-            self.c.answer(role, run_id, step, answer, note=note, output=output, seconds_spent=spent)
+            self.c.answer(role, run_id, step, answer, note=note, output=output, seconds_spent=spent,
+                          to=fields.get("to") or None)
         except AnswerRejected as err:
             return 400, self.stop_page(run_id, step, "not recorded: " + "; ".join(err.reasons), fields)
         except RunBusy:
             return 409, self.stop_page(run_id, step, "the run is busy in another process; try again in a moment", fields)
         continue_in_background(self.c.home, run_id)
-        return 303, "/"
+        return 303, f"/run/{q(run_id)}"
+
+    def start(self, fields: dict[str, str]) -> tuple[int, str]:
+        ref = fields.get("ref", "").strip() or fields.get("role", "")
+        task = fields.get("task", "").strip()
+        if not task:
+            return 400, self.new_page("a run needs a task", fields)
+        if self.import_role(ref) is None:
+            return 400, self.new_page(f"{ref} cannot be imported from {Path.cwd()}", fields)
+        folder = fields.get("project", "").strip()
+        preview = fields.get("preview", "").strip()
+        if folder:
+            try:
+                repo.resolve(Path(folder).expanduser())
+            except repo.ProjectError as err:
+                return 400, self.new_page(str(err), fields)
+        if preview and "{port}" not in preview:
+            return 400, self.new_page("the preview command needs {port} where the port goes", fields)
+        ports = fields.get("preview_ports", "").replace(",", " ").split()
+        if not all(p.isdigit() and 0 < int(p) < 65536 for p in ports):
+            return 400, self.new_page("local ports are numbers, such as 8789", fields)
+        run_id = new_run_id()
+        start_in_background(self.c.home, run_id, ref, task, self.known_roles().get(ref, {}),
+                            str(Path(folder).expanduser()) if folder else "", preview,
+                            fields.get("preview_path", "").strip(), " ".join(ports))
+        return 303, f"/run/{q(run_id)}"
 
     # pieces -------------------------------------------------------------------
 
@@ -648,7 +931,7 @@ class Review:
         if self.c._held(run_id):  # pyright: ignore[reportPrivateUsage]
             return 409, self.run_page(run_id)
         continue_in_background(self.c.home, run_id)
-        return 303, "/"
+        return 303, f"/run/{q(run_id)}"
 
     def _value(self, s: StepState, target: Step[Any] | None) -> Any:
         return None if s.checked is None else self._value_of(s.checked, target)
@@ -687,6 +970,10 @@ class Review:
             if p.get("step") != step or self._round_of(events, ev) != round_:
                 continue
             if ev.type == "TurnFinished":
+                if "web" in p:
+                    read = ", ".join(str(x) for x in p["web"]) or "nothing"
+                    rows.append(f'<tr><td class="m" style="color:var(--blue)">web</td><td>read {esc(read)}</td>'
+                                f'<td class="m">attempt {esc(str(p["attempt"]))}</td></tr>')
                 tin += int(p["tokens_in"])
                 tout += int(p["tokens_out"])
                 seconds += float(p.get("seconds") or 0)
@@ -740,9 +1027,21 @@ class Review:
         return (f'<div><div class="label">{esc(label)}{": " + esc(name) if name else ""} <span>{esc(right)}</span></div>'
                 f"{render_value(value)}</div>")
 
+    @staticmethod
+    def _earlier(role: Role | None, step: str) -> list[str]:
+        """Steps before ``step`` with an output, which a return or context from its stop can go back to."""
+        names = [x.name for x in role.steps] if role else []
+        return [x.name for x in role.steps[:names.index(step)] if x.output is not None] if role and step in names else []
+
     def _answer_bar(self, run_id: str, step: str, value: Any, error: str, fields: dict[str, str] | None,
-                    editable: bool = True) -> str:
+                    editable: bool = True, earlier: list[str] | None = None) -> str:
         fields = fields or {}
+        chosen = fields.get("to", "")
+        back = ("" if not earlier else
+                '<select name="to" title="Return and context go to this step; every step after it runs again">'
+                + f'<option value="">to {esc(step)}</option>'
+                + "".join(f'<option value="{esc(n)}"{" selected" if n == chosen else ""}>back to {esc(n)}</option>'
+                          for n in earlier) + "</select>")
         edited = fields.get("output") or json.dumps(value, indent=2, ensure_ascii=False)
         editor_class = "" if fields.get("answer") == "change" else "hidden"
         hidden = "".join(f'<input type="hidden" name="{k}" value="{esc(v)}">' for k, v in (
@@ -752,7 +1051,7 @@ class Review:
                 f'<span>it is checked before it replaces the agent\'s</span></div>'
                 f'<textarea name="output" spellcheck="false">{esc(edited)}</textarea></div>'
                 f'<div class="row"><input type="text" name="note" value="{esc(fields.get("note", ""))}" '
-                f'placeholder="Note for the agent (needed for return and context)">'
+                f'placeholder="Note for the agent (needed for return and context)">{back}'
                 f'<button type="button" class="btn" data-a="context">Context<kbd>X</kbd></button>'
                 f'<button type="button" class="btn" data-a="return">Return<kbd>R</kbd></button>'
                 + (f'<button type="button" class="btn" data-a="change">Change<kbd>C</kbd></button>' if editable else "") +
@@ -771,7 +1070,10 @@ class Review:
             "Checked": lambda: f"by {p['source']}" + (f", output {str(p['output_hash'])[:12]}" if p.get("output_hash") else ""),
             "StopOpened": lambda: f"{p['status']}, {p['n']} labels, {p['k']} errors",
             "StopSkipped": lambda: f"certified, coin {float(p['coin']):.2f}",
-            "StopAnswered": lambda: f"{'accepted' if p['answer'] == 'accept' else p['answer']} ({p['label']})"
+            "StopAnswered": lambda: (f"{p['answer']} to {p['to']}" + (f" ({p['revises']['label']} for {p['to']})"
+                                                                      if p.get("revises") else "")
+                                     if p.get("to") else
+                                     f"{'accepted' if p['answer'] == 'accept' else p['answer']} ({p['label']})")
                                     + (f": {p['note']}" if p.get("note") else ""),
             "RunPaused": lambda: f"quota until {datetime.fromtimestamp(float(p['until'])).strftime('%H:%M')}",
             "RunBlocked": lambda: "; ".join(str(x) for x in p.get("reasons", [])[:2]),
@@ -788,7 +1090,7 @@ class Review:
 
 # --- HTTP ------------------------------------------------------------------------------
 
-def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> ThreadingHTTPServer:
+def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> ReviewServer:
     """A review server for ``home`` on 127.0.0.1; ``port=0`` picks a free one."""
     if str(Path.cwd()) not in sys.path:
         sys.path.insert(0, str(Path.cwd()))  # role modules are imported from the project, as `jaynes run` does
@@ -798,14 +1100,14 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Threa
         def log_message(self, format: str, *args: Any) -> None:
             return None
 
-        def _send(self, status: int, body: str, kind: str = "text/html; charset=utf-8",
-                  location: str | None = None) -> None:
-            data = body.encode()
+        def _send(self, status: int, body: str | bytes, kind: str = "text/html; charset=utf-8",
+                  location: str | None = None, frame: str = "DENY") -> None:
+            data = body.encode() if isinstance(body, str) else body
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("X-Frame-Options", frame)
             if location:
                 self.send_header("Location", location)
             self.end_headers()
@@ -849,6 +1151,24 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Threa
                     self._send(200, app.stop_page(run_id, step))
                 case ["run", run_id]:
                     self._send(200, app.run_page(run_id))
+                case ["new"]:
+                    self._send(200, app.new_page())
+                case ["preview", run_id, which]:
+                    status, out = app.preview(run_id, which)
+                    if status == 302:
+                        self._send(302, "", location=out)
+                    else:
+                        self._send(status, out, frame="SAMEORIGIN")
+                case ["file", run_id, step, *rel] if rel:
+                    found = app.picture(run_id, step, "/".join(rel))
+                    if found is None:
+                        self._send(404, app.not_found("Not found"))
+                    else:
+                        self._send(200, found[0], found[1])
+                case ["history"]:
+                    self._send(200, app.history_page())
+                case ["setup"]:
+                    self._send(200, app.setup_page())
                 case ["roles"]:
                     self._send(200, app.roles_page())
                 case ["role", name]:
@@ -869,24 +1189,48 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Threa
                 return self._send(400, "bad Content-Length", "text/plain")
             fields = dict(urllib.parse.parse_qsl(self.rfile.read(length).decode(errors="replace"), keep_blank_values=True))
             path = urllib.parse.urlsplit(self.path).path
-            if path not in ("/answer", "/continue"):
+            handlers = {"/answer": Review.answer, "/continue": Review.resume, "/start": Review.start, "/setup": Review.setup}
+            if path not in handlers:
                 return self._send(404, "not found", "text/plain")
             if not secrets.compare_digest(fields.get("token", ""), shared.token):
                 return self._send(403, "this page is stale or not from this server; reload it", "text/plain")
             app = Review(home, shared)
-            status, out = app.answer(fields) if path == "/answer" else app.resume(fields)
+            status, out = handlers[path](app, fields)
             if status == 303:
                 self._send(303, "", location=out)
             else:
                 self._send(status, out)
 
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return ReviewServer(("127.0.0.1", port), Handler, shared.previews)
+
+
+class ReviewServer(ThreadingHTTPServer):
+    """Stops the previews it started when it shuts down."""
+
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], previews: Previews) -> None:
+        super().__init__(address, handler)
+        self.previews = previews
+
+    def shutdown(self) -> None:
+        super().shutdown()
+        self.previews.stop_all()
+
+    def server_close(self) -> None:
+        super().server_close()
+        self.previews.stop_all()
 
 
 def serve(home: Path, port: int) -> None:
     server = make_server(home, port)
+    def leave(signum: int, frame: object) -> None:
+        sys.exit(0)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):  # a closed terminal or a kill still stops the previews
+        signal.signal(sig, leave)
     print(f"Jaynes review on http://127.0.0.1:{server.server_address[1]}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        server.server_close()

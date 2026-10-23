@@ -18,6 +18,7 @@ class TurnResult:
     tokens_in: int  # from the runtime's meter, never from the agent's report
     tokens_out: int
     model: str  # the model that answered, as the runtime reports it
+    web: tuple[str, ...] = ()  # addresses and searches the turn read on the web, as the runtime saw them
 
 
 class QuotaExhausted(Exception):
@@ -40,5 +41,8 @@ class Runtime(Protocol):
     name: str
 
     def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
-        """Run one turn; ``deadline`` is in seconds. Raises the exceptions above."""
+        """Run one turn; ``deadline`` is in seconds. Raises the exceptions above.
+
+        A runtime that can let a turn read the web also takes ``web: bool = False``; the conductor passes
+        ``web=True`` only for steps marked ``web``, and refuses those steps on runtimes without it."""
         ...

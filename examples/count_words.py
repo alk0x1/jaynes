@@ -1,7 +1,7 @@
 """A two-step role for trying the conductor: Jaynes sets a word count (the topic's words plus five),
 an agent writes a sentence with exactly that many words, and a check counts them.
 
-    jaynes run --role examples.count_words:ROLE --task "lighthouses in fog"
+    jaynes run --role count_words:ROLE --task "lighthouses in fog"   # from this folder
 """
 
 from pydantic import BaseModel
