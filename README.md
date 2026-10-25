@@ -123,7 +123,8 @@ your own task on the second line.
 Set up Jaynes and run this task with it:
 make the team page dark and calm
 
-Install it: uv tool install git+https://github.com/alk0x1/jaynes
+Install it, even if jaynes is already there, since it may be old:
+uv tool install --reinstall git+https://github.com/alk0x1/jaynes
 (install uv first if it is missing). In the background, run jaynes:
 it opens the review page in my browser. Then, also in the background:
 jaynes run --role visual-identity --task "<the task>" --project .
@@ -136,7 +137,7 @@ why it blocked. Never answer a stop yourself.
 Or by hand:
 
 ```sh
-uv tool install git+https://github.com/alk0x1/jaynes
+uv tool install --reinstall git+https://github.com/alk0x1/jaynes
 jaynes                         # opens the page on http://127.0.0.1:8740
 ```
 

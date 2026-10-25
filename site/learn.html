@@ -557,7 +557,8 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
     <pre id="paste-text">Set up Jaynes and run this task with it:
 <em>make the team page dark and calm</em>
 
-Install it: uv tool install git+https://github.com/alk0x1/jaynes
+Install it, even if jaynes is already there, since it may be old:
+uv tool install --reinstall git+https://github.com/alk0x1/jaynes
 (install uv first if it is missing). In the background, run jaynes:
 it opens the review page in my browser. Then, also in the background:
 jaynes run --role visual-identity --task "&lt;the task&gt;" --project .
@@ -1143,7 +1144,7 @@ why it blocked. Never answer a stop yourself.</pre>
   const bot4 = char(term4, 'agent', 'bot4'), bot4Say = bubble(term4, 'bot4Say');
   const LINES = [
     ['<span class="me">› Set up Jaynes and run this task with it: make the team page dark and calm</span>', 600],
-    ['<span class="p">$</span> uv tool install git+https://github.com/alk0x1/jaynes', 1100],
+    ['<span class="p">$</span> uv tool install --reinstall git+https://github.com/alk0x1/jaynes', 1100],
     ['<span class="p">$</span> jaynes', 700],
     ['  Jaynes review on http://127.0.0.1:8740', 800],
     ['<span class="p">$</span> jaynes run --role visual-identity --task "Make the team page dark and calm" --project .', 1200],
