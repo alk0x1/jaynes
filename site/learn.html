@@ -288,7 +288,9 @@ a.primary { text-decoration: none; display: inline-block; }
 .paste2 pre em { font-style: normal; color: var(--amber); }
 .paste2 .row { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .paste2 .note { font-size: 14px; color: var(--faint); }
-.copy-b { font-family: var(--mono); font-size: 12px; padding: 9px 14px; border-radius: 4px; border: 1px solid var(--line-2); background: var(--panel); color: var(--faint); cursor: not-allowed; }
+.copy-b { font-family: var(--mono); font-size: 13px; padding: 9px 16px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); cursor: pointer; transition: border-color .2s, color .2s; }
+.copy-b:hover { border-color: var(--blue); }
+.copy-b.done { border-color: var(--green); color: var(--green); }
 .demo4 { display: grid; gap: 18px; margin: 0; }
 .term4 { position: relative; display: grid; gap: 10px; align-content: start; min-height: 0; padding: 16px 18px 60px; border: 1px solid rgba(255, 255, 255, .06); border-radius: 14px; background: #05070a; font-family: var(--mono); font-size: 12px; line-height: 1.7; min-width: 0; }
 .tl { color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; animation: drop .25s ease; }
@@ -553,12 +555,17 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
 
   <div class="paste2">
     <pre id="paste-text">Set up Jaynes and run this task with it:
-<em>redesign the People screen</em>
+<em>make the team page dark and calm</em>
 
-Open it with uvx --from git+https://github.com/alk0x1/jaynes jaynes,
-start a run on this repository,
-and tell me when it stops for my answer.</pre>
-    <div class="row"><p class="note">One paste is being built. Today: install from GitHub and open the page. <a href="https://github.com/alk0x1/jaynes#get-started">README</a></p><button type="button" class="copy-b" disabled>Copy</button></div>
+Install it: uv tool install git+https://github.com/alk0x1/jaynes
+(install uv first if it is missing). In the background, run jaynes:
+it opens the review page in my browser. Then, also in the background:
+jaynes run --role visual-identity --task "&lt;the task&gt;" --project .
+Use --role redesign if the task names links or pictures of interfaces
+I like. If the project has a dev server, add --preview "&lt;its command,
+with {port} as the port&gt;". Tell me when it stops for my answer, or
+why it blocked. Never answer a stop yourself.</pre>
+    <div class="row"><p class="note">Change the <span class="w amber">task</span>, then paste it into Claude Code or Codex, in your project.</p><button type="button" class="copy-b" id="copy">Copy</button></div>
   </div>
 
   <div class="controls"><div class="act"><button type="button" class="primary hint" id="c4-play">See it happen</button></div></div>
@@ -567,14 +574,14 @@ and tell me when it stops for my answer.</pre>
     <div class="term4" id="term4" aria-live="off"><span class="label">Claude Code</span><div id="tl4"></div></div>
     <div class="win4" id="win4">
       <div class="wbar"><i></i><i></i><i></i><span>127.0.0.1:8740</span><b id="w-count">1 waiting</b></div>
-      <div class="shot4"><img src="img/review-page.png" width="1440" height="900" loading="lazy" alt="The Jaynes review page in a browser: the run Redesign the People screen waits at its requirements step, with the five proposed requirements, the check that passed, and Accept, Change and Return buttons at the bottom."><span class="hl" aria-hidden="true"></span></div>
+      <div class="shot4"><img src="img/review-page.png" width="1440" height="900" loading="lazy" alt="The Jaynes review page in a browser: the run Make the team page dark and calm waits at its direction step, asking Apply the Night Desk direction?, with the proposed palette and fonts, and Context, Return, Change and Accept buttons at the bottom."><span class="hl" aria-hidden="true"></span></div>
     </div>
     <figcaption class="cap4" id="cap4">Your browser opens. <span class="w amber">You</span> answer here.</figcaption>
   </figure>
 
   <div class="fin" id="fin4" aria-live="polite">
     <svg class="check" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="20"/><path d="M13 23l6 6 12-13"/></svg>
-    <h3>Today it takes two commands. Soon, one paste.</h3>
+    <h3>One paste. You answer in the page.</h3>
     <a class="primary" href="https://github.com/alk0x1/jaynes">Jaynes on GitHub</a>
   </div>
 </section>
@@ -1135,12 +1142,13 @@ and tell me when it stops for my answer.</pre>
   const term4 = $('term4'), tl4 = $('tl4'), win4 = $('win4');
   const bot4 = char(term4, 'agent', 'bot4'), bot4Say = bubble(term4, 'bot4Say');
   const LINES = [
-    ['<span class="me">› Set up Jaynes and run this task with it: redesign the People screen</span>', 600],
-    ['<span class="p">$</span> uvx --from git+https://github.com/alk0x1/jaynes jaynes', 1100],
-    ['  review page on http://127.0.0.1:8740', 800],
-    ['<span class="p">$</span> jaynes run --role screen-design --task "Redesign the People screen" --project .', 1200],
-    ['  <span class="ok">✓</span> snapshot   <span class="ok">✓</span> breaks   <span class="ok">✓</span> requirements checked, 1 retry', 1400],
-    ['  <span class="wt">●</span> waiting for you: requirements', 900]
+    ['<span class="me">› Set up Jaynes and run this task with it: make the team page dark and calm</span>', 600],
+    ['<span class="p">$</span> uv tool install git+https://github.com/alk0x1/jaynes', 1100],
+    ['<span class="p">$</span> jaynes', 700],
+    ['  Jaynes review on http://127.0.0.1:8740', 800],
+    ['<span class="p">$</span> jaynes run --role visual-identity --task "Make the team page dark and calm" --project .', 1200],
+    ['  <span class="ok">✓</span> current   <span class="ok">✓</span> direction checked', 1400],
+    ['  <span class="wt">●</span> waiting for you: direction', 900]
   ];
   let run4 = 0;
   function reset4() {
@@ -1161,6 +1169,15 @@ and tell me when it stops for my answer.</pre>
     b.hidden = false; b.className = 'alt'; b.textContent = 'see it again'; complete(2, $('fin4'));
   }
   $('c4-play').onclick = play4;
+  $('copy').onclick = async () => {
+    const b = $('copy'), text = $('paste-text').textContent;
+    try { await navigator.clipboard.writeText(text); } catch {
+      const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select();
+      document.execCommand('copy'); t.remove();
+    }
+    b.textContent = 'Copied'; b.classList.add('done');
+    setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1800);
+  };
   reset4();
 
   spy();

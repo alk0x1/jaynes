@@ -79,3 +79,15 @@ def test_an_answer_from_the_cli_is_an_agent_and_can_be_bound_to_what_the_queue_s
 
     [answered] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("StopAnswered", run_id=run)]
     assert answered["by"] == "agent" and answered["label"] == "correct"
+
+
+def test_a_built_in_role_is_started_by_its_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "visual-identity", "--task", "t"])
+    assert json.loads(capsys.readouterr().out)["step"] == "current"  # it ran: the first step wants a project
+    [started] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("RunStarted")]
+    assert started["ref"] == "jaynes.roles.visual_identity:ROLE"
+
+
+def test_an_unknown_role_name_lists_the_built_in_ones(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="visual-identity, redesign"):
+        cli.main(["run", "--home", str(tmp_path), "--role", "screen-design", "--task", "t"])

@@ -6,8 +6,9 @@
   jaynes parity HOOK [--config P]   compare floors against an existing deny hook on past Bash calls
   jaynes simulate                   Monte Carlo check of the certification guarantee
   jaynes                            the review page, opened in the browser
-  jaynes run [ID] --role M:R --task T [--project DIR] [--preview CMD]
-                                    start a run of role R from module M, on the git repository at DIR
+  jaynes run [ID] --role R --task T [--project DIR] [--preview CMD]
+                                    start a run of a built-in role (visual-identity, redesign) or module:attribute,
+                                    on the git repository at DIR
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
   jaynes queue                      stops waiting for an answer and blocked runs, oldest first
   jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
@@ -146,6 +147,16 @@ def cmd_simulate(args: argparse.Namespace) -> None:
 DEFAULT_RUNTIMES = {"claude": "jaynes.runtimes:ClaudeRuntime", "codex": "jaynes.runtimes:CodexRuntime"}
 
 
+def role_ref(name: str) -> str:
+    """A built-in role's name, as its module:attribute; anything with a colon is already one."""
+    from jaynes.roles import BUILT_IN
+    if ":" in name:
+        return name
+    if name not in BUILT_IN:
+        sys.exit(f"no built-in role {name!r}: use one of {', '.join(BUILT_IN)}, or module:attribute")
+    return BUILT_IN[name]
+
+
 def load_ref(ref: str) -> Any:
     module, _, attr = ref.partition(":")
     if not module or not attr:
@@ -189,7 +200,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             sys.exit("a new run needs --role and --task")
         if any("=" not in pair for pair in args.runtime):
             sys.exit("--runtime takes name=module:attribute")
-        ref, task, run_id = args.role, args.task, args.id or new_run_id()
+        ref, task, run_id = role_ref(args.role), args.task, args.id or new_run_id()
         extra = dict(pair.split("=", 1) for pair in args.runtime)
         r = _role(ref)
     # imported on first use, so a run that never calls an agent needs neither CLI installed
@@ -302,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--p", type=float, nargs="+", default=[0.0, 0.01, 0.02, 0.03, 0.05, 0.06, 0.08])
     r = sub.add_parser("run")
     r.add_argument("id", nargs="?")
-    r.add_argument("--role", help="module:attribute of the role")
+    r.add_argument("--role", help="a built-in role (visual-identity, redesign) or module:attribute")
     r.add_argument("--task")
     r.add_argument("--runtime", action="append", default=[], help="name=module:attribute, overrides a runtime")
     r.add_argument("--project", help="a folder in a git repository, for steps that work on a project")

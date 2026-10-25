@@ -95,8 +95,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 
 Missing, roughly in order:
 
-- **Published package.** Not on PyPI yet; install from a clone with
-  `uv tool install .`.
+- **Published package.** Not on PyPI yet; install from GitHub (below).
 - **A first real case**, measured against the first user's baseline.
 - **More built-in roles** that need no design taste to check: fix a bug (a
   failing test first), build a feature (a spec stop, then tests), upgrade
@@ -114,8 +113,27 @@ Missing, roughly in order:
 
 Python 3.12 or later.
 
+The shortest way: paste this into Claude Code or Codex, in your project, with
+your own task on the second line.
+
+```text
+Set up Jaynes and run this task with it:
+make the team page dark and calm
+
+Install it: uv tool install git+https://github.com/alk0x1/jaynes
+(install uv first if it is missing). In the background, run jaynes:
+it opens the review page in my browser. Then, also in the background:
+jaynes run --role visual-identity --task "<the task>" --project .
+Use --role redesign if the task names links or pictures of interfaces
+I like. If the project has a dev server, add --preview "<its command,
+with {port} as the port>". Tell me when it stops for my answer, or
+why it blocked. Never answer a stop yourself.
+```
+
+Or by hand:
+
 ```sh
-uv tool install jaynes-ai      # or: pip install jaynes-ai
+uv tool install git+https://github.com/alk0x1/jaynes
 jaynes                         # opens the page on http://127.0.0.1:8740
 ```
 

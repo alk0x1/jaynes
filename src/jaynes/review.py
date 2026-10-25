@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from jaynes import bounds, install, sandbox
+from jaynes import bounds, install, roles, sandbox
 from jaynes import project as repo
 from jaynes.conductor import (LABELS, Answer, AnswerRejected, Conductor, RunBusy, RunState, StepState, Waiting,
                               continue_in_background, new_run_id, project, start_in_background)
@@ -48,8 +48,7 @@ from jaynes.store import Event
 esc = html.escape
 CHIP = {"certified": "green", "refuted": "red", "floor": "blue"}  # any other status is amber
 DEMO = "jaynes.demo:ROLE"
-BUILT_IN = {DEMO: {"scripted": "jaynes.demo:Agent"}, "jaynes.roles.visual_identity:ROLE": {},
-            "jaynes.roles.redesign:ROLE": {}}
+BUILT_IN = {DEMO: {"scripted": "jaynes.demo:Agent"}, **{ref: {} for ref in roles.BUILT_IN.values()}}
 StageState = Literal["jaynes", "checked", "accepted", "changed", "sampled", "waiting", "blocked", "running", "todo"]
 
 PICTURES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
