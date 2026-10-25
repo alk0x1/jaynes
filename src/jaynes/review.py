@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from jaynes import bounds, install, roles, sandbox
+from jaynes import bounds, install, roles, sandbox, verify
 from jaynes import project as repo
 from jaynes.conductor import (LABELS, Answer, AnswerRejected, Conductor, RunBusy, RunState, StepState, Waiting,
                               continue_in_background, new_run_id, project, start_in_background)
@@ -249,7 +249,7 @@ pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wra
 .btn kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: 6px; }
 .btn.solid { background: var(--green); border-color: var(--green); color: #04150c; font-weight: 500; }
 .btn.solid kbd { color: #0b3a22; }
-.err { color: var(--red); font-family: var(--mono); font-size: 12px; }
+.err { color: var(--red); font-family: var(--mono); font-size: 12px; white-space: pre-line; }
 .hidden { display: none; }
 .empty { margin: auto; text-align: center; color: var(--dim); display: grid; gap: 6px; }
 .empty h1 { color: var(--ink); }
@@ -930,8 +930,11 @@ class Review:
         task = fields.get("task", "").strip()
         if not task:
             return 400, self.new_page("a run needs a task", fields)
-        if self.import_role(ref) is None:
+        r = self.import_role(ref)
+        if r is None:
             return 400, self.new_page(f"{ref} cannot be imported from {Path.cwd()}", fields)
+        if problems := verify.verify(r):
+            return 400, self.new_page(verify.report(r, problems), fields)
         folder = fields.get("project", "").strip()
         preview = fields.get("preview", "").strip()
         if folder:

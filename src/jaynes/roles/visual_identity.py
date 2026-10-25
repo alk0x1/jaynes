@@ -9,6 +9,7 @@ changes come back as a branch.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -98,13 +99,18 @@ def readable(out: Direction, needs: Witnesses) -> Pass | Fail:
     return Fail(*reasons) if reasons else Pass()
 
 
+def in_style_files(project: Path, palette: list[Swatch]) -> Pass | Fail:
+    """Every colour of the palette appears in the project's style files."""
+    text = "\n".join(p.read_text(errors="replace").lower() for g in STYLE_FILES
+                     for p in project.glob(g) if p.is_file() and "node_modules" not in p.parts)
+    missing = [f"{s.role} {s.value}" for s in palette if s.value.lower() not in text]
+    return Fail(f"these colours appear in no style file: {', '.join(missing)}") if missing else Pass()
+
+
 def palette_applied(out: Applied, needs: Witnesses) -> Pass | Fail:
     """Every colour of the direction appears in the project's style files."""
     assert needs.project is not None
-    text = "\n".join(p.read_text(errors="replace").lower() for g in STYLE_FILES
-                     for p in needs.project.glob(g) if p.is_file())
-    missing = [f"{s.role} {s.value}" for s in needs[DIRECTION].value.palette if s.value.lower() not in text]
-    return Fail(f"these colours appear in no style file: {', '.join(missing)}") if missing else Pass()
+    return in_style_files(needs.project, needs[DIRECTION].value.palette)
 
 
 ROLE = role("visual-identity")

@@ -355,3 +355,11 @@ def test_a_second_page_for_the_same_home_points_to_the_first_instead_of_failing(
             cli.main(["review", "--home", str(tmp_path / "other"), "--port", str(port)])
     finally:
         server.kill()
+
+
+def test_the_page_refuses_to_start_a_role_with_problems(served: tuple[str, Path]) -> None:
+    base, home = served
+    page = get(base + "/new")
+    status, body = post(base + "/start", {**form(page), "role": "", "ref": "tests.test_verify:BAD", "task": "go"})
+    assert status == 400 and "bad has 6 problems" in body and "publish: check for_notes takes a Note" in body
+    assert list(Store(home / "jaynes.sqlite3").events("RunStarted")) == []

@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from jaynes import bounds, gate, hook
+from jaynes import bounds, gate, hook, verify
 from jaynes.history import past_calls, report
 from jaynes.install import BUILT_IN_POLICY
 from jaynes.policy import Policy, classify, find_policy, jaynes_home, load_policy
@@ -195,6 +195,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     if args.id and not args.role:
         r, ref, task, extra = _started(c, args.id)
         run_id = args.id
+        if problems := verify.verify(r):  # warned, not refused: the run is under way and its role may have changed
+            print(verify.report(r, problems), file=sys.stderr)
     else:
         if not args.role or args.task is None:
             sys.exit("a new run needs --role and --task")
@@ -203,6 +205,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         ref, task, run_id = role_ref(args.role), args.task, args.id or new_run_id()
         extra = dict(pair.split("=", 1) for pair in args.runtime)
         r = _role(ref)
+        if problems := verify.verify(r):  # before any agent works for it
+            sys.exit(verify.report(r, problems))
     # imported on first use, so a run that never calls an agent needs neither CLI installed
     c.runtimes = {name: (lambda t=target: load_ref(t)()) for name, target in {**DEFAULT_RUNTIMES, **extra}.items()}
     started: dict[str, Any] = {"ref": ref, "runtimes": extra}
@@ -218,6 +222,14 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(str(err))
     print(json.dumps({"run": run_id, "status": result.status, "step": result.step, "until": result.until,
                       "reasons": list(result.reasons)}))
+
+
+def cmd_check(args: argparse.Namespace) -> None:
+    r = _role(role_ref(args.role))
+    problems = verify.verify(r)
+    print(verify.report(r, problems))
+    if problems:
+        sys.exit(1)
 
 
 def cmd_queue(args: argparse.Namespace) -> None:
@@ -321,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--preview-path", help="the path to open in the preview, / by default")
     r.add_argument("--preview-ports", help="local ports the preview may connect to, such as a backend: 8789,5432")
     r.add_argument("--home")
+    k = sub.add_parser("check", help="find what a role gets wrong before any agent runs")
+    k.add_argument("role", help="a built-in role (visual-identity, redesign) or module:attribute")
     q = sub.add_parser("queue")
     q.add_argument("--home")
     w = sub.add_parser("answer")
@@ -354,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         serve(_home(args), args.port)
         return 0
     {"autonomy": cmd_autonomy, "history": cmd_history, "parity": cmd_parity, "simulate": cmd_simulate,
-     "run": cmd_run, "queue": cmd_queue, "answer": cmd_answer, "demo": cmd_demo}[args.cmd](args)
+     "run": cmd_run, "check": cmd_check, "queue": cmd_queue, "answer": cmd_answer, "demo": cmd_demo}[args.cmd](args)
     return 0
 
 

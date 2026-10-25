@@ -246,6 +246,13 @@ then pick the role under New run (type `count_words:ROLE` the first time), or:
 jaynes run --role count_words:ROLE --task "lighthouses in fog"
 ```
 
+Before any agent works, Jaynes checks the role and refuses it with a list of
+what to fix: a check, question or executor that reads a step its step does not
+need, or a step of another role; a check whose first argument is annotated
+with another step's output type; a step, other than the last, whose output no
+later step needs and no stop shows, unless it changes the project or acts.
+`jaynes check count_words:ROLE` runs the same check alone.
+
 ### From a clone
 
 ```sh

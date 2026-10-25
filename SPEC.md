@@ -142,6 +142,18 @@ Rules:
   run, the step and the payload, to pass to the service that acts; and if
   Jaynes stopped while it was running, the run is blocked instead of resumed,
   since it may have acted.
+- Before a new run, from the CLI or the page, the verifier reads the role's
+  checks, questions and trusted executors from their bytecode, without
+  running them, and refuses the role if one names a step its step does not
+  need, or a step of another role, for more than the step's name: directly or
+  through a closure, a default value, a module or class attribute, a dict or
+  list, a partial or callable object, or a plain function it names in turn;
+  if a check or question is annotated for an output type its step does not
+  produce; or if a step's output, other than the last step's, reaches no
+  later step and no stop and the step neither changes the project nor acts.
+  Steps reached through a method of another object, or a name computed at run
+  time, are not seen. Resuming a run warns instead of refusing. `jaynes check
+  <role>` runs it alone.
 - The role's prompt for each agent step is built from the method text, the
   step's instructions, its schema, and the needed outputs. All of it is part
   of the step's fingerprint.

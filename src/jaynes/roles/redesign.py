@@ -59,7 +59,7 @@ def drawn_from(out: Direction, needs: Witnesses) -> Pass | Fail:
 def applied(out: Applied, needs: Witnesses) -> Pass | Fail:
     """The palette is in the style files, and any motion stops for people who ask for reduced motion."""
     assert needs.project is not None
-    found = vi.palette_applied(out, needs)
+    found = vi.in_style_files(needs.project, needs[DIRECTION].value.palette)
     reasons = list(found.reasons) if isinstance(found, Fail) else []
     text = "\n".join(p.read_text(errors="replace").lower() for g in vi.STYLE_FILES + MARKUP
                      for p in needs.project.glob(g) if p.is_file() and "node_modules" not in p.parts)
