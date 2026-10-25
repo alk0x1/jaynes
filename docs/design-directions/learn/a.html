@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jaynes · Learn · Direction A</title>
+<meta name="description" content="Jaynes, explained: how it keeps your agents on the method and calls you only where your judgment is still needed.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Direction A: the landing's graphite instrument panel, laid out like a Distill article, stripped to the
+   minimum: a sticky chapter index, one sentence of setup, the simulation as the hero, two big choices. */
+:root {
+  --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
+  --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
+  --blue: #6fb4ff; --blue-soft: rgba(111, 180, 255, .12);
+  --amber: #ffb35c; --amber-soft: rgba(255, 179, 92, .13);
+  --green: #69dba0; --green-soft: rgba(105, 219, 160, .13);
+  --red: #ff6f6f; --red-soft: rgba(255, 111, 111, .12);
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--display); font-size: 17px; line-height: 1.55; }
+body { padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); overflow-x: hidden; }
+.grid-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 64px 64px; opacity: .55;
+  -webkit-mask-image: radial-gradient(80% 60% at 50% 0%, #000 0%, transparent 75%); mask-image: radial-gradient(80% 60% at 50% 0%, #000 0%, transparent 75%); }
+main, header, footer { position: relative; z-index: 1; }
+.wrap { max-width: 1200px; margin: 0 auto; }
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.03em; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+a { color: var(--blue); }
+code { font-family: var(--mono); font-size: .85em; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tag { font-family: var(--mono); font-size: 12px; color: var(--blue); }
+.label { font-family: var(--mono); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.btn { font-family: var(--mono); font-size: 13px; padding: 12px 16px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); cursor: pointer; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--dim); }
+.btn.solid { background: var(--blue); color: #04101f; border-color: var(--blue); font-weight: 500; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+.chip.amber { background: var(--amber-soft); color: var(--amber); }
+.chip.green { background: var(--green-soft); color: var(--green); }
+.chip.blue { background: var(--blue-soft); color: var(--blue); }
+.chip.red { background: var(--red-soft); color: var(--red); }
+.chip.plain { background: var(--panel-2); color: var(--dim); }
+.card { border: 1px solid var(--line); border-radius: 12px; background: rgba(14, 18, 24, .92); }
+
+/* nav */
+header.bar { position: sticky; top: 0; z-index: 20; padding-top: env(safe-area-inset-top, 0px); background: rgba(7, 9, 13, .78); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding-inline: max(16px, env(safe-area-inset-left, 0px)); }
+header.bar .wrap { display: flex; align-items: center; gap: 24px; height: 62px; }
+.logo { font-weight: 600; font-size: 19px; letter-spacing: -0.01em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.logo svg { width: 20px; height: 20px; }
+.logo span { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--dim); }
+header nav { margin-left: auto; display: flex; gap: 24px; font-family: var(--mono); font-size: 12px; }
+header nav a { color: var(--dim); text-decoration: none; }
+header nav a:hover { color: var(--ink); }
+header nav a[aria-current] { color: var(--ink); box-shadow: 0 1px 0 var(--blue); }
+header .gh { font-family: var(--mono); font-size: 12px; padding: 7px 12px; }
+
+/* layout: chapter index + article */
+.learn { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px; padding: 56px 0 88px; }
+.toc { position: sticky; top: 94px; align-self: start; }
+.toc summary { list-style: none; cursor: pointer; display: grid; gap: 10px; }
+.toc summary::-webkit-details-marker { display: none; }
+.toc .segs { display: grid; grid-template-columns: repeat(9, 1fr); gap: 3px; }
+.toc .segs i { height: 3px; border-radius: 2px; background: var(--line-2); }
+.toc .segs i.on { background: var(--blue); box-shadow: 0 0 8px rgba(111, 180, 255, .6); }
+.toc ol { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 2px; counter-reset: ch; }
+.toc li { counter-increment: ch; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 7px 10px; border-radius: 6px; font-size: 14px; color: var(--faint); }
+.toc li::before { content: counter(ch); font-family: var(--mono); font-size: 11px; }
+.toc li.cur { color: var(--ink); background: var(--panel-2); box-shadow: inset 2px 0 0 var(--blue); }
+.toc li.cur::before { color: var(--blue); }
+
+article { min-width: 0; display: grid; gap: 28px; }
+.col { max-width: 640px; }
+.kicker { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+article h1 { font-size: clamp(40px, 5.4vw, 66px); line-height: 1.03; margin-top: 4px; }
+.intro { font-size: 20px; color: var(--dim); line-height: 1.6; }
+.intro b { color: var(--ink); font-weight: 500; }
+
+/* defined term */
+.term { position: relative; display: inline; font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: help; text-decoration: underline dotted var(--blue); text-underline-offset: 4px; text-decoration-thickness: 1.5px; }
+.term .tip { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translate(-50%, 4px); width: min(300px, 80vw); padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); color: var(--dim); font-size: 14px; line-height: 1.5; text-align: left; display: none; transform: translate(-50%, 0); z-index: 5; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+.term .tip b { color: var(--ink); font-weight: 500; display: block; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+.term:hover .tip, .term:focus .tip, .term.open .tip { display: block; }
+
+/* figure */
+.fig { padding: 0; overflow: hidden; position: relative; }
+.fig canvas { display: block; width: 100%; height: 400px; }
+.speed { position: absolute; left: 14px; bottom: 12px; }
+.controls { display: grid; gap: 16px; }
+.choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.choice { display: grid; gap: 4px; justify-items: start; text-align: left; padding: 16px 18px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; transition: border-color .2s, background .2s, box-shadow .2s; }
+.choice b { font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
+.choice:hover { border-color: var(--blue); }
+.choice[aria-pressed="true"] { border-color: var(--blue); background: var(--blue-soft); box-shadow: 0 0 24px rgba(111, 180, 255, .15); }
+.choice:disabled { cursor: default; }
+.choice .tick { font-family: var(--mono); font-size: 11px; color: var(--green); visibility: hidden; }
+.choice.tried .tick { visibility: visible; }
+.readouts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.ro { padding: 10px 14px; display: grid; gap: 4px; border-right: 1px solid var(--line); min-width: 0; }
+.ro:last-child { border-right: 0; }
+.ro span { font-family: var(--mono); font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ro b { font-family: var(--mono); font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ro b.amber { color: var(--amber); } .ro b.green { color: var(--green); } .ro b.red { color: var(--red); } .ro b.blue { color: var(--blue); }
+.result { min-height: 64px; padding: 16px 18px; border-radius: 8px; font-size: 16px; color: var(--dim); display: grid; gap: 6px; align-content: center; }
+.result b { color: var(--ink); font-weight: 500; }
+.result .big { font-size: 24px; color: var(--ink); letter-spacing: -0.01em; }
+.result .big.red { color: var(--red); }
+.result .big.amber { color: var(--amber); }
+.result .mono { font-family: var(--mono); font-size: 12px; }
+
+/* third option */
+.third { display: grid; gap: 14px; padding: 22px; justify-items: start; border: 1px dashed var(--line-2); border-radius: 12px; background: transparent; transition: all .5s ease; }
+.third p { color: var(--faint); font-size: 18px; }
+.third.on { border-style: solid; border-color: rgba(111, 180, 255, .5); background: linear-gradient(180deg, rgba(111, 180, 255, .08), rgba(111, 180, 255, 0)); box-shadow: 0 0 40px rgba(111, 180, 255, .08); }
+.third.on p { color: var(--ink); }
+.third.on p b { color: var(--blue); font-weight: 500; }
+.next { font-family: var(--mono); font-size: 12px; padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line-2); background: var(--panel); color: var(--faint); cursor: not-allowed; justify-self: start; display: flex; gap: 10px; align-items: center; }
+.next small { font-size: 10px; color: var(--faint); }
+
+/* measured */
+.measured { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 32px; align-items: center; padding: 24px; }
+.measured .nums { display: grid; gap: 16px; }
+.measured .n { font-size: clamp(44px, 5vw, 64px); font-weight: 500; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.measured .n small { font-family: var(--mono); font-size: 13px; color: var(--dim); letter-spacing: 0; font-weight: 400; margin-left: 8px; }
+.measured .n.seen { color: var(--blue); text-shadow: 0 0 24px rgba(111, 180, 255, .45); }
+.measured p { color: var(--dim); font-size: 17px; }
+.measured p.source { font-size: 11px; }
+.measured p b { color: var(--ink); font-weight: 500; }
+.field { display: block; width: 100%; height: 240px; }
+.source { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* media slot */
+.media { overflow: hidden; }
+.media-frame { position: relative; aspect-ratio: 16 / 9; background: var(--panel-2); overflow: hidden; }
+.media-frame video, .media-frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.media-empty { position: absolute; inset: 0; display: grid; place-items: center;
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 32px 32px; background-position: center; }
+.media-empty::after { content: ""; position: absolute; left: 0; right: 0; height: 40%; top: -40%; background: linear-gradient(180deg, transparent, rgba(111, 180, 255, .07), transparent); animation: scan 4.5s linear infinite; }
+@keyframes scan { to { top: 100%; } }
+.media-empty .play { position: relative; z-index: 1; width: 64px; height: 64px; border-radius: 50%; border: 1px solid rgba(111, 180, 255, .5); display: grid; place-items: center; background: rgba(7, 9, 13, .8); box-shadow: 0 0 30px rgba(111, 180, 255, .18); }
+.media-empty .play svg { width: 20px; height: 20px; margin-left: 3px; }
+.media-cap { display: flex; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--dim); align-items: baseline; }
+.media-cap b { color: var(--ink); font-weight: 500; }
+
+
+footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--dim); font-family: var(--mono); font-size: 12px; }
+footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wrap: wrap; }
+
+@media (max-width: 1080px) { .measured { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) {
+  .learn { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 24px; }
+  .toc { position: sticky; top: 62px; z-index: 10; margin-inline: -16px; padding: 12px 16px; background: rgba(7, 9, 13, .9); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .toc ol { margin-top: 12px; }
+  .toc summary .label::after { content: " ▾"; color: var(--faint); }
+  .toc[open] summary .label::after { content: " ▴"; }
+}
+@media (max-width: 640px) {
+  header nav { display: none; }
+  header .gh { margin-left: auto; }
+  .fig canvas { height: 540px; }
+  .speed { left: auto; right: 14px; bottom: auto; top: 12px; }
+  .choice { padding: 14px; }
+  .choice b { font-size: 17px; }
+  .ro { padding: 10px; }
+  .ro b { font-size: 15px; }
+  .intro { font-size: 18px; position: relative; }
+  .term { position: static; }
+  .term .tip { left: 0; right: 0; width: auto; transform: none; }
+  .measured { padding: 18px; }
+  .field { height: 300px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="logo" href="#top"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="3" fill="#6fb4ff"/><circle cx="15" cy="5" r="2.2" fill="#eef2f7"/><circle cx="15" cy="15" r="2.2" fill="#eef2f7"/><path d="M7.5 9 13 5.8M7.5 11 13 14.2" stroke="#6fb4ff" stroke-width="1.4"/></svg>Jaynes <span>v0 · open source</span></a>
+    <nav aria-label="Sections"><a href="../../../site/index.html#layers">How it works</a><a href="../../../site/index.html#try">Try it</a><a href="../../../site/index.html#guarantee">Guarantee</a><a href="#top" aria-current="page">Learn</a><a href="../../../site/index.html#start">Get started</a></nav>
+    <a class="btn gh" href="https://github.com/alk0x1/jaynes">GitHub</a>
+  </div>
+</header>
+
+<main class="wrap learn" id="top">
+
+<details class="toc" id="toc" open>
+  <summary>
+    <span class="label">Jaynes, explained</span>
+    <span class="segs" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+  </summary>
+  <ol>
+    <li class="cur" aria-current="step">Your agent says done</li>
+    <li>A role is a recipe</li>
+    <li>One step at a time, in a box</li>
+    <li>The machine checks first</li>
+    <li>Stops: where you come in</li>
+    <li>Every answer is evidence</li>
+    <li>Why not the obvious shortcut</li>
+    <li>The gate</li>
+    <li>On a real project</li>
+  </ol>
+</details>
+
+<article>
+  <div class="col" style="display:grid;gap:18px">
+    <span class="tag">// chapter 1</span>
+    <h1>Your agent says done.</h1>
+    <p class="intro">You give an agent a task. It works for twenty minutes, takes two hundred <button class="term" type="button" aria-describedby="tip-action">actions<span class="tip" role="tooltip" id="tip-action"><b>Action</b>One thing an agent does, like reading a file, editing one, or running a command. Claude Code calls them tool calls.</span></button>, and says: <b>done.</b> Did it follow the process? Did it skip the part where it should have asked you? You have two options, and both are bad.</p>
+  </div>
+
+  <figure class="card fig" style="margin:0">
+    <canvas id="sim" aria-label="Simulation: an agent takes 200 actions; you either review each one or let them ship."></canvas>
+    <span id="speed" class="chip plain speed" hidden></span>
+  </figure>
+
+  <div class="controls">
+    <div class="choices" role="group" aria-label="Pick an option">
+      <button type="button" class="choice" id="m-review"><span class="label">option 1</span><b>Review everything</b><small class="tick">tried ✓</small></button>
+      <button type="button" class="choice" id="m-run"><span class="label">option 2</span><b>Let it run</b><small class="tick">tried ✓</small></button>
+    </div>
+    <div class="readouts" aria-live="off">
+      <div class="ro"><span id="l1">your queue</span><b id="r1">0</b></div>
+      <div class="ro"><span id="l2">your time</span><b id="r2">0 min</b></div>
+      <div class="ro"><span id="l3">agent</span><b id="r3">ready</b></div>
+    </div>
+    <div class="result" id="result" aria-live="polite"><span>Pick an option. Each dot will be one action.</span></div>
+  </div>
+
+  <section class="third" id="third" aria-live="polite">
+    <p id="third-p">Try both. There is a third option.</p>
+    <button class="next" type="button" disabled aria-disabled="true">Next: A role is a recipe <small>soon</small></button>
+  </section>
+
+  <section class="card measured" id="measured">
+    <div class="nums">
+      <p>One person running a company of agents measured it over seven weeks:</p>
+      <div class="n" id="c-all">0<small>actions</small></div>
+      <div class="n seen" id="c-seen">0<small>they saw</small></div>
+      <p class="source">A one-person company run by agents, Sep 1 to Oct 21, 2026.</p>
+    </div>
+    <canvas id="field" class="field" aria-label="11,894 dots, one per action; 25 are lit, the ones the person saw."></canvas>
+  </section>
+
+  <figure class="card media" style="margin:0">
+    <div class="media-frame">
+      <!-- Drop the recording in here: replace the .media-empty div with
+           <video src="media/run.mp4" poster="media/run.jpg" controls playsinline muted></video>
+           or a screenshot: <img src="media/stop.png" alt="A stop in the Jaynes review page"> -->
+      <div class="media-empty"><div class="play"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5v13l11-6.5z" fill="#6fb4ff"/></svg></div></div>
+    </div>
+    <figcaption class="media-cap"><b>Watch it for real</b><span>A real Jaynes run, recorded on a Mac. Coming soon.</span></figcaption>
+  </figure>
+</article>
+</main>
+
+<footer>
+  <div class="wrap"><span>Named after E. T. Jaynes, who treated probability as the logic of reasoning with incomplete information.</span><span><a href="https://github.com/alk0x1/jaynes" style="color:inherit">GitHub</a> · Apache-2.0</span></div>
+</footer>
+
+<script>
+(() => {
+  const C = { blue: '#6fb4ff', amber: '#ffb35c', green: '#69dba0', red: '#ff6f6f', ink: '#eef2f7', dim: '#93a0b2', faint: '#5d6a7c', line: '#222a36', line2: '#2c3646', panel: '#0e1218', panel2: '#121823' };
+  const MONO = '"IBM Plex Mono", ui-monospace, Menlo, monospace';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const N = 200, EMIT = 0.05, REVIEW = 0.4, CAP = 32, SECS = 30, SCALE = SECS / REVIEW;
+  const KINDS = ['skipped a step', 'edited the wrong file', 'a test that checks nothing'];
+  const $ = id => document.getElementById(id);
+  const fmt = s => { const m = Math.round(s / 60); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min'; };
+
+  // chapter index: always open on wide screens, a collapsible bar on narrow ones
+  const toc = $('toc'), wide = matchMedia('(min-width: 901px)');
+  const syncToc = () => { toc.open = wide.matches; };
+  syncToc(); wide.addEventListener('change', syncToc);
+  toc.querySelector('summary').addEventListener('click', e => { if (wide.matches) e.preventDefault(); });
+  const term = document.querySelector('.term');
+  term.addEventListener('click', e => { e.stopPropagation(); term.classList.toggle('open'); });
+  document.addEventListener('click', () => term.classList.remove('open'));
+
+  // simulation
+  const cv = $('sim'), cx = cv.getContext('2d');
+  let W = 0, H = 0, Z = null, mode = 'review', S = null, last = 0;
+  const tried = new Set();
+
+  function layout() {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const p = 14, narrow = W < 560;
+    if (narrow) {
+      const a = { x: p, y: p, w: W - 2 * p, h: 74 }, y2 = a.y + a.h + 22, you = { x: p, y: y2, w: W - 2 * p, h: 190 }, y3 = you.y + you.h + 22;
+      Z = { narrow, agent: a, you, ship: { x: p, y: y3, w: W - 2 * p, h: H - y3 - p } };
+    } else {
+      const a = { x: p, y: 40, w: W * .15, h: H - 80 }, you = { x: W * .25, y: p, w: W * .3, h: H - 2 * p }, sx = W * .62;
+      Z = { narrow, agent: a, you, ship: { x: sx, y: p, w: W - sx - p, h: H - 2 * p } };
+    }
+    const sh = Z.ship, cols = 20, rows = 10, gx = (sh.w - 28) / cols, gy = Math.min(gx, (sh.h - 52) / rows);
+    Z.shipSlot = i => ({ x: sh.x + 14 + gx * (i % cols + .5), y: sh.y + 40 + gy * (Math.floor(i / cols) + .5) });
+    const y = Z.you, qc = 8, qg = Math.min((y.w - 28) / qc, narrow ? 15 : 22);
+    const qx0 = y.x + (y.w - qg * qc) / 2;
+    Z.qSlot = i => ({ x: qx0 + qg * (i % qc + .5), y: y.y + 40 + qg * (Math.floor(i / qc) + .5) });
+    Z.spot = { x: y.x + y.w / 2, y: y.y + 40 + qg * 4 + (narrow ? 28 : 46) };
+    Z.caughtSlot = i => ({ x: y.x + 18 + (i % 16) * Math.min(14, (y.w - 36) / 16), y: y.y + y.h - 18 - Math.floor(i / 16) * 12 });
+    Z.r = Math.max(2.2, Math.min(4.2, gx * .28));
+    const ag = Z.agent; Z.src = { x: ag.x + ag.w / 2, y: ag.y + ag.h / 2 + (narrow ? 0 : -6) };
+    if (S) for (const d of S.dots) { if (d.home) { const t = d.home(); d.tx = t.x; d.ty = t.y; } }
+  }
+
+  function fresh() {
+    let dots;
+    do { dots = Array.from({ length: N }, (_, i) => ({ i, bad: Math.random() < .065, x: 0, y: 0, tx: 0, ty: 0, on: false, seen: false, flash: 0 })); }
+    while (!(n => n >= 9 && n <= 16)(dots.filter(d => d.bad).length));
+    dots.filter(d => d.bad).forEach((d, k) => d.kind = KINDS[k % 3]);
+    return { dots, t: 0, emitted: 0, next: 0, queue: [], shipped: 0, caught: [], cur: null, end: 0, free: 0, wait: 0, reviewed: 0, done: false, running: false, revealAt: 0, doneAt: 0 };
+  }
+
+  function place(d, home) { d.home = home; const t = home(); d.tx = t.x; d.ty = t.y; }
+
+  function step(dt) {
+    const s = S; s.t += dt;
+    while (s.emitted < N && s.t >= s.next) {
+      if (mode === 'review' && s.queue.length >= CAP) { s.next = s.t; break; }
+      const d = s.dots[s.emitted++]; d.on = true; d.at = s.t; d.x = Z.src.x + (Math.random() - .5) * 8; d.y = Z.src.y + (Math.random() - .5) * 8;
+      if (mode === 'run') { const k = s.shipped++; place(d, () => Z.shipSlot(k)); }
+      else s.queue.push(d);
+      s.next += EMIT;
+    }
+    if (mode === 'review') {
+      if (s.emitted < N && s.queue.length >= CAP || s.emitted >= N) s.wait += dt;
+      s.queue.forEach((d, k) => place(d, () => Z.qSlot(k)));
+      for (;;) {
+        if (s.cur && s.t >= s.end) {
+          const d = s.cur; s.cur = null; s.reviewed++; d.seen = true; d.flash = 1; s.free = s.end;
+          if (d.bad) { const k = s.caught.length; s.caught.push(d); place(d, () => Z.caughtSlot(k)); }
+          else { const k = s.shipped++; place(d, () => Z.shipSlot(k)); }
+        }
+        if (s.cur || !s.queue.length) break;
+        s.cur = s.queue.shift(); s.end = Math.max(s.free, s.cur.at) + REVIEW; place(s.cur, () => Z.spot);
+      }
+      if (s.reviewed >= N && !s.done) finish();
+    } else if (s.emitted >= N && s.t >= N * EMIT + .7 && !s.done) finish();
+  }
+
+  function finish() {
+    const s = S; s.done = true; s.running = false; s.doneAt = performance.now(); tried.add(mode);
+    $('m-' + mode).classList.add('tried');
+    if (mode === 'run') s.dots.forEach(d => { if (d.bad) d.seen = true; });
+    choices(false); readout(true); unlock();
+  }
+
+  function speed() { return mode === 'review' && S.running ? (S.t < 4 ? 1 : Math.min(8, 1 + (S.t - 4) * .7)) : 1; }
+
+  function cell(n, label, value, cls) { $('l' + n).textContent = label; const b = $('r' + n); b.textContent = value; b.className = cls || ''; }
+
+  function readout(final) {
+    const s = S, bad = s.dots.filter(d => d.bad), you = fmt(s.reviewed * SECS);
+    if (mode === 'review') {
+      const blocked = s.running && (s.queue.length >= CAP || s.emitted >= N);
+      cell(1, 'your queue', s.queue.length + (s.cur ? 1 : 0), s.queue.length >= CAP ? 'amber' : '');
+      cell(2, 'your time', you, s.reviewed * SECS > 1800 ? 'amber' : '');
+      cell(3, 'agent', s.done ? 'done' : !s.running ? 'ready' : blocked ? 'idle, waiting' : 'working', s.done ? 'green' : blocked ? 'amber' : s.running ? 'blue' : '');
+    } else {
+      cell(1, 'shipped', s.shipped + ' / ' + N, s.running ? 'blue' : '');
+      cell(2, 'your time', you, '');
+      cell(3, 'mistakes', s.done ? bad.length : s.running ? '?' : '0', s.done ? 'red' : '');
+    }
+    const sp = speed(), chip = $('speed');
+    chip.hidden = !(sp > 1.2); chip.textContent = 'fast-forward ×' + Math.round(sp); chip.className = 'chip amber speed';
+    if (!final) return;
+    const r = $('result');
+    if (mode === 'review') {
+      r.innerHTML = `<span class="big amber">You caught all ${bad.length} mistakes.</span><span>It cost you <b>${fmt(N * SECS)}</b>. The agent sat idle <b>${fmt(Math.min(s.wait, s.t) * SCALE)}</b>, waiting for you.</span>`;
+    } else {
+      const by = KINDS.map(k => `${k} ×${bad.filter(d => d.kind === k).length}`).join(' · ');
+      r.innerHTML = `<span class="big red">${bad.length} mistakes shipped. You saw 0 of them.</span><span class="mono">${by}</span>`;
+    }
+  }
+
+  function unlock() {
+    if (tried.size < 2) { $('third-p').textContent = 'Now try the other one.'; return; }
+    const t = $('third'); if (t.classList.contains('on')) return;
+    t.classList.add('on');
+    $('third-p').innerHTML = 'There is a third option: let the agent run, and get called only where your judgment is still needed. <b>That is Jaynes.</b>';
+  }
+
+  function choices(busy) { for (const m of ['review', 'run']) { const b = $('m-' + m); b.disabled = busy; b.setAttribute('aria-pressed', m === mode); } }
+
+  function start(m) {
+    if (S.running) return;
+    mode = m; S = fresh(); S.running = true; choices(true);
+    $('result').innerHTML = mode === 'review' ? '<span>Every action waits for you.</span>' : '<span>Every action ships. Nobody looks.</span>';
+    if (reduce) { while (!S.done) step(.02); S.dots.forEach(d => { d.x = d.tx; d.y = d.ty; d.flash = 0; }); }
+  }
+  $('m-review').onclick = () => start('review');
+  $('m-run').onclick = () => start('run');
+
+  function rr(z, r) { cx.beginPath(); cx.roundRect ? cx.roundRect(z.x, z.y, z.w, z.h, r) : cx.rect(z.x, z.y, z.w, z.h); }
+
+  function zone(z, title, count, state) {
+    rr(z, 10); cx.fillStyle = state === 'off' ? 'rgba(14,18,24,.35)' : 'rgba(14,18,24,.85)'; cx.fill();
+    cx.lineWidth = 1; cx.strokeStyle = state === 'hot' ? 'rgba(255,179,92,.55)' : state === 'off' ? C.line : C.line2;
+    if (state === 'off') cx.setLineDash([3, 5]); cx.stroke(); cx.setLineDash([]);
+    cx.font = `500 10px ${MONO}`; cx.textBaseline = 'middle';
+    cx.fillStyle = state === 'off' ? C.faint : C.dim; cx.textAlign = 'left'; cx.fillText(title.toUpperCase(), z.x + 14, z.y + 20);
+    if (count != null) { cx.textAlign = 'right'; cx.fillStyle = state === 'hot' ? C.amber : C.ink; cx.fillText(count, z.x + z.w - 14, z.y + 20); }
+  }
+
+  function flow(a, b, on, color) {
+    cx.beginPath(); cx.moveTo(a.x, a.y);
+    if (Z.narrow) cx.bezierCurveTo(a.x, (a.y + b.y) / 2, b.x, (a.y + b.y) / 2, b.x, b.y);
+    else cx.bezierCurveTo((a.x + b.x) / 2, a.y, (a.x + b.x) / 2, b.y, b.x, b.y);
+    cx.strokeStyle = on ? color : C.line2; cx.lineWidth = on ? 1.4 : 1; cx.setLineDash(on ? [] : [3, 5]); cx.globalAlpha = on ? .55 : 1; cx.stroke(); cx.globalAlpha = 1; cx.setLineDash([]);
+  }
+
+  function draw(now) {
+    const s = S, rev = mode === 'review', blocked = rev && s.running && (s.queue.length >= CAP || s.emitted >= N);
+    cx.clearRect(0, 0, W, H);
+    const yz = Z.you, sh = Z.ship, ag = Z.agent;
+    const youIn = Z.narrow ? { x: yz.x + yz.w / 2, y: yz.y } : { x: yz.x, y: yz.y + yz.h / 2 };
+    const youOut = Z.narrow ? { x: yz.x + yz.w / 2, y: yz.y + yz.h } : { x: yz.x + yz.w, y: yz.y + yz.h / 2 };
+    const shipIn = Z.narrow ? { x: sh.x + sh.w / 2, y: sh.y } : { x: sh.x, y: sh.y + sh.h / 2 };
+    const agOut = Z.narrow ? { x: ag.x + ag.w / 2, y: ag.y + ag.h } : { x: ag.x + ag.w, y: Z.src.y };
+    if (rev) { flow(agOut, youIn, s.running, C.blue); flow(youOut, shipIn, s.running, C.blue); }
+    else {
+      cx.beginPath(); cx.moveTo(agOut.x, agOut.y);
+      if (Z.narrow) cx.bezierCurveTo(agOut.x - W * .45, agOut.y + 80, shipIn.x - W * .45, shipIn.y - 80, shipIn.x, shipIn.y);
+      else cx.bezierCurveTo(agOut.x + 60, agOut.y - H * .48, shipIn.x - 60, shipIn.y - H * .48, shipIn.x, shipIn.y);
+      cx.strokeStyle = s.running ? C.blue : C.line2; cx.globalAlpha = s.running ? .55 : 1; cx.lineWidth = 1.4; cx.setLineDash(s.running ? [] : [3, 5]); cx.stroke(); cx.globalAlpha = 1; cx.setLineDash([]);
+    }
+    zone(ag, 'agent', null, blocked ? 'hot' : '');
+    zone(yz, rev ? 'you' : 'you · not looking', rev ? (s.queue.length + (s.cur ? 1 : 0)) + ' waiting' : null, rev ? (blocked ? 'hot' : '') : 'off');
+    zone(sh, 'shipped', s.shipped + (mode === 'run' && s.done ? '' : ''), '');
+    // agent node
+    const pulse = s.running && !blocked ? (Math.sin(now / 120) + 1) / 2 : 0, col = blocked ? C.amber : s.done ? C.green : C.blue;
+    cx.save(); cx.shadowColor = col; cx.shadowBlur = 14 + pulse * 14;
+    cx.beginPath(); cx.arc(Z.src.x, Z.src.y, Z.narrow ? 13 : 16, 0, Math.PI * 2); cx.fillStyle = 'rgba(111,180,255,.12)'; if (blocked) cx.fillStyle = 'rgba(255,179,92,.14)'; cx.fill();
+    cx.lineWidth = 1.5; cx.strokeStyle = col; cx.stroke(); cx.restore();
+    cx.beginPath(); cx.arc(Z.src.x, Z.src.y, 4 + pulse * 2, 0, Math.PI * 2); cx.fillStyle = col; cx.fill();
+    cx.font = `10px ${MONO}`; cx.textAlign = 'center'; cx.fillStyle = blocked ? C.amber : C.dim;
+    const st = !s.running && !s.done ? 'ready' : s.done ? 'done.' : blocked ? 'waiting' : 'working';
+    if (Z.narrow) { cx.textAlign = 'left'; cx.fillText(st, Z.src.x + 24, Z.src.y); } else cx.fillText(st, Z.src.x, Z.src.y + 34);
+    // review spot
+    if (rev) {
+      const sp = Z.spot; cx.strokeStyle = C.line2; cx.lineWidth = 1; cx.setLineDash([2, 4]);
+      cx.beginPath(); cx.arc(sp.x, sp.y, 13, 0, Math.PI * 2); cx.stroke(); cx.setLineDash([]);
+      if (s.cur) { const k = 1 - Math.max(0, (s.end - s.t) / REVIEW); cx.strokeStyle = C.amber; cx.lineWidth = 2; cx.beginPath(); cx.arc(sp.x, sp.y, 13, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2); cx.stroke(); }
+      cx.font = `10px ${MONO}`; cx.fillStyle = C.faint; cx.textAlign = 'center'; cx.fillText('reviewing', sp.x, sp.y + 26);
+      if (s.caught.length || s.done) { cx.textAlign = 'left'; cx.fillStyle = C.red; cx.fillText('caught ' + s.caught.length, yz.x + 14, yz.y + yz.h - 36); }
+    } else {
+      cx.font = `10px ${MONO}`; cx.fillStyle = C.faint; cx.textAlign = 'center';
+      cx.fillText('0 actions seen', yz.x + yz.w / 2, yz.y + yz.h / 2 + (Z.narrow ? 10 : 0));
+    }
+    // dots
+    const k = 1 - Math.exp(-(reduce ? 60 : 9) * Math.min(.05, (now - last) / 1000 || .016));
+    const revealT = s.done && mode === 'run' ? (now - s.doneAt) / 1000 : -1;
+    for (const d of s.dots) {
+      if (!d.on) continue;
+      d.x += (d.tx - d.x) * k; d.y += (d.ty - d.y) * k;
+      let c = C.blue, glow = 6, r = Z.r;
+      if (d.bad && d.seen) {
+        const lag = mode === 'run' ? revealT - d.i * .004 : 1;
+        if (lag > 0) { c = C.red; glow = 10 + (mode === 'run' ? 8 * Math.max(0, Math.sin(now / 260 + d.i)) : 0); r = Z.r * (mode === 'run' ? 1.35 : 1.1); }
+      } else if (d.seen && rev) c = 'rgba(111,180,255,.55)';
+      if (d === s.cur) { c = C.ink; glow = 14; r = Z.r * 1.3; }
+      if (d.flash > 0) { glow += 18 * d.flash; d.flash = Math.max(0, d.flash - .04); }
+      cx.save(); cx.shadowColor = c; cx.shadowBlur = glow; cx.fillStyle = c;
+      cx.beginPath(); cx.arc(d.x, d.y, r, 0, Math.PI * 2); cx.fill(); cx.restore();
+    }
+    if (revealT > .6 && !Z.narrow) {
+      cx.font = `11px ${MONO}`; cx.textAlign = 'right'; cx.fillStyle = C.red;
+      cx.fillText(s.dots.filter(d => d.bad).length + ' quiet mistakes, now visible', sh.x + sh.w - 14, sh.y + sh.h - 14);
+    }
+  }
+
+  function loop(now) {
+    const dt = Math.min(.05, (now - (last || now)) / 1000);
+    if (S.running) { let left = dt * speed(); while (left > 0 && S.running) { const h = Math.min(.02, left); step(h); left -= h; } readout(S.done); }
+    draw(now); last = now; requestAnimationFrame(loop);
+  }
+
+  S = fresh(); layout(); readout(false); $('m-review').setAttribute('aria-pressed', 'false');
+  addEventListener('resize', layout);
+  document.fonts && document.fonts.ready.then(layout);
+  requestAnimationFrame(loop);
+
+  // measured: 11,894 actions, 25 seen
+  const fc = $('field'), fx = fc.getContext('2d'), ALL = 11894, SEEN = 25;
+  let lit = null, played = false;
+  function fieldDraw(p) {
+    const dpr = Math.min(2, devicePixelRatio || 1), w = fc.clientWidth, h = fc.clientHeight;
+    if (fc.width !== w * dpr) { fc.width = w * dpr; fc.height = h * dpr; }
+    fx.setTransform(dpr, 0, 0, dpr, 0, 0); fx.clearRect(0, 0, w, h);
+    const st = Math.sqrt(w * h / ALL), cols = Math.floor(w / st), n = Math.floor(ALL * p);
+    if (!lit) { lit = new Set(); while (lit.size < SEEN) lit.add(Math.floor(Math.random() * ALL)); }
+    fx.fillStyle = C.line2;
+    for (let i = 0; i < n; i++) { const x = (i % cols) * st, y = Math.floor(i / cols) * st; fx.fillRect(x, y, Math.max(1, st * .55), Math.max(1, st * .55)); }
+    if (p >= 1) {
+      fx.save(); fx.fillStyle = C.blue; fx.shadowColor = C.blue; fx.shadowBlur = 12;
+      for (const i of lit) { const x = (i % cols) * st, y = Math.floor(i / cols) * st; fx.beginPath(); fx.arc(x + st * .3, y + st * .3, Math.max(2.4, st * .9), 0, Math.PI * 2); fx.fill(); }
+      fx.restore();
+    }
+  }
+  function countUp() {
+    if (played) return; played = true;
+    const all = $('c-all'), seen = $('c-seen'), t0 = performance.now(), dur = reduce ? 0 : 2200;
+    const set = (el, v, unit) => { el.firstChild.nodeValue = v.toLocaleString('en-US'); };
+    const tick = now => {
+      const p = dur ? Math.min(1, (now - t0) / dur) : 1, e = 1 - Math.pow(1 - p, 3);
+      set(all, Math.round(ALL * e)); fieldDraw(e);
+      if (p < 1) return requestAnimationFrame(tick);
+      const t1 = performance.now(), d2 = reduce ? 0 : 900;
+      const tick2 = n2 => { const q = d2 ? Math.min(1, (n2 - t1) / d2) : 1; set(seen, Math.round(SEEN * q)); if (q < 1) requestAnimationFrame(tick2); };
+      requestAnimationFrame(tick2);
+    };
+    requestAnimationFrame(tick);
+  }
+  fieldDraw(0);
+  if ('IntersectionObserver' in window) new IntersectionObserver((es, o) => { if (es.some(e => e.isIntersecting)) { countUp(); o.disconnect(); } }, { threshold: .35 }).observe($('measured'));
+  else countUp();
+  addEventListener('resize', () => fieldDraw(played ? 1 : 0));
+})();
+</script>
+</body>
+</html>
