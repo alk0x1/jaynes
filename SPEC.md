@@ -120,6 +120,28 @@ Rules:
   no output, whether the person accepts the result of the steps it needs.
 - `stop(budget, sampled=True, audit_rate=0.1)`: `sampled=False` makes it a
   floor.
+- `project="read"` gives the step a copy of the run's project to read;
+  `project="write"` lets it change that copy, only at the paths its
+  `may_change` globs name (`["**"]` for any). Each step's changes become a
+  patch, and the patches become a branch at the end; the person's working
+  tree is never touched.
+- Floor paths are project paths that tools run or obey later, outside any
+  box: agents' and editors' settings and instructions, git attributes and
+  hooks, direnv, interpreters and package scripts (`pyproject.toml`,
+  `package.json`, `sitecustomize.py`), test and build entry points
+  (`conftest.py`, `Makefile`) and dev containers, in any case and at any
+  depth, and CI files where CI reads them, at the top. `may_change` alone
+  never lets them through: a step without a stop that touches one is
+  rejected, and a step with a stop makes that stop a floor for the round
+  whose output touched it (section 6.1).
+- `effect` declares what a trusted executor does to the world: `pure`
+  (default), `read`, `write-copy`, `web` or `irreversible`. Only
+  `irreversible` changes how it runs: every step it needs must have a floor
+  stop, so a person approves the whole payload; its own stop, if any, is a
+  floor; it gets one attempt; it receives `ctx.idempotency_key`, a hash of the
+  run, the step and the payload, to pass to the service that acts; and if
+  Jaynes stopped while it was running, the run is blocked instead of resumed,
+  since it may have acted.
 - The role's prompt for each agent step is built from the method text, the
   step's instructions, its schema, and the needed outputs. All of it is part
   of the step's fingerprint.
@@ -191,7 +213,7 @@ The conductor computes the stop's status from its window:
 
 | Status | Condition | Behaviour |
 |---|---|---|
-| floor | `sampled=False` | waits every run |
+| floor | `sampled=False`, or the round's output changed a floor path | waits every run |
 | certified | certify statistic ≥ 1/δ | waits with probability `audit_rate`, otherwise continues |
 | refuted | refute statistic ≥ 1/δ | waits every run; flagged on the role page |
 | undetermined | neither | waits every run |
@@ -212,6 +234,22 @@ Only answers given while the stop was waiting count. A stop that continued
 without waiting produces no label, so labels are either every occurrence
 (mandatory phase) or a uniform random sample (audits). Both are unbiased for
 the stop's error rate.
+
+Every answer says who gave it, and only a person's answer is a label:
+
+- **person**: an answer from the review page, which needs the page key
+  (section 7). It is counted in the window.
+- **agent**: anything else, such as `jaynes answer` run by an agent. It
+  releases the stop but is never counted, and a floor stop refuses it.
+
+From Python, `Conductor.answer` has no default for `by`, so nothing passes for
+a person by omission. When a person sends a run back to an earlier step, the
+label that step's stop was released with is replaced by the person's; if an
+agent had released it, there was no label, so the person's is added.
+
+Each opened stop records `evidence`, the hash of the output and question it
+shows. An answer that carries it is refused if the stop has shown something
+else since, so a stale page cannot accept what came after it.
 
 A later change by the person to an output that went through unreviewed, for
 example editing a delivered screen, is recorded as an outcome event. It is
@@ -284,7 +322,15 @@ imported once per server; restart it after editing a role.
 
 Answers are accepted only with the server's per-process token and a local
 Host and Origin, so another site open in the same browser cannot answer a
-stop or send a run on.
+stop or send a run on. Only a browser opened with the link the server prints,
+which carries the page key once and keeps it as a cookie, answers as the
+person; any other client can read the page but not answer from it.
+
+Known limit: the agent runs as the same operating-system user as the person,
+so a process that starts `jaynes review` itself and reads the printed link
+gets the key. Separating the two needs isolation from the operating system,
+such as a separate user or a confirmation the agent cannot reach; v0 does not
+do it.
 
 The CLI mirrors the essentials: `jaynes queue`, and `jaynes answer <run>
 <step> accept|change|return|context [--note] [--output JSON|@file]`, which
@@ -300,14 +346,14 @@ Conductor events:
 | Event | Payload |
 |---|---|
 | `RunStarted` | role, task, role fingerprint, role reference and runtime overrides (for `jaynes run <id>`) |
-| `StepStarted` | step, round, attempt, executor, workspace manifest hash |
+| `StepStarted` | step, round, attempt, executor, workspace manifest hash; for an irreversible step, effect, idempotency key and payload |
 | `TurnFinished` | step, attempt, files changed, tokens in and out from the runtime meter, model, seconds |
 | `TurnRejected` | step, attempt, reason: `write_boundary`, `schema`, `check`, `deadline`, `runtime`, `executor`; reasons |
 | `TurnInterrupted` | step, attempt, reason `crash` or `quota`; not an attempt |
 | `Checked` | step, round, attempt, output hash, check hash, source (agent, `jaynes`, `person`), model |
-| `StopOpened` | step, round, status, coin, n, k, log evidence, stop fingerprint, budget, δ, question |
+| `StopOpened` | step, round, status, coin, n, k, log evidence, stop fingerprint, budget, δ, question, evidence hash, floor paths |
 | `StopSkipped` | step, status `certified`, coin, stop fingerprint, budget, δ |
-| `StopAnswered` | step, answer, label, note, stop fingerprint, seconds waited, seconds spent |
+| `StopAnswered` | step, answer, label, note, stop fingerprint, seconds waited, seconds spent, by (`person` or `agent`), the earlier label it revises |
 | `RunPaused` | reason `quota`, agent, until |
 | `RunBlocked` | step, reasons |
 | `RunFinished` | outcome |

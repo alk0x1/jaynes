@@ -95,7 +95,7 @@ def drive(c: Conductor, r: Role, script: Script) -> str:
         assert result.step is not None
         round_ = int(list(c.store.events("StopOpened", run_id="r"))[-1].payload["round"])
         a = script.answer(result.step, round_)
-        c.answer(r, "r", result.step, a, note="n", output={"text": "edited"} if a == "change" else None)
+        c.answer(r, "r", result.step, a, note="n", output={"text": "edited"} if a == "change" else None, by="person")
     raise AssertionError("run did not settle")
 
 

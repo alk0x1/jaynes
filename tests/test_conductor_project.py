@@ -125,10 +125,10 @@ def test_a_returned_step_starts_again_from_the_earlier_steps_without_its_own_pat
                       ("apply", 2): second})
     c = Conductor(tmp_path / "home", runtimes={"fake": lambda: agent})
     assert c.run(r, "t", "r1", project=repo).status == "waiting"
-    c.answer(r, "r1", "apply", "return", note="warmer")
+    c.answer(r, "r1", "apply", "return", note="warmer", by="person")
     assert c.run(r, "t", "r1").status == "waiting"
     assert seen == [":root { --bg: #ffffff; }\n"]
-    c.answer(r, "r1", "apply", "accept")
+    c.answer(r, "r1", "apply", "accept", by="person")
     assert c.run(r, "t", "r1").status == "finished"
     assert git(repo, "show", "jaynes/r1:src/app.css") == ":root { --bg: #202020; }"
 
@@ -204,7 +204,7 @@ def test_paths_that_run_later_turn_even_a_certified_stop_into_a_floor(repo: Path
     c = Conductor(tmp_path / "home", runtimes={"fake": lambda: agent})
     for i in range(13):  # certify the stop, which then never asks (audit rate 0)
         assert c.run(r, "t", f"w{i}", project=repo).status == "waiting"
-        c.answer(r, f"w{i}", "apply", "accept")
+        c.answer(r, f"w{i}", "apply", "accept", by="person")
         c.run(r, "t", f"w{i}")
     assert c.run(r, "t", "quiet", project=repo).status == "finished"
 

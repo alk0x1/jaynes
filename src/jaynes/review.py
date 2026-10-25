@@ -6,9 +6,10 @@ that come with a foreign Host or Origin, so another site open in the browser
 cannot answer a stop. Only a browser opened with the link the server prints,
 which carries its key once and keeps it as a cookie, may answer: any other
 client, such as an agent with curl, can read the page but not act as the
-person. Each answer carries the hash of the evidence shown, so a stale page
-cannot accept what came after it. After an answer the run continues in the
-background.
+person, unless it starts a server itself and reads the link (SPEC section 7,
+known limit). Each answer carries the hash of the evidence shown, so a stale
+page cannot accept what came after it. After an answer the run continues in
+the background.
 """
 
 from __future__ import annotations
@@ -564,8 +565,7 @@ class Review:
         if not later or not patch:
             return ""
         text = (self.c.home / "objects" / f"{patch}.patch").read_bytes().decode(errors="replace")
-        diffs = [d for d in text.split("diff --git ")[1:] if d.split(" b/", 1)[0].removeprefix("a/") in later]
-        shown = "".join(f"diff --git {d}" for d in diffs)
+        shown = "".join(d for path, d in repo.diffs(text).items() if path in later)
         if len(shown) > 20000:  # never cut silently: what is not shown here must still be read
             shown = shown[:20000] + f"\n\n[{len(shown) - 20000} more characters not shown: read the branch before merging it]"
         return (f'<div class="wide"><div class="label" style="color:var(--red)">These files run later, outside any '

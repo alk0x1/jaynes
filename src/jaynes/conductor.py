@@ -31,7 +31,7 @@ from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast, get_args
 
 from pydantic import BaseModel, ValidationError
 
@@ -293,18 +293,21 @@ class Conductor:
 
     def answer(self, role: Role, run_id: str, step: str, answer: Answer, *, note: str | None = None,
                output: BaseModel | Mapping[str, Any] | None = None, seconds_spent: float | None = None,
-               to: str | None = None, by: By = "person", evidence: str | None = None) -> None:
+               to: str | None = None, by: By, evidence: str | None = None) -> None:
         """Record the answer at an open stop. ``change`` needs the edited output, which must pass the checks.
 
         ``to`` returns an earlier step instead of this one: it runs again with the note, and so does every step
         after it. The label goes to the earlier step's stop, replacing the one it was released with; this stop,
         whose step did what it was given, takes none.
 
-        An answer ``by`` an agent releases the stop but is never counted as a label, and a floor stop refuses it.
+        ``by`` says who answered, with no default, so nothing passes for a person by omission. An answer by an
+        agent releases the stop but is never counted as a label, and a floor stop refuses it.
         ``evidence``, the hash of what was shown, refuses the answer if the stop has shown something else since.
         """
         if answer not in LABELS:
             raise ValueError(f"unknown answer {answer!r}")
+        if by not in get_args(By):
+            raise ValueError(f"by is person or agent, not {by!r}")
         if answer in ("return", "context") and not (note or "").strip():
             raise AnswerRejected([f"{answer} needs a note for the agent"])
         names = [x.name for x in role.steps]

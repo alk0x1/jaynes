@@ -146,7 +146,7 @@ def test_run_waits_at_a_stop_and_continues_after_accept(tmp_path: Path) -> None:
     assert c.run(r, "t", run_id="r1") == RunResult("waiting", "a")
     assert c.run(r, "t", run_id="r1") == RunResult("waiting", "a")  # still waiting, nothing new
     assert kinds(c, "r1").count("StopOpened") == 1
-    c.answer(r, "r1", "a", "accept")
+    c.answer(r, "r1", "a", "accept", by="person")
     assert c.run(r, "t", run_id="r1").status == "finished"
 
     [opened] = payloads(c, "r1", "StopOpened")
@@ -164,8 +164,8 @@ def test_change_replaces_the_output_after_rechecking_it(tmp_path: Path) -> None:
     c.run(r, "t", run_id="r1")
 
     with pytest.raises(AnswerRejected, match="empty"):
-        c.answer(r, "r1", "a", "change", output={"text": ""})
-    c.answer(r, "r1", "a", "change", output=Note(text="better"))
+        c.answer(r, "r1", "a", "change", output={"text": ""}, by="person")
+    c.answer(r, "r1", "a", "change", output=Note(text="better"), by="person")
 
     assert c.run(r, "t", run_id="r1").status == "finished"
     assert c.output("r1", a) == Note(text="better")
@@ -182,12 +182,12 @@ def test_return_reruns_the_step_with_the_note_and_context_is_not_counted(tmp_pat
     c = Conductor(tmp_path, runtimes={"fake": lambda: agent})
     c.run(r, "t", run_id="r1")
 
-    c.answer(r, "r1", "a", "return", note="shorter please")
+    c.answer(r, "r1", "a", "return", note="shorter please", by="person")
     assert c.run(r, "t", run_id="r1") == RunResult("waiting", "a")
     assert "shorter please" in agent.prompts[-1] and "inputs/previous.json" in agent.prompts[-1]
-    c.answer(r, "r1", "a", "context", note="the data was stale")
+    c.answer(r, "r1", "a", "context", note="the data was stale", by="person")
     assert c.run(r, "t", run_id="r1") == RunResult("waiting", "a")
-    c.answer(r, "r1", "a", "accept")
+    c.answer(r, "r1", "a", "accept", by="person")
 
     assert c.run(r, "t", run_id="r1").status == "finished"
     assert c.output("r1", a) == Note(text="three")
@@ -199,13 +199,13 @@ def test_answer_without_an_open_stop_is_rejected(tmp_path: Path) -> None:
     r, _, _ = reviewed()
     c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
     with pytest.raises(AnswerRejected):
-        c.answer(r, "r1", "a", "accept")
+        c.answer(r, "r1", "a", "accept", by="person")
 
 
 def certify(c: Conductor, r: Any, labels: int) -> None:
     for i in range(labels):
         assert c.run(r, "t", run_id=f"warm{i}").status == "waiting"
-        c.answer(r, f"warm{i}", "a", "accept")
+        c.answer(r, f"warm{i}", "a", "accept", by="person")
         c.run(r, "t", run_id=f"warm{i}")
 
 
@@ -263,7 +263,7 @@ def test_a_stop_that_keeps_failing_is_refuted_and_waits(tmp_path: Path) -> None:
     c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
     for i in range(6):
         c.run(r, "t", run_id=f"w{i}")
-        c.answer(r, f"w{i}", "a", "change", output={"text": "fixed"})
+        c.answer(r, f"w{i}", "a", "change", output={"text": "fixed"}, by="person")
     assert c.run(r, "t", run_id="x").status == "waiting"
     assert payloads(c, "x", "StopOpened")[0]["status"] == "refuted"
 
@@ -289,7 +289,7 @@ def test_queue_lists_waiting_stops_and_blocked_runs_oldest_first(tmp_path: Path)
     c.run(blocking, "second task", run_id="r2")
     now[0] = 300.0
     c.run(r, "third task", run_id="r3")
-    c.answer(r, "r3", "a", "accept")
+    c.answer(r, "r3", "a", "accept", by="person")
     c.run(r, "third task", run_id="r3")
 
     assert [(q.run_id, q.kind, q.step, q.since, q.task) for q in c.queue()] == [
@@ -308,7 +308,18 @@ def test_return_and_context_need_a_note(tmp_path: Path) -> None:
     c.run(r, "t", run_id="r1")
     for answer in ("return", "context"):
         with pytest.raises(AnswerRejected, match="needs a note"):
-            c.answer(r, "r1", "a", answer, note="  ")  # type: ignore[arg-type]
+            c.answer(r, "r1", "a", answer, note="  ", by="person")  # type: ignore[arg-type]
+
+
+def test_an_answer_must_say_who_gave_it(tmp_path: Path) -> None:
+    r, _, _ = reviewed()
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    c.run(r, "t", run_id="r1")
+    with pytest.raises(TypeError, match="by"):
+        c.answer(r, "r1", "a", "accept")  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="robot"):
+        c.answer(r, "r1", "a", "accept", by="robot")  # type: ignore[arg-type]
+    assert payloads(c, "r1", "StopAnswered") == []
 
 
 def test_a_question_on_a_stop_without_output_is_asked(tmp_path: Path) -> None:
@@ -395,10 +406,10 @@ def test_an_answer_bound_to_evidence_that_changed_is_refused(tmp_path: Path) -> 
     c.run(r, "t", run_id="r1")  # round 2, "two", at the same step
 
     with pytest.raises(AnswerRejected, match="changed since"):
-        c.answer(r, "r1", "a", "accept", evidence=shown)
+        c.answer(r, "r1", "a", "accept", evidence=shown, by="person")
     [now] = [w.evidence for w in c.queue()]
     assert now != shown
-    c.answer(r, "r1", "a", "accept", evidence=now)
+    c.answer(r, "r1", "a", "accept", evidence=now, by="person")
     assert c.run(r, "t", run_id="r1").status == "finished"
 
 
@@ -410,7 +421,7 @@ def test_a_person_returning_to_a_stop_an_agent_released_counts_one_label_not_a_r
     c.run(r, "t", run_id="r1")
     c.answer(r, "r1", "a", "accept", by="agent")
     assert c.run(r, "t", run_id="r1") == RunResult("waiting", "b")
-    c.answer(r, "r1", "b", "return", note="a was wrong", to="a")
+    c.answer(r, "r1", "b", "return", note="a was wrong", to="a", by="person")
 
     fp = payloads(c, "r1", "StopOpened")[0]["fingerprint"]
     assert c.window(fp) == Window(1, 1)

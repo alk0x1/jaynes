@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -21,7 +22,8 @@ from pathlib import Path
 
 # Never let a person's git config (hooks, signing, templates) act on Jaynes's own git calls.
 SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "init.templateDir=",
-        "-c", "user.name=Jaynes", "-c", "user.email=jaynes@localhost", "-c", "core.autocrlf=false"]
+        "-c", "user.name=Jaynes", "-c", "user.email=jaynes@localhost", "-c", "core.autocrlf=false",
+        "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"]  # patches always read a/ and b/
 
 
 class ProjectError(Exception):
@@ -82,8 +84,39 @@ class Tracker:
         """The patch from the copy as handed over to the copy now, and the paths it touches."""
         _git("add", "-A", cwd=self.work, env=self.env)
         patch = _git("diff", "--cached", "--binary", "--no-renames", "HEAD", cwd=self.work, env=self.env)
-        names = _git("diff", "--cached", "--name-only", "--no-renames", "HEAD", cwd=self.work, env=self.env)
-        return patch, sorted(n for n in names.decode().splitlines() if n)
+        # -z: names as written, since git otherwise quotes a name with accents or quotes and no glob matches it
+        names = _git("diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", cwd=self.work, env=self.env)
+        return patch, sorted(n for n in names.decode(errors="replace").split("\0") if n)
+
+
+_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _unquote(quoted: str) -> str:
+    """The first name git quoted in ``quoted``: C escapes, with octal for each byte past ASCII."""
+    name, i = bytearray(), 1
+    while quoted[i] != '"':
+        if quoted[i] == "\\" and quoted[i + 1] in "01234567":
+            name.append(int(quoted[i + 1:i + 4], 8))
+            i += 4
+        elif quoted[i] == "\\":
+            name.append(_ESCAPES.get(quoted[i + 1], ord(quoted[i + 1])))
+            i += 2
+        else:
+            name += quoted[i].encode()
+            i += 1
+    return name.decode(errors="replace")
+
+
+def diffs(patch: str) -> dict[str, str]:
+    """Each file's diff in a patch made with ``--no-renames``, by its path as written, even where git quoted it."""
+    out: dict[str, str] = {}
+    for d in re.split(r"(?m)^diff --git ", patch)[1:]:
+        header = d.split("\n", 1)[0]
+        # "a/<quoted>" "b/<quoted>", or a/<path> b/<path>: the same path twice since nothing is renamed
+        path = _unquote(header) if header.startswith('"') else header[:(len(header) - 1) // 2]
+        out[path.removeprefix("a/")] = f"diff --git {d}"
+    return out
 
 
 def branch(root: Path, base: str, name: str, patches: Sequence[tuple[str, bytes]]) -> str:
@@ -102,13 +135,15 @@ def branch(root: Path, base: str, name: str, patches: Sequence[tuple[str, bytes]
 
 
 # Paths that trusted tools run or obey later, outside any box: agents' and editors' settings and instructions, git
-# attributes and hooks, direnv, interpreters and package scripts, CI. ``may_change`` alone never lets them through.
+# attributes and hooks, direnv, interpreters and package scripts, test and build entry points, dev containers, CI.
+# ``may_change`` alone never lets them through.
 FLOOR = ("**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.vscode/**", "**/.idea/**",
          "**/.zed/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules",
          "**/.git*", "**/.husky/**", "**/.pre-commit-config.yaml", "**/.envrc",
          "**/.venv/**", "**/venv/**", "**/package.json", "**/.npmrc", "**/.yarnrc*", "**/pyproject.toml",
-         "**/setup.py", "**/setup.cfg", ".gitlab-ci.yml", ".circleci/**", ".buildkite/**", "Jenkinsfile",
-         "azure-pipelines.yml", ".travis.yml")
+         "**/setup.py", "**/setup.cfg", "**/sitecustomize.py", "**/usercustomize.py", "**/conftest.py",
+         "**/Makefile", "**/GNUmakefile", "**/.devcontainer/**", ".gitlab-ci.yml", ".circleci/**", ".buildkite/**",
+         "Jenkinsfile", "azure-pipelines.yml", ".travis.yml")
 
 
 def _matches(path: str, glob: str) -> bool:

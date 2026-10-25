@@ -52,7 +52,7 @@ def test_an_irreversible_step_runs_the_payload_the_person_approved_with_a_derive
     assert calls == []
     with pytest.raises(AnswerRejected, match="only a person"):
         c.answer(r, "r1", "plan", "accept", by="agent")
-    c.answer(r, "r1", "plan", "change", output={"to": "acme", "cents": 90})
+    c.answer(r, "r1", "plan", "change", output={"to": "acme", "cents": 90}, by="person")
 
     assert c.run(r, "pay acme", run_id="r1").status == "finished"
 
@@ -70,7 +70,7 @@ def test_each_run_and_each_payload_get_their_own_key(tmp_path: Path) -> None:
         r, _, _ = paying(calls)
         c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"to": "acme", "cents": cents})})
         c.run(r, "t", run_id=run)
-        c.answer(r, run, "plan", "accept")
+        c.answer(r, run, "plan", "accept", by="person")
         c.run(r, "t", run_id=run)
         keys[run] = [k for _, k in calls]
     assert keys["r1"] != keys["r2"]  # each run is its own effect
@@ -82,7 +82,7 @@ def test_an_irreversible_step_that_was_running_at_a_crash_blocks_instead_of_runn
     r, _, _ = paying(calls, crash=True)
     c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"to": "acme", "cents": 90})})
     c.run(r, "t", run_id="r1")
-    c.answer(r, "r1", "plan", "accept")
+    c.answer(r, "r1", "plan", "accept", by="person")
     with pytest.raises(Crash):
         c.run(r, "t", run_id="r1")
 
@@ -105,7 +105,7 @@ def test_an_irreversible_step_that_fails_is_not_retried(tmp_path: Path) -> None:
     r.step("send", output=Receipt, needs=[plan], run_by=pay, effect="irreversible")
     c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"to": "acme", "cents": 90})})
     c.run(r, "t", run_id="r1")
-    c.answer(r, "r1", "plan", "accept")
+    c.answer(r, "r1", "plan", "accept", by="person")
     result = c.run(r, "t", run_id="r1")
     assert result.status == "blocked" and len(tries) == 1 and any(tries[0] in x for x in result.reasons)
 
