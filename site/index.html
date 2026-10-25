@@ -409,7 +409,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
       <div class="head">
         <span class="label">3 · Attention</span>
         <h3>Your attention moves to where it is still needed.</h3>
-        <p>Every answer at a stop is a label. Keep accepting a stop without changes and it becomes <b>sampled</b>: it asks one time in ten. That takes 20 accepts in a row at a 20% budget, 43 at 10%, 88 at 5%. Change a sampled answer and it asks every time again.</p>
+        <p>Every answer at a stop is a label. Keep accepting a stop without changes and it becomes <b>sampled</b>: it asks one time in ten. That takes 20 accepts in a row at a 20% budget, 43 at 10%, 88 at 5%. Each change lowers the evidence. If it falls below the threshold, the stop asks every time again.</p>
       </div>
       <div class="card att">
         <div class="stage-top"><span>role <b>screen-design</b> · week 4</span><span class="chip plain">illustration</span></div>
@@ -601,7 +601,7 @@ jaynes</pre>
       st.className = "chip " + (ok ? "green" : "amber"); st.textContent = ok ? "sampled · asks 1 in 10" : "asks every time";
       var nd = needed(k, budget);
       $("h-read").innerHTML = "<b>" + n + "</b> answers, <b>" + k + "</b> changed · evidence <b>" + Math.exp(le).toFixed(1) + "</b> of 20 at a " + Math.round(budget * 100) + "% budget. " +
-        (ok ? "This stop now asks one time in ten. Change one and it comes back." : (nd === null ? "At this rate it keeps asking." : "Keeps asking: " + Math.max(0, nd - n) + " more accepts without a change."));
+        (ok ? "This stop now asks one time in ten. " + (logE(n + 1, k + 1, budget) >= T ? "One change now would not bring it back." : "One change now would bring it back.") : (nd === null ? "At this rate it keeps asking." : "Keeps asking: " + Math.max(0, nd - n) + " more accepts without a change."));
     }
     $("h-acc").addEventListener("click", function () { answers.push(false); draw(); });
     $("h-chg").addEventListener("click", function () { answers.push(true); draw(); });

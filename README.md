@@ -31,8 +31,9 @@ were still sent back.
 3. **Where the method needs you, the run stops.** The question and its
    evidence wait for you in the review page.
 4. **Every answer is a label.** A stop you keep accepting without changes
-   becomes sampled: it asks one time in ten. Change one and it is mandatory
-   again.
+   becomes sampled: it asks one time in ten. Each change lowers its
+   evidence, and if the evidence falls below the threshold it asks every
+   time again.
 5. **Underneath, every tool action goes through a gate.** Some actions, like
    pushing or deleting history, never run without you.
 
