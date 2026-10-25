@@ -45,7 +45,7 @@ def three_steps():  # noqa: ANN201
     r = role("paint", agent="fake")
     read = r.step("read", output=Note)
     direction = r.step("direction", output=Note, needs=[read], stop=stop(0.2))
-    r.step("apply", output=Note, needs=[direction], project="write", stop=stop(0.2))
+    r.step("apply", output=Note, needs=[direction], project="write", may_change=["**"], stop=stop(0.2))
     return r
 
 

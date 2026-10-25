@@ -11,6 +11,7 @@
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
   jaynes queue                      stops waiting for an answer and blocked runs, oldest first
   jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
+                                    recorded as an agent's: it releases the stop but is not a label
   jaynes review [--port 8740]       the review page on 127.0.0.1: queue, stops, runs, roles, log
   jaynes policy                     print the built-in policy, a starting point for ~/.jaynes/jaynes.toml
   jaynes demo [--port 8740]         a scripted run that stops for you, then the review page
@@ -218,7 +219,8 @@ def cmd_queue(args: argparse.Namespace) -> None:
     now = c.clock()
     for w in items:
         print(f"{w.run_id}  {w.kind}  {w.step}  {age(now - w.since)} ago  {w.role}: {w.task}")
-        for line in ([w.question] if w.question else []) + list(w.reasons):
+        for line in ([w.question] if w.question else []) + list(w.reasons) + (
+                [f"evidence {w.evidence}"] if w.evidence else []):
             print(f"    {line}")
 
 
@@ -245,7 +247,8 @@ def cmd_answer(args: argparse.Namespace) -> None:
             sys.exit(f"--output is not JSON: {err}")
     answer: Answer = args.answer
     try:
-        c.answer(r, args.run, args.step, answer, note=args.note, output=output, to=args.to)
+        c.answer(r, args.run, args.step, answer, note=args.note, output=output, to=args.to, by="agent",
+                 evidence=args.evidence)
     except AnswerRejected as err:
         sys.exit("answer not recorded: " + "; ".join(err.reasons))
     except RunBusy:
@@ -269,11 +272,8 @@ def cmd_demo(args: argparse.Namespace) -> None:
 
 
 def _open_page(home: Path, port: int) -> None:
-    import threading
-    import webbrowser
     from jaynes.review import serve
-    threading.Timer(0.5, webbrowser.open, [f"http://127.0.0.1:{port}"]).start()
-    serve(home, port)
+    serve(home, port, browser=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -319,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--note")
     w.add_argument("--output", help="the edited output for change: JSON, or @file")
     w.add_argument("--to", help="with return or context: an earlier step to run again, with every step after it")
+    w.add_argument("--evidence", help="the evidence hash jaynes queue printed; refuses the answer if the stop changed")
     w.add_argument("--home")
     v = sub.add_parser("review")
     v.add_argument("--port", type=int, default=8740)

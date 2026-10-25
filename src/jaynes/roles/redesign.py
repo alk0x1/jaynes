@@ -70,7 +70,7 @@ def applied(out: Applied, needs: Witnesses) -> Pass | Fail:
 
 
 ROLE = role("redesign")
-REFERENCES = ROLE.step("references", output=rf.References, run_by=rf.gather, max_turns=1)
+REFERENCES = ROLE.step("references", output=rf.References, run_by=rf.gather, max_turns=1, effect="web")
 CURRENT = ROLE.step(
     "current", output=Current, project="read", check=cited,
     instructions="Read the project and describe its interface as it is today: the colours and fonts it uses and "

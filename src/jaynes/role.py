@@ -74,12 +74,21 @@ Check = Callable[[Any, Witnesses], Pass | Fail]
 
 @dataclass(frozen=True)
 class StepContext:
-    """What a trusted executor receives."""
+    """What a trusted executor receives. ``idempotency_key`` is set for an irreversible step: pass it to the service
+    that acts, so a second call with the same payload in the same run does not act twice."""
 
     run_id: str
     task: str
     needs: Witnesses
     workspace: Path
+    idempotency_key: str = ""
+
+
+# What a trusted executor does to the world. Only ``irreversible`` changes how it runs: after a floor stop over the
+# payload, once, with a key, never resumed after a crash. The others say what it touches: nothing, what it reads,
+# copies it writes, or the web.
+Effect = Literal["pure", "read", "write-copy", "web", "irreversible"]
+EFFECTS: tuple[Effect, ...] = ("pure", "read", "write-copy", "web", "irreversible")
 
 
 @dataclass(frozen=True)
@@ -111,8 +120,9 @@ class Step(Generic[T]):
     deadline: float  # seconds per turn
     question: Callable[[Any, Witnesses], str] | None = None  # what the person is asked at the stop
     project: Literal["read", "write"] | None = None  # a copy of the run's project, to read or to change
-    may_change: tuple[str, ...] = ()  # globs of project paths a changing step may touch; empty means any
+    may_change: tuple[str, ...] = ()  # globs of project paths a changing step may touch, never the floor alone
     web: bool = False  # the agent may read the web during this step
+    effect: Effect = "pure"  # what a trusted executor does to the world
 
     @property
     def executor(self) -> str:
@@ -135,6 +145,8 @@ class Step(Generic[T]):
             parts.append(f"project:{self.project}:{','.join(self.may_change)}")
         if self.web:
             parts.append("web")
+        if self.effect != "pure":
+            parts.append(f"effect:{self.effect}")
         return _sha("\0".join(parts))
 
     def stop_fingerprint(self, model: str) -> str:
@@ -161,7 +173,7 @@ class Role:
              instructions: str = "", max_turns: int = 3, deadline: float = 900.0,
              question: Callable[[T, Witnesses], str] | None = None,
              project: Literal["read", "write"] | None = None, may_change: Sequence[str] = (),
-             web: bool = False) -> Step[T]:
+             web: bool = False, effect: Effect | None = None) -> Step[T]:
         if any(s.name == name for s in self.steps):
             raise ValueError(f"step {name!r} defined twice")
         for n in needs:
@@ -175,14 +187,28 @@ class Role:
             raise ValueError(f"step {name!r} has a question but no stop to ask it at")
         if may_change and project != "write":
             raise ValueError(f"step {name!r} lists may_change but does not change the project")
+        if project == "write" and not may_change:
+            raise ValueError(f"step {name!r} changes the project but lists no may_change; name the paths it may "
+                             "change, or ['**'] for any")
         if project is not None and output is None:
             raise ValueError(f"step {name!r} works on the project but has no output")
         if web and (output is None or run_by is not None):
             raise ValueError(f"step {name!r} reads the web but no agent runs it")
+        if effect is not None and effect not in EFFECTS:
+            raise ValueError(f"step {name!r} declares effect {effect!r}; it must be one of {', '.join(EFFECTS)}")
+        if effect is not None and run_by is None:
+            raise ValueError(f"step {name!r} declares an effect but no trusted executor runs it")
+        if effect == "irreversible":
+            if not needs or not all(n.stop is not None and not n.stop.sampled for n in needs):
+                raise ValueError(f"step {name!r} is irreversible; every step it needs must have a floor stop "
+                                 "(sampled=False), so a person approves the whole payload")
+            if stop is not None and stop.sampled:
+                raise ValueError(f"step {name!r} is irreversible, so its own stop must be a floor, never sampled")
+            max_turns = 1  # a failed attempt may have acted; a person decides what happens next
         checks = tuple(cast(Sequence[Check], check)) if isinstance(check, Sequence) else (check,)
         s: Step[T] = Step(self, name, output, tuple(needs), checks, stop, run_by, agent or self.agent,
                           instructions, max_turns, deadline, cast(Callable[[Any, Witnesses], str] | None, question),
-                          project, tuple(may_change), web)
+                          project, tuple(may_change), web, effect or "pure")
         self.steps.append(s)
         return s
 

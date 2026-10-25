@@ -3,7 +3,12 @@
 Every number on the page is a projection of the event log. The server binds
 127.0.0.1 only and refuses answers that do not carry its per-process token or
 that come with a foreign Host or Origin, so another site open in the browser
-cannot answer a stop. After an answer the run continues in the background.
+cannot answer a stop. Only a browser opened with the link the server prints,
+which carries its key once and keeps it as a cookie, may answer: any other
+client, such as an agent with curl, can read the page but not act as the
+person. Each answer carries the hash of the evidence shown, so a stale page
+cannot accept what came after it. After an answer the run continues in the
+background.
 """
 
 from __future__ import annotations
@@ -18,12 +23,14 @@ import secrets
 import shutil
 import signal
 import sys
+import threading
 import time
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -139,6 +146,7 @@ def tokens(n: int) -> str:
 # --- rendering -------------------------------------------------------------------
 
 CSS = """
+.notice { background: var(--amber-soft); color: var(--amber); padding: 10px 16px; font-size: 13px; }
 :root {
   --bg: #07090d; --panel: #0e1218; --panel-2: #121823; --line: #222a36; --line-2: #2c3646;
   --ink: #eef2f7; --dim: #93a0b2; --faint: #5d6a7c;
@@ -370,9 +378,10 @@ def stage_strip(items: list[Stage]) -> str:
 
 @dataclass
 class Shared:
-    """What outlives a request: the answer token, imported roles, and when each open stop was first shown."""
+    """What outlives a request: the answer token and key, imported roles, and when each open stop was first shown."""
 
     token: str
+    key: str
     idle_after: float = 10.0
     roles: dict[str, Role] = field(default_factory=dict[str, Role])
     first_seen: dict[tuple[str, str, float], float] = field(default_factory=dict[tuple[str, str, float], float])
@@ -505,6 +514,7 @@ class Review:
         if s.note:
             sub += f'<div class="sub">You returned round {s.round - 1} with: {esc(s.note)}</div>'
         parts.append(f"<div><h1>{esc(question)}</h1>{sub}</div>")
+        parts.append(self._floor_part(s))
         parts.append(self._project_part(run_id, st, role))
         parts.append(self._pictures_part(run_id, st, target))
         if pure and target is not None:
@@ -526,7 +536,8 @@ class Review:
         parts.append(self._tiles(s, target))
         main = (crumbs + f'<div class="body">{"".join(parts)}</div>'
                 + self._answer_bar(run_id, step, value, error, fields, editable=not pure,
-                                   earlier=self._earlier(role, step)))
+                                   earlier=self._earlier(role, step),
+                                   evidence=str(s.open_stop[1].get("evidence") or "") if s.open_stop else ""))
         return page(f"Stop: {step}", self.sidebar((run_id, step)), main, self.seq())
 
     def _project_part(self, run_id: str, st: RunState, role: Role | None) -> str:
@@ -546,6 +557,22 @@ class Review:
         out += (f'<div><div class="label">Changed in the project <span>{esc(str(info["root"]))}, from '
                 f'{esc(str(info["base"])[:8])}</span></div><div class="box"><table>{files}</table></div></div>')
         return out
+
+    def _floor_part(self, s: StepState) -> str:
+        """The diff of the paths this step changed that tools run later, which is why the stop is a floor."""
+        later = set((s.checked or {}).get("floor") or [])
+        patch = (s.checked or {}).get("patch")
+        if not later or not patch:
+            return ""
+        text = (self.c.home / "objects" / f"{patch}.patch").read_bytes().decode(errors="replace")
+        diffs = [d for d in text.split("diff --git ")[1:] if d.split(" b/", 1)[0].removeprefix("a/") in later]
+        shown = "".join(f"diff --git {d}" for d in diffs)
+        if len(shown) > 20000:  # never cut silently: what is not shown here must still be read
+            shown = shown[:20000] + f"\n\n[{len(shown) - 20000} more characters not shown: read the branch before merging it]"
+        return (f'<div class="wide"><div class="label" style="color:var(--red)">These files run later, outside any '
+                f'box <span>editors, agents, git, direnv, package managers or CI may run or obey them; read every '
+                f'line</span></div><div class="box"><pre style="padding:12px 16px">{esc(", ".join(sorted(later)))}\n\n{esc(shown)}</pre>'
+                f'</div></div>')
 
     def _pictures_part(self, run_id: str, st: RunState, target: Step[Any] | None) -> str:
         """The pictures the stop's step and the steps it needs left, such as references."""
@@ -889,7 +916,7 @@ class Review:
         spent = round(max(0.0, time.time() - seen), 3) if seen else None  # from the first view, across reloads
         try:
             self.c.answer(role, run_id, step, answer, note=note, output=output, seconds_spent=spent,
-                          to=fields.get("to") or None)
+                          to=fields.get("to") or None, by="person", evidence=fields.get("evidence") or None)
         except AnswerRejected as err:
             return 400, self.stop_page(run_id, step, "not recorded: " + "; ".join(err.reasons), fields)
         except RunBusy:
@@ -1034,7 +1061,7 @@ class Review:
         return [x.name for x in role.steps[:names.index(step)] if x.output is not None] if role and step in names else []
 
     def _answer_bar(self, run_id: str, step: str, value: Any, error: str, fields: dict[str, str] | None,
-                    editable: bool = True, earlier: list[str] | None = None) -> str:
+                    editable: bool = True, earlier: list[str] | None = None, evidence: str = "") -> str:
         fields = fields or {}
         chosen = fields.get("to", "")
         back = ("" if not earlier else
@@ -1045,7 +1072,7 @@ class Review:
         edited = fields.get("output") or json.dumps(value, indent=2, ensure_ascii=False)
         editor_class = "" if fields.get("answer") == "change" else "hidden"
         hidden = "".join(f'<input type="hidden" name="{k}" value="{esc(v)}">' for k, v in (
-            ("token", self.shared.token), ("run", run_id), ("step", step), ("answer", "")))
+            ("token", self.shared.token), ("run", run_id), ("step", step), ("evidence", evidence), ("answer", "")))
         return (f'<form id="answer" class="bar" method="post" action="/answer">{hidden}'
                 f'<div id="editor" class="{editor_class}"><div class="label">Edit the output, then press Change again '
                 f'<span>it is checked before it replaces the agent\'s</span></div>'
@@ -1094,16 +1121,20 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
     """A review server for ``home`` on 127.0.0.1; ``port=0`` picks a free one."""
     if str(Path.cwd()) not in sys.path:
         sys.path.insert(0, str(Path.cwd()))  # role modules are imported from the project, as `jaynes run` does
-    shared = Shared(secrets.token_urlsafe(16), idle_after)
+    shared = Shared(secrets.token_urlsafe(16), secrets.token_urlsafe(24), idle_after)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
             return None
 
         def _send(self, status: int, body: str | bytes, kind: str = "text/html; charset=utf-8",
-                  location: str | None = None, frame: str = "DENY") -> None:
+                  location: str | None = None, frame: str = "DENY", cookie: str | None = None) -> None:
+            if isinstance(body, str) and kind.startswith("text/html") and not self._person():
+                body = body.replace("<main>", f'<main><div class="notice">{NOT_PERSON}</div>', 1)
             data = body.encode() if isinstance(body, str) else body
             self.send_response(status)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
@@ -1118,6 +1149,18 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
             hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
             origin = self.headers.get("Origin")
             return self.headers.get("Host") in hosts and (origin is None or origin.split("//", 1)[-1] in hosts)
+
+        def _cookie_name(self) -> str:  # cookies ignore ports, so two servers keep apart by name
+            return f"jaynes_key_{cast(tuple[str, int], self.server.server_address)[1]}"
+
+        def _person(self) -> bool:
+            jar = SimpleCookie()
+            try:
+                jar.load(self.headers.get("Cookie") or "")
+            except CookieError:
+                return False
+            got = jar.get(self._cookie_name())
+            return got is not None and secrets.compare_digest(got.value, shared.key)
 
         def do_GET(self) -> None:
             try:
@@ -1142,6 +1185,13 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
             url = urllib.parse.urlsplit(self.path)
             parts = [urllib.parse.unquote(x) for x in url.path.strip("/").split("/") if x]
             query = dict(urllib.parse.parse_qsl(url.query))
+            if "key" in query:  # the link the server printed: keep the key as a cookie and drop it from the address
+                if not secrets.compare_digest(query["key"], shared.key):
+                    return self._send(403, "this link is from an earlier start of jaynes; open the one it printed "
+                                           "last", "text/plain")
+                rest = urllib.parse.urlencode({k: v for k, v in query.items() if k != "key"})
+                return self._send(303, "", location=url.path + (f"?{rest}" if rest else ""), cookie=(
+                    f"{self._cookie_name()}={shared.key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000"))
             match parts:
                 case []:
                     self._send(200, app.queue_page())
@@ -1194,6 +1244,8 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
                 return self._send(404, "not found", "text/plain")
             if not secrets.compare_digest(fields.get("token", ""), shared.token):
                 return self._send(403, "this page is stale or not from this server; reload it", "text/plain")
+            if not self._person():
+                return self._send(403, NOT_PERSON, "text/plain")
             app = Review(home, shared)
             status, out = handlers[path](app, fields)
             if status == 303:
@@ -1201,15 +1253,25 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
             else:
                 self._send(status, out)
 
-    return ReviewServer(("127.0.0.1", port), Handler, shared.previews)
+    return ReviewServer(("127.0.0.1", port), Handler, shared.previews, shared.key)
+
+
+NOT_PERSON = ("This browser can look but not answer. To answer, open the link jaynes printed in its terminal "
+              "when it started.")
 
 
 class ReviewServer(ThreadingHTTPServer):
-    """Stops the previews it started when it shuts down."""
+    """Stops the previews it started when it shuts down. ``link`` opens the page as the person."""
 
-    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], previews: Previews) -> None:
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], previews: Previews,
+                 key: str) -> None:
         super().__init__(address, handler)
         self.previews = previews
+        self.key = key
+
+    @property
+    def link(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}/?key={self.key}"
 
     def shutdown(self) -> None:
         super().shutdown()
@@ -1220,14 +1282,18 @@ class ReviewServer(ThreadingHTTPServer):
         self.previews.stop_all()
 
 
-def serve(home: Path, port: int) -> None:
+def serve(home: Path, port: int, browser: bool = False) -> None:
+    """Serve the page; ``browser`` opens it with its link, as the person."""
     server = make_server(home, port)
     def leave(signum: int, frame: object) -> None:
         sys.exit(0)
 
     for sig in (signal.SIGTERM, signal.SIGHUP):  # a closed terminal or a kill still stops the previews
         signal.signal(sig, leave)
-    print(f"Jaynes review on http://127.0.0.1:{server.server_address[1]}  (Ctrl+C to stop)", flush=True)
+    print(f"Jaynes review on {server.link}  (Ctrl+C to stop)", flush=True)
+    if browser:
+        import webbrowser
+        threading.Timer(0.5, webbrowser.open, [server.link]).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

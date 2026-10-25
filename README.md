@@ -68,6 +68,7 @@ done = design.step("accept", needs=build, stop=stop(budget=0.05, sampled=False))
 | Label | Your answer at a stop: accepted, changed, or returned |
 | Budget | The error rate a stop may have once it stops being mandatory |
 | Floor | An action or stop that never runs without a person |
+| Effect | What a trusted step does to the world: `pure`, `read`, `write-copy`, `web` or `irreversible` |
 
 ## The guarantee
 
@@ -86,6 +87,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 | History report and guarantee simulation | Works |
 | Step conductor for Claude Code and Codex: role API, write boundary, checks, retries, resume after a crash, quota pause | Works |
 | Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step | Works |
+| Answers bound to who gave them and to the evidence shown; floor paths; irreversible steps with idempotency keys | Works |
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
 | Box for previews on macOS; web access per step, with every address recorded | Works |
 | Built-in roles: visual-identity, redesign (from references) | Works, first real runs in progress |
@@ -154,6 +156,22 @@ The same from a terminal or an agent: `jaynes demo`, `jaynes history`,
 `jaynes simulate`, `jaynes policy` (prints the built-in policy), `jaynes queue`
 and `jaynes answer`. `jaynes --help` lists them all.
 
+Only you answer as a person. The page answers only in a browser opened with
+the link `jaynes` prints when it starts (it opens it for you), which it keeps
+as a cookie; anything else, like an agent with `curl`, can read the page but
+not answer. An answer from `jaynes answer` releases the stop but is recorded
+as an agent's: it never counts as a label, so an agent cannot make a stop
+sampled by accepting its own work, and a floor stop refuses it. Every answer
+carries the hash of what was shown, so a page left open cannot accept a newer
+round it never showed.
+
+Some files run later, outside any box: agent and editor settings (`.claude`,
+`.vscode`, `CLAUDE.md`), git attributes and hooks, `.envrc`, `package.json`,
+`pyproject.toml`, CI workflows. A step that changes the project must list what
+it may change (`may_change`, `["**"]` for anything), and even then a change to
+one of those files is rejected in a step without a stop, and turns a step's
+stop into a floor that shows the file's diff.
+
 ### Write a role
 
 A role is a Python module. Save this as `count_words.py`:
@@ -189,6 +207,12 @@ SENTENCE = ROLE.step("sentence", output=Sentence, needs=[TOPIC], check=matches,
                      instructions="Write one sentence about the topic in inputs/topic.json with exactly "
                                   "the number of words given there.")
 ```
+
+A trusted step that acts on the world declares it: `effect="irreversible"`
+(book, pay, send) needs only steps with floor stops, so you approve its whole
+payload. It runs once, with `ctx.idempotency_key` for the service
+it calls, and a run that stopped while it was running blocks instead of running
+it again.
 
 Jaynes runs the first step itself; Claude Code (with your login) writes the
 sentence, and the check sends it back until the count is right. Use

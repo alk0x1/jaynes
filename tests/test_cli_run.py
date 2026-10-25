@@ -65,3 +65,17 @@ def test_answer_from_the_cli_continues_the_run_in_the_background(tmp_path: Path)
     answered = [e.payload for e in store.events("StopAnswered", run_id=run)]
     assert [(a["answer"], a["label"], a["note"]) for a in answered] == [("change", "error", "warmer")]
     assert jaynes(tmp_path, "queue").strip() == "nothing is waiting"
+
+
+def test_an_answer_from_the_cli_is_an_agent_and_can_be_bound_to_what_the_queue_showed(tmp_path: Path) -> None:
+    run = json.loads(jaynes(tmp_path, "run", "--role", "tests.stopped:ROLE", "--task", "t",
+                            "--runtime", "quick=tests.stopped:Agent"))["run"]
+    queue = jaynes(tmp_path, "queue")
+    [evidence] = [line.split("evidence ")[1].strip() for line in queue.splitlines() if "evidence " in line]
+    with pytest.raises(SystemExit, match="changed since"):
+        cli.main(["answer", "--home", str(tmp_path), run, "draft", "accept", "--evidence", "0" * 16])
+
+    jaynes(tmp_path, "answer", run, "draft", "accept", "--evidence", evidence)
+
+    [answered] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("StopAnswered", run_id=run)]
+    assert answered["by"] == "agent" and answered["label"] == "correct"

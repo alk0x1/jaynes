@@ -45,6 +45,7 @@ from jaynes.store import Event, Store
 T = TypeVar("T", bound=BaseModel)
 
 Answer = Literal["accept", "change", "return", "context"]
+By = Literal["person", "agent"]  # the page with its key, or anything else, such as the CLI an agent runs
 LABELS: dict[str, str] = {"accept": "correct", "change": "error", "return": "error", "context": "context"}
 OUTPUT_BYTES = 1_000_000
 FILES = "files"  # where a trusted executor leaves files for the steps that need it
@@ -72,6 +73,7 @@ class Waiting:
     task: str
     question: str | None = None
     reasons: tuple[str, ...] = ()
+    evidence: str | None = None  # the hash of what a stop shows; an answer that carries it is bound to it
 
 
 class RunBusy(Exception):
@@ -159,7 +161,8 @@ def project(events: Iterable[Event]) -> RunState:
                         x.checked = None
                 elif p["answer"] in ("accept", "change"):
                     s.resolved = True
-                    s.released = {"fingerprint": p["fingerprint"], "label": p["label"]}
+                    # an agent's answer was never counted, so a later revision has nothing to replace
+                    s.released = {"fingerprint": p["fingerprint"], "label": "none" if p.get("by") == "agent" else p["label"]}
                 else:
                     s.round += 1
                     s.attempts = 0
@@ -237,6 +240,11 @@ def start_in_background(home: Path, run_id: str, ref: str, task: str, runtimes: 
     return continue_in_background(home, run_id, "--role", ref, "--task", task, *overrides, *on)
 
 
+def evidence_hash(checked: Mapping[str, Any], question: str | None) -> str:
+    """What a stop shows: its checked output with the project change and files it carries, and the question."""
+    return hashlib.sha256(json.dumps([checked, question], sort_keys=True).encode()).hexdigest()[:16]
+
+
 def coin(run_id: str, step: str) -> float:
     """Deterministic uniform draw per run and step, so a replay reproduces every decision."""
     h = hashlib.sha256(f"{run_id}:{step}".encode()).digest()
@@ -285,12 +293,15 @@ class Conductor:
 
     def answer(self, role: Role, run_id: str, step: str, answer: Answer, *, note: str | None = None,
                output: BaseModel | Mapping[str, Any] | None = None, seconds_spent: float | None = None,
-               to: str | None = None) -> None:
-        """Record the person's answer at an open stop. ``change`` needs the edited output, which must pass the checks.
+               to: str | None = None, by: By = "person", evidence: str | None = None) -> None:
+        """Record the answer at an open stop. ``change`` needs the edited output, which must pass the checks.
 
         ``to`` returns an earlier step instead of this one: it runs again with the note, and so does every step
         after it. The label goes to the earlier step's stop, replacing the one it was released with; this stop,
         whose step did what it was given, takes none.
+
+        An answer ``by`` an agent releases the stop but is never counted as a label, and a floor stop refuses it.
+        ``evidence``, the hash of what was shown, refuses the answer if the stop has shown something else since.
         """
         if answer not in LABELS:
             raise ValueError(f"unknown answer {answer!r}")
@@ -309,6 +320,10 @@ class Conductor:
             if s.open_stop is None:
                 raise AnswerRejected([f"no stop is waiting at {step!r} in run {run_id}"])
             opened_at, opened = s.open_stop
+            if evidence is not None and opened.get("evidence") not in (None, evidence):
+                raise AnswerRejected([f"the stop at {step!r} changed since it was shown; reload it and answer again"])
+            if by == "agent" and opened["status"] == "floor":
+                raise AnswerRejected([f"the stop at {step!r} is a floor: only a person answers it, from the page"])
             target = next(x for x in role.steps if x.name == step)
             value: BaseModel | None = None
             if answer == "change":
@@ -332,10 +347,10 @@ class Conductor:
             rows: list[tuple[str, dict[str, Any]]] = [("StopAnswered", {
                 "step": step, "answer": answer, "label": "none" if to else LABELS[answer], "note": note,
                 "fingerprint": opened["fingerprint"], "seconds_waited": round(self.clock() - opened_at, 3),
-                "seconds_spent": seconds_spent, **back})]
+                "seconds_spent": seconds_spent, "by": by, **back})]
             if value is not None:  # the edit and its witness are one write, so a crash cannot drop the edit
                 assert s.checked is not None
-                rows.append(self._witness(target, s, value, source="person", model=str(s.checked["model"]),
+                rows.append(self._witness(target, s, value, source=by, model=str(s.checked["model"]),
                                           carry=s.checked))
             self.store.append_all([(kind, p, run_id, self.clock()) for kind, p in rows])
 
@@ -365,7 +380,8 @@ class Conductor:
                                      reasons=tuple(st.blocked["reasons"])))
             opened = [(name, s.open_stop) for name, s in st.steps.items() if s.open_stop is not None]
             for name, (opened_at, payload) in opened:
-                items.append(Waiting(run_id, "stop", name, opened_at, role, task, payload.get("question")))
+                items.append(Waiting(run_id, "stop", name, opened_at, role, task, payload.get("question"),
+                                     evidence=payload.get("evidence")))
             paused = st.paused_until is not None and st.paused_until > self.clock()
             quiet = self.clock() - events[-1].ts >= idle_after
             if st.blocked is None and not opened and not paused and quiet and not self._held(run_id):
@@ -382,11 +398,13 @@ class Conductor:
             return True
 
     def window(self, fingerprint: str) -> Window:
-        """Labels recorded under a stop fingerprint, across all runs, with later revisions of earlier ones."""
+        """Labels a person recorded under a stop fingerprint, across all runs, with later revisions of earlier ones."""
         weight = {"correct": (1, 0), "error": (1, 1)}  # context, none and skipped count nothing
         n = k = 0
         for e in self.store.events("StopAnswered"):
             p = e.payload
+            if p.get("by") == "agent":
+                continue
             if p.get("fingerprint") == fingerprint:
                 dn, dk = weight.get(p["label"], (0, 0))
                 n, k = n + dn, k + dk
@@ -408,6 +426,10 @@ class Conductor:
             if s.in_flight is not None:
                 self._emit(run_id, "TurnInterrupted", {"step": step.name, "attempt": s.in_flight["attempt"],
                                                        "reason": "crash"})
+                if s.in_flight.get("effect") == "irreversible":
+                    self._emit(run_id, "RunBlocked", {"step": step.name, "reasons": [
+                        f"the irreversible step {step.name} was running when Jaynes stopped and may have acted; "
+                        f"check what it did under idempotency key {s.in_flight['key']} before running it again"]})
                 return None
         for step in role.steps:
             s = st.step(step.name)
@@ -471,16 +493,22 @@ class Conductor:
             tracker = repo.Tracker(ws.parent / "project.git", ws / "project")
             needs = self._witnesses(step, st, ws / "project")
         before = manifest(ws, skip="project")
+        key, effect = "", {}
+        if step.effect == "irreversible":  # the payload is what the floor stops before it released: every need
+            payload = [needs[n].output_hash for n in step.needs]
+            key = hashlib.sha256("\0".join([run_id, step.name, *payload]).encode()).hexdigest()[:32]
+            effect = {"effect": step.effect, "key": key, "payload": payload}
         self._emit(run_id, "StepStarted", {"step": step.name, "round": s.round, "attempt": attempt,
-                                           "executor": step.executor, "manifest": manifest_hash(before)})
+                                           "executor": step.executor, "manifest": manifest_hash(before), **effect})
         task = str(st.started["task"]) if st.started else ""
         t0 = time.monotonic()
         kept: dict[str, str] | list[str] = {}
         if step.run_by is not None:
             try:
-                value = step.run_by(StepContext(run_id, task, needs, ws))
+                value = step.run_by(StepContext(run_id, task, needs, ws, key))
             except Exception as err:  # a trusted executor failed; it counts as a rejected turn
-                self._reject(run_id, step, attempt, "executor", [f"{type(err).__name__}: {err}"[:500]], t0)
+                acted = [f"it may have acted; check under idempotency key {key}"] if key else []
+                self._reject(run_id, step, attempt, "executor", [f"{type(err).__name__}: {err}"[:500], *acted], t0)
                 return None
             if not isinstance(value, step.output):
                 self._reject(run_id, step, attempt, "schema", [f"executor returned {type(value).__name__}"], t0)
@@ -539,12 +567,18 @@ class Conductor:
                 f"only {', '.join(step.may_change)} may change in the project; the turn changed: "
                 + ", ".join(outside[:10])], t0)
             return None
+        later = repo.floor(touched)
+        if later and step.stop is None:
+            self._reject(run_id, step, attempt, "write_boundary", [
+                "these paths run later, outside any box, and change only at a stop a person answers; "
+                "leave them as they were: " + ", ".join(later[:10])], t0)
+            return None
         failures = self._check(step, value, needs)
         if failures:
             self._reject(run_id, step, attempt, "check", failures, t0)
             return None
         carry: dict[str, Any] = {"patch": self._store(patch, ".patch") if patch else None, "changed": touched,
-                                 "workspace": str(ws)} if tracker else {}
+                                 "workspace": str(ws), **({"floor": later} if later else {})} if tracker else {}
         if kept:
             carry["files"] = kept
         self._accept(run_id, step, s, value, source=step.executor, model=model, attempt=attempt, carry=carry)
@@ -556,7 +590,8 @@ class Conductor:
         w = self.window(fp)
         n, k = w.n, w.k
         sp = step.stop
-        if not sp.sampled:
+        later = list(s.checked.get("floor") or [])  # paths that run later: a person sees them every time
+        if not sp.sampled or later:
             status = "floor"
         elif bounds.certified(n, k, sp.budget, sp.delta):
             status = "certified"
@@ -569,10 +604,12 @@ class Conductor:
             self._emit(run_id, "StopSkipped", {"step": step.name, "status": status, "coin": u, "fingerprint": fp,
                                                "budget": sp.budget, "delta": sp.delta})
             return
+        question = self._question(step, s, st)
         self._emit(run_id, "StopOpened", {
             "step": step.name, "round": s.round, "status": status, "coin": u, "n": n, "k": k,
             "log_e": bounds.log_certify_evalue(n, k, sp.budget) if n else 0.0, "fingerprint": fp,
-            "budget": sp.budget, "delta": sp.delta, "question": self._question(step, s, st)})
+            "budget": sp.budget, "delta": sp.delta, "question": question,
+            "evidence": evidence_hash(s.checked, question), **({"floor_paths": later} if later else {})})
 
     # helpers ------------------------------------------------------------------
 
@@ -684,7 +721,8 @@ class Conductor:
                  attempt: int = 0, carry: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
         """Store the output and return its ``Checked`` event, not yet recorded. ``carry`` holds the project change."""
         h = self._store(canonical(value), ".json")
-        project_change = {k: carry[k] for k in ("patch", "changed", "workspace", "files") if k in carry} if carry else {}
+        project_change = {k: carry[k] for k in ("patch", "changed", "workspace", "files", "floor")
+                          if k in carry} if carry else {}
         return "Checked", {"step": step.name, "round": s.round, "attempt": attempt, "output_hash": h,
                            "check_hash": step.check_hash(), "source": source, "model": model, **project_change}
 
