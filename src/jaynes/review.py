@@ -14,10 +14,12 @@ the background.
 
 from __future__ import annotations
 
+import errno
 import html
 import importlib
 import json
 import math
+import os
 import hashlib
 import re
 import secrets
@@ -1264,9 +1266,9 @@ class ReviewServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], previews: Previews,
                  key: str) -> None:
-        super().__init__(address, handler)
-        self.previews = previews
+        self.previews = previews  # set first: a port in use closes the server inside __init__
         self.key = key
+        super().__init__(address, handler)
 
     @property
     def link(self) -> str:
@@ -1281,9 +1283,36 @@ class ReviewServer(ThreadingHTTPServer):
         self.previews.stop_all()
 
 
+def _running(home: Path, port: int) -> int | None:
+    """The process serving ``home``'s page on ``port``, if one still is."""
+    try:
+        info = json.loads((home / "review.json").read_text())
+        pid = int(info["pid"])
+        os.kill(pid, 0)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return pid if info.get("port") == port else None
+
+
 def serve(home: Path, port: int, browser: bool = False) -> None:
-    """Serve the page; ``browser`` opens it with its link, as the person."""
-    server = make_server(home, port)
+    """Serve the page; ``browser`` opens it with its link, as the person. If ``home``'s page already runs on
+    ``port``, point to it instead: its key stays in the browser that opened it first."""
+    try:
+        server = make_server(home, port)
+    except OSError as err:
+        if err.errno != errno.EADDRINUSE:
+            raise
+        pid = _running(home, port)
+        if pid is None:
+            sys.exit(f"port {port} is in use by another program or another Jaynes home; stop it or pass --port")
+        print(f"Jaynes review is already running on http://127.0.0.1:{port}/ (process {pid})", flush=True)
+        if browser:
+            import webbrowser
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+        return
+    mine, port = home / "review.json", server.server_address[1]  # port 0 picks a free one
+    mine.write_text(json.dumps({"pid": os.getpid(), "port": port}))
+
     def leave(signum: int, frame: object) -> None:
         sys.exit(0)
 
@@ -1299,3 +1328,5 @@ def serve(home: Path, port: int, browser: bool = False) -> None:
         pass
     finally:
         server.server_close()
+        if _running(home, port) == os.getpid():
+            mine.unlink(missing_ok=True)
