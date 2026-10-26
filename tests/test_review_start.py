@@ -22,6 +22,7 @@ from jaynes.history import PastCall, report
 from jaynes.install import BUILT_IN_POLICY
 from jaynes.policy import load_policy
 from jaynes.store import Store
+from tests import test_role_file as role_file
 from tests.test_review import JAR, NoRedirect, form, get, post, serving
 
 
@@ -363,3 +364,23 @@ def test_the_page_refuses_to_start_a_role_with_problems(served: tuple[str, Path]
     status, body = post(base + "/start", {**form(page), "role": "", "ref": "tests.test_verify:BAD", "task": "go"})
     assert status == 400 and "bad has 6 problems" in body and "publish: check for_notes takes a Note" in body
     assert list(Store(home / "jaynes.sqlite3").events("RunStarted")) == []
+
+
+def test_a_role_file_starts_from_the_page_and_a_broken_one_says_why(served: tuple[str, Path], tmp_path: Path) -> None:
+    base, home = served
+    path = role_file.write(tmp_path / "roles").resolve()
+    cli.main(["run", "--home", str(home), "--role", str(path), "--task", "t",
+              "--runtime", "quick=tests.role_file_agent:Agent"])
+    page = get(base + "/new")
+    assert f"notes ({path})" in page
+    run = start(base, {**form(page), "role": str(path), "ref": "", "task": "again"})
+    store = Store(home / "jaynes.sqlite3")
+    deadline = time.monotonic() + 30
+    while not list(store.events("StopOpened", run_id=run)):
+        assert time.monotonic() < deadline, (home / "runs" / run / "continue.log").read_text()
+        time.sleep(0.05)
+    assert "Ship &#x27;buy milk&#x27;?" in get(base + "/")
+
+    broken = role_file.write(tmp_path / "broken", role_file.ROLE.replace("max_turns", "max_turn"))
+    status, body = post(base + "/start", {**form(page), "role": "", "ref": str(broken), "task": "t"})
+    assert status == 400 and "unknown key max_turn" in body

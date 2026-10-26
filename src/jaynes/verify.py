@@ -3,7 +3,8 @@
 It reads checks, questions and trusted executors without running them, from their bytecode. A step a function
 names is a step it reads, unless it only takes the step's name: directly, through a closure, a default value, a
 module or class attribute, a dict or list, a partial or a callable object, or any plain function it names in
-turn. A step can only read what it needs: the conductor hands it nothing else, looked up by step name, so an
+turn. A role file's checks read steps by name, ``needs["draft"]``: a constant string looked up in ``needs``
+(or the function's second parameter) is a read of the step with that name. A step can only read what it needs: the conductor hands it nothing else, looked up by step name, so an
 undeclared read fails mid-run, or quietly reads another step that happens to share the name.
 
 Steps reached through a method of some other object, or a name computed at run time, are not seen.
@@ -59,6 +60,12 @@ def report(role: Role, problems: list[str]) -> str:
 def _reads(role: Role, step: Step[Any], what: str, fn: Callable[..., Any]) -> list[str]:
     out: list[str] = []
     for other in _named_steps(fn):
+        if isinstance(other, str):
+            match = [s for s in role.steps if s.name == other]
+            if not match:
+                out.append(f"{step.name}: {what} reads {other}, which is not a step of {role.name}")
+                continue
+            other = match[0]
         if other.role is not role:
             out.append(f"{step.name}: {what} reads {other.name} of role {other.role.name}; use a step of "
                        f"{role.name}, in {step.name}'s needs")
@@ -84,9 +91,9 @@ def _takes(step: Step[Any], what: str, fn: Callable[..., Any]) -> list[str]:
     return [f"{step.name}: {what} takes a {names}, but {step.name}'s output is a {step.output.__name__}"]
 
 
-def _named_steps(fn: Callable[..., Any]) -> list[Step[Any]]:
-    """Steps a function names for more than their name, in order."""
-    found: list[Step[Any]] = []
+def _named_steps(fn: Callable[..., Any]) -> list[Step[Any] | str]:
+    """Steps a function names for more than their name, in order; a step looked up by name is its name."""
+    found: list[Step[Any] | str] = []
     seen: set[int] = set()
 
     def visit(f: FunctionType) -> None:
@@ -102,9 +109,16 @@ def _named_steps(fn: Callable[..., Any]) -> list[Step[Any]]:
                     pass
             for value in (*(f.__defaults__ or ()), *(f.__kwdefaults__ or {}).values()):
                 consider(value)
+            params = [p for p in f.__code__.co_varnames[:f.__code__.co_argcount] if p != "self"]
+            lookups = {"needs", *params[1:2]}  # where a check, question or executor finds the steps it needs
             for code in _codes(f.__code__):
                 ins = list(dis.get_instructions(code))
                 for i, x in enumerate(ins):
+                    if x.opname == "LOAD_CONST" and isinstance(x.argval, str) and 0 < i < len(ins) - 1 \
+                            and ins[i - 1].argval in lookups and _subscript(ins[i + 1]):
+                        if x.argval not in found:
+                            found.append(x.argval)
+                        continue
                     if x.opname in ("LOAD_GLOBAL", "LOAD_NAME"):
                         value = f.__globals__.get(x.argval)
                     elif x.opname == "LOAD_DEREF":
@@ -144,6 +158,10 @@ def _named_steps(fn: Callable[..., Any]) -> list[Step[Any]]:
 
     consider(fn)
     return found
+
+
+def _subscript(x: dis.Instruction) -> bool:
+    return x.opname == "BINARY_SUBSCR" or (x.opname == "BINARY_OP" and x.argrepr == "[]")
 
 
 def _stdlib(code: CodeType) -> bool:

@@ -71,8 +71,9 @@ person ── review page (local web) ── answers
 
 ## 4. Role definition
 
-Python is the definition language. Schemas are Pydantic models; checks are
-plain functions. Sketch of the v0 API:
+Python is the definition language, or a TOML file that lists the steps and
+names its models and functions in Python (below). Schemas are Pydantic models;
+checks are plain functions. Sketch of the v0 API:
 
 ```python
 from jaynes import role, stop, Checked
@@ -154,6 +155,19 @@ Rules:
   Steps reached through a method of another object, or a name computed at run
   time, are not seen. Resuming a run warns instead of refusing. `jaynes check
   <role>` runs it alone.
+- A role file (`.toml`) holds the same role as data: top-level `name`,
+  `agent` and `method` (or `method_file`, next to the file), then one
+  `[[step]]` table per step with the keys of `step`. `output`, `check` and
+  `run_by` are `module:attribute` references, imported from the file's folder
+  and from the current folder; `needs` lists earlier step names; `stop` is a
+  table, `{ budget = 0.2, sampled = false }`; `question` is a template over the
+  step's output, `"Apply the {out.name} direction?"`, whose fields must exist
+  in the output model and whose text is part of the stop's fingerprint. Checks
+  in a role file read their needs by name, `needs["draft"]`, and the verifier
+  treats a constant name looked up in `needs` as a read of that step, refusing
+  names that are not steps of the role. An unknown key, a missing reference or
+  a step needed before it is defined is refused with the file and the step.
+  A run stores the file's absolute path, so it continues from any folder.
 - The role's prompt for each agent step is built from the method text, the
   step's instructions, its schema, and the needed outputs. All of it is part
   of the step's fingerprint.

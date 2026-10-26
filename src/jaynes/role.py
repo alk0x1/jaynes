@@ -18,7 +18,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -59,8 +59,13 @@ class Witnesses:
         self._by_name = dict(by_name)
         self.project = project
 
-    def __getitem__(self, step: Step[T]) -> Checked[T]:
-        return cast(Checked[T], self._by_name[step.name])
+    @overload
+    def __getitem__(self, step: Step[T]) -> Checked[T]: ...
+    @overload
+    def __getitem__(self, step: str) -> Checked[Any]: ...  # by name, as a role file's checks read
+
+    def __getitem__(self, step: Step[Any] | str) -> Checked[Any]:
+        return self._by_name[step if isinstance(step, str) else step.name]
 
     def names(self) -> list[str]:
         return sorted(self._by_name)

@@ -86,7 +86,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 |---|---|
 | Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works |
 | History report and guarantee simulation | Works |
-| Step conductor for Claude Code and Codex: role API, write boundary, checks, retries, resume after a crash, quota pause | Works |
+| Step conductor for Claude Code and Codex: roles in Python or TOML, write boundary, checks, retries, resume after a crash, quota pause | Works |
 | Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step | Works |
 | Answers bound to who gave them and to the evidence shown; floor paths; irreversible steps with idempotency keys | Works |
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
@@ -252,6 +252,37 @@ need, or a step of another role; a check whose first argument is annotated
 with another step's output type; a step, other than the last, whose output no
 later step needs and no stop shows, unless it changes the project or acts.
 `jaynes check count_words:ROLE` runs the same check alone.
+
+The steps can also live in a TOML file, with the models and checks staying in
+Python. Save the classes and functions above, without the last three lines,
+as `count_checks.py`, and change the check to read its need by name,
+`needs["topic"]`. Then save this as `count_words.toml`:
+
+```toml
+name = "count-words"
+agent = "claude"
+
+[[step]]
+name = "topic"
+output = "count_checks:Topic"
+run_by = "count_checks:read_topic"
+
+[[step]]
+name = "sentence"
+output = "count_checks:Sentence"
+needs = ["topic"]
+check = ["count_checks:matches"]
+stop = { budget = 0.2 }
+question = "Is this sentence right: {out.sentence}?"
+instructions = "Write one sentence about the topic in inputs/topic.json with exactly the number of words given there."
+```
+
+```sh
+jaynes run --role count_words.toml --task "lighthouses in fog"
+```
+
+A key Jaynes does not know, a reference that does not import, or a question
+that names a field the output lacks is refused with the step it is in.
 
 ### From a clone
 

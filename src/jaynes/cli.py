@@ -148,12 +148,16 @@ DEFAULT_RUNTIMES = {"claude": "jaynes.runtimes:ClaudeRuntime", "codex": "jaynes.
 
 
 def role_ref(name: str) -> str:
-    """A built-in role's name, as its module:attribute; anything with a colon is already one."""
+    """A built-in role's name, as its module:attribute; anything with a colon is already one, and a role file is
+    its absolute path, so a run continued from another folder finds it."""
     from jaynes.roles import BUILT_IN
+    if name.endswith(".toml"):
+        return str(Path(name).resolve())
     if ":" in name:
         return name
     if name not in BUILT_IN:
-        sys.exit(f"no built-in role {name!r}: use one of {', '.join(BUILT_IN)}, or module:attribute")
+        sys.exit(f"no built-in role {name!r}: use one of {', '.join(BUILT_IN)}, a role file (.toml), or "
+                 "module:attribute")
     return BUILT_IN[name]
 
 
@@ -183,7 +187,11 @@ def _started(c: Conductor, run_id: str) -> tuple[Role, str, str, dict[str, str]]
 
 def _role(ref: str) -> Role:
     from jaynes.role import Role
-    r = load_ref(ref)
+    from jaynes.role_file import RoleFileError, load
+    try:
+        r = load(Path(ref)) if ref.endswith(".toml") else load_ref(ref)
+    except RoleFileError as err:
+        sys.exit(str(err))
     if not isinstance(r, Role):
         sys.exit(f"{ref} is not a role")
     return r
@@ -325,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--p", type=float, nargs="+", default=[0.0, 0.01, 0.02, 0.03, 0.05, 0.06, 0.08])
     r = sub.add_parser("run")
     r.add_argument("id", nargs="?")
-    r.add_argument("--role", help="a built-in role (visual-identity, redesign) or module:attribute")
+    r.add_argument("--role", help="a built-in role (visual-identity, redesign), a role file (.toml) or module:attribute")
     r.add_argument("--task")
     r.add_argument("--runtime", action="append", default=[], help="name=module:attribute, overrides a runtime")
     r.add_argument("--project", help="a folder in a git repository, for steps that work on a project")
@@ -334,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--preview-ports", help="local ports the preview may connect to, such as a backend: 8789,5432")
     r.add_argument("--home")
     k = sub.add_parser("check", help="find what a role gets wrong before any agent runs")
-    k.add_argument("role", help="a built-in role (visual-identity, redesign) or module:attribute")
+    k.add_argument("role", help="a built-in role (visual-identity, redesign), a role file (.toml) or module:attribute")
     q = sub.add_parser("queue")
     q.add_argument("--home")
     w = sub.add_parser("answer")

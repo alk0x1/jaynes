@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from jaynes import bounds, install, roles, sandbox, verify
+from jaynes import bounds, install, role_file, roles, sandbox, verify
 from jaynes import project as repo
 from jaynes.conductor import (LABELS, Answer, AnswerRejected, Conductor, RunBusy, RunState, StepState, Waiting,
                               continue_in_background, new_run_id, project, start_in_background)
@@ -413,7 +413,10 @@ class Review:
         if ref not in self.shared.roles:
             module, _, attr = ref.partition(":")
             try:
-                found = getattr(importlib.import_module(module), attr) if module and attr else None
+                if ref.endswith(".toml"):
+                    found = role_file.load(Path(ref))
+                else:
+                    found = getattr(importlib.import_module(module), attr) if module and attr else None
             except Exception:
                 return None  # not cached, so a fixed import works without a restart
             if not isinstance(found, Role):
@@ -699,7 +702,7 @@ class Review:
                 f'<form class="form" method="post" action="/start"><input type="hidden" name="token" value="{self.shared.token}">'
                 f'<label><span class="label">Role</span><select name="role">{options}</select></label>'
                 f'<label><span class="label">Or a role in this folder</span>'
-                f'<input type="text" name="ref" placeholder="my_role:ROLE" value="{esc(f.get("ref", ""))}">'
+                f'<input type="text" name="ref" placeholder="my_role.toml or my_role:ROLE" value="{esc(f.get("ref", ""))}">'
                 f'<span class="m" style="margin-top:6px">{esc(str(Path.cwd()))}</span></label>'
                 f'<label><span class="label">Task</span><textarea name="task" placeholder="Redesign the People screen">'
                 f'{esc(f.get("task", ""))}</textarea></label>'
@@ -930,6 +933,12 @@ class Review:
         task = fields.get("task", "").strip()
         if not task:
             return 400, self.new_page("a run needs a task", fields)
+        if ref.endswith(".toml"):  # stored whole, so the run continues from any folder; its mistakes are shown
+            ref = str(Path(ref).expanduser().resolve())
+            try:
+                role_file.load(Path(ref))
+            except role_file.RoleFileError as err:
+                return 400, self.new_page(str(err), fields)
         r = self.import_role(ref)
         if r is None:
             return 400, self.new_page(f"{ref} cannot be imported from {Path.cwd()}", fields)
