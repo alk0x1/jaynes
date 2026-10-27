@@ -80,6 +80,13 @@ class Tracker:
         _git("add", "-A", cwd=work, env=self.env)
         _git("commit", "-q", "--allow-empty", "--no-verify", "-m", "before", cwd=work, env=self.env)
 
+    def exclude(self, paths: Sequence[str]) -> None:
+        """Leave ``paths``, folders relative to the copy, out of every change, such as linked dependencies."""
+        info = Path(self.env["GIT_DIR"]) / "info"
+        info.mkdir(exist_ok=True)
+        with (info / "exclude").open("a") as f:
+            f.writelines(f"/{p}/\n" for p in paths)
+
     def changes(self) -> tuple[bytes, list[str]]:
         """The patch from the copy as handed over to the copy now, and the paths it touches."""
         _git("add", "-A", cwd=self.work, env=self.env)

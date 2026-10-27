@@ -38,6 +38,7 @@ from pydantic import BaseModel, ValidationError
 from jaynes import bounds
 from jaynes import project as repo
 from jaynes.gate import Window
+from jaynes.preview import link_dependencies
 from jaynes.role import OUTPUT, Checked, Fail, Pass, Role, Step, StepContext, Witnesses
 from jaynes.runtime import QuotaExhausted, Runtime, RuntimeFailure, TurnTimeout
 from jaynes.store import Event, Store
@@ -365,7 +366,7 @@ class Conductor:
         return step.output.model_validate_json(self._object(str(checked["output_hash"])))
 
     def queue(self, idle_after: float = 10.0) -> list[Waiting]:
-        """Stops waiting, blocked runs and idle runs, oldest first.
+        """Stops waiting, then blocked runs, then idle runs, each oldest first: what needs the person comes first.
 
         A run counts as idle only after ``idle_after`` seconds without events, so one that a background
         process is about to pick up after an answer does not flicker into the queue.
@@ -390,7 +391,7 @@ class Conductor:
             if st.blocked is None and not opened and not paused and quiet and not self._held(run_id):
                 step = next((str(ev.payload["step"]) for ev in reversed(events) if "step" in ev.payload), "")
                 items.append(Waiting(run_id, "idle", step, events[-1].ts, role, task))
-        return sorted(items, key=lambda w: w.since)
+        return sorted(items, key=lambda w: (("stop", "blocked", "idle").index(w.kind), w.since))
 
     def _held(self, run_id: str) -> bool:
         """Whether a process holds the run's lock right now."""
@@ -437,6 +438,9 @@ class Conductor:
         for step in role.steps:
             s = st.step(step.name)
             if s.checked is not None and (step.stop is None or s.resolved):
+                if s.resolved and self._ends(step, s):  # a person accepted an output that ends the run
+                    self._emit(run_id, "RunFinished", {"outcome": "ended", "step": step.name})
+                    return None
                 continue
             if s.open_stop is not None:
                 return RunResult("waiting", step.name)
@@ -494,6 +498,8 @@ class Conductor:
                 self._emit(run_id, "RunBlocked", {"step": step.name, "reasons": [str(err)]})
                 return None
             tracker = repo.Tracker(ws.parent / "project.git", ws / "project")
+            # installed dependencies, so the agent can run the project's tests; never part of what it changed
+            tracker.exclude(link_dependencies(Path(info["root"]), ws / "project"))
             needs = self._witnesses(step, st, ws / "project", Path(info["root"]))
         before = manifest(ws, skip="project")
         key, effect = "", {}
@@ -594,7 +600,8 @@ class Conductor:
         n, k = w.n, w.k
         sp = step.stop
         later = list(s.checked.get("floor") or [])  # paths that run later: a person sees them every time
-        if not sp.sampled or later:
+        ending = self._ends(step, s)  # only a person ends a run early
+        if not sp.sampled or later or ending:
             status = "floor"
         elif bounds.certified(n, k, sp.budget, sp.delta):
             status = "certified"
@@ -612,9 +619,16 @@ class Conductor:
             "step": step.name, "round": s.round, "status": status, "coin": u, "n": n, "k": k,
             "log_e": bounds.log_certify_evalue(n, k, sp.budget) if n else 0.0, "fingerprint": fp,
             "budget": sp.budget, "delta": sp.delta, "question": question,
-            "evidence": evidence_hash(s.checked, question), **({"floor_paths": later} if later else {})})
+            "evidence": evidence_hash(s.checked, question), **({"floor_paths": later} if later else {}),
+            **({"ends": True} if ending else {})})
 
     # helpers ------------------------------------------------------------------
+
+    def _ends(self, step: Step[Any], s: StepState) -> bool:
+        """Whether the step's checked output, as the agent gave it or the person changed it, ends the run."""
+        if step.ends is None or step.output is None or s.checked is None:
+            return False
+        return bool(step.ends(step.output.model_validate_json(self._object(str(s.checked["output_hash"])))))
 
     def _question(self, step: Step[Any], s: StepState, st: RunState) -> str | None:
         if step.question is None or s.checked is None:
@@ -644,7 +658,8 @@ class Conductor:
             lines.append("")
         if step.project:
             lines += ["The project is in project/: a copy of its repository at the last commit, with the changes of "
-                      "earlier steps applied."]
+                      "earlier steps applied. Its installed dependencies are linked in, so you can run its own "
+                      "commands, such as its tests, from project/; there is no internet, so nothing installs."]
             if step.project == "write":
                 keep = [g for g in step.may_change if not g.startswith("!")]
                 out = [g[1:] for g in step.may_change if g.startswith("!")]

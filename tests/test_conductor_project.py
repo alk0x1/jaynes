@@ -225,3 +225,30 @@ def test_a_home_given_as_a_relative_path_still_works_on_the_project(repo: Path, 
     agent = Scripted({("current", 1): write({"text": "a"})})
     assert Conductor(Path("home"), runtimes={"fake": lambda: agent}).run(r, "t", "r1", project=repo).status == \
         "finished"
+
+
+def test_an_agent_finds_the_installed_dependencies_in_its_copy_and_they_never_count_as_changes(
+        repo: Path, tmp_path: Path) -> None:
+    (repo / "node_modules" / "pkg").mkdir(parents=True)  # installed, and not even ignored by git
+    (repo / "node_modules" / "pkg" / "index.js").write_text("module.exports = 1\n")
+    (repo / "web" / ".venv" / "bin").mkdir(parents=True)
+    (repo / "web" / "app.py").write_text("")
+    git(repo, "add", "web/app.py")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "web")
+    (repo / "web" / ".venv" / "bin" / "tool").write_text("#!/bin/sh\n")
+    seen: list[str] = []
+
+    def act(ws: Path) -> None:
+        seen.append((ws / "project" / "node_modules" / "pkg" / "index.js").read_text())
+        seen.append((ws / "project" / "web" / ".venv" / "bin" / "tool").read_text())
+        (ws / "project" / "node_modules" / ".cache").mkdir()  # what a test runner writes beside them
+        edit("src/app.css", ":root { --bg: #000000; }\n", {"text": "dark"})(ws)
+
+    r = role("paint", agent="fake")
+    r.step("paint", output=Note, project="write", may_change=["**"])
+    c = Conductor(tmp_path / "home", runtimes={"fake": lambda: Scripted({("paint", 1): act})})
+    assert c.run(r, "t", "r1", project=repo).status == "finished"
+    assert seen == ["module.exports = 1\n", "#!/bin/sh\n"]
+    [checked] = payloads(c, "r1", "Checked")
+    assert checked["changed"] == ["src/app.css"]
+    assert sorted(p.name for p in (repo / "node_modules").iterdir()) == ["pkg"]  # the person's folder is untouched

@@ -44,6 +44,10 @@ def follows_the_note(out, needs):
 
 def reads_the_plan(out, needs):
     return Pass() if needs["plan"].value.steps else Fail("no plan")
+
+
+def is_empty(out):
+    return not out.text
 '''
 
 ROLE = '''
@@ -180,3 +184,10 @@ def test_a_role_file_that_does_not_load_is_refused_with_its_reason(tmp_path: Pat
         cli.main(["check", str(path)])
     with pytest.raises(SystemExit, match="no role file"):
         cli.main(["check", str(tmp_path / "missing.toml")])
+
+
+def test_a_role_file_step_can_end_the_run_by_its_output(tmp_path: Path) -> None:
+    draft = load(write(tmp_path, ROLE.replace('instructions = "Write the note."',
+                                              'instructions = "Write the note."\nends = "notes_checks:is_empty"'))).steps[0]
+    assert draft.ends is not None and draft.output is not None
+    assert draft.ends(draft.output(text="")) and not draft.ends(draft.output(text="hi"))

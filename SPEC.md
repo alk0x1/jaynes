@@ -121,6 +121,11 @@ Rules:
   no output, whether the person accepts the result of the steps it needs.
 - `stop(budget, sampled=True, audit_rate=0.1)`: `sampled=False` makes it a
   floor.
+- `ends=fn(output) -> bool` lets an output end the run early, such as
+  fix-bug's "no test shows the bug". It needs a stop, and when it holds
+  that stop is a floor: only a person ends a run. Accepting (or changing
+  the output to one that still ends it) finishes the run with outcome
+  `ended` and delivers nothing; returning has the agent try again.
 - `project="read"` gives the step a copy of the run's project to read;
   `project="write"` lets it change that copy, only at the paths its
   `may_change` globs name (`["**"]` for any; a glob that starts with `!`
@@ -129,7 +134,11 @@ Rules:
   `jaynes.suite.run(needs, command)`: on a throwaway copy of the step's
   project, in the box, reaching any local port but no internet, with
   installed dependencies linked from the person's repository and the copy's
-  code imported first. Each step's changes become a
+  code imported first. The agent's own copy has the same dependencies
+  linked, never counted as changes, and its commands get the same offline
+  environment (`jaynes.suite.environment`); Claude's box also opens the
+  folders behind those links, a cache folder and local ports, so the agent
+  runs the tests before it answers. Each step's changes become a
   patch, and the patches become a branch at the end; the person's working
   tree is never touched.
 - Floor paths are project paths that tools run or obey later, outside any
@@ -338,7 +347,7 @@ order with how each was released (`by jaynes`, `checked`, `accepted`,
 
 | View | Content |
 |---|---|
-| Queue (`/`) | Stops waiting, blocked runs, and idle runs (unfinished, not waiting, no process holds them, no event for 10 s), oldest first; the oldest opens. An idle run shows the end of its `continue.log` and a Continue button |
+| Queue (`/`) | Stops waiting, then blocked runs, then idle runs (unfinished, not waiting, no process holds them, no event for 10 s), each oldest first; the first opens. An idle run shows the end of its `continue.log` and a Continue button |
 | Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, and no Change |
 | Blocked | The last rejection reasons and the turns of the round |
 | Run (`/run/<run>`) | Step timeline, state, turns, tokens, time, every event; witnesses by output hash |
@@ -388,7 +397,7 @@ Conductor events:
 | `StopAnswered` | step, answer, label, note, stop fingerprint, seconds waited, seconds spent, by (`person` or `agent`), the earlier label it revises |
 | `RunPaused` | reason `quota`, agent, until |
 | `RunBlocked` | step, reasons |
-| `RunFinished` | outcome |
+| `RunFinished` | outcome: `delivered`, or `ended` with the step whose accepted output ended it |
 | `OutcomeObserved` | step, kind `changed_after_delivery`, evidence |
 
 Action gate events (section 9): `ActionProposed`, `GateDecided`, `Executed`,

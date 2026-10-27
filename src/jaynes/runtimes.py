@@ -24,6 +24,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, cast
 
+from jaynes import suite
 from jaynes.runtime import QuotaExhausted, RuntimeFailure, TurnResult, TurnTimeout
 
 LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit|quota", re.I)
@@ -38,7 +39,7 @@ def _binary(name: str) -> str:
 
 def _run(args: list[str], cwd: Path, scratch: Path, prompt: str, deadline: float,
          env: dict[str, str] | None = None) -> tuple[int, str, str]:
-    environ = dict(os.environ, TMPDIR=str(scratch), **(env or {}))
+    environ = {**os.environ, "TMPDIR": str(scratch), **(env or {})}
     proc = subprocess.Popen(args, cwd=cwd, env=environ, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
@@ -50,6 +51,12 @@ def _run(args: list[str], cwd: Path, scratch: Path, prompt: str, deadline: float
         if proc.poll() is None:
             _kill(proc)
     return proc.returncode, out, err
+
+
+def _project_env(workspace: Path, scratch: Path) -> dict[str, str]:
+    """On a project step, what the project's tests run with in Jaynes's own checks (``jaynes.suite``)."""
+    project = workspace / "project"
+    return suite.environment(project, scratch) if project.is_dir() else {}
 
 
 def _kill(proc: subprocess.Popen[str]) -> None:
@@ -75,7 +82,10 @@ def _reset_epoch(text: str) -> float | None:
 WEB_TOOLS = ["WebFetch", "WebSearch"]
 
 
-def claude_settings(workspace: Path, web: bool = False) -> dict[str, Any]:
+def claude_settings(workspace: Path, web: bool = False, scratch: Path | None = None) -> dict[str, Any]:
+    """On a project step the box also opens the installed dependencies and local ports, for the project's tests."""
+    project = workspace / "project"
+    reads = [str(workspace), *(str(p) for p in suite.reads(project))] if project.is_dir() else [str(workspace)]
     return {
         "permissions": {"defaultMode": "dontAsk",
                         "allow": ["Read(./**)", "Edit(./**)", "Write(./**)", "Bash"] + (WEB_TOOLS if web else []),
@@ -84,8 +94,10 @@ def claude_settings(workspace: Path, web: bool = False) -> dict[str, Any]:
                         "disableBypassPermissionsMode": "disable"},
         "sandbox": {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True,
                     "autoAllowBashIfSandboxed": True,
-                    "network": {"allowedDomains": [], "strictAllowlist": True},
-                    "filesystem": {"denyRead": ["~/"], "allowRead": [str(workspace)]}},
+                    "network": {"allowedDomains": [], "strictAllowlist": True,
+                                **({"allowLocalBinding": True} if project.is_dir() else {})},
+                    "filesystem": {"denyRead": ["~/"], "allowRead": reads,
+                                   **({"allowWrite": [str(scratch)]} if scratch else {})}},
         "disableAllHooks": True, "autoMemoryEnabled": False, "disableClaudeAiConnectors": True,
         "syncClaudeAiPlugins": False, "syncClaudeAiSkills": False, "disableBundledSkills": True,
     }
@@ -124,16 +136,16 @@ class ClaudeRuntime:
         self.model = model or os.environ.get("JAYNES_CLAUDE_MODEL")
         self.max_turns = max_turns
 
-    def command(self, workspace: Path, web: bool = False) -> list[str]:
+    def command(self, workspace: Path, web: bool = False, scratch: Path | None = None) -> list[str]:
         args = [_binary("claude"), "-p", "--output-format", "stream-json", "--verbose", "--setting-sources", "",
-                "--settings", json.dumps(claude_settings(workspace, web)), "--strict-mcp-config",
+                "--settings", json.dumps(claude_settings(workspace, web, scratch)), "--strict-mcp-config",
                 "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
                 "--permission-mode", "dontAsk", "--max-turns", str(self.max_turns)]
         return args + (["--model", self.model] if self.model else [])
 
     def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
-        code, out, err = _run(self.command(workspace, web), workspace, scratch, prompt, deadline,
-                              {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"})
+        code, out, err = _run(self.command(workspace, web, scratch), workspace, scratch, prompt, deadline,
+                              {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", **_project_env(workspace, scratch)})
         result, read = claude_result(out)
         text = f"{result.get('result') or ''} {err[-400:]}"
         if result.get("is_error") or code != 0:
@@ -168,7 +180,8 @@ class CodexRuntime:
         return args + (["--model", self.model] if self.model else []) + ["-"]
 
     def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
-        code, out, err = _run(self.command(workspace, web), workspace, scratch, prompt, deadline)
+        code, out, err = _run(self.command(workspace, web), workspace, scratch, prompt, deadline,
+                              _project_env(workspace, scratch))
         usage: dict[str, Any] = {}
         read: list[str] = []
         model = self.model or self._default_model()

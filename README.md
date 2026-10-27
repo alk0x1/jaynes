@@ -92,7 +92,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
 | Box for previews on macOS; web access per step, with every address recorded | Works |
 | Built-in roles: visual-identity, redesign (from references) | Works, first real runs in progress |
-| Built-in role fix-bug: a failing test first, then a fix, both run in the box | Works with a scripted agent; first real run next |
+| Built-in role fix-bug: a failing test first, then a fix, both run in the box | Works; first real run delivered its branch |
 
 Missing, roughly in order:
 
@@ -160,7 +160,9 @@ Everything else happens in the page:
   has the agent write a test that fails because of the bug, changing test files
   only; Jaynes runs it in the box and requires it to fail with the message the
   agent quotes, and you see the test. Then the agent fixes the code, never the
-  tests, until Jaynes sees those tests and the whole suite pass. The box
+  tests, until Jaynes sees those tests and the whole suite pass. If the agent
+  finds no bug a test can show, it says why and you decide: accepting ends
+  the run with nothing changed. The agent runs the tests itself too. The box
   reaches no internet, only local ports (tests that start servers or use a
   local database work), so the suite must pass at your last commit with its
   dependencies already installed (`node_modules`, `.venv`). With a preview command, such as

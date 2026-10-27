@@ -132,3 +132,20 @@ def test_project_commands_commit_with_git_even_when_the_person_signs_commits_wit
                     'cd "$TMPDIR" && git init -q g && cd g && git -c user.name=t -c user.email=t@t commit -q '
                     '--allow-empty -m x && echo committed')
     assert (ran.code, ran.output.strip()) == (0, "committed")
+
+
+def test_when_no_test_shows_the_bug_a_person_decides_and_accepting_ends_the_run_with_nothing_changed(
+        repo: Path, tmp_path: Path) -> None:
+    assert isinstance(fb.fails_for_the_bug(reproduction(command=""), Witnesses({}, repo, source=repo)), Fail)
+    nothing = {"bug": "add adds; the report used the wrong numbers", "reproduced": False}
+    agent = Scripted(name="claude", plan={("reproduce", 1): write(nothing)})
+    c = Conductor(tmp_path / "home", runtimes={"claude": lambda: agent})
+    assert c.run(fb.ROLE, "add(2, 2) gives 0", run_id="r1", project=repo).step == "reproduce"
+    [opened] = [e.payload for e in c.store.events("StopOpened", run_id="r1")]
+    assert opened["status"] == "floor" and opened["question"].startswith("No test shows the bug: add adds")
+
+    c.answer(fb.ROLE, "r1", "reproduce", "accept", by="person")
+    assert c.run(fb.ROLE, "add(2, 2) gives 0", run_id="r1").status == "finished"
+    assert [e.payload for e in c.store.events("RunFinished", run_id="r1")] == [{"outcome": "ended",
+                                                                                "step": "reproduce"}]
+    assert git(repo, "branch", "--list", "jaynes/*") == ""

@@ -592,6 +592,9 @@ class Review:
         sub = (f'<div class="sub">{len(rejected)} earlier attempt{"s" if len(rejected) != 1 else ""} '
                f'rejected by Jaynes before you saw it: {esc(rejected[-1].payload["reasons"][0])}</div>'
                if rejected and rejected[-1].payload.get("reasons") else "")
+        if s.open_stop is not None and s.open_stop[1].get("ends"):
+            sub += ('<div class="sub">Accepting ends the run here, with nothing delivered; return it with a note '
+                    'to have the agent look again.</div>')
         if s.note:
             sub += f'<div class="sub">You returned round {s.round - 1} with: {esc(s.note)}</div>'
         parts.append(f"<div><h1>{esc(question)}</h1>{sub}</div>")
@@ -738,7 +741,8 @@ class Review:
         role = self.role_of(run_id)
         names = self.names(role, events)
         started = st.started or {}
-        state = ("finished" if st.finished else "blocked" if st.blocked else
+        ended = any(e.type == "RunFinished" and e.payload.get("outcome") == "ended" for e in events)
+        state = ("ended" if ended else "finished" if st.finished else "blocked" if st.blocked else
                  "waiting" if any(x.open_stop for x in st.steps.values()) else
                  "paused" if st.paused_until and st.paused_until > self.c.clock() else
                  "running" if self.c._held(run_id) else "idle")  # pyright: ignore[reportPrivateUsage]
@@ -1199,7 +1203,8 @@ class Review:
                                     + (f": {p['note']}" if p.get("note") else ""),
             "RunPaused": lambda: f"quota until {datetime.fromtimestamp(float(p['until'])).strftime('%H:%M')}",
             "RunBlocked": lambda: "; ".join(str(x) for x in p.get("reasons", [])[:2]),
-            "RunFinished": lambda: "finished",
+            "RunFinished": lambda: (f"ended at {p['step']}; nothing was delivered" if p.get("outcome") == "ended"
+                                    else "finished"),
         }.get(ev.type, lambda: "")()
         when = datetime.fromtimestamp(ev.ts).strftime("%H:%M:%S")
         return (f'<tr><td class="m">{when}</td><td class="m">{esc(ev.type)}</td><td class="m">{esc(str(p.get("step", "")))}</td>'

@@ -349,6 +349,19 @@ def test_a_run_left_without_a_process_is_in_the_queue_as_idle(tmp_path: Path) ->
         assert c.queue(idle_after=0) == []
 
 
+def test_stops_come_before_idle_runs_in_the_queue_even_when_younger(tmp_path: Path) -> None:
+    def die(ws: Path) -> None:
+        raise Killed()
+    r, _, _ = chain()
+    with pytest.raises(Killed):
+        Conductor(tmp_path, runtimes={"fake": lambda: Scripted({("a", 1): die})}).run(r, "t", run_id="old")
+    asked = role("q", agent="fake")
+    asked.step("a", output=Note, stop=stop(0.2))
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": "it"})})
+    c.run(asked, "t", run_id="new")
+    assert [(w.run_id, w.kind) for w in c.queue(idle_after=0)] == [("new", "stop"), ("old", "idle")]
+
+
 def test_empty_folders_a_runtime_creates_for_itself_are_not_writes_but_files_in_them_are(tmp_path: Path) -> None:
     def own_dir(ws: Path) -> None:
         (ws / ".claude" / ".cc-writes").mkdir(parents=True)
@@ -433,3 +446,54 @@ def test_an_edit_from_an_agent_is_recorded_as_the_agent_s_not_a_person_s(tmp_pat
     c.run(r, "t", run_id="r1")
     c.answer(r, "r1", "a", "change", output={"text": "edited"}, by="agent")
     assert payloads(c, "r1", "Checked")[-1]["source"] == "agent"
+
+
+class Found(BaseModel):
+    found: bool
+    why: str
+
+
+def finder() -> tuple[Any, Any]:
+    r = role("find", agent="fake")
+    look = r.step("look", output=Found, stop=stop(0.2), ends=lambda out: not out.found)
+    r.step("fix", output=Note, needs=[look])
+    return r, look
+
+
+def test_an_output_that_ends_the_run_always_asks_a_person_and_their_accept_ends_it(tmp_path: Path) -> None:
+    r, _ = finder()
+    agent = Scripted({("look", 1): write({"found": False, "why": "it works as written"})},
+                     default=lambda s: {"text": "fixed"})
+    c = Conductor(tmp_path, runtimes={"fake": lambda: agent})
+    assert c.run(r, "t", run_id="r1") == RunResult("waiting", "look")
+    [opened] = payloads(c, "r1", "StopOpened")
+    assert opened["status"] == "floor" and opened["ends"] is True  # sampled step, yet a person answers
+    with pytest.raises(AnswerRejected, match="floor"):
+        c.answer(r, "r1", "look", "accept", by="agent")
+
+    c.answer(r, "r1", "look", "accept", by="person")
+    assert c.run(r, "t", run_id="r1").status == "finished"
+    assert payloads(c, "r1", "RunFinished") == [{"outcome": "ended", "step": "look"}]
+    assert [p["step"] for p in payloads(c, "r1", "StepStarted")] == ["look"]  # fix never ran
+
+
+def test_an_ending_output_returned_by_the_person_is_tried_again_and_a_found_one_goes_on(tmp_path: Path) -> None:
+    r, _ = finder()
+    agent = Scripted({("look", 1): write({"found": False, "why": "no"}),
+                      ("look", 2): write({"found": True, "why": "off by one"})}, default=lambda s: {"text": "fixed"})
+    c = Conductor(tmp_path, runtimes={"fake": lambda: agent})
+    c.run(r, "t", run_id="r1")
+    c.answer(r, "r1", "look", "return", note="try the empty list", by="person")
+    assert c.run(r, "t", run_id="r1") == RunResult("waiting", "look")
+    assert payloads(c, "r1", "StopOpened")[-1]["status"] != "floor" and "ends" not in payloads(c, "r1", "StopOpened")[-1]
+    c.answer(r, "r1", "look", "accept", by="person")
+    assert c.run(r, "t", run_id="r1").status == "finished"
+    assert payloads(c, "r1", "RunFinished") == [{"outcome": "delivered"}]
+
+
+def test_a_step_that_can_end_the_run_needs_an_output_and_a_stop() -> None:
+    r = role("bad", agent="fake")
+    with pytest.raises(ValueError, match="ends the run only at a stop"):
+        r.step("look", output=Found, ends=lambda out: not out.found)
+    with pytest.raises(ValueError, match="no output"):
+        r.step("look", stop=stop(0.2), ends=lambda out: True)

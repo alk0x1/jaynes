@@ -22,13 +22,19 @@ TESTS = ("**/tests/**", "**/test/**", "**/__tests__/**", "**/spec/**", "**/test_
 
 
 class Reproduction(BaseModel):
-    bug: str = Field(description="what goes wrong, in one or two sentences")
-    tests: list[str] = Field(min_length=1, description="the test files you added or changed, relative to the "
-                                                       "project folder")
-    command: str = Field(description="a shell command, run from the project folder, that runs only these tests")
-    suite: str = Field(description="a shell command, run from the project folder, that runs the whole test suite")
-    failure: str = Field(description="a line the command prints because of the bug, copied exactly, such as the "
-                                     "assertion message")
+    bug: str = Field(description="what goes wrong, in one or two sentences; when no test shows it, what you "
+                                 "tried and why")
+    reproduced: bool = Field(default=True, description="false when you found no bug a test can show: the code "
+                                                       "behaves as it should, or the bug cannot be reproduced here; "
+                                                       "then leave the fields below empty")
+    tests: list[str] = Field(default_factory=list[str], description="the test files you added or changed, "
+                                                                    "relative to the project folder")
+    command: str = Field(default="", description="a shell command, run from the project folder, that runs only "
+                                                 "these tests")
+    suite: str = Field(default="", description="a shell command, run from the project folder, that runs the "
+                                               "whole test suite")
+    failure: str = Field(default="", description="a line the command prints because of the bug, copied exactly, "
+                                                 "such as the assertion message")
 
 
 class Fix(BaseModel):
@@ -44,8 +50,16 @@ def _ran(needs: Witnesses, command: str) -> suite.Ran | Fail:
 
 
 def fails_for_the_bug(out: Reproduction, needs: Witnesses) -> Pass | Fail:
-    """The tests are test files, and their command fails, printing the failure quoted."""
+    """The tests are test files, and their command fails, printing the failure quoted. Not reproduced passes:
+    the person reads why at the stop, and accepting ends the run."""
     assert needs.project is not None
+    if not out.bug.strip():
+        return Fail("say what goes wrong, or, when no test shows it, what you tried and why")
+    if not out.reproduced:
+        return Pass()
+    reasons = [f"{name} is empty; a reproduced bug needs it" for name in ("tests", "command", "suite", "failure") if not getattr(out, name)]
+    if reasons:
+        return Fail(*reasons)
     reasons = [f"{t} is not a test file; tests go in paths such as tests/ or *_test.*" for t in out.tests
                if project.allowed([t], TESTS)]
     reasons += [f"{t} does not exist in the project" for t in out.tests if not (needs.project / t).is_file()]
@@ -78,19 +92,25 @@ def fixed(out: Fix, needs: Witnesses) -> Pass | Fail:
 ROLE = role("fix-bug")
 REPRODUCE = ROLE.step(
     "reproduce", output=Reproduction, project="write", may_change=TESTS, check=fails_for_the_bug, stop=stop(0.2),
-    question=lambda out, _: f"Do these tests show the bug? {out.bug}",
+    question=lambda out, _: (f"Do these tests show the bug? {out.bug}" if out.reproduced else
+                             f"No test shows the bug: {out.bug} Accept ends the run with nothing changed; "
+                             "return it with a hint to look again."),
+    ends=lambda out: not out.reproduced,
     instructions="Find the bug the task describes and write the smallest test that fails because of it, next to "
                  "the project's other tests and in their style. Change test files only; do not fix the bug yet. "
                  "Give the command that runs only your tests and the command that runs the whole suite, as the "
-                 "project runs them (its README, Makefile, package.json or pyproject.toml say how). Jaynes runs "
-                 "your command from the project folder in a box without internet, with the dependencies already "
-                 "installed, and requires it to fail, printing the line you quote. If the person returned an "
-                 "earlier attempt, follow their note.")
+                 "project runs them (its README, Makefile, package.json or pyproject.toml say how), and run them "
+                 "yourself before you answer. Jaynes runs your command again from the project folder in a box "
+                 "without internet, with the dependencies already installed, and requires it to fail, printing "
+                 "the line you quote. If you find no bug a test can show, set reproduced to false, say what you "
+                 "tried and why in bug, and change nothing: the person decides whether the run ends. If the "
+                 "person returned an earlier attempt, follow their note.")
 FIX = ROLE.step(
     "fix", output=Fix, needs=[REPRODUCE], project="write", may_change=("**", *(f"!{t}" for t in TESTS)),
     check=fixed, deadline=3600.0,
     instructions="Fix the bug so the tests in inputs/reproduce.json pass, and the whole suite with them. Change "
                  "the project's code, never its tests: they are how the person knows the bug is gone. Keep the "
-                 "change as small as the fix needs. Jaynes runs both commands in a box without internet.")
+                 "change as small as the fix needs. Run both commands yourself; Jaynes runs them again in a box "
+                 "without internet.")
 ROLE.step("accept", needs=[FIX], stop=stop(0.05, sampled=False),
           question=lambda _, needs: f"Merge this fix? {needs[FIX].value.summary}")

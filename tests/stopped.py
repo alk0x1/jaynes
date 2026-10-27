@@ -26,3 +26,21 @@ class Agent:
     def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
         fakes.write({"text": "draft one"})(workspace)
         return TurnResult(10, 1, "quick-1")
+
+
+class Found(BaseModel):
+    found: bool
+    why: str
+
+
+ENDING = role("ending", agent="quick")
+LOOK = ENDING.step("look", output=Found, stop=stop(0.2), ends=lambda out: not out.found)
+ENDING.step("fix", output=Note, needs=[LOOK])
+
+
+class Nothing:
+    name = "quick"
+
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
+        fakes.write({"found": False, "why": "it works"})(workspace)
+        return TurnResult(10, 1, "quick-1")

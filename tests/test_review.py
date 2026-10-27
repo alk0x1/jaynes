@@ -292,3 +292,21 @@ def test_a_diff_is_colored_by_change_and_by_the_files_language() -> None:
 def test_a_diff_of_a_file_no_language_knows_is_shown_plain() -> None:
     shown = diff_html(PATCH.replace("calc.py", "notes.unknownext"))
     assert '<span class="add"><i>+</i>    return a + b</span>' in shown
+
+
+def test_a_stop_that_ends_the_run_says_so_and_the_run_shows_it_ended(tmp_path: Path) -> None:
+    from jaynes.conductor import Conductor
+    from tests.stopped import ENDING, Nothing
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.stopped:ENDING", "--task", "find it",
+              "--runtime", "quick=tests.stopped:Nothing"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        assert "Accepting ends the run here" in get(f"{base}/stop/{run}/look")
+        c = Conductor(tmp_path, runtimes={"quick": Nothing})
+        c.answer(ENDING, run, "look", "accept", by="person")
+        c.run(ENDING, "find it", run_id=run)
+        page = get(f"{base}/run/{run}")
+        assert '<div class="n">ended</div>' in page and "ended at look; nothing was delivered" in page
+    finally:
+        server.shutdown()
