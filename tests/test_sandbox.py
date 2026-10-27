@@ -72,6 +72,23 @@ def test_it_reaches_only_the_local_ports_it_is_given(tmp_path: Path) -> None:
 
 
 @boxed
+def test_a_box_for_tests_reaches_every_local_port_and_still_no_internet(tmp_path: Path) -> None:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        probe = ("import sys, urllib.request\nfor u in sys.argv[1:]:\n    try:\n"
+                 "        urllib.request.urlopen(u, timeout=3); print('open')\n"
+                 "    except OSError: print('closed')\n")
+        (tmp_path / "probe.py").write_text(probe)
+        port = int(server.server_address[1])
+        done = sh(f"{sys.executable} -I {tmp_path}/probe.py http://127.0.0.1:{port}/ http://1.1.1.1/",
+                  Box((tmp_path,), local=True))
+        assert done.stdout.split("\n")[:2] == ["open", "closed"], done.stderr
+    finally:
+        server.shutdown()
+
+
+@boxed
 def test_it_cannot_signal_processes_outside_it(tmp_path: Path) -> None:
     outside = subprocess.Popen(["sleep", "30"])
     try:

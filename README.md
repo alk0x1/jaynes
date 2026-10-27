@@ -92,17 +92,17 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
 | Box for previews on macOS; web access per step, with every address recorded | Works |
 | Built-in roles: visual-identity, redesign (from references) | Works, first real runs in progress |
+| Built-in role fix-bug: a failing test first, then a fix, both run in the box | Works with a scripted agent; first real run next |
 
 Missing, roughly in order:
 
 - **Published package.** Not on PyPI yet; install from GitHub (below).
 - **A first real case**, measured against the first user's baseline.
-- **More built-in roles** that need no design taste to check: fix a bug (a
-  failing test first), build a feature (a spec stop, then tests), upgrade
-  dependencies. They need checks that run the project's tests in the box.
+- **More built-in roles** that need no design taste to check: build a feature
+  (a spec stop, then tests), upgrade dependencies.
 - **Choosing among two or three directions** at a stop, instead of one.
 - **Dismissing a blocked run** from the page.
-- **A box on Linux.** There, previews refuse to run unless
+- **A box on Linux.** There, previews and test runs refuse to run unless
   `JAYNES_UNBOXED=1`.
 - **Codex web search**, wired but not yet verified in a live run.
 - **Roles without Python**, for people who don't write code.
@@ -129,7 +129,7 @@ uv tool install --reinstall git+https://github.com/alk0x1/jaynes
 it opens the review page in my browser. Then, also in the background:
 jaynes run --role visual-identity --task "<the task>" --project .
 Use --role redesign if the task names links or pictures of interfaces
-I like. If the project has a dev server, add --preview "<its command,
+I like, and --role fix-bug if it describes a bug. If the project has a dev server, add --preview "<its command,
 with {port} as the port>". Tell me when it stops for my answer, or
 why it blocked. Never answer a stop yourself.
 ```
@@ -156,7 +156,14 @@ Everything else happens in the page:
   and the direction must say what it takes from each one. Agents run without
   the web unless a step allows it (`web=True`); the direction step does, so
   the agent can read the references' sites and look up fonts, and the stop
-  lists every address it read. Shell commands stay offline. With a preview command, such as
+  lists every address it read. Shell commands stay offline. **fix-bug** first
+  has the agent write a test that fails because of the bug, changing test files
+  only; Jaynes runs it in the box and requires it to fail with the message the
+  agent quotes, and you see the test. Then the agent fixes the code, never the
+  tests, until Jaynes sees those tests and the whole suite pass. The box
+  reaches no internet, only local ports (tests that start servers or use a
+  local database work), so the suite must pass at your last commit with its
+  dependencies already installed (`node_modules`, `.venv`). With a preview command, such as
   `npm run dev -- --port {port}`, each stop shows the project before and after.
   The preview runs the agent's changes, so on macOS it runs in a box: it writes
   only to its copy, cannot read where secrets live, and reaches no network but

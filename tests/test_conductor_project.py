@@ -215,3 +215,13 @@ def test_paths_that_run_later_turn_even_a_certified_stop_into_a_floor(repo: Path
     assert opened["status"] == "floor" and opened["floor_paths"] == [".envrc"]
     with pytest.raises(AnswerRejected, match="only a person"):
         c.answer(r, "x", "apply", "accept", by="agent")
+
+
+def test_a_home_given_as_a_relative_path_still_works_on_the_project(repo: Path, tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    r = role("read", agent="fake")
+    r.step("current", output=Note, project="read")
+    agent = Scripted({("current", 1): write({"text": "a"})})
+    assert Conductor(Path("home"), runtimes={"fake": lambda: agent}).run(r, "t", "r1", project=repo).status == \
+        "finished"

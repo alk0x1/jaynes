@@ -5,7 +5,8 @@ machine, outside that sandbox. On macOS Jaynes runs such commands under ``sandbo
 allows the rest of the system, so toolchains work, and denies the ways out:
 
 * writing anywhere but the box's folders (the copy and a temporary folder) and terminals;
-* the network, except the local ports the run names (a backend the project's dev server talks to);
+* the network, except the local ports the run names (a backend the project's dev server talks to), or, for a
+  test suite, any local port, since tests start their own servers and use local databases;
 * reading where secrets usually live, and folders the box hides, such as Jaynes's home outside the copy;
 * signalling processes outside the box, writing preferences, opening apps and sending Apple Events, which
   act outside any box.
@@ -41,6 +42,7 @@ class Box:
     writable: tuple[Path, ...]
     hidden: tuple[Path, ...] = ()  # folders it may not read, apart from its writable folders inside them
     ports: tuple[int, ...] = ()  # local ports it may connect to
+    local: bool = False  # any local port: a test suite's own servers and databases; never the internet
     home: Path = field(default_factory=Path.home)
 
 
@@ -67,6 +69,8 @@ def profile(box: Box) -> str:
         lines.append(f"(allow file-read* {_subpaths(box.writable)})")
     lines.append("(deny network-outbound)")
     lines += [f'(allow network-outbound (remote ip "localhost:{int(p)}"))' for p in box.ports]
+    if box.local:
+        lines.append('(allow network-outbound (remote ip "localhost:*"))')
     lines += ["(deny signal)", "(allow signal (target same-sandbox))", "(deny user-preference-write)",
               "(deny appleevent-send)", "(deny lsopen)"]
     return "\n".join(lines) + "\n"

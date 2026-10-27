@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from jaynes import cli
-from jaynes.review import ReviewServer, make_server
+from jaynes.review import ReviewServer, diff_html, make_server
 from jaynes.store import Store
 from tests.pictured import PNG
 
@@ -258,3 +258,37 @@ def test_an_answer_from_the_page_is_the_person_and_carries_what_was_shown(served
     assert post(base + "/answer", {**fields, "answer": "accept"})[0] == 303
     [answered] = [e.payload for e in Store(home / "jaynes.sqlite3").events("StopAnswered", run_id=run)]
     assert answered["by"] == "person"
+
+
+PATCH = """diff --git a/calc.py b/calc.py
+index 1..2 100644
+--- a/calc.py
++++ b/calc.py
+@@ -1,4 +1,4 @@
+ def add(a, b):
+     \"\"\"Add two numbers,
+-    badly.\"\"\"
+-    return a - b
++    well.\"\"\"
++    return a + b
+"""
+
+
+def lines(shown: str) -> list[tuple[str, str]]:
+    return re.findall(r'<span class="(add|del|ctx|hunk|file|meta)">(.*?)</span>(?=<span class="(?:add|del|ctx|hunk|file|meta)">|$)',
+                      shown)
+
+
+def test_a_diff_is_colored_by_change_and_by_the_files_language() -> None:
+    shown = lines(diff_html(PATCH))
+    assert shown[0] == ("file", "diff --git a/calc.py b/calc.py")
+    [(_, well), (_, ret)] = [x for x in shown if x[0] == "add"]
+    assert ret.startswith("<i>+</i>") and '<span class="k">return</span>' in ret
+    assert '<span class="sd">    well."""</span>' in well  # still inside the docstring it continues
+    [(_, badly), _] = [x for x in shown if x[0] == "del"]
+    assert '<span class="sd">    badly."""</span>' in badly  # the removed side is read on its own
+
+
+def test_a_diff_of_a_file_no_language_knows_is_shown_plain() -> None:
+    shown = diff_html(PATCH.replace("calc.py", "notes.unknownext"))
+    assert '<span class="add"><i>+</i>    return a + b</span>' in shown

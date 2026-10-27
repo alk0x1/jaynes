@@ -53,11 +53,18 @@ class Checked(Generic[T]):
 
 
 class Witnesses:
-    """The checked outputs a step needs, read by step, and the step's copy of the project if it has one."""
+    """The checked outputs a step needs, read by step, and the step's copy of the project if it has one.
 
-    def __init__(self, by_name: Mapping[str, Checked[Any]], project: Path | None = None) -> None:
+    ``source`` is the person's repository, where installed dependencies are linked from when a check runs a
+    project command (``jaynes.suite``); ``hidden`` is what such a command may not read, Jaynes's home.
+    """
+
+    def __init__(self, by_name: Mapping[str, Checked[Any]], project: Path | None = None,
+                 source: Path | None = None, hidden: tuple[Path, ...] = ()) -> None:
         self._by_name = dict(by_name)
         self.project = project
+        self.source = source
+        self.hidden = hidden
 
     @overload
     def __getitem__(self, step: Step[T]) -> Checked[T]: ...

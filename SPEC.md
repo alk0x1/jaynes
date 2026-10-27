@@ -123,7 +123,13 @@ Rules:
   floor.
 - `project="read"` gives the step a copy of the run's project to read;
   `project="write"` lets it change that copy, only at the paths its
-  `may_change` globs name (`["**"]` for any). Each step's changes become a
+  `may_change` globs name (`["**"]` for any; a glob that starts with `!`
+  keeps its paths out, as fix-bug keeps its fix step off the tests). A check
+  can run the project's own commands, such as its tests, with
+  `jaynes.suite.run(needs, command)`: on a throwaway copy of the step's
+  project, in the box, reaching any local port but no internet, with
+  installed dependencies linked from the person's repository and the copy's
+  code imported first. Each step's changes become a
   patch, and the patches become a branch at the end; the person's working
   tree is never touched.
 - Floor paths are project paths that tools run or obey later, outside any

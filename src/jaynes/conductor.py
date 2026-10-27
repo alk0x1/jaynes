@@ -260,7 +260,7 @@ def new_run_id() -> str:
 class Conductor:
     def __init__(self, home: Path, runtimes: Mapping[str, Callable[[], Runtime]] | None = None,
                  clock: Callable[[], float] = time.time) -> None:
-        self.home = Path(home)
+        self.home = Path(home).resolve()  # git runs from the copies, so a relative home would point elsewhere
         self.home.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.home / "jaynes.sqlite3")
         self.runtimes = dict(runtimes or {})
@@ -494,7 +494,7 @@ class Conductor:
                 self._emit(run_id, "RunBlocked", {"step": step.name, "reasons": [str(err)]})
                 return None
             tracker = repo.Tracker(ws.parent / "project.git", ws / "project")
-            needs = self._witnesses(step, st, ws / "project")
+            needs = self._witnesses(step, st, ws / "project", Path(info["root"]))
         before = manifest(ws, skip="project")
         key, effect = "", {}
         if step.effect == "irreversible":  # the payload is what the floor stops before it released: every need
@@ -646,7 +646,10 @@ class Conductor:
             lines += ["The project is in project/: a copy of its repository at the last commit, with the changes of "
                       "earlier steps applied."]
             if step.project == "write":
-                scope = f" Only paths matching {', '.join(step.may_change)} may change." if step.may_change else ""
+                keep = [g for g in step.may_change if not g.startswith("!")]
+                out = [g[1:] for g in step.may_change if g.startswith("!")]
+                scope = (f" Only paths matching {', '.join(keep)} may change." if keep else "") + (
+                    f" Paths matching {', '.join(out)} may not change." if out else "")
                 lines += [f"Make this step's changes by editing files in project/.{scope} Your changes are recorded "
                           "and reach the person's repository only after they accept them.", ""]
             else:
@@ -780,7 +783,8 @@ class Conductor:
         self._emit(run_id, "TurnRejected", {"step": step.name, "attempt": attempt, "reason": reason,
                                             "reasons": reasons[:50], "seconds": round(time.monotonic() - t0, 3)})
 
-    def _witnesses(self, step: Step[Any], st: RunState, project: Path | None = None) -> Witnesses:
+    def _witnesses(self, step: Step[Any], st: RunState, project: Path | None = None,
+                   source: Path | None = None) -> Witnesses:
         by_name: dict[str, Checked[Any]] = {}
         for need in step.needs:
             c = st.step(need.name).checked
@@ -788,7 +792,7 @@ class Conductor:
             h = c["output_hash"]
             value = None if need.output is None or h is None else need.output.model_validate_json(self._object(h))
             by_name[need.name] = Checked(need.name, value, str(h), str(c["check_hash"]))
-        return Witnesses(by_name, project)
+        return Witnesses(by_name, project, source, hidden=(self.home,) if project else ())
 
     def _object(self, h: str) -> bytes:
         return (self.home / "objects" / f"{h}.json").read_bytes()

@@ -7,8 +7,8 @@
   jaynes simulate                   Monte Carlo check of the certification guarantee
   jaynes                            the review page, opened in the browser
   jaynes run [ID] --role R --task T [--project DIR] [--preview CMD]
-                                    start a run of a built-in role (visual-identity, redesign) or module:attribute,
-                                    on the git repository at DIR
+                                    start a run of a built-in role (visual-identity, redesign, fix-bug), a role
+                                    file (.toml) or module:attribute, on the git repository at DIR
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
   jaynes queue                      stops waiting for an answer and blocked runs, oldest first
   jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
@@ -333,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--p", type=float, nargs="+", default=[0.0, 0.01, 0.02, 0.03, 0.05, 0.06, 0.08])
     r = sub.add_parser("run")
     r.add_argument("id", nargs="?")
-    r.add_argument("--role", help="a built-in role (visual-identity, redesign), a role file (.toml) or module:attribute")
+    r.add_argument("--role", help="a built-in role (visual-identity, redesign, fix-bug), a role file (.toml) or module:attribute")
     r.add_argument("--task")
     r.add_argument("--runtime", action="append", default=[], help="name=module:attribute, overrides a runtime")
     r.add_argument("--project", help="a folder in a git repository, for steps that work on a project")
@@ -342,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--preview-ports", help="local ports the preview may connect to, such as a backend: 8789,5432")
     r.add_argument("--home")
     k = sub.add_parser("check", help="find what a role gets wrong before any agent runs")
-    k.add_argument("role", help="a built-in role (visual-identity, redesign), a role file (.toml) or module:attribute")
+    k.add_argument("role", help="a built-in role (visual-identity, redesign, fix-bug), a role file (.toml) or module:attribute")
     q = sub.add_parser("queue")
     q.add_argument("--home")
     w = sub.add_parser("answer")

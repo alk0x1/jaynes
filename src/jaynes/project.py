@@ -151,8 +151,11 @@ def _matches(path: str, glob: str) -> bool:
 
 
 def allowed(paths: Sequence[str], globs: Sequence[str]) -> list[str]:
-    """The paths no glob matches, so with no globs every path. ``**/`` also matches the top level."""
-    return [p for p in paths if not any(_matches(p, g) for g in globs)]
+    """The paths no glob matches, so with no globs every path. ``**/`` also matches the top level, and a glob
+    that starts with ``!`` keeps the paths it matches out even when another glob lets them in."""
+    keep = [g for g in globs if not g.startswith("!")]
+    out = [g[1:] for g in globs if g.startswith("!")]
+    return [p for p in paths if not any(_matches(p, g) for g in keep) or any(_matches(p, g) for g in out)]
 
 
 def floor(paths: Sequence[str]) -> list[str]:

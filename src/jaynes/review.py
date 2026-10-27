@@ -30,13 +30,19 @@ import threading
 import time
 import urllib.parse
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, cast
+
+from pygments import highlight
+from pygments.formatters import HtmlFormatter
+from pygments.lexer import Lexer
+from pygments.lexers import get_lexer_for_filename  # pyright: ignore[reportUnknownVariableType]
+from pygments.util import ClassNotFound
 
 from jaynes import bounds, install, role_file, roles, sandbox, verify
 from jaynes import project as repo
@@ -60,6 +66,56 @@ PICTURES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".
 def q(segment: str) -> str:
     """One URL path segment."""
     return urllib.parse.quote(segment, safe="")
+
+
+def diff_html(text: str) -> str:
+    """A unified diff, escaped: added lines green, removed lines red, each file's header set apart, and the code
+    highlighted in the file's language where Pygments knows it."""
+    out: list[str] = []
+    files = repo.diffs(text)
+    for path, d in files.items() or [("", text)]:
+        try:
+            lexer = get_lexer_for_filename(path, stripnl=False, ensurenl=False) if path else None
+        except ClassNotFound:
+            lexer = None
+        lines = d.rstrip("\n").split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if not line.startswith("@@"):
+                kind = "file" if line.startswith("diff --git ") else "meta" if files else "ctx"
+                out.append(f'<span class="{kind}">{esc(line) or " "}</span>')
+                i += 1
+                continue
+            out.append(f'<span class="hunk">{esc(line)}</span>')
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].startswith("@@")), len(lines))
+            out += _hunk(lines[i + 1:end], lexer)
+            i = end
+    return "".join(out)
+
+
+def _hunk(body: list[str], lexer: Lexer | None) -> list[str]:
+    """A hunk's lines, each side read whole by the lexer so a line inside a string or comment is colored as one."""
+    def side(marks: str) -> Iterator[str]:
+        code = [x[1:] for x in body if x[:1] in marks]
+        if lexer is None:
+            return iter([esc(x) for x in code])
+        formatter: HtmlFormatter[str] = HtmlFormatter(nowrap=True)
+        shown = highlight("\n".join(code) + "\n", lexer, formatter).split("\n")
+        return iter(shown[:len(code)])
+    old, new = side(" -"), side(" +")
+    out: list[str] = []
+    for x in body:
+        mark = x[:1]
+        if mark == " ":
+            next(old)
+            out.append(f'<span class="ctx"><i> </i>{next(new)}</span>')
+        elif mark in "+-":
+            code = next(new) if mark == "+" else next(old)
+            out.append(f'<span class="{"add" if mark == "+" else "del"}"><i>{mark}</i>{code}</span>')
+        else:  # "\ No newline at end of file", or an empty line
+            out.append(f'<span class="meta">{esc(x) or " "}</span>')
+    return out
 
 
 # --- reading the log -------------------------------------------------------------
@@ -233,6 +289,26 @@ td.id { font-family: var(--mono); font-size: 12px; color: var(--blue); white-spa
 .kv td:first-child { font-family: var(--mono); font-size: 11.5px; color: var(--dim); width: 160px; }
 ul.plain { margin: 0; padding-left: 18px; }
 pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--dim); }
+.diff > span { display: block; padding: 0 16px; }
+.diff > span > i { font-style: normal; display: inline-block; width: 2ch; color: var(--faint); user-select: none; }
+.diff > .add, .diff > .del { color: var(--ink); }
+.diff > .add { background: var(--green-soft); }
+.diff > .add > i { color: var(--green); }
+.diff > .del { background: var(--red-soft); }
+.diff > .del > i { color: var(--red); }
+.diff > .hunk { color: var(--blue); }
+.diff > .file { color: var(--ink); font-weight: 600; margin-top: 10px; }
+.diff > .file:first-child { margin-top: 0; }
+.diff > .meta { color: var(--faint); }
+.diff .k, .diff .kd, .diff .kn, .diff .kr, .diff .kc, .diff .kp, .diff .ow, .diff .na { color: #c4a7ff; }
+.diff .kt, .diff .nb, .diff .bp, .diff .nd { color: #ff9e64; }
+.diff .s, .diff .s1, .diff .s2, .diff .sa, .diff .sb, .diff .sc, .diff .sd, .diff .se, .diff .sh, .diff .si,
+.diff .sr, .diff .ss, .diff .sx, .diff .dl { color: #f2c48d; }
+.diff .c, .diff .c1, .diff .cm, .diff .cp, .diff .cs, .diff .ch, .diff .cpf { color: #6b7789; font-style: italic; }
+.diff .m, .diff .mi, .diff .mf, .diff .mh, .diff .mo, .diff .mb, .diff .il { color: #7cc4ff; }
+.diff .nf, .diff .fm, .diff .nc, .diff .nn, .diff .ne { color: #6fe0d0; }
+.diff .nt { color: #ff9fc0; }
+.diff .gh, .diff .gu { color: var(--blue); font-weight: 600; }
 .field + .field { margin-top: 18px; }
 .checks { display: flex; gap: 8px; flex-wrap: wrap; }
 .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
@@ -561,6 +637,12 @@ class Review:
         files = "".join(f'<tr><td class="m">{esc(f)}</td></tr>' for f in changed)
         out += (f'<div><div class="label">Changed in the project <span>{esc(str(info["root"]))}, from '
                 f'{esc(str(info["base"])[:8])}</span></div><div class="box"><table>{files}</table></div></div>')
+        for step, patch in self.c.patches(role, st) if role is not None else []:
+            text = patch.decode(errors="replace")
+            if len(text) > 20000:  # never cut silently: what is not shown here must still be read
+                text = text[:20000] + f"\n\n[{len(text) - 20000} more characters not shown: read the branch before merging it]"
+            out += (f'<div class="wide"><div class="label">Changes from {esc(step)}</div><div class="box">'
+                    f'<pre class="diff" style="padding:12px 0">{diff_html(text)}</pre></div></div>')
         return out
 
     def _floor_part(self, s: StepState) -> str:
@@ -575,8 +657,8 @@ class Review:
             shown = shown[:20000] + f"\n\n[{len(shown) - 20000} more characters not shown: read the branch before merging it]"
         return (f'<div class="wide"><div class="label" style="color:var(--red)">These files run later, outside any '
                 f'box <span>editors, agents, git, direnv, package managers or CI may run or obey them; read every '
-                f'line</span></div><div class="box"><pre style="padding:12px 16px">{esc(", ".join(sorted(later)))}\n\n{esc(shown)}</pre>'
-                f'</div></div>')
+                f'line</span></div><div class="box"><pre class="diff" style="padding:12px 0"><span>{esc(", ".join(sorted(later)))}'
+                f'</span><span> </span>{diff_html(shown)}</pre></div></div>')
 
     def _pictures_part(self, run_id: str, st: RunState, target: Step[Any] | None) -> str:
         """The pictures the stop's step and the steps it needs left, such as references."""
@@ -1309,6 +1391,8 @@ def _running(home: Path, port: int) -> int | None:
 def serve(home: Path, port: int, browser: bool = False) -> None:
     """Serve the page; ``browser`` opens it with its link, as the person. If ``home``'s page already runs on
     ``port``, point to it instead: its key stays in the browser that opened it first."""
+    home = home.resolve()
+    home.mkdir(parents=True, exist_ok=True)  # a new home: the page records itself there before any request
     try:
         server = make_server(home, port)
     except OSError as err:

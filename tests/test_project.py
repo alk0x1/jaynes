@@ -149,3 +149,10 @@ def test_each_file_diff_is_found_whatever_prefixes_the_persons_git_config_asks_f
     patch, names = tracker.changes()
 
     assert list(project.diffs(patch.decode())) == names == ["conftest.py"]
+
+
+def test_a_glob_with_an_exclamation_mark_keeps_paths_out() -> None:
+    globs = ["**", "!**/tests/**", "!**/test_*.py"]
+    assert project.allowed(["calc.py", "tests/test_add.py", "pkg/test_x.py", "pkg/tests/data.json"], globs) == [
+        "tests/test_add.py", "pkg/test_x.py", "pkg/tests/data.json"]
+    assert project.allowed(["calc.py"], ["!calc.py"]) == ["calc.py"]  # exclusions alone allow nothing
