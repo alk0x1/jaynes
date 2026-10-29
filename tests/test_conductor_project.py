@@ -252,3 +252,15 @@ def test_an_agent_finds_the_installed_dependencies_in_its_copy_and_they_never_co
     [checked] = payloads(c, "r1", "Checked")
     assert checked["changed"] == ["src/app.css"]
     assert sorted(p.name for p in (repo / "node_modules").iterdir()) == ["pkg"]  # the person's folder is untouched
+
+
+def test_a_change_at_a_project_stop_is_checked_with_the_projects_dependencies(repo: Path, tmp_path: Path) -> None:
+    def deps(out: Note, needs: Witnesses) -> Pass | Fail:  # what jaynes.suite.run needs to link them
+        return Pass() if needs.source and needs.source.resolve() == repo.resolve() else Fail("the project's dependencies are missing in the box")
+
+    r = role("recheck", agent="fake")
+    r.step("note", output=Note, project="write", may_change=["**"], check=deps, stop=stop(0.2))
+    c = Conductor(tmp_path / "home", runtimes={"fake": lambda: Scripted(default=lambda s: {"text": "draft"})})
+    assert c.run(r, "t", "r1", project=repo).status == "waiting"  # the agent's turn passed the check
+    c.answer(r, "r1", "note", "change", output={"text": "edited"}, by="person")
+    assert payloads(c, "r1", "Checked")[-1]["source"] == "person"

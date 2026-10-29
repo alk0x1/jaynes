@@ -340,8 +340,11 @@ class Conductor:
                 except ValidationError as err:
                     raise AnswerRejected(_schema_reasons(err)) from None
                 where = s.checked.get("workspace") if s.checked else None
+                info = (st.started or {}).get("project")
+                on = bool(where and target.project and info)  # the copy, with the repository for its dependencies
                 failures = self._check(target, value, self._witnesses(
-                    target, st, Path(where) / "project" if where and target.project else None))
+                    target, st, Path(str(where)) / "project" if on else None,
+                    Path(info["root"]) if on and info else None))
                 if failures:
                     raise AnswerRejected(failures)
             back: dict[str, Any] = {}
