@@ -139,8 +139,10 @@ def claude_commands(out: str) -> list[Ran]:
             event: dict[str, Any] = json.loads(line)
         except ValueError:
             continue
-        message: dict[str, Any] = event.get("message") or {}
-        content = message.get("content")
+        message = event.get("message")
+        if not isinstance(message, dict):  # some events carry their message as text
+            continue
+        content = cast(dict[str, Any], message).get("content")
         if not isinstance(content, list):
             continue
         for block in cast(list[dict[str, Any]], content):

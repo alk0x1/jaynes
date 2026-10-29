@@ -88,6 +88,13 @@ def test_the_commands_a_claude_turn_ran_come_from_its_stream_with_how_each_ended
     assert len(ran) == 3
 
 
+def test_an_event_whose_message_is_text_is_not_a_command() -> None:
+    lines = [{"type": "system", "message": "text, not a message object"},
+             {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "1", "name": "Bash",
+                                                            "input": {"command": "true"}}]}}]
+    assert claude_commands("\n".join(json.dumps(x) for x in lines)) == [Ran("true", False, "")]
+
+
 def test_a_codex_command_item_says_what_ran_and_how_it_ended() -> None:
     item = {"id": "i1", "type": "command_execution", "command": "bash -lc 'pytest -q'",
             "aggregated_output": "1 failed\n", "exit_code": 1, "status": "failed"}
