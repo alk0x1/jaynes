@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Jaynes</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">
-<meta name="description" content="Jaynes makes your AI agents follow the method, checks what they deliver, and calls you only where your judgment is still needed. For Claude Code and Codex.">
+<meta name="description" content="Jaynes makes your AI agents follow the method, checks what they deliver, and calls you only where your judgment is still needed. For Claude Code.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -296,7 +296,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
     <h1>Stop reviewing everything your agents do.</h1>
     <p class="lede">Jaynes makes your agents follow the method and checks what they deliver. Your answers become evidence, and each checkpoint stops asking you only once the evidence says it can.</p>
     <div class="ctas"><a class="btn solid" href="#start">Get started</a><a class="btn" href="#layers">See how it works</a></div>
-    <div class="works">Works with <b>Claude Code</b><b>Codex</b></div>
+    <div class="works">Works with <b>Claude Code</b></div>
   </div>
   <div class="card inst" aria-label="Live evidence for one checkpoint">
     <div class="inst-top"><span>stop <b>moments-of-use</b> · role screen-design</span><span class="chip amber" id="h-state">asks every time</span></div>
@@ -359,10 +359,10 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
       <div class="head">
         <span class="label">1 · Method</span>
         <h3>The agent cannot skip a step.</h3>
-        <p>A role is a sequence of steps, each with a required output and a check. Jaynes runs Claude Code or Codex for <b>one step at a time</b>, with write access to that step's output and nothing else. Evidence the agent could invent, like a walkthrough of a screen, is produced by Jaynes.</p>
+        <p>A role is a sequence of steps, each with a required output and a check. Jaynes runs Claude Code for <b>one step at a time</b>, with write access to that step's output and nothing else. Evidence the agent could invent, like the references captured from the web, is produced by Jaynes.</p>
       </div>
       <div class="card stage">
-        <div class="stage-top"><span>role <b>screen-design</b> · task <b>People screen</b> · agent <b>codex</b></span><button class="btn solid" type="button" id="m-run">Run the method</button></div>
+        <div class="stage-top"><span>role <b>screen-design</b> · task <b>People screen</b> · agent <b>claude</b></span><button class="btn solid" type="button" id="m-run">Run the method</button></div>
         <svg viewBox="0 0 760 300" role="img" aria-label="Six steps in two rows: moments, object map, walkthrough, then requirements, implement, accept. Moments, requirements and accept are stops.">
           <path class="edge" id="e0" d="M220 74 H270"/>
           <path class="edge" id="e1" d="M470 74 H520"/>
@@ -527,7 +527,7 @@ jaynes</pre>
         <tbody>
           <tr><td>Action gate for Claude Code: floors, sampled audits, anytime-valid certification</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>History report and guarantee simulation</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Step conductor for Claude Code and Codex: checks, retries, resume after a crash</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>Step conductor for Claude Code (Codex also runs): checks, retries, resume after a crash</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>Review page and CLI answers</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>Real projects: steps on copies, previews before and after, a branch at the end</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>Built-in roles visual-identity and redesign</td><td><span class="chip blue">first real runs in progress</span></td></tr>

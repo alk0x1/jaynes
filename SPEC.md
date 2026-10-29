@@ -82,7 +82,7 @@ from pydantic import BaseModel
 class Moments(BaseModel):
     moments: list[Moment]            # each cites snapshot evidence
 
-design = role("screen-design", agent="codex", method=Path("method.md"))
+design = role("screen-design", method=Path("method.md"))
 
 snapshot = design.step("snapshot", output=Snapshot, run_by=take_snapshot)
 moments  = design.step("moments", output=Moments, needs=[snapshot],

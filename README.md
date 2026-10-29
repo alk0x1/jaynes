@@ -1,8 +1,7 @@
 # Jaynes
 
 Make your AI agents follow the method, check what they deliver, and call you
-only where it matters. For people who run a team of agents in Claude Code and
-Codex.
+only where it matters. For people who run a team of agents in Claude Code.
 
 > **Alpha.** Jaynes runs end to end on macOS with Claude Code, but its role
 > API and stored formats will still change, and it is not on PyPI yet. See
@@ -24,8 +23,8 @@ were still sent back.
 
 1. **Describe a role as a method.** Ordered steps, each with a required output
    and a check.
-2. **Jaynes conducts the agent one step at a time.** Claude Code or Codex runs
-   a single step and can only write that step's output. The next step starts
+2. **Jaynes conducts the agent one step at a time.** Claude Code runs a single
+   step and can only write that step's output. The next step starts
    when the check passes. Evidence the agent could fake, like the references
    captured from the web, is produced by Jaynes.
 3. **Where the method needs you, the run stops.** The question and its
@@ -48,7 +47,7 @@ A sketch of the `screen-design` role (a working role is under
 from jaynes import role, stop
 from checks import cites_real_data, tests_pass, contrast_aa, tokens_only
 
-design = role("screen-design", agent="codex")
+design = role("screen-design")
 
 moments = design.step("moments", output=Moments, stop=stop(budget=0.20))
 objects = design.step("object-map", output=ObjectMap, needs=moments, check=cites_real_data)
@@ -86,7 +85,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 |---|---|
 | Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works |
 | History report and guarantee simulation | Works |
-| Step conductor for Claude Code and Codex: roles in Python or TOML, write boundary, checks, retries, resume after a crash, quota pause | Works |
+| Step conductor for Claude Code (Codex also runs): roles in Python or TOML, write boundary, checks, retries, resume after a crash, quota pause | Works |
 | Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step; dismiss a run; running and paused runs in the queue, a paused run continuing at its reset | Works |
 | Answers bound to who gave them and to the evidence shown; floor paths; irreversible steps with idempotency keys | Works |
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
@@ -103,7 +102,6 @@ Missing, roughly in order:
 - **Choosing among two or three directions** at a stop, instead of one.
 - **A box on Linux.** There, previews and test runs refuse to run unless
   `JAYNES_UNBOXED=1`.
-- **Codex web search**, wired but not yet verified in a live run.
 - **Roles without Python**, for people who don't write code.
 - **Judges calibrated on your labels**, so fewer answers are needed.
 - **Keeping a stop's labels across agent model versions.** Today a new model
@@ -118,7 +116,7 @@ Missing, roughly in order:
 
 Python 3.12 or later.
 
-The shortest way: paste this into Claude Code or Codex, in your project, with
+The shortest way: paste this into Claude Code, in your project, with
 your own task on the second line.
 
 ```text
