@@ -441,3 +441,25 @@ def test_a_floor_stop_marks_its_answers_so_one_key_does_not_accept_it(tmp_path: 
 def test_a_sampled_stop_answers_on_one_key(served: tuple[str, Path, str]) -> None:
     base, _, _ = served
     assert '<form id="answer" class="bar" method="post" action="/answer">' in get(base + "/")
+
+
+def test_a_paused_run_shows_in_the_queue_and_continues_by_itself_when_its_quota_resets(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.stopped:ROLE", "--task", "later",
+              "--runtime", "quick=tests.stopped:Exhausted"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    server = make_server(tmp_path, port=0, idle_after=0, wake_every=0.2)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    get(f"{base}/?key={server.key}")
+    try:
+        page = get(base + "/")
+        assert '<span class="chip amber">paused</span>' in page and f'href="/run/{run}"' in page
+        assert '<div class="qhead"><span>Waiting</span><span>0</span></div>' in page
+        assert 'id="answer"' not in page and "Nothing is waiting" in page
+        store = Store(tmp_path / "jaynes.sqlite3")
+        deadline = time.monotonic() + 30
+        while not list(store.events("StopOpened", run_id=run)):  # nobody pressed Continue
+            assert time.monotonic() < deadline, (tmp_path / "runs" / run / "continue.log").read_text()
+            time.sleep(0.05)
+    finally:
+        server.shutdown()

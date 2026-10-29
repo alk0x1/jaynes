@@ -531,11 +531,16 @@ class Review:
             events = list(self.c.store.events(run_id=w.run_id))
             run_stages = stages(self.names(self.role_of(w.run_id), events), events, project(events), now)
             chip = {"stop": '<span class="chip amber">stop</span>', "blocked": '<span class="chip red">blocked</span>',
-                    "idle": '<span class="chip blue">idle</span>'}[w.kind]
-            rows.append(f'<a class="item{" on" if on else ""} {w.kind}" href="/stop/{q(w.run_id)}/{q(w.step)}">'
+                    "idle": '<span class="chip blue">idle</span>', "running": '<span class="chip blue">running</span>',
+                    "paused": '<span class="chip amber">paused</span>'}[w.kind]
+            # a run that needs nobody opens its run page; it continues by itself
+            href = f"/stop/{q(w.run_id)}/{q(w.step)}" if w.needs_person else f"/run/{q(w.run_id)}"
+            when = (f"until {time.strftime('%H:%M', time.localtime(w.until))}" if w.until is not None
+                    else age(now - w.since))
+            rows.append(f'<a class="item{" on" if on else ""} {w.kind}" href="{href}">'
                         f'<div class="t">{esc(w.task)}</div>'
                         f'<div class="m">{chip}<span class="s">{esc(w.step)}</span>'
-                        f'<span>{age(now - w.since)}</span></div>'
+                        f'<span>{when}</span></div>'
                         f'{stage_list(run_stages) if on else stage_strip(run_stages)}</a>')
             if on:
                 t = totals(events)
@@ -546,12 +551,13 @@ class Review:
         body = "".join(rows) or '<div class="empty-q">Nothing is waiting.</div>'
         return ('<aside><div class="brand"><a href="/">Jaynes</a> <span>review</span><nav>'
                 '<a href="/">Queue</a><a href="/new">New run</a><a href="/roles">Roles</a><a href="/history">History</a><a href="/log">Log</a><a href="/setup">Setup</a></nav></div>'
-                f'<div class="qhead"><span>Waiting</span><span>{len(items)}</span></div>{body}{foot}</aside>')
+                f'<div class="qhead"><span>Waiting</span><span>{sum(w.needs_person for w in items)}</span></div>'
+                f'{body}{foot}</aside>')
 
     # pages ------------------------------------------------------------------
 
     def queue_page(self) -> str:
-        items = self.queue()
+        items = [w for w in self.queue() if w.needs_person]
         if items:
             return self.stop_page(items[0].run_id, items[0].step)
         main = ('<div class="crumbs"><b>Queue</b></div><div class="body" style="display:flex">'
@@ -561,7 +567,7 @@ class Review:
 
     def stop_page(self, run_id: str, step: str, error: str = "", fields: dict[str, str] | None = None) -> str:
         w = next((x for x in self.queue() if (x.run_id, x.step) == (run_id, step)), None)
-        if w is None:
+        if w is None or not w.needs_person:  # gone, running or paused: nothing to answer
             return self.run_page(run_id)
         events = list(self.c.store.events(run_id=run_id))
         st = project(events)
@@ -1265,8 +1271,9 @@ class Review:
 
 # --- HTTP ------------------------------------------------------------------------------
 
-def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> ReviewServer:
-    """A review server for ``home`` on 127.0.0.1; ``port=0`` picks a free one."""
+def make_server(home: Path, port: int = 8740, idle_after: float = 10.0, wake_every: float = 15.0) -> ReviewServer:
+    """A review server for ``home`` on 127.0.0.1; ``port=0`` picks a free one. Every ``wake_every`` seconds it
+    continues the runs whose quota pause has ended, since nothing else would."""
     if str(Path.cwd()) not in sys.path:
         sys.path.insert(0, str(Path.cwd()))  # role modules are imported from the project, as `jaynes run` does
     shared = Shared(secrets.token_urlsafe(16), secrets.token_urlsafe(24), idle_after)
@@ -1403,7 +1410,22 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
             else:
                 self._send(status, out)
 
-    return ReviewServer(("127.0.0.1", port), Handler, shared.previews, shared.key)
+    server = ReviewServer(("127.0.0.1", port), Handler, shared.previews, shared.key)
+    threading.Thread(target=_wake, args=(home, wake_every, server.stopping), daemon=True).start()
+    return server
+
+
+def _wake(home: Path, every: float, stopping: threading.Event) -> None:
+    """Continue each run whose pause ended, once per reset: one that pauses again waits for its new reset."""
+    tried: set[tuple[str, float]] = set()
+    while not stopping.wait(every):
+        try:
+            for due in Conductor(home).due():
+                if due not in tried:
+                    tried.add(due)
+                    continue_in_background(home, due[0])
+        except Exception:  # a locked or half-written log is read again on the next tick
+            continue
 
 
 NOT_PERSON = ("This browser can look but not answer. To answer, open the link jaynes printed in its terminal "
@@ -1417,6 +1439,7 @@ class ReviewServer(ThreadingHTTPServer):
                  key: str) -> None:
         self.previews = previews  # set first: a port in use closes the server inside __init__
         self.key = key
+        self.stopping = threading.Event()  # ends the thread that continues paused runs
         super().__init__(address, handler)
 
     @property
@@ -1425,10 +1448,12 @@ class ReviewServer(ThreadingHTTPServer):
 
     def shutdown(self) -> None:
         super().shutdown()
+        self.stopping.set()
         self.previews.stop_all()
 
     def server_close(self) -> None:
         super().server_close()
+        self.stopping.set()
         self.previews.stop_all()
 
 

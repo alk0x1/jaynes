@@ -346,7 +346,7 @@ def test_a_run_left_without_a_process_is_in_the_queue_as_idle(tmp_path: Path) ->
     [item] = c.queue(idle_after=0)
     assert (item.run_id, item.kind, item.step) == ("r1", "idle", "a")
     with c._lock("r1"):  # pyright: ignore[reportPrivateUsage]  # a process that holds the run is not idle
-        assert c.queue(idle_after=0) == []
+        assert [(w.kind, w.step) for w in c.queue(idle_after=0)] == [("running", "a")]
 
 
 def test_stops_come_before_idle_runs_in_the_queue_even_when_younger(tmp_path: Path) -> None:
@@ -537,3 +537,32 @@ def test_a_step_s_message_limit_reaches_the_runtime_and_none_is_passed_without_o
     agent = Scripted(default=lambda s: {"text": s})
     assert Conductor(tmp_path, runtimes={"fake": lambda: agent}).run(r, "t", run_id="r1").status == "finished"
     assert agent.limits == [400, None]
+
+
+def test_a_paused_run_is_in_the_queue_until_its_reset_and_then_due_to_continue(tmp_path: Path) -> None:
+    now = [1000.0]
+    r, _, _ = chain()
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted({("a", 1): quota(1600.0)})}, clock=lambda: now[0])
+    assert c.run(r, "t", run_id="r1").status == "paused"
+    [item] = c.queue(idle_after=0)
+    assert (item.kind, item.step, item.until) == ("paused", "a", 1600.0) and c.due() == []
+    now[0] = 1601.0
+    assert c.due() == [("r1", 1600.0)]
+    with c._lock("r1"):  # pyright: ignore[reportPrivateUsage]  # a process already continues it
+        assert c.due() == []
+
+
+def test_the_queue_lists_what_needs_the_person_before_what_runs_or_waits_for_quota(tmp_path: Path) -> None:
+    now = [1000.0]
+    r, _, _ = chain()
+    asked = role("q", agent="other")  # a pause is per agent
+    asked.step("a", output=Note, stop=stop(0.2))
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted({("a", 1): quota(5000.0)})}, clock=lambda: now[0])
+    c.run(r, "t", run_id="paused")
+    now[0] = 1001.0
+    Conductor(tmp_path, runtimes={"other": lambda: Scripted(default=lambda s: {"text": "it"})},
+              clock=lambda: now[0]).run(asked, "t", run_id="stop")
+    c.store.append("RunStarted", {"role": "chain", "task": "t", "fingerprint": "x"}, run_id="busy", ts=1002.0)
+    with c._lock("busy"):  # pyright: ignore[reportPrivateUsage]
+        assert [(w.run_id, w.kind) for w in c.queue(idle_after=0)] == [
+            ("stop", "stop"), ("busy", "running"), ("paused", "paused")]

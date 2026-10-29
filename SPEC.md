@@ -238,12 +238,15 @@ Quota: a runtime that reports an exhausted window raises a quota error; the
 turn is interrupted (not counted) and the run pauses until the reported reset,
 or 30 minutes when none is reported. Before each turn the conductor checks the
 latest pause for that agent across all runs, so no turn starts inside a window
-known to be exhausted.
+known to be exhausted. While the review page runs, it continues each paused run
+once its reset has passed (it checks every 15 s, and once per reset, so a run
+that pauses again waits for its new one); without the page, `jaynes run <id>`
+continues it.
 
 Known limits of v0: `kill -9` of the conductor leaves the agent process (its
 own session) running until its deadline, writing only into the abandoned
-workspace; nothing restarts a paused run by itself, it continues when
-`jaynes run <id>` is called after the reset; outputs are JSON only, without
+workspace; a paused run continues by itself only while the review page runs;
+outputs are JSON only, without
 attached files; the action gate is not installed inside conductor turns yet
 (hooks are off in the turn settings); resuming a run does not check that the
 role's fingerprint is unchanged; `OutcomeObserved` (section 6.2) is not
@@ -365,8 +368,8 @@ order with how each was released (`by jaynes`, `checked`, `accepted`,
 
 | View | Content |
 |---|---|
-| Queue (`/`) | Stops waiting, then blocked runs, then idle runs (unfinished, not waiting, no process holds them, no event for 10 s), each oldest first; the first opens. An idle run shows the end of its `continue.log` and a Continue button. Idle and blocked runs have Dismiss, which finishes the run with nothing delivered (refused while a process holds it) |
-| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost with each shell command the agent ran, green or red by its exit and its output a click away, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, no Change, and Return and Context going to the earlier step selected by default (section 6.2) |
+| Queue (`/`) | Stops waiting, then blocked runs, then idle runs (unfinished, not waiting, no process holds them, no event for 10 s), each oldest first; the first opens. An idle run shows the end of its `continue.log` and a Continue button. Idle and blocked runs have Dismiss, which finishes the run with nothing delivered (refused while a process holds it). After them, runs a process holds (`running`) and runs paused for quota (`paused`, with the reset time), which need nobody: they link to their run page, have no answer bar, and are not counted in Waiting |
+| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost with each shell command the agent ran, green or red by its exit and its output a click away, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field (at a floor, A accepts only when pressed again within two seconds; a click accepts at once); Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, no Change, and Return and Context going to the earlier step selected by default (section 6.2) |
 | Blocked | The last rejection reasons and the turns of the round. A run blocked after its last step, because its branch was not created, says so with the reason |
 | Run (`/run/<run>`) | Step timeline, state, turns, tokens, time, every event; witnesses by output hash |
 | Role (`/role/<name>`) | Per stop: status, labels, evidence against 1/δ with the budget and δ logged at the stop, audits and skips, and each audit with its answer; per week: runs, distinct steps checked, rounds until accepted, tokens per finished run, the person's minutes; the runs |

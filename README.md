@@ -87,7 +87,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 | Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works |
 | History report and guarantee simulation | Works |
 | Step conductor for Claude Code and Codex: roles in Python or TOML, write boundary, checks, retries, resume after a crash, quota pause | Works |
-| Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step; dismiss a run | Works |
+| Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step; dismiss a run; running and paused runs in the queue, a paused run continuing at its reset | Works |
 | Answers bound to who gave them and to the evidence shown; floor paths; irreversible steps with idempotency keys | Works |
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
 | Box for previews on macOS; web access per step, with every address recorded | Works |
@@ -173,7 +173,11 @@ Everything else happens in the page:
   At a stop, return and context can go back to an earlier step: it runs again
   with your note, and so does every step after it. Steps work on copies of the
   last commit; when the run finishes, the accepted changes are a branch,
-  `jaynes/<run>`, and your checkout is untouched.
+  `jaynes/<run>`, and your checkout is untouched. The queue also lists runs
+  that are working and runs paused because the agent's plan ran out; a paused
+  run continues by itself when the plan resets, while the page is open. At a
+  stop that must never pass without you, such as the final accept, the A key
+  accepts only when pressed twice.
 - **History** reads your Claude Code transcripts and shows how many tool calls a
   person approved. It changes nothing.
 - **Setup** installs the action gate in Claude Code: `jaynes hook` on

@@ -65,10 +65,11 @@ class RunResult:
 
 @dataclass(frozen=True)
 class Waiting:
-    """Something in the queue: a stop waiting for its answer, or a blocked run."""
+    """Something in the queue: a stop waiting for its answer, a blocked or idle run, or one running or paused."""
 
     run_id: str
-    kind: Literal["stop", "blocked", "idle"]  # idle: unfinished, not waiting, and no process holds it
+    # idle: unfinished, not waiting, and no process holds it; running: a process holds it; paused: for quota
+    kind: Literal["stop", "blocked", "idle", "running", "paused"]
     step: str
     since: float
     role: str
@@ -76,6 +77,11 @@ class Waiting:
     question: str | None = None
     reasons: tuple[str, ...] = ()
     evidence: str | None = None  # the hash of what a stop shows; an answer that carries it is bound to it
+    until: float | None = None  # when a paused run's quota resets
+
+    @property
+    def needs_person(self) -> bool:
+        return self.kind in ("stop", "blocked", "idle")
 
 
 class RunBusy(Exception):
@@ -398,6 +404,7 @@ class Conductor:
 
     def queue(self, idle_after: float = 10.0) -> list[Waiting]:
         """Stops waiting, then blocked runs, then idle runs, each oldest first: what needs the person comes first.
+        After them, runs a process holds and runs paused for quota, which need nobody.
 
         A run counts as idle only after ``idle_after`` seconds without events, so one that a background
         process is about to pick up after an answer does not flicker into the queue.
@@ -417,12 +424,29 @@ class Conductor:
             for name, (opened_at, payload) in opened:
                 items.append(Waiting(run_id, "stop", name, opened_at, role, task, payload.get("question"),
                                      evidence=payload.get("evidence")))
-            paused = st.paused_until is not None and st.paused_until > self.clock()
-            quiet = self.clock() - events[-1].ts >= idle_after
-            if st.blocked is None and not opened and not paused and quiet and not self._held(run_id):
-                step = next((str(ev.payload["step"]) for ev in reversed(events) if "step" in ev.payload), "")
+            if st.blocked is not None or opened:
+                continue
+            step = next((str(ev.payload["step"]) for ev in reversed(events) if "step" in ev.payload), "")
+            if st.paused_until is not None and st.paused_until > self.clock():
+                since = max(e.ts for e in events if e.type == "RunPaused")
+                items.append(Waiting(run_id, "paused", step, since, role, task, until=st.paused_until))
+            elif self._held(run_id):
+                items.append(Waiting(run_id, "running", step, events[-1].ts, role, task))
+            elif self.clock() - events[-1].ts >= idle_after:
                 items.append(Waiting(run_id, "idle", step, events[-1].ts, role, task))
-        return sorted(items, key=lambda w: (("stop", "blocked", "idle").index(w.kind), w.since))
+        order = ("stop", "blocked", "idle", "running", "paused")
+        return sorted(items, key=lambda w: (order.index(w.kind), w.since))
+
+    def due(self) -> list[tuple[str, float]]:
+        """Runs whose quota pause has ended and that no process continues yet, with the reset they waited for."""
+        out: list[tuple[str, float]] = []
+        for run_id in self.store.runs():
+            st = project(self.store.events(run_id=run_id))
+            if st.finished or st.blocked is not None or any(x.open_stop for x in st.steps.values()):
+                continue
+            if st.paused_until is not None and st.paused_until <= self.clock() and not self._held(run_id):
+                out.append((run_id, st.paused_until))
+        return out
 
     def _held(self, run_id: str) -> bool:
         """Whether a process holds the run's lock right now."""

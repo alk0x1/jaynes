@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from jaynes.role import role, stop
-from jaynes.runtime import Ran, TurnResult
+from jaynes.runtime import QuotaExhausted, Ran, TurnResult
 from tests import fakes
 
 
@@ -54,3 +55,15 @@ class Tested:
         fakes.write({"text": "draft one"})(workspace)
         return TurnResult(10, 1, "quick-1", commands=(Ran("uv run pytest -q", False, "Exit code 1\n1 failed"),
                                                       Ran("uv run pytest -q", True, "3 passed in 0.02s")))
+
+
+class Exhausted:
+    """Out of quota for two seconds, once per home; then writes as Agent does."""
+    name = "quick"
+
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
+        once = workspace.parents[3] / "paused-once"  # runs/, under the home
+        if not once.exists():
+            once.write_text("1")
+            raise QuotaExhausted(time.time() + 2)
+        return Agent().turn(workspace, scratch, prompt, deadline)

@@ -11,7 +11,7 @@
                                     file (.toml) or module:attribute, on the git repository at DIR
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
   jaynes check ROLE                 find what a role gets wrong before any agent runs
-  jaynes queue                      stops waiting for an answer and blocked runs, oldest first
+  jaynes queue                      stops waiting for an answer, blocked and idle runs, then running and paused
   jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
                                     recorded as an agent's: it releases the stop but is not a label
   jaynes review [--port 8740]       the review page on 127.0.0.1: queue, stops, runs, roles, log
@@ -28,6 +28,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -250,7 +251,8 @@ def cmd_queue(args: argparse.Namespace) -> None:
         print("nothing is waiting")
     now = c.clock()
     for w in items:
-        print(f"{w.run_id}  {w.kind}  {w.step}  {age(now - w.since)} ago  {w.role}: {w.task}")
+        when = f"until {time.strftime('%H:%M', time.localtime(w.until))}" if w.until else f"{age(now - w.since)} ago"
+        print(f"{w.run_id}  {w.kind}  {w.step}  {when}  {w.role}: {w.task}")
         for line in ([w.question] if w.question else []) + list(w.reasons) + (
                 [f"evidence {w.evidence}"] if w.evidence else []):
             print(f"    {line}")
