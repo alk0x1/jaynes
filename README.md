@@ -106,6 +106,9 @@ Missing, roughly in order:
 - **Codex web search**, wired but not yet verified in a live run.
 - **Roles without Python**, for people who don't write code.
 - **Judges calibrated on your labels**, so fewer answers are needed.
+- **Keeping a stop's labels across agent model versions.** Today a new model
+  starts the stop's count over; keeping them needs a detector that withdraws
+  the certification if errors rise.
 - **Answers only you can give.** An agent running as your user can start its
   own review page and read the link it prints, then answer as you. Closing
   this needs a confirmation the agent cannot reach, such as Touch ID.
