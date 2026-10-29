@@ -411,3 +411,16 @@ def test_a_stop_with_no_output_returns_to_the_step_before_it_by_default(tmp_path
             time.sleep(0.05)
     finally:
         server.shutdown()
+
+
+def test_accept_at_a_stop_with_no_output_goes_through_although_a_step_is_selected(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.two_stops:PURE", "--task", "t",
+              "--runtime", "quick=tests.two_stops:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + f"/stop/{run}/accept")
+        status, body = post(base + "/answer", {**form(page), "answer": "accept", "to": "write"})  # as the form sends
+        assert status == 303, body
+    finally:
+        server.shutdown()

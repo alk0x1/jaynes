@@ -1019,7 +1019,9 @@ class Review:
         spent = round(max(0.0, time.time() - seen), 3) if seen else None  # from the first view, across reloads
         try:
             self.c.answer(role, run_id, step, answer, note=note, output=output, seconds_spent=spent,
-                          to=fields.get("to") or None, by="person", evidence=fields.get("evidence") or None)
+                          # the select goes with every answer; only return and context go back
+                          to=(fields.get("to") or None) if answer in ("return", "context") else None,
+                          by="person", evidence=fields.get("evidence") or None)
         except AnswerRejected as err:
             return 400, self.stop_page(run_id, step, "not recorded: " + "; ".join(err.reasons), fields)
         except RunBusy:
