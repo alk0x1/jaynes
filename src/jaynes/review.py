@@ -358,7 +358,8 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600'
          '&family=IBM+Plex+Mono:wght@400;500&display=swap">')
 
-# Reload when the log grows, unless the person is typing; keys answer the open stop.
+# Reload when the log grows, unless the person is typing; keys answer the open stop. A floor, which never
+# passes without a person, accepts on the second A within two seconds, so a stray key does not release it.
 SCRIPT = """
 <script>
 const seq = %d;
@@ -379,10 +380,20 @@ if (form) {
     form.querySelector("[name=answer]").value = a; form.submit();
   };
   form.querySelectorAll("[data-a]").forEach(b => b.addEventListener("click", () => send(b.dataset.a)));
+  const accept = form.querySelector("[data-a=accept]");
+  let armed = null;
   document.addEventListener("keydown", (ev) => {
     if (busy() || ev.metaKey || ev.ctrlKey || ev.altKey) return;
     const a = {a: "accept", c: "change", r: "return", x: "context"}[ev.key.toLowerCase()];
-    if (a) { ev.preventDefault(); send(a); }
+    if (!a) return;
+    ev.preventDefault();
+    if (a === "accept" && form.dataset.floor && !armed) {
+      const label = accept.innerHTML;
+      accept.innerHTML = "Press A again to accept<kbd>A</kbd>";
+      armed = setTimeout(() => { accept.innerHTML = label; armed = null; }, 2000);
+      return;
+    }
+    send(a);
   });
 }
 </script>
@@ -626,6 +637,7 @@ class Review:
                 + self._answer_bar(run_id, step, value, error, fields, editable=not pure,
                                    earlier=self._earlier(role, step),
                                    default_to=return_to(role, step) if pure and role else None,
+                                   floor=bool(s.open_stop and s.open_stop[1].get("status") == "floor"),
                                    evidence=str(s.open_stop[1].get("evidence") or "") if s.open_stop else ""))
         return page(f"Stop: {step}", self.sidebar((run_id, step)), main, self.seq())
 
@@ -1193,7 +1205,7 @@ class Review:
 
     def _answer_bar(self, run_id: str, step: str, value: Any, error: str, fields: dict[str, str] | None,
                     editable: bool = True, earlier: list[str] | None = None, evidence: str = "",
-                    default_to: str | None = None) -> str:
+                    default_to: str | None = None, floor: bool = False) -> str:
         fields = fields or {}
         chosen = fields.get("to", "") or (default_to or "")
         back = ("" if not earlier else
@@ -1205,7 +1217,8 @@ class Review:
         editor_class = "" if fields.get("answer") == "change" else "hidden"
         hidden = "".join(f'<input type="hidden" name="{k}" value="{esc(v)}">' for k, v in (
             ("token", self.shared.token), ("run", run_id), ("step", step), ("evidence", evidence), ("answer", "")))
-        return (f'<form id="answer" class="bar" method="post" action="/answer">{hidden}'
+        floor_mark = ' data-floor="1"' if floor else ""  # the page script asks for A twice
+        return (f'<form id="answer" class="bar" method="post" action="/answer"{floor_mark}>{hidden}'
                 f'<div id="editor" class="{editor_class}"><div class="label">Edit the output, then press Change again '
                 f'<span>it is checked before it replaces the agent\'s</span></div>'
                 f'<textarea name="output" spellcheck="false">{esc(edited)}</textarea></div>'

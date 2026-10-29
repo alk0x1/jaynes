@@ -1,5 +1,5 @@
-"""Roles for returning an earlier step from the page: two stops in a row, and a stop with no output after a step
-with one. Loaded by ``jaynes run``."""
+"""Roles for returning an earlier step from the page: two stops in a row, a stop with no output after a step
+with one, and the same as a floor. Loaded by ``jaynes run``."""
 
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ DRAFT = ROLE.step("draft", output=Note, needs=[OUTLINE], stop=stop(0.2))
 PURE = role("pure-stop", agent="quick")
 WRITE = PURE.step("write", output=Note)
 PURE.step("accept", needs=[WRITE], stop=stop(0.2))
+
+FLOOR = role("floor-stop", agent="quick")
+FLOOR.step("accept", needs=[FLOOR.step("write", output=Note)], stop=stop(0.05, sampled=False))
 
 
 class Agent:

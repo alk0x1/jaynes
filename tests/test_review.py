@@ -424,3 +424,20 @@ def test_accept_at_a_stop_with_no_output_goes_through_although_a_step_is_selecte
         assert status == 303, body
     finally:
         server.shutdown()
+
+
+def test_a_floor_stop_marks_its_answers_so_one_key_does_not_accept_it(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.two_stops:FLOOR", "--task", "t",
+              "--runtime", "quick=tests.two_stops:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        assert '<form id="answer" class="bar" method="post" action="/answer" data-floor="1">' in get(
+            base + f"/stop/{run}/accept")
+    finally:
+        server.shutdown()
+
+
+def test_a_sampled_stop_answers_on_one_key(served: tuple[str, Path, str]) -> None:
+    base, _, _ = served
+    assert '<form id="answer" class="bar" method="post" action="/answer">' in get(base + "/")
