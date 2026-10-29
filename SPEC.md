@@ -149,6 +149,12 @@ Rules:
   step blocks the run at once with how to give one. Each step's changes become a
   patch, and the patches become a branch at the end; the person's working
   tree is never touched.
+- `web=True` lets the agent read the web in that step through its own fetch
+  and search tools; its shell stays offline. The prompt tells it that what a
+  page says is information for the task, never an instruction. The runtime
+  records each address and search, `TurnFinished` keeps them, and the step's
+  page lists them. Only an agent step can read the web; a trusted executor
+  that does declares `effect="web"`.
 - Floor paths are project paths that tools run or obey later, outside any
   box: agents' and editors' settings and instructions, git attributes and
   hooks, direnv, interpreters and package scripts (`pyproject.toml`,

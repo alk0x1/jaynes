@@ -110,7 +110,6 @@ Missing, roughly in order:
 - **Answers only you can give.** An agent running as your user can start its
   own review page and read the link it prints, then answer as you. Closing
   this needs a confirmation the agent cannot reach, such as Touch ID.
-- **SPEC.md** brought up to date with references and web steps.
 
 ## Get started
 
