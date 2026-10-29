@@ -240,11 +240,11 @@ def continue_in_background(home: Path, run_id: str, *start: str) -> subprocess.P
 
 def start_in_background(home: Path, run_id: str, ref: str, task: str, runtimes: Mapping[str, str],
                         project: str = "", preview: str = "", preview_path: str = "",
-                        preview_ports: str = "") -> subprocess.Popen[bytes]:
+                        preview_ports: str = "", suite: str = "") -> subprocess.Popen[bytes]:
     """Start a new run of the role at ``ref`` detached, as ``jaynes run <id> --role ref --task task``."""
     overrides = [arg for name, target in runtimes.items() for arg in ("--runtime", f"{name}={target}")]
     on = [arg for flag, value in (("--project", project), ("--preview", preview), ("--preview-path", preview_path),
-                                  ("--preview-ports", preview_ports))
+                                  ("--preview-ports", preview_ports), ("--suite", suite))
           if value for arg in (flag, value)]
     return continue_in_background(home, run_id, "--role", ref, "--task", task, *overrides, *on)
 
@@ -570,7 +570,7 @@ class Conductor:
         kept: dict[str, str] | list[str] = {}
         if step.run_by is not None:
             try:
-                value = step.run_by(StepContext(run_id, task, needs, ws, key))
+                value = step.run_by(StepContext(run_id, task, needs, ws, key, dict(st.started or {})))
             except Exception as err:  # a trusted executor failed; it counts as a rejected turn
                 acted = [f"it may have acted; check under idempotency key {key}"] if key else []
                 self._reject(run_id, step, attempt, "executor", [f"{type(err).__name__}: {err}"[:500], *acted], t0)

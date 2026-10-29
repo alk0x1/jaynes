@@ -840,6 +840,11 @@ class Review:
                 f'value="{esc(f.get("preview_ports", ""))}"><span class="m" style="margin-top:6px">Optional. The '
                 f'preview runs the agent\'s changes in a box with no network; list the ports of local servers it '
                 f'needs, such as a backend.</span></label>'
+                f'<label><span class="label">Test suite</span>'
+                f'<input type="text" name="suite" placeholder="npm test" value="{esc(f.get("suite", ""))}">'
+                f'<span class="m" style="margin-top:6px">Optional. The command that runs all the project\'s tests, '
+                f'for fix-bug; Jaynes finds it when the project uses pytest, a test script, go, cargo or make.'
+                f'</span></label>'
                 + (f'<div class="err">{esc(error)}</div>' if error else '')
                 + '<button class="btn go" type="submit">Start the run</button></form></div>')
         return page("New run", self.sidebar(None), main, self.seq())
@@ -1078,7 +1083,7 @@ class Review:
         run_id = new_run_id()
         start_in_background(self.c.home, run_id, ref, task, self.known_roles().get(ref, {}),
                             str(Path(folder).expanduser()) if folder else "", preview,
-                            fields.get("preview_path", "").strip(), " ".join(ports))
+                            fields.get("preview_path", "").strip(), " ".join(ports), fields.get("suite", "").strip())
         return 303, f"/run/{q(run_id)}"
 
     # pieces -------------------------------------------------------------------

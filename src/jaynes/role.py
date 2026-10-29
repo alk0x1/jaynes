@@ -94,6 +94,7 @@ class StepContext:
     needs: Witnesses
     workspace: Path
     idempotency_key: str = ""
+    started: Mapping[str, Any] = field(default_factory=dict[str, Any])  # what the run started with, such as suite
 
 
 # What a trusted executor does to the world. Only ``irreversible`` changes how it runs: after a floor stop over the

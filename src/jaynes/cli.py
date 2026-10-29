@@ -6,7 +6,7 @@
   jaynes parity HOOK [--config P]   compare floors against an existing deny hook on past Bash calls
   jaynes simulate                   Monte Carlo check of the certification guarantee
   jaynes                            the review page, opened in the browser
-  jaynes run [ID] --role R --task T [--project DIR] [--preview CMD]
+  jaynes run [ID] --role R --task T [--project DIR] [--preview CMD] [--suite CMD]
                                     start a run of a built-in role (visual-identity, redesign, fix-bug), a role
                                     file (.toml) or module:attribute, on the git repository at DIR
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
@@ -224,6 +224,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         if args.preview:
             started["preview"] = {"command": args.preview, "path": args.preview_path or "/",
                                   "ports": _ports(args.preview_ports or "")}
+        if args.suite:
+            started["suite"] = args.suite
     from jaynes.project import ProjectError
     try:
         result = c.run(r, task, run_id, started=started,
@@ -343,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--preview", help="a command that serves the project on {port}, shown at stops")
     r.add_argument("--preview-path", help="the path to open in the preview, / by default")
     r.add_argument("--preview-ports", help="local ports the preview may connect to, such as a backend: 8789,5432")
+    r.add_argument("--suite", help="the command that runs the project's whole test suite, when Jaynes does not "
+                                   "find it (fix-bug)")
     r.add_argument("--home")
     k = sub.add_parser("check", help="find what a role gets wrong before any agent runs")
     k.add_argument("role", help="a built-in role (visual-identity, redesign, fix-bug), a role file (.toml) or module:attribute")

@@ -156,9 +156,14 @@ Everything else happens in the page:
   the web unless a step allows it (`web=True`); the direction step does, so
   the agent can read the references' sites and look up fonts, and the stop
   lists every address it read. Shell commands stay offline. **fix-bug** first
-  has the agent write a test that fails because of the bug, changing test files
-  only; Jaynes runs it in the box and requires it to fail with the message the
-  agent quotes, and you see the test. Then the agent fixes the code, never the
+  finds how the project runs its tests (pytest, a `test` script in
+  `package.json`, `go test`, `cargo test` or a Makefile `test` target), so the
+  agent never chooses what counts as the suite; when it finds none, the run
+  stops and asks you to start it again with `--suite "<command>"` (or Test
+  suite on New run). Then the agent writes a test that fails because of the
+  bug, changing test files only and naming them; Jaynes runs them in the box
+  and requires them to fail with the message the agent quotes, and you see
+  the test. Then the agent fixes the code, never the
   tests, until Jaynes sees those tests and the whole suite pass. If the agent
   finds no bug a test can show, it says why and you decide: accepting ends
   the run with nothing changed. The agent runs the tests itself too. The box

@@ -420,3 +420,18 @@ def test_the_page_starts_on_a_home_that_does_not_exist_yet(tmp_path: Path) -> No
         assert json.loads((home / "review.json").read_text())["port"] == port
     finally:
         server.kill()
+
+
+def test_a_test_suite_given_on_new_run_or_the_cli_is_recorded_with_the_run(served: tuple[str, Path]) -> None:
+    base, home = served
+    cli.main(["run", "--home", str(home), "--role", "tests.stopped:ROLE", "--task", "t", "--suite", "make check",
+              "--runtime", "quick=tests.stopped:Agent"])
+    page = get(base + "/new")
+    assert 'name="suite"' in page
+    run = start(base, {**form(page), "role": "tests.stopped:ROLE", "ref": "", "task": "again", "suite": "npm test"})
+    store = Store(home / "jaynes.sqlite3")
+    deadline = time.monotonic() + 30
+    while not list(store.events("RunStarted", run_id=run)):
+        assert time.monotonic() < deadline, (home / "runs" / run / "continue.log").read_text()
+        time.sleep(0.05)
+    assert [e.payload.get("suite") for e in store.events("RunStarted")] == ["make check", "npm test"]

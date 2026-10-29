@@ -110,8 +110,10 @@ Rules:
 - `method` is the method text, or a `Path` to it; a relative path is resolved
   next to the module that calls `role`.
 - `run_by=fn` makes the step a trusted executor: Jaynes calls
-  `fn(StepContext(run_id, task, needs, workspace))` and the agent never writes
-  its output. The function's source is part of the step's fingerprint.
+  `fn(StepContext(run_id, task, needs, workspace, idempotency_key, started))`
+  and the agent never writes its output; `started` is what the run started
+  with, such as the `suite` given to `jaynes run --suite`. The function's
+  source is part of the step's fingerprint.
 - A step with no `output` is a pure stop over its needs, like `accept` above.
 - Per step: `agent` overrides the role's agent, `max_turns` (default 3),
   `deadline` in seconds per turn (default 900), `max_messages` per Claude
@@ -139,7 +141,12 @@ Rules:
   linked, never counted as changes, and its commands get the same offline
   environment (`jaynes.suite.environment`); Claude's box also opens the
   folders behind those links, a cache folder and local ports, so the agent
-  runs the tests before it answers. Each step's changes become a
+  runs the tests before it answers. Which command runs the tests is not the
+  agent's to say: `jaynes.runners.detect` finds it from the project's files
+  (pytest, a `test` script in `package.json`, `go test`, `cargo test`, a
+  Makefile `test` target), or takes the `suite` the person gave at the start,
+  and fix-bug's first step, a trusted executor, records it; with neither, that
+  step blocks the run at once with how to give one. Each step's changes become a
   patch, and the patches become a branch at the end; the person's working
   tree is never touched.
 - Floor paths are project paths that tools run or obey later, outside any
