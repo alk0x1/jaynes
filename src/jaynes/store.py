@@ -108,6 +108,10 @@ class Store:
     def max_seq(self) -> int:
         return int(self.db.execute("select coalesce(max(seq), 0) from events").fetchone()[0])
 
+    def max_run_seq(self) -> int:
+        """The last conductor event: what the review page watches, so the action gate's events leave it be."""
+        return int(self.db.execute("select coalesce(max(seq), 0) from events where run_id is not null").fetchone()[0])
+
     def kinds(self) -> list[str]:
         return sorted(str(r[0]) for r in self.db.execute("select distinct type from events"))
 

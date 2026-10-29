@@ -477,7 +477,7 @@ class Review:
         self.shared = shared
 
     def seq(self) -> int:
-        return self.c.store.max_seq()
+        return self.c.store.max_run_seq()
 
     def queue(self) -> list[Waiting]:
         return self.c.queue(idle_after=self.shared.idle_after)

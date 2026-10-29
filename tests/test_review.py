@@ -381,3 +381,13 @@ def test_a_run_blocked_at_its_branch_links_to_a_page_that_names_the_reason(
         assert "r1" in get(base + "/stop/r1/")  # a link from an older log, with no step, opens the run
     finally:
         server.shutdown()
+
+
+def test_the_page_reloads_for_runs_and_not_for_the_action_gate(served: tuple[str, Path, str]) -> None:
+    base, home, run = served
+    store = Store(home / "jaynes.sqlite3")
+    before = get(base + "/seq")
+    store.append("GateDecided", {"verdict": "allow"}, action_id="a1", session="s1")  # any agent on the machine
+    assert get(base + "/seq") == before
+    store.append("RunPaused", {"reason": "quota", "agent": "quick", "until": 0}, run_id=run)
+    assert get(base + "/seq") != before
