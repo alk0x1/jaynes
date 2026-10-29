@@ -192,7 +192,7 @@ def test_setup_warns_when_jaynes_runs_from_a_temporary_environment(
     base, _ = served
     assert "temporary" not in get(base + "/setup")
     monkeypatch.setattr("jaynes.install.sys.prefix", "/Users/x/.cache/uv/archive-v0/abc")
-    assert "temporary" in get(base + "/setup") and "uv tool install jaynes-ai" in get(base + "/setup")
+    assert "temporary" in get(base + "/setup") and "uv tool install git+https://github.com/alk0x1/jaynes" in get(base + "/setup")
 
 
 def static_site(tmp_path: Path) -> Path:
