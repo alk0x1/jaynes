@@ -63,7 +63,7 @@ person ── review page (local web) ── answers
 | Role definitions | Python modules declaring steps, schemas, checks and stops | works (`jaynes.role`) |
 | Conductor | Runs a task through a role, one step at a time; owns workspaces, write boundaries, retries and resumption | works (`jaynes.conductor`) |
 | Runtimes | Run one bounded agent turn in a workspace: Claude Code (`claude -p`) and Codex (`codex exec`) | works (`jaynes.runtimes`) |
-| Trusted executors | Steps Jaynes runs itself, such as a read-only browser walkthrough or the test suite | the mechanism works; no executors shipped yet |
+| Trusted executors | Steps Jaynes runs itself, such as capturing references from the web or running the test suite | works; one shipped, `jaynes.roles.references.gather` (`effect="web"`), see section 4 |
 | Event log | Append-only record of everything; all state is a projection | works (`jaynes.store`), conductor events keyed by `run_id` |
 | Attention engine | Decides, per stop, mandatory, sampled, or refuted | works (`jaynes.bounds`, `jaynes.gate`) |
 | Review page | Local web page where stops wait for answers | works (`jaynes.review`) |
@@ -363,11 +363,14 @@ order with how each was released (`by jaynes`, `checked`, `accepted`,
 | View | Content |
 |---|---|
 | Queue (`/`) | Stops waiting, then blocked runs, then idle runs (unfinished, not waiting, no process holds them, no event for 10 s), each oldest first; the first opens. An idle run shows the end of its `continue.log` and a Continue button. Idle and blocked runs have Dismiss, which finishes the run with nothing delivered (refused while a process holds it) |
-| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost with each shell command the agent ran, green or red by its exit and its output a click away, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, and no Change |
-| Blocked | The last rejection reasons and the turns of the round |
+| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost with each shell command the agent ran, green or red by its exit and its output a click away, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, no Change, and Return and Context going to the earlier step selected by default (section 6.2) |
+| Blocked | The last rejection reasons and the turns of the round. A run blocked after its last step, because its branch was not created, says so with the reason |
 | Run (`/run/<run>`) | Step timeline, state, turns, tokens, time, every event; witnesses by output hash |
 | Role (`/role/<name>`) | Per stop: status, labels, evidence against 1/δ with the budget and δ logged at the stop, audits and skips, and each audit with its answer; per week: runs, distinct steps checked, rounds until accepted, tokens per finished run, the person's minutes; the runs |
 | Log (`/log`) | The latest 500 events, payloads cut at 600 characters, filterable by type and run |
+| New run (`/new`) | Starts a run: a built-in role, one run before (proposed first, the last one run) or a role in the folder, the task, the project folder and an optional preview command |
+| History (`/history`) | The report of `jaynes history`: how many past tool calls a person approved, by category |
+| Setup (`/setup`) | Installs or removes the action gate in Claude Code's settings, keeping a backup |
 
 After an answer the server starts `jaynes run <id>` in the background, logging
 to `runs/<id>/continue.log`, and the page reloads when the log grows, unless
@@ -453,7 +456,7 @@ before Jaynes (Sep 1 to Oct 21, 2026):
 | Tokens per screen | 170k to 480k against a 150k budget |
 | Agent-reported cost vs measured | lower than measured in both recorded cases |
 
-Jaynes is validated on this user when the `screen-design` role shows: all
+Jaynes is validated on this user when its design roles (`visual-identity`, `redesign`) show: all
 steps fulfilled with requirements approved, fewer rounds until acceptance,
 fewer rejections after checks pass, tokens per screen measured and lower, and
 an error rate stated per stop.
@@ -465,7 +468,7 @@ an error rate stated per stop.
 | M1, done | Action gate, bounds, history report, simulation | Appendix A |
 | M2, done | Conductor, role API, both runtimes, write boundary, durability, quota pause | Appendix B |
 | M3, done | Review page and CLI answers | Appendix C |
-| M4 | `screen-design` role on the first user's product | Two screens end to end with real stops; measures from section 10 recorded |
+| M4 | Built-in roles (`visual-identity`, `redesign`, `fix-bug`) on the first user's product | Two screens end to end with real stops; measures from section 10 recorded |
 | M5 | Dogfood | Several weeks of use; at least one stop certified with real labels; comparison against the baseline |
 | M6 | Judges with prediction-powered and active inference | A simulation on the first user's labels shows fewer labels for the same guarantee before anything ships |
 | M7 | Change detection with e-detectors | Injected drift in simulation is detected within its false-alarm bound |

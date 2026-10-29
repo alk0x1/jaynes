@@ -26,8 +26,8 @@ were still sent back.
    and a check.
 2. **Jaynes conducts the agent one step at a time.** Claude Code or Codex runs
    a single step and can only write that step's output. The next step starts
-   when the check passes. Evidence the agent could fake, like a walkthrough of
-   a screen, is produced by Jaynes.
+   when the check passes. Evidence the agent could fake, like the references
+   captured from the web, is produced by Jaynes.
 3. **Where the method needs you, the run stops.** The question and its
    evidence wait for you in the review page.
 4. **Every answer is a label.** A stop you keep accepting without changes

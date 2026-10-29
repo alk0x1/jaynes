@@ -10,6 +10,7 @@
                                     start a run of a built-in role (visual-identity, redesign, fix-bug), a role
                                     file (.toml) or module:attribute, on the git repository at DIR
   jaynes run ID                     continue a run from its log (after a crash, a pause or a stop)
+  jaynes check ROLE                 find what a role gets wrong before any agent runs
   jaynes queue                      stops waiting for an answer and blocked runs, oldest first
   jaynes answer RUN STEP ANSWER     accept, change (--output JSON), return or context (--note); the run continues
                                     recorded as an agent's: it releases the stop but is not a label
