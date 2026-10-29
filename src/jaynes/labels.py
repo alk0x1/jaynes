@@ -95,9 +95,18 @@ def scan(lines: Iterable[str], wanted: set[str]) -> list[Label]:
     return found
 
 
-def scan_file(path: str, wanted: set[str]) -> list[Label]:
+def scan_file(path: str, wanted: set[str], start: int = 0) -> tuple[list[Label], int]:
+    """Labels in the complete lines after byte ``start``, and where those lines end, for the next call to
+    start from. An action's result comes after it was asked, so a session that reads on from there misses none
+    of its later answers. A file shorter than ``start`` was rewritten, and is read from the beginning."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            return scan(fh, set(wanted))
+        with open(path, "rb") as fh:
+            if fh.seek(0, 2) < start:
+                start = 0
+            fh.seek(start)
+            data = fh.read()
     except OSError:
-        return []
+        return [], start
+    end = data.rfind(b"\n") + 1  # a line still being written waits for the next call
+    lines = data[:end].decode("utf-8", errors="replace").splitlines()
+    return scan(lines, set(wanted)), start + end

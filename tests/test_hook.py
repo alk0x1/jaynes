@@ -2,7 +2,7 @@
 
 import io
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 import pytest
@@ -138,3 +138,27 @@ def test_first_call_of_a_session_reuses_the_session_model(env: Path, tmp_path: P
     store = Store(Path(hook.db_path()))
     [proposed] = [e for e in store.events("ActionProposed") if e.action_id == "m1"]
     assert proposed.payload["model"] == "claude-opus-5-5"
+
+
+def test_a_pending_audit_whose_answer_never_comes_does_not_make_each_call_reread_the_transcript(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    transcript = tmp_path / "t.jsonl"
+    for i in range(500):  # a long session: results for other actions
+        transcript_result(transcript, f"other{i}", accept=True)
+    store = Store(tmp_path / "jaynes.sqlite3")
+    store.append("ActionProposed", {"transcript": str(transcript)}, action_id="stale", session="s1")
+    store.append("GateDecided", {"verdict": "ask"}, action_id="stale", session="s1")
+    read: list[int] = []
+    scan = hook.labels.scan
+
+    def counting(lines: Iterable[str], wanted: set[str]) -> list[hook.labels.Label]:
+        seen = list(lines)
+        read.append(len(seen))
+        return scan(seen, wanted)
+
+    monkeypatch.setattr(hook.labels, "scan", counting)
+    assert hook.collect(store, "s1") == 0 and hook.collect(store, "s1") == 0
+    assert read == [500, 0]  # the second call starts where the first stopped
+    transcript_result(transcript, "stale", accept=True)  # its answer, late: still a label
+    assert hook.collect(store, "s1") == 1 and read[-1] == 1
+    assert store.pending_audits("s1") == []

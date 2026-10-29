@@ -11,7 +11,9 @@ Conductor events carry a ``run_id`` instead; their payloads are listed in SPEC
 section 8 and written by ``jaynes.conductor``.
 
 State is never stored: the window of a category is the set of labels whose
-decision carried the category's current fingerprint.
+decision carried the category's current fingerprint. The one other table,
+``transcripts``, only remembers how far the hook has read each transcript for each session,
+so an answer that never comes does not make every tool call reread it.
 """
 
 from __future__ import annotations
@@ -38,6 +40,12 @@ create table if not exists events (
 );
 create index if not exists events_action on events(action_id);
 create index if not exists events_type on events(type);
+create table if not exists transcripts (
+  session text not null,
+  path text not null,
+  read_to integer not null,
+  primary key (session, path)
+);
 """
 # Logs created before the conductor existed have no run_id column.
 MIGRATE = "alter table events add column run_id text"
@@ -166,6 +174,16 @@ class Store:
             (session,),
         ).fetchone()
         return None if row is None else str(row[0])
+
+    def read_to(self, session: str, transcript: str) -> int:
+        row = self.db.execute("select read_to from transcripts where session = ? and path = ?",
+                              (session, transcript)).fetchone()
+        return 0 if row is None else int(row[0])
+
+    def set_read_to(self, session: str, transcript: str, offset: int) -> None:
+        self.db.execute("insert into transcripts(session, path, read_to) values (?, ?, ?) "
+                        "on conflict(session, path) do update set read_to = excluded.read_to",
+                        (session, transcript, offset))
 
     def pending_audits(self, session: str) -> list[tuple[str, str]]:
         """Asked actions in a session that have no label yet: (action_id, transcript path)."""

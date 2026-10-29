@@ -130,10 +130,12 @@ def collect(store: Store, session: str) -> int:
             by_file.setdefault(transcript, set()).add(action_id)
     count = 0
     for path, wanted in by_file.items():
-        for lab in labels.scan_file(path, wanted):
+        found, end = labels.scan_file(path, wanted, store.read_to(session, path))
+        for lab in found:
             store.append("HumanLabeled", {"label": lab.label, "source": lab.source, "note": lab.note},
                          action_id=lab.action_id, session=session)
             count += 1
+        store.set_read_to(session, path, end)  # after the labels, so a crash rereads rather than skips
     return count
 
 
