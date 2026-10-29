@@ -47,7 +47,8 @@ def environment(work: Path, scratch: Path) -> dict[str, str]:
 
 def reads(work: Path) -> list[Path]:
     """The real folders behind the dependencies linked into ``work``, and the Python each virtualenv runs: what an
-    agent's box must let it read to run the project's commands."""
+    agent's box must let it read to run the project's commands. The Python's folder comes also as the virtualenv
+    names it, since a box refuses a path through a link it may not read (uv names cpython-3.12, a link)."""
     found: set[Path] = set()
     for d, dirs, _ in os.walk(work):
         for name in [x for x in dirs if x in preview.DEPENDENCIES]:
@@ -57,7 +58,7 @@ def reads(work: Path) -> list[Path]:
             home = next((line.split("=", 1)[1].strip() for line in cfg.read_text().splitlines()
                          if line.split("=", 1)[0].strip() == "home"), "") if cfg.is_file() else ""
             if home:
-                found.add(Path(home).resolve().parent)
+                found |= {Path(home).parent, Path(home).resolve().parent}
         dirs[:] = [x for x in dirs if x not in preview.DEPENDENCIES and x != ".git"]
     return sorted(found)
 

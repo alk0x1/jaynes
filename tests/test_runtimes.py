@@ -34,6 +34,22 @@ def test_on_a_project_step_claude_may_read_the_dependencies_write_caches_and_use
     assert box["network"]["allowLocalBinding"] is True and box["network"]["allowedDomains"] == []
 
 
+def test_claude_may_read_the_python_folder_through_the_link_the_virtualenv_names(tmp_path: Path) -> None:
+    # uv's venvs name cpython-3.12, a link to cpython-3.12.13; the box refuses to run a path through a link it cannot read
+    real = tmp_path / "pythons" / "cpython-3.12.13"
+    (real / "bin").mkdir(parents=True)
+    alias = tmp_path / "pythons" / "cpython-3.12"
+    alias.symlink_to(real, target_is_directory=True)
+    source = tmp_path / "person"
+    (source / ".venv" / "bin").mkdir(parents=True)
+    (source / ".venv" / "pyvenv.cfg").write_text(f"home = {alias / 'bin'}\nversion_info = 3.12\n")
+    ws = tmp_path / "turn" / "workspace"
+    (ws / "project").mkdir(parents=True)
+    link_dependencies(source, ws / "project")
+    reads = set(claude_settings(ws)["sandbox"]["filesystem"]["allowRead"])
+    assert {str(alias), str(real.resolve())} <= reads
+
+
 def test_a_step_without_a_project_gets_no_local_ports_and_reads_only_its_workspace(tmp_path: Path) -> None:
     box = claude_settings(tmp_path, scratch=tmp_path / "scratch")["sandbox"]
     assert box["filesystem"]["allowRead"] == [str(tmp_path)] and "allowLocalBinding" not in box["network"]
