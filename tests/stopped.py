@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from jaynes.role import role, stop
-from jaynes.runtime import TurnResult
+from jaynes.runtime import Ran, TurnResult
 from tests import fakes
 
 
@@ -44,3 +44,13 @@ class Nothing:
     def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
         fakes.write({"found": False, "why": "it works"})(workspace)
         return TurnResult(10, 1, "quick-1")
+
+
+class Tested:
+    """Runs the tests twice: they fail, then they pass."""
+    name = "quick"
+
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float) -> TurnResult:
+        fakes.write({"text": "draft one"})(workspace)
+        return TurnResult(10, 1, "quick-1", commands=(Ran("uv run pytest -q", False, "Exit code 1\n1 failed"),
+                                                      Ran("uv run pytest -q", True, "3 passed in 0.02s")))

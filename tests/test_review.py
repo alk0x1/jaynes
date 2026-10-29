@@ -167,6 +167,21 @@ def test_an_idle_run_can_be_continued_from_the_page(served: tuple[str, Path, str
         time.sleep(0.05)
 
 
+def test_an_idle_run_can_be_dismissed_from_the_page_and_the_queue_moves_on(served: tuple[str, Path, str]) -> None:
+    base, home, run = served
+    store = Store(home / "jaynes.sqlite3")
+    store.append("StopAnswered", {"step": "draft", "answer": "accept", "label": "correct", "note": None,
+                                  "fingerprint": "x", "seconds_waited": 0, "seconds_spent": 0}, run_id=run)
+    page = get(base + "/")
+    assert 'action="/dismiss"' in page
+    status, _ = post(base + "/dismiss", {**form(page)}, jar=None)
+    assert status == 403 and not list(store.events("RunFinished", run_id=run))  # only the person's browser
+    status, _ = post(base + "/dismiss", {**form(page)})
+    assert status == 303 and "Nothing is waiting" in get(base + "/")
+    shown = get(f"{base}/run/{run}")
+    assert '<div class="n">dismissed</div>' in shown and "dismissed; nothing was delivered" in shown
+
+
 def test_after_an_answer_the_page_follows_the_run_it_continues(served: tuple[str, Path, str]) -> None:
     base, _, run = served
     fields = urllib.parse.urlencode({**form(get(base + "/")), "answer": "return", "note": "shorter"}).encode()
@@ -215,6 +230,21 @@ def test_a_stop_shows_the_pictures_its_inputs_left_and_what_it_read_on_the_web(t
             with pytest.raises(urllib.error.HTTPError) as err:
                 urllib.request.urlopen(base + path, timeout=10)
             assert err.value.code == 404
+    finally:
+        server.shutdown()
+
+
+def test_a_stop_shows_the_commands_the_agent_ran_and_how_each_ended(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.stopped:ROLE", "--task", "t",
+              "--runtime", "quick=tests.stopped:Tested"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + f"/stop/{run}/draft")
+        assert page.count("<code>uv run pytest -q</code>") == 2
+        assert "Exit code 1\n1 failed" in page and "3 passed in 0.02s" in page
+        assert '<td class="m" style="color:var(--red)">ran</td>' in page
+        assert '<td class="m" style="color:var(--green)">ran</td>' in page
     finally:
         server.shutdown()
 

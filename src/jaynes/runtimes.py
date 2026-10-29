@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from jaynes import suite
-from jaynes.runtime import QuotaExhausted, RuntimeFailure, TurnResult, TurnTimeout
+from jaynes.runtime import QuotaExhausted, Ran, RuntimeFailure, TurnResult, TurnTimeout
 
 LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit|quota", re.I)
+OUTPUT_TAIL = 2000  # characters of a command's output kept, from its end, where test summaries are
 
 
 def _binary(name: str) -> str:
@@ -128,6 +129,32 @@ def claude_result(out: str) -> tuple[dict[str, Any], list[str]]:
     return result, read
 
 
+def claude_commands(out: str) -> list[Ran]:
+    """The shell commands a ``stream-json`` turn ran. A command the turn ended before is not ok, with no output."""
+    commands: dict[str, str] = {}
+    results: dict[str, Ran] = {}
+    for line in out.splitlines():
+        try:
+            event: dict[str, Any] = json.loads(line)
+        except ValueError:
+            continue
+        message: dict[str, Any] = event.get("message") or {}
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in cast(list[dict[str, Any]], content):
+            if block.get("type") == "tool_use" and block.get("name") == "Bash":
+                args: dict[str, Any] = block.get("input") or {}
+                commands[str(block.get("id"))] = str(args.get("command", ""))
+            elif block.get("type") == "tool_result" and str(block.get("tool_use_id")) in commands:
+                i = str(block["tool_use_id"])
+                body = block.get("content")
+                text = body if isinstance(body, str) else "".join(
+                    str(x.get("text", "")) for x in cast(list[dict[str, Any]], body or []))
+                results[i] = Ran(commands[i], not block.get("is_error"), text[-OUTPUT_TAIL:])
+    return [results.get(i, Ran(c, False, "")) for i, c in commands.items()]
+
+
 class ClaudeRuntime:
     name = "claude"
     scratch_dirs = (".claude",)  # Claude Code 2.1 creates .claude/.cc-writes in its working directory
@@ -155,7 +182,8 @@ class ClaudeRuntime:
         usage: dict[str, Any] = result.get("usage") or {}
         tokens_in = sum(int(usage.get(k) or 0) for k in
                         ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), self._model(result), tuple(read))
+        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), self._model(result), tuple(read),
+                          tuple(claude_commands(out)))
 
     def _model(self, result: dict[str, Any]) -> str:
         per_model: dict[str, dict[str, Any]] = result.get("modelUsage") or {}
@@ -165,6 +193,14 @@ class ClaudeRuntime:
 
 
 # --- Codex ------------------------------------------------------------------------
+
+def codex_command(item: dict[str, Any]) -> Ran | None:
+    """A shell command from a completed ``codex exec --json`` item, or None for any other item."""
+    if item.get("type") != "command_execution":
+        return None
+    return Ran(str(item.get("command", "")), item.get("exit_code") == 0,
+               str(item.get("aggregated_output") or "")[-OUTPUT_TAIL:])
+
 
 class CodexRuntime:
     name = "codex"
@@ -184,6 +220,7 @@ class CodexRuntime:
                               _project_env(workspace, scratch))
         usage: dict[str, Any] = {}
         read: list[str] = []
+        ran: list[Ran] = []
         model = self.model or self._default_model()
         failure = ""
         for line in out.splitlines():
@@ -198,6 +235,8 @@ class CodexRuntime:
                 item: dict[str, Any] = event.get("item") or {}
                 if item.get("type") == "web_search":
                     read.append(f"search: {item.get('query', '')}")
+                elif command := codex_command(item):
+                    ran.append(command)
             elif kind in ("turn.failed", "error"):
                 failure += " " + json.dumps(event.get("error") or event.get("message") or event)[:400]
         if failure or code != 0 or not usage:
@@ -206,7 +245,7 @@ class CodexRuntime:
                 raise QuotaExhausted(_reset_epoch(text))
             raise RuntimeFailure(f"codex turn did not complete ({code}): {text.strip()[:300]}")
         tokens_in = int(usage.get("input_tokens") or 0)  # cached input is a subset of input for Codex
-        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), model, tuple(read))
+        return TurnResult(tokens_in, int(usage.get("output_tokens") or 0), model, tuple(read), tuple(ran))
 
     @staticmethod
     def _default_model() -> str:

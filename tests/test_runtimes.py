@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from jaynes.preview import link_dependencies
-from jaynes.runtimes import _project_env, _run, claude_settings  # pyright: ignore[reportPrivateUsage]
+from jaynes.runtime import Ran
+from jaynes.runtimes import _project_env, _run, claude_commands, claude_settings, codex_command  # pyright: ignore[reportPrivateUsage]
 from jaynes.suite import environment
 
 
@@ -49,3 +51,30 @@ def test_an_agent_on_a_project_step_starts_with_the_projects_environment(tmp_pat
     ws, scratch, _, _ = project_step(tmp_path)
     code, out, _ = _run(["sh", "-c", "echo $TMPDIR $UV_OFFLINE"], ws, scratch, "", 10, _project_env(ws, scratch))
     assert (code, out.split()) == (0, [str(scratch), "1"])
+
+
+def test_the_commands_a_claude_turn_ran_come_from_its_stream_with_how_each_ended() -> None:
+    def use(i: str, name: str, **args: str) -> dict[str, object]:
+        return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": i, "name": name, "input": args}]}}
+
+    def result(i: str, content: object, error: bool = False) -> dict[str, object]:
+        return {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": i, "content": content, "is_error": error}]}}
+
+    lines = [use("1", "Bash", command="uv run pytest -q", description="tests"), result("1", "Exit code 1\n1 failed", True),
+             use("2", "Read", file_path="x"), result("2", "contents"),
+             use("3", "Bash", command="uv run pytest -q"), result("3", [{"type": "text", "text": "a" * 5000 + "3 passed"}]),
+             use("4", "Bash", command="sleep 999")]
+    ran = claude_commands("\n".join(json.dumps(x) for x in lines))
+    assert ran[0] == Ran("uv run pytest -q", False, "Exit code 1\n1 failed")
+    assert ran[1].ok and ran[1].output.endswith("3 passed") and len(ran[1].output) <= 2000
+    assert ran[2] == Ran("sleep 999", False, "")  # the turn ended before it did
+    assert len(ran) == 3
+
+
+def test_a_codex_command_item_says_what_ran_and_how_it_ended() -> None:
+    item = {"id": "i1", "type": "command_execution", "command": "bash -lc 'pytest -q'",
+            "aggregated_output": "1 failed\n", "exit_code": 1, "status": "failed"}
+    assert codex_command(item) == Ran("bash -lc 'pytest -q'", False, "1 failed\n")
+    assert codex_command({**item, "exit_code": 0, "status": "completed"}) == Ran("bash -lc 'pytest -q'", True, "1 failed\n")
+    assert codex_command({"type": "agent_message", "text": "hi"}) is None

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from jaynes.conductor import AnswerRejected, Conductor, RunResult, coin
+from jaynes.conductor import AnswerRejected, Conductor, RunBusy, RunResult, coin
 from jaynes.gate import Window
 from jaynes.role import Fail, Pass, Witnesses, role, stop
 from tests.fakes import Scripted, fail, nothing, quota, raw, stray, tamper, timeout, write
@@ -360,6 +360,24 @@ def test_stops_come_before_idle_runs_in_the_queue_even_when_younger(tmp_path: Pa
     c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": "it"})})
     c.run(asked, "t", run_id="new")
     assert [(w.run_id, w.kind) for w in c.queue(idle_after=0)] == [("new", "stop"), ("old", "idle")]
+
+
+def test_a_person_dismisses_a_run_that_no_process_holds_and_it_leaves_the_queue(tmp_path: Path) -> None:
+    def die(ws: Path) -> None:
+        raise Killed()
+    r, _, _ = chain()
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted({("a", 1): die})})
+    with pytest.raises(Killed):
+        c.run(r, "t", run_id="r1")
+    with c._lock("r1"), pytest.raises(RunBusy):  # pyright: ignore[reportPrivateUsage]
+        c.dismiss("r1")
+    c.dismiss("r1")
+    assert c.queue(idle_after=0) == [] and payloads(c, "r1", "RunFinished") == [{"outcome": "dismissed"}]
+    assert c.run(r, "t", run_id="r1").status == "finished"  # continuing it changes nothing
+    with pytest.raises(AnswerRejected, match="already finished"):
+        c.dismiss("r1")
+    with pytest.raises(AnswerRejected, match="no run"):
+        c.dismiss("nope")
 
 
 def test_empty_folders_a_runtime_creates_for_itself_are_not_writes_but_files_in_them_are(tmp_path: Path) -> None:

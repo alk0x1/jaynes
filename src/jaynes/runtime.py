@@ -14,11 +14,20 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
+class Ran:
+    """A shell command the agent ran in its box, as the runtime saw it: whether it exited 0, and its last output."""
+    command: str
+    ok: bool
+    output: str
+
+
+@dataclass(frozen=True)
 class TurnResult:
     tokens_in: int  # from the runtime's meter, never from the agent's report
     tokens_out: int
     model: str  # the model that answered, as the runtime reports it
     web: tuple[str, ...] = ()  # addresses and searches the turn read on the web, as the runtime saw them
+    commands: tuple[Ran, ...] = ()  # shell commands the turn ran, in order
 
 
 class QuotaExhausted(Exception):

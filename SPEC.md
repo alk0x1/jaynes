@@ -333,6 +333,15 @@ Simulation, 4,000 runs, true rate equal to a 5% budget: 3.7% wrongly
 certified, against 27.4% for a Clopper-Pearson bound recomputed after every
 label (`jaynes simulate`).
 
+Why this statistic and not predictable betting (simulated 2026-10-27, budget 5%,
+δ 5%, 300 streams per rate, median labels to certify): no test can certify faster
+on average than `log(1/δ)` divided by the information per label, so the floor is
+58 at a true 0%, 121 at 1%, 247 at 2% and 613 at 3%. The mixture needs 88, 134,
+244 and 573: at the floor from 1% up. Plug-in betting strategies did 76 to 129 on
+clean streams and no better from 1% up, with worse 90th percentiles (281 against
+244 at 1%). The gain is at most a dozen labels on clean streams, so the mixture
+stays.
+
 Assumption: future runs of a stop resemble its window. Covered by new windows
 on declared changes; undeclared drift is the job of the change detector
 planned in section 11.
@@ -347,8 +356,8 @@ order with how each was released (`by jaynes`, `checked`, `accepted`,
 
 | View | Content |
 |---|---|
-| Queue (`/`) | Stops waiting, then blocked runs, then idle runs (unfinished, not waiting, no process holds them, no event for 10 s), each oldest first; the first opens. An idle run shows the end of its `continue.log` and a Continue button |
-| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, and no Change |
+| Queue (`/`) | Stops waiting, then blocked runs, then idle runs (unfinished, not waiting, no process holds them, no event for 10 s), each oldest first; the first opens. An idle run shows the end of its `continue.log` and a Continue button. Idle and blocked runs have Dismiss, which finishes the run with nothing delivered (refused while a process holds it) |
+| Stop (`/stop/<run>/<step>`) | The question, the output rendered from its JSON in schema order (lists of records as tables), after a return the returned output as Before, earlier rejections of the round, the person's note from the last round, the names of the checks its witness passed, turns and their cost with each shell command the agent ran, green or red by its exit and its output a click away, the stop's labels and evidence; answer buttons with keys A, C, R, X and a note field; Change opens an editor over the output JSON. For a step with no output, the outputs of the steps it needs, and no Change |
 | Blocked | The last rejection reasons and the turns of the round |
 | Run (`/run/<run>`) | Step timeline, state, turns, tokens, time, every event; witnesses by output hash |
 | Role (`/role/<name>`) | Per stop: status, labels, evidence against 1/δ with the budget and δ logged at the stop, audits and skips, and each audit with its answer; per week: runs, distinct steps checked, rounds until accepted, tokens per finished run, the person's minutes; the runs |
@@ -388,7 +397,7 @@ Conductor events:
 |---|---|
 | `RunStarted` | role, task, role fingerprint, role reference and runtime overrides (for `jaynes run <id>`) |
 | `StepStarted` | step, round, attempt, executor, workspace manifest hash; for an irreversible step, effect, idempotency key and payload |
-| `TurnFinished` | step, attempt, files changed, tokens in and out from the runtime meter, model, seconds |
+| `TurnFinished` | step, attempt, files changed, tokens in and out from the runtime meter, model, seconds; on a web step, what it read; the shell commands the turn ran as the runtime saw them (the last 50, each with whether it exited 0 and the last 2000 characters of its output) |
 | `TurnRejected` | step, attempt, reason: `write_boundary`, `schema`, `check`, `deadline`, `runtime`, `executor`; reasons |
 | `TurnInterrupted` | step, attempt, reason `crash` or `quota`; not an attempt |
 | `Checked` | step, round, attempt, output hash, check hash, source (agent, `jaynes`, `person`), model |
@@ -397,7 +406,7 @@ Conductor events:
 | `StopAnswered` | step, answer, label, note, stop fingerprint, seconds waited, seconds spent, by (`person` or `agent`), the earlier label it revises |
 | `RunPaused` | reason `quota`, agent, until |
 | `RunBlocked` | step, reasons |
-| `RunFinished` | outcome: `delivered`, or `ended` with the step whose accepted output ended it |
+| `RunFinished` | outcome: `delivered`, `ended` with the step whose accepted output ended it, or `dismissed` by a person from the page |
 | `OutcomeObserved` | step, kind `changed_after_delivery`, evidence |
 
 Action gate events (section 9): `ActionProposed`, `GateDecided`, `Executed`,

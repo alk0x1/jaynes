@@ -322,6 +322,8 @@ pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wra
 .bar select { background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font-family: var(--mono); font-size: 12.5px; padding: 10px 8px; }
 .bar textarea { width: 100%; min-height: 160px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font-family: var(--mono); font-size: 12.5px; padding: 10px 12px; }
 .btn { font-family: var(--mono); font-size: 12.5px; padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink); background: var(--panel); cursor: pointer; white-space: nowrap; }
+details.ran summary { cursor: pointer; }
+details.ran pre { margin: 8px 0 0; max-height: 320px; overflow: auto; white-space: pre-wrap; color: var(--dim); }
 .btn kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: 6px; }
 .btn.solid { background: var(--green); border-color: var(--green); color: #04150c; font-weight: 500; }
 .btn.solid kbd { color: #0b3a22; }
@@ -567,10 +569,7 @@ class Review:
             if tail:
                 parts.append(f'<div><div class="label">Last output</div><div class="box"><pre style="padding:12px 16px">'
                              f"{esc(tail)}</pre></div></div>")
-            form = (f'<form class="bar" method="post" action="/continue"><input type="hidden" name="token" '
-                    f'value="{esc(self.shared.token)}"><input type="hidden" name="run" value="{esc(run_id)}">'
-                    f'<div class="row"><span style="flex:1"></span><button class="btn solid">Continue</button></div></form>')
-            main = crumbs + f'<div class="body">{"".join(parts)}</div>' + form
+            main = crumbs + f'<div class="body">{"".join(parts)}</div>' + self._run_bar(run_id, cont=True)
             return page(f"Idle: {run_id}", self.sidebar((run_id, step)), main, self.seq())
         if w.kind == "blocked":
             parts.append(f"<div><h1>This run is blocked at {esc(step)}</h1>"
@@ -579,7 +578,7 @@ class Review:
                 f'<tr><td class="m" style="color:var(--red)">rejected</td><td>{esc(r)}</td></tr>' for r in w.reasons)
                 + "</table></div>")
             parts.append(self._turns(events, step, s.round))
-            main = crumbs + f'<div class="body">{"".join(parts)}</div>'
+            main = crumbs + f'<div class="body">{"".join(parts)}</div>' + self._run_bar(run_id, cont=False)
             return page(f"Blocked: {step}", self.sidebar((run_id, step)), main, self.seq())
 
         value = self._value(s, target)
@@ -725,6 +724,13 @@ class Review:
                      f'font:13px/1.5 ui-monospace,Menlo,monospace;color:#5d6a7c;background:#fff}}pre{{white-space:pre-wrap}}'
                      f'</style></head><body><b>{head}</b><pre>{esc(text)}</pre></body></html>')
 
+    def _run_bar(self, run_id: str, cont: bool) -> str:
+        """Dismiss, and Continue for a run whose process is gone: each button posts the same hidden fields."""
+        go = '<button class="btn solid" formaction="/continue">Continue</button>' if cont else ""
+        return (f'<form class="bar" method="post" action="/dismiss"><input type="hidden" name="token" '
+                f'value="{esc(self.shared.token)}"><input type="hidden" name="run" value="{esc(run_id)}">'
+                f'<div class="row"><span style="flex:1"></span><button class="btn">Dismiss</button>{go}</div></form>')
+
     def run_page(self, run_id: str) -> str:
         events = list(self.c.store.events(run_id=run_id))
         log = self.c.home / "runs" / run_id / "continue.log"
@@ -741,9 +747,8 @@ class Review:
         role = self.role_of(run_id)
         names = self.names(role, events)
         started = st.started or {}
-        ended = any(e.type == "RunFinished" and e.payload.get("outcome") == "ended" for e in events)
-        state = ("ended" if ended else "finished" if st.finished else "blocked" if st.blocked else
-                 "waiting" if any(x.open_stop for x in st.steps.values()) else
+        state = (st.outcome if st.outcome in ("ended", "dismissed") else "finished" if st.finished else
+                 "blocked" if st.blocked else "waiting" if any(x.open_stop for x in st.steps.values()) else
                  "paused" if st.paused_until and st.paused_until > self.c.clock() else
                  "running" if self.c._held(run_id) else "idle")  # pyright: ignore[reportPrivateUsage]
         t = totals(events)
@@ -937,7 +942,7 @@ class Review:
             wk = weeks[week]
             wk["runs"] += 1
             st = project(evs)
-            if st.finished:
+            if st.finished and st.outcome != "dismissed":
                 wk["finished"] += 1
                 wk["tokens"] += sum(int(ev.payload.get("tokens_in", 0)) + int(ev.payload.get("tokens_out", 0))
                                     for ev in evs if ev.type == "TurnFinished")
@@ -1059,6 +1064,16 @@ class Review:
         continue_in_background(self.c.home, run_id)
         return 303, f"/run/{q(run_id)}"
 
+    def dismiss(self, fields: dict[str, str]) -> tuple[int, str]:
+        run_id = fields.get("run", "")
+        try:
+            self.c.dismiss(run_id)
+        except AnswerRejected as err:
+            return 400, self.not_found("; ".join(err.reasons))
+        except RunBusy:
+            return 409, self.run_page(run_id)
+        return 303, "/"
+
     def _value(self, s: StepState, target: Step[Any] | None) -> Any:
         return None if s.checked is None else self._value_of(s.checked, target)
 
@@ -1100,6 +1115,13 @@ class Review:
                     read = ", ".join(str(x) for x in p["web"]) or "nothing"
                     rows.append(f'<tr><td class="m" style="color:var(--blue)">web</td><td>read {esc(read)}</td>'
                                 f'<td class="m">attempt {esc(str(p["attempt"]))}</td></tr>')
+                for r in p.get("ran", []):
+                    command = f'<code>{esc(str(r["command"]))}</code>'
+                    shown = (f'<details class="ran"><summary>{command}</summary><pre>{esc(str(r["output"]))}</pre></details>'
+                             if r["output"] else command)
+                    rows.append(f'<tr><td class="m" style="color:var(--{"green" if r["ok"] else "red"})">ran</td>'
+                                f'<td>{shown}</td><td class="m">attempt {esc(str(p["attempt"]))}, '
+                                f'{"ok" if r["ok"] else "failed"}</td></tr>')
                 tin += int(p["tokens_in"])
                 tout += int(p["tokens_out"])
                 seconds += float(p.get("seconds") or 0)
@@ -1190,7 +1212,8 @@ class Review:
             "RunStarted": lambda: f"task {p.get('task', '')}",
             "StepStarted": lambda: f"round {p['round']}, attempt {p['attempt']}, by {p['executor']}",
             "TurnFinished": lambda: f"{tokens(int(p['tokens_in']))} in, {tokens(int(p['tokens_out']))} out, "
-                                    f"{age(float(p.get('seconds') or 0))}, {p['model']}",
+                                    f"{age(float(p.get('seconds') or 0))}, {p['model']}"
+                                    + (f", ran {len(p['ran'])} commands" if p.get("ran") else ""),
             "TurnRejected": lambda: f"{p['reason']}: " + "; ".join(str(x) for x in p.get("reasons", [])[:2]),
             "TurnInterrupted": lambda: str(p["reason"]),
             "Checked": lambda: f"by {p['source']}" + (f", output {str(p['output_hash'])[:12]}" if p.get("output_hash") else ""),
@@ -1204,6 +1227,7 @@ class Review:
             "RunPaused": lambda: f"quota until {datetime.fromtimestamp(float(p['until'])).strftime('%H:%M')}",
             "RunBlocked": lambda: "; ".join(str(x) for x in p.get("reasons", [])[:2]),
             "RunFinished": lambda: (f"ended at {p['step']}; nothing was delivered" if p.get("outcome") == "ended"
+                                    else "dismissed; nothing was delivered" if p.get("outcome") == "dismissed"
                                     else "finished"),
         }.get(ev.type, lambda: "")()
         when = datetime.fromtimestamp(ev.ts).strftime("%H:%M:%S")
@@ -1339,7 +1363,7 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
                 return self._send(400, "bad Content-Length", "text/plain")
             fields = dict(urllib.parse.parse_qsl(self.rfile.read(length).decode(errors="replace"), keep_blank_values=True))
             path = urllib.parse.urlsplit(self.path).path
-            handlers = {"/answer": Review.answer, "/continue": Review.resume, "/start": Review.start, "/setup": Review.setup}
+            handlers = {"/answer": Review.answer, "/continue": Review.resume, "/dismiss": Review.dismiss, "/start": Review.start, "/setup": Review.setup}
             if path not in handlers:
                 return self._send(404, "not found", "text/plain")
             if not secrets.compare_digest(fields.get("token", ""), shared.token):

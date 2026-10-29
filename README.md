@@ -87,7 +87,7 @@ by Ville's inequality. Details in [SPEC.md](SPEC.md).
 | Action gate for Claude Code: categories, floors, sampled audits, labels from the transcript, anytime-valid certification | Works |
 | History report and guarantee simulation | Works |
 | Step conductor for Claude Code and Codex: roles in Python or TOML, write boundary, checks, retries, resume after a crash, quota pause | Works |
-| Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step | Works |
+| Review page and CLI answers: queue, stops, runs, roles, log; return to an earlier step; dismiss a run | Works |
 | Answers bound to who gave them and to the evidence shown; floor paths; irreversible steps with idempotency keys | Works |
 | Real projects: steps on copies, previews before and after, a branch at the end | Works |
 | Box for previews on macOS; web access per step, with every address recorded | Works |
@@ -101,7 +101,6 @@ Missing, roughly in order:
 - **More built-in roles** that need no design taste to check: build a feature
   (a spec stop, then tests), upgrade dependencies.
 - **Choosing among two or three directions** at a stop, instead of one.
-- **Dismissing a blocked run** from the page.
 - **A box on Linux.** There, previews and test runs refuse to run unless
   `JAYNES_UNBOXED=1`.
 - **Codex web search**, wired but not yet verified in a live run.

@@ -29,7 +29,7 @@ import sys
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast, get_args
 
@@ -52,6 +52,7 @@ OUTPUT_BYTES = 1_000_000
 FILES = "files"  # where a trusted executor leaves files for the steps that need it
 FILE_BYTES, MAX_FILES = 10_000_000, 20
 UNKNOWN_RESET = 30 * 60  # pause this long when a runtime reports exhaustion without a reset time
+MAX_RAN = 50  # commands kept per turn
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,7 @@ class RunState:
     started: dict[str, Any] | None = None
     steps: dict[str, StepState] = field(default_factory=dict[str, StepState])
     finished: bool = False
+    outcome: str | None = None  # how it finished: delivered, ended by a step's output, or dismissed by a person
     blocked: dict[str, Any] | None = None
     paused_until: float | None = None
     branch: dict[str, Any] | None = None
@@ -175,7 +177,7 @@ def project(events: Iterable[Event]) -> RunState:
             case "RunBlocked":
                 st.blocked = p
             case "RunFinished":
-                st.finished = True
+                st.finished, st.outcome = True, str(p.get("outcome", "delivered"))
             case "BranchCreated":
                 st.branch = p
             case _:
@@ -357,6 +359,17 @@ class Conductor:
                 rows.append(self._witness(target, s, value, source=by, model=str(s.checked["model"]),
                                           carry=s.checked))
             self.store.append_all([(kind, p, run_id, self.clock()) for kind, p in rows])
+
+    def dismiss(self, run_id: str) -> None:
+        """A person drops an unfinished run: it finishes with nothing delivered and leaves the queue.
+        A run that a process holds right now is refused with ``RunBusy``."""
+        with self._lock(run_id):
+            st = project(self.store.events(run_id=run_id))
+            if st.started is None:
+                raise AnswerRejected([f"no run {run_id}"])
+            if st.finished:
+                raise AnswerRejected([f"run {run_id} already finished"])
+            self._emit(run_id, "RunFinished", {"outcome": "dismissed"})
 
     def output(self, run_id: str, step: Step[T]) -> T | None:
         """The latest checked output of ``step`` in ``run_id``."""
@@ -555,7 +568,10 @@ class Conductor:
             self._emit(run_id, "TurnFinished", {"step": step.name, "attempt": attempt, "files_changed": changed,
                                                 "tokens_in": turn.tokens_in, "tokens_out": turn.tokens_out,
                                                 "model": turn.model, "seconds": round(time.monotonic() - t0, 3),
-                                                **({"web": list(turn.web)} if step.web else {})})
+                                                **({"web": list(turn.web)} if step.web else {}),
+                                                # the last commands, which hold the final test runs
+                                                **({"ran": [asdict(r) for r in turn.commands[-MAX_RAN:]]}
+                                                   if turn.commands else {})})
             if changed:
                 other = f"{OUTPUT} and files in project/" if step.project == "write" else OUTPUT
                 self._reject(run_id, step, attempt, "write_boundary",
