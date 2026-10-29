@@ -47,7 +47,7 @@ from pygments.util import ClassNotFound
 from jaynes import bounds, install, role_file, roles, sandbox, verify
 from jaynes import project as repo
 from jaynes.conductor import (LABELS, Answer, AnswerRejected, Conductor, RunBusy, RunState, StepState, Waiting,
-                              continue_in_background, new_run_id, project, start_in_background)
+                              continue_in_background, new_run_id, project, return_to, start_in_background)
 from jaynes.history import Report, past_calls, report
 from jaynes.preview import Previews
 from jaynes.policy import find_policy, load_policy
@@ -625,6 +625,7 @@ class Review:
         main = (crumbs + f'<div class="body">{"".join(parts)}</div>'
                 + self._answer_bar(run_id, step, value, error, fields, editable=not pure,
                                    earlier=self._earlier(role, step),
+                                   default_to=return_to(role, step) if pure and role else None,
                                    evidence=str(s.open_stop[1].get("evidence") or "") if s.open_stop else ""))
         return page(f"Stop: {step}", self.sidebar((run_id, step)), main, self.seq())
 
@@ -1187,12 +1188,13 @@ class Review:
         return [x.name for x in role.steps[:names.index(step)] if x.output is not None] if role and step in names else []
 
     def _answer_bar(self, run_id: str, step: str, value: Any, error: str, fields: dict[str, str] | None,
-                    editable: bool = True, earlier: list[str] | None = None, evidence: str = "") -> str:
+                    editable: bool = True, earlier: list[str] | None = None, evidence: str = "",
+                    default_to: str | None = None) -> str:
         fields = fields or {}
-        chosen = fields.get("to", "")
+        chosen = fields.get("to", "") or (default_to or "")
         back = ("" if not earlier else
                 '<select name="to" title="Return and context go to this step; every step after it runs again">'
-                + f'<option value="">to {esc(step)}</option>'
+                + ("" if default_to else f'<option value="">to {esc(step)}</option>')  # a step with no output reruns nothing
                 + "".join(f'<option value="{esc(n)}"{" selected" if n == chosen else ""}>back to {esc(n)}</option>'
                           for n in earlier) + "</select>")
         edited = fields.get("output") or json.dumps(value, indent=2, ensure_ascii=False)

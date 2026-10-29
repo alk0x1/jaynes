@@ -288,6 +288,12 @@ a person by omission. When a person sends a run back to an earlier step, the
 label that step's stop was released with is replaced by the person's; if an
 agent had released it, there was no label, so the person's is added.
 
+A stop with no output, such as `accept`, has nothing of its own to rerun, so
+`return` and `context` there must name the earlier step that runs again
+(`to`); without it the answer is refused with the step to name. The page
+selects that step by default: the stop's last need with an output, else the
+nearest earlier step with one.
+
 Each opened stop records `evidence`, the hash of the output and question it
 shows. An answer that carries it is refused if the stop has shown something
 else since, so a stale page cannot accept what came after it.
@@ -481,9 +487,6 @@ outbound integrations.
 - Turn deadline and `max_turns` defaults per step type.
 - Whether resuming a run whose role fingerprint changed should continue, block,
   or restart the affected steps.
-- What `return` means at a stop with no output, such as `accept`: today it
-  only reopens the same stop; it should probably rerun the steps it needs,
-  which v0 cannot do because downstream steps never rerun.
 
 ## Appendix A. M1 evidence
 

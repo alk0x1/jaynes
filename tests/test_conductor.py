@@ -515,3 +515,16 @@ def test_a_step_that_can_end_the_run_needs_an_output_and_a_stop() -> None:
         r.step("look", output=Found, ends=lambda out: not out.found)
     with pytest.raises(ValueError, match="no output"):
         r.step("look", stop=stop(0.2), ends=lambda out: True)
+
+
+def test_return_at_a_stop_with_no_output_must_name_the_step_to_rerun(tmp_path: Path) -> None:
+    r = role("pure", agent="fake")
+    a = r.step("draft", output=Note)
+    r.step("accept", needs=[a], stop=stop(0.2))
+    c = Conductor(tmp_path, runtimes={"fake": lambda: Scripted(default=lambda s: {"text": s})})
+    assert c.run(r, "t", run_id="r1") == RunResult("waiting", "accept")
+    with pytest.raises(AnswerRejected, match="return to 'draft' instead"):
+        c.answer(r, "r1", "accept", "return", note="shorter", by="person")
+    c.answer(r, "r1", "accept", "return", note="shorter", to="draft", by="person")
+    assert c.run(r, "t", run_id="r1") == RunResult("waiting", "accept")
+    assert [p["round"] for p in payloads(c, "r1", "StepStarted")] == [1, 2]

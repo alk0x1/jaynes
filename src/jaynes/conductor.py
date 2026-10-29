@@ -254,6 +254,16 @@ def coin(run_id: str, step: str) -> float:
     return int.from_bytes(h[:8], "big") / 2**64
 
 
+def return_to(role: Role, step: str) -> str | None:
+    """Where a return from a stop with no output goes: its last need with an output, else the nearest earlier
+    step with one."""
+    names = [x.name for x in role.steps]
+    here = role.steps[names.index(step)]
+    needs = [n.name for n in here.needs if n.output is not None]
+    earlier = [x.name for x in role.steps[:names.index(step)] if x.output is not None]
+    return needs[-1] if needs else earlier[-1] if earlier else None
+
+
 def new_run_id() -> str:
     return "r" + time.strftime("%Y%m%d%H%M%S") + secrets.token_hex(3)
 
@@ -314,6 +324,11 @@ class Conductor:
         if answer in ("return", "context") and not (note or "").strip():
             raise AnswerRejected([f"{answer} needs a note for the agent"])
         names = [x.name for x in role.steps]
+        if to is None and answer in ("return", "context") and step in names \
+                and role.steps[names.index(step)].output is None:  # nothing here would run again
+            need = return_to(role, step)
+            raise AnswerRejected([f"{step!r} has no output to rerun; return to {need!r} instead" if need else
+                                  f"{step!r} has no output and no earlier step has one; nothing can run again"])
         if to is not None:
             if answer not in ("return", "context"):
                 raise AnswerRejected(["only return or context can go to an earlier step"])

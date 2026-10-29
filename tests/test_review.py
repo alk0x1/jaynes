@@ -391,3 +391,23 @@ def test_the_page_reloads_for_runs_and_not_for_the_action_gate(served: tuple[str
     assert get(base + "/seq") == before
     store.append("RunPaused", {"reason": "quota", "agent": "quick", "until": 0}, run_id=run)
     assert get(base + "/seq") != before
+
+
+def test_a_stop_with_no_output_returns_to_the_step_before_it_by_default(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.two_stops:PURE", "--task", "t",
+              "--runtime", "quick=tests.two_stops:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + f"/stop/{run}/accept")
+        assert '<option value="write" selected>back to write</option>' in page
+        assert "to accept</option>" not in page
+        status, _ = post(base + "/answer", {**form(page), "answer": "return", "note": "shorter", "to": "write"})
+        assert status == 303
+        store = Store(tmp_path / "jaynes.sqlite3")
+        deadline = time.monotonic() + 30
+        while [e.payload["round"] for e in store.events("StepStarted", run_id=run)] != [1, 2]:
+            assert time.monotonic() < deadline, (tmp_path / "runs" / run / "continue.log").read_text()
+            time.sleep(0.05)
+    finally:
+        server.shutdown()

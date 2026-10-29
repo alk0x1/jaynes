@@ -1,4 +1,5 @@
-"""Role with two stops in a row, for returning an earlier step from the page; loaded by ``jaynes run``."""
+"""Roles for returning an earlier step from the page: two stops in a row, and a stop with no output after a step
+with one. Loaded by ``jaynes run``."""
 
 from __future__ import annotations
 
@@ -18,6 +19,10 @@ class Note(BaseModel):
 ROLE = role("two-stops", agent="quick")
 OUTLINE = ROLE.step("outline", output=Note, stop=stop(0.2))
 DRAFT = ROLE.step("draft", output=Note, needs=[OUTLINE], stop=stop(0.2))
+
+PURE = role("pure-stop", agent="quick")
+WRITE = PURE.step("write", output=Note)
+PURE.step("accept", needs=[WRITE], stop=stop(0.2))
 
 
 class Agent:
