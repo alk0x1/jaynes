@@ -476,7 +476,8 @@ class Conductor:
                 commit = repo.branch(Path(info["root"]), str(info["base"]), name,
                                      [(f"{role.name}, {step}: {task}"[:200], p) for step, p in patches])
             except repo.ProjectError as err:
-                self._emit(run_id, "RunBlocked", {"step": "", "reasons": [f"the branch was not created: {err}"]})
+                self._emit(run_id, "RunBlocked", {"step": role.steps[-1].name, "at": "branch",
+                                                  "reasons": [f"the branch was not created: {err}"]})
                 return None
             self._emit(run_id, "BranchCreated", {"branch": name, "commit": commit, "root": info["root"],
                                                  "steps": [step for step, _ in patches]})

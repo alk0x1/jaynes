@@ -571,9 +571,14 @@ class Review:
                              f"{esc(tail)}</pre></div></div>")
             main = crumbs + f'<div class="body">{"".join(parts)}</div>' + self._run_bar(run_id, cont=True)
             return page(f"Idle: {run_id}", self.sidebar((run_id, step)), main, self.seq())
-        if w.kind == "blocked":
+        if w.kind == "blocked" and (st.blocked or {}).get("at") == "branch":
+            parts.append("<div><h1>This run is blocked after its last step</h1>"
+                         '<div class="sub">Every step finished, but its changes did not reach your repository:</div>'
+                         "</div>")
+        elif w.kind == "blocked":
             parts.append(f"<div><h1>This run is blocked at {esc(step)}</h1>"
                          f'<div class="sub">Every attempt of the round was rejected. The last reasons:</div></div>')
+        if w.kind == "blocked":
             parts.append('<div class="box"><table>' + "".join(
                 f'<tr><td class="m" style="color:var(--red)">rejected</td><td>{esc(r)}</td></tr>' for r in w.reasons)
                 + "</table></div>")
@@ -1323,6 +1328,8 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0) -> Revie
                     self._send(200, str(app.seq()), "text/plain")
                 case ["stop", run_id, step]:
                     self._send(200, app.stop_page(run_id, step))
+                case ["stop", run_id]:  # a run blocked with no step, in logs from before it had one
+                    self._send(200, app.run_page(run_id))
                 case ["run", run_id]:
                     self._send(200, app.run_page(run_id))
                 case ["new"]:

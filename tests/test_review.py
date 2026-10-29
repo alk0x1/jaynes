@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -15,10 +16,14 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
-from jaynes import cli
+from jaynes import cli, project
+from jaynes.conductor import Conductor
 from jaynes.review import ReviewServer, diff_html, make_server
+from jaynes.role import role
 from jaynes.store import Store
+from tests.fakes import Scripted, write
 from tests.pictured import PNG
 
 
@@ -338,5 +343,41 @@ def test_a_stop_that_ends_the_run_says_so_and_the_run_shows_it_ended(tmp_path: P
         c.run(ENDING, "find it", run_id=run)
         page = get(f"{base}/run/{run}")
         assert '<div class="n">ended</div>' in page and "ended at look; nothing was delivered" in page
+    finally:
+        server.shutdown()
+
+
+class Note(BaseModel):
+    text: str
+
+
+def test_a_run_blocked_at_its_branch_links_to_a_page_that_names_the_reason(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.txt").write_text("a\n")
+    for a in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "s"]):
+        subprocess.run(["git", *a], cwd=repo, check=True)
+
+    def edit(ws: Path) -> None:
+        (ws / "project" / "a.txt").write_text("b\n")
+        write({"text": "b"})(ws)
+
+    def refuse(*args: object) -> str:
+        raise project.ProjectError("the repository is locked")
+
+    monkeypatch.setattr(project, "branch", refuse)
+    r = role("paint", agent="fake")
+    r.step("paint", output=Note, project="write", may_change=["**"])
+    home = tmp_path / "home"
+    result = Conductor(home, runtimes={"fake": lambda: Scripted({("paint", 1): edit})}).run(r, "t", "r1", project=repo)
+    assert result.status == "blocked" and result.step == "paint"
+    base, server = serving(home)
+    try:
+        [link] = re.findall(r'<a class="item[^"]*" href="([^"]+)"', get(base + "/"))
+        page = get(base + link)
+        assert "blocked after its last step" in page and "the repository is locked" in page
+        assert "Every attempt of the round was rejected" not in page
+        assert "r1" in get(base + "/stop/r1/")  # a link from an older log, with no step, opens the run
     finally:
         server.shutdown()
