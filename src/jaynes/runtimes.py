@@ -28,6 +28,7 @@ from jaynes import suite
 from jaynes.runtime import QuotaExhausted, Ran, RuntimeFailure, TurnResult, TurnTimeout
 
 LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit|quota", re.I)
+NOT_QUOTA = ("error_max_turns", "error_max_budget_usd")  # Claude result subtypes that name another failure
 OUTPUT_TAIL = 2000  # characters of a command's output kept, from its end, where test summaries are
 
 
@@ -155,6 +156,18 @@ def claude_commands(out: str) -> list[Ran]:
     return [results.get(i, Ran(c, False, "")) for i, c in commands.items()]
 
 
+def claude_failure(result: dict[str, Any], code: int, err: str) -> QuotaExhausted | RuntimeFailure:
+    """Why a turn failed. The result text is Claude's own error only when it reports one of no other kind;
+    otherwise it is the agent's last message, which may mention limits without having hit one."""
+    said = str(result.get("result") or "")
+    own = bool(result.get("is_error")) and result.get("subtype") not in NOT_QUOTA
+    text = f"{said if own else ''} {err[-400:]}"
+    if LIMIT.search(text):
+        return QuotaExhausted(_reset_epoch(text))
+    return RuntimeFailure(f"claude turn did not complete ({result.get('subtype') or code}): "
+                          f"{f'{said} {err[-400:]}'.strip()[:300]}")
+
+
 class ClaudeRuntime:
     name = "claude"
     scratch_dirs = (".claude",)  # Claude Code 2.1 creates .claude/.cc-writes in its working directory
@@ -174,11 +187,8 @@ class ClaudeRuntime:
         code, out, err = _run(self.command(workspace, web, scratch), workspace, scratch, prompt, deadline,
                               {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", **_project_env(workspace, scratch)})
         result, read = claude_result(out)
-        text = f"{result.get('result') or ''} {err[-400:]}"
         if result.get("is_error") or code != 0:
-            if LIMIT.search(text):
-                raise QuotaExhausted(_reset_epoch(text))
-            raise RuntimeFailure(f"claude turn did not complete ({result.get('subtype') or code}): {text.strip()[:300]}")
+            raise claude_failure(result, code, err)
         usage: dict[str, Any] = result.get("usage") or {}
         tokens_in = sum(int(usage.get(k) or 0) for k in
                         ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))

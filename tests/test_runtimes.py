@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 from jaynes.preview import link_dependencies
-from jaynes.runtime import Ran
-from jaynes.runtimes import _project_env, _run, claude_commands, claude_settings, codex_command  # pyright: ignore[reportPrivateUsage]
+from jaynes.runtime import QuotaExhausted, Ran, RuntimeFailure
+from jaynes.runtimes import _project_env, _run, claude_commands, claude_failure, claude_settings, codex_command  # pyright: ignore[reportPrivateUsage]
 from jaynes.suite import environment
 
 
@@ -78,3 +78,14 @@ def test_a_codex_command_item_says_what_ran_and_how_it_ended() -> None:
     assert codex_command(item) == Ran("bash -lc 'pytest -q'", False, "1 failed\n")
     assert codex_command({**item, "exit_code": 0, "status": "completed"}) == Ran("bash -lc 'pytest -q'", True, "1 failed\n")
     assert codex_command({"type": "agent_message", "text": "hi"}) is None
+
+
+def test_a_claude_turn_pauses_for_quota_only_when_claude_says_so_not_when_the_agent_does() -> None:
+    reset = claude_failure({"is_error": True, "subtype": "success", "result": "Claude AI usage limit reached|1761000000"},
+                           1, "")
+    assert isinstance(reset, QuotaExhausted) and reset.until == 1761000000
+    assert isinstance(claude_failure({"is_error": True, "result": "x"}, 1, "API Error: 429 rate limit"), QuotaExhausted)
+    said = "Fixed the bug: the retry now backs off when the rate limit is reached."  # the agent's last message
+    assert isinstance(claude_failure({"is_error": False, "subtype": "success", "result": said}, 1, ""), RuntimeFailure)
+    assert isinstance(claude_failure({"is_error": True, "subtype": "error_max_turns", "result": said}, 1, ""),
+                      RuntimeFailure)
