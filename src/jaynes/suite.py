@@ -28,6 +28,7 @@ TAIL = 3000  # characters of output kept, from the end, where test runners put t
 class Ran:
     code: int  # 124 when the command ran out of time
     output: str  # the end of what it printed, stdout and stderr together
+    printed: str = ""  # all of it, to search: a long traceback can push a line out of the end
 
 
 def environment(work: Path, scratch: Path) -> dict[str, str]:
@@ -83,4 +84,5 @@ def run(needs: Witnesses, command: str, timeout: float = 600.0) -> Ran:
             out, _ = proc.communicate()
             out += f"\n(stopped after {timeout:.0f} s)".encode()
             code = 124
-        return Ran(code, out.decode(errors="replace")[-TAIL:])
+        text = out.decode(errors="replace")
+        return Ran(code, text[-TAIL:], text)

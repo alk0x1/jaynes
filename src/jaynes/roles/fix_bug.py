@@ -71,7 +71,7 @@ def fails_for_the_bug(out: Reproduction, needs: Witnesses) -> Pass | Fail:
     if ran.code == 0:
         return Fail(f"the tests pass before any fix; they must fail because of the bug. {out.command} printed:\n"
                     + ran.output)
-    if out.failure.strip() not in ran.output:
+    if out.failure.strip() not in ran.printed:
         return Fail(f"{out.failure.strip()} is not in what the command printed; quote a line it prints because of "
                     f"the bug. The end of what it printed (exit {ran.code}):\n{ran.output}")
     return Pass()

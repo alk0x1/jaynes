@@ -69,6 +69,12 @@ def test_a_reproduction_must_fail_for_the_reason_it_quotes(repo: Path, tmp_path:
     assert isinstance(elsewhere, Fail) and "calc.py is not a test file" in elsewhere.reasons[0]
 
 
+def test_the_quoted_failure_counts_wherever_the_command_printed_it(repo: Path, tmp_path: Path) -> None:
+    needs = Witnesses({}, copy(repo, tmp_path, {}), source=repo)
+    long = "echo 'AssertionError: add subtracts'; head -c 20000 /dev/zero | tr '\\0' x; echo; false"
+    assert isinstance(fb.fails_for_the_bug(reproduction(tests=["tests/test_zero.py"], command=long), needs), Pass)
+
+
 def test_a_fix_must_pass_the_new_tests_and_the_whole_suite(repo: Path, tmp_path: Path) -> None:
     found = Checked("reproduce", reproduction(), "h", "c")
     broken = Witnesses({"reproduce": found}, copy(repo, tmp_path, {"tests/test_add.py": TEST}), source=repo)
