@@ -88,12 +88,15 @@ class Scripted:
     scratch_dirs: tuple[str, ...] = ()  # folders the runtime itself creates in the workspace
     web_read: dict[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])  # by step, on web turns
     webs: list[bool] = field(default_factory=list[bool])
+    limits: list[int | None] = field(default_factory=list[int | None])  # max_messages of each turn
 
-    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False,
+             max_messages: int | None = None) -> TurnResult:
         step = json.loads((workspace / "step.json").read_text())["step"]
         self.counts[step] = self.counts.get(step, 0) + 1
         self.prompts.append(prompt)
         self.webs.append(web)
+        self.limits.append(max_messages)
         action = self.plan.get((step, self.counts[step]))
         if action is None:
             if self.default is None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from jaynes.preview import link_dependencies
 from jaynes.runtime import QuotaExhausted, Ran, RuntimeFailure
-from jaynes.runtimes import _project_env, _run, claude_commands, claude_failure, claude_settings, codex_command  # pyright: ignore[reportPrivateUsage]
+from jaynes.runtimes import ClaudeRuntime, _project_env, _run, claude_commands, claude_failure, claude_settings, codex_command  # pyright: ignore[reportPrivateUsage]
 from jaynes.suite import environment
 
 
@@ -89,3 +89,13 @@ def test_a_claude_turn_pauses_for_quota_only_when_claude_says_so_not_when_the_ag
     assert isinstance(claude_failure({"is_error": False, "subtype": "success", "result": said}, 1, ""), RuntimeFailure)
     assert isinstance(claude_failure({"is_error": True, "subtype": "error_max_turns", "result": said}, 1, ""),
                       RuntimeFailure)
+
+
+def test_a_claude_turn_has_200_messages_unless_its_step_says_and_running_out_says_so_plainly(tmp_path: Path) -> None:
+    def limit(args: list[str]) -> str:
+        return args[args.index("--max-turns") + 1]
+
+    claude = ClaudeRuntime()
+    assert limit(claude.command(tmp_path)) == "200" and limit(claude.command(tmp_path, max_messages=500)) == "500"
+    out = claude_failure({"is_error": True, "subtype": "error_max_turns"}, 1, "")
+    assert isinstance(out, RuntimeFailure) and "ran out of messages" in str(out) and "max_messages" in str(out)

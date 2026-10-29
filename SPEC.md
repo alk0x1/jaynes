@@ -114,7 +114,8 @@ Rules:
   its output. The function's source is part of the step's fingerprint.
 - A step with no `output` is a pure stop over its needs, like `accept` above.
 - Per step: `agent` overrides the role's agent, `max_turns` (default 3),
-  `deadline` in seconds per turn (default 900).
+  `deadline` in seconds per turn (default 900), `max_messages` per Claude
+  turn (default 200; Codex counts none).
 - `question=fn(output, needs) -> str` writes what the person is asked at the
   stop. It is recorded in `StopOpened` and is part of the stop's fingerprint.
   Without it the page asks whether the output is right, or, for a step with
@@ -200,7 +201,9 @@ For each step, the conductor:
    meter read from the runtime, never from the agent's own report.
    - Claude Code: `claude -p` with settings that allow writes only inside the
      workspace, OS sandbox on, no network tools, no subagents, permission mode
-     `dontAsk`.
+     `dontAsk`, and at most `max_messages` messages (`--max-turns`, default
+     200, so the deadline is what usually ends a long turn). A turn that runs
+     out is rejected with that reason in plain words.
    - Codex: `codex exec --json` with the `workspace-write` sandbox rooted at the
      workspace, network off, user config, rules and project docs ignored,
      ephemeral session. The app server (which can read the quota before a turn

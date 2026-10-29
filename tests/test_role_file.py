@@ -69,6 +69,7 @@ output = "notes_checks:Plan"
 needs = ["draft"]
 check = ["notes_checks:follows_the_note"]
 max_turns = 2
+max_messages = 300
 
 [[step]]
 name = "accept"
@@ -92,7 +93,7 @@ def test_a_role_file_gives_the_same_steps_as_python(tmp_path: Path) -> None:
     assert (r.name, r.agent, r.method_text()) == ("notes", "quick", "Write short notes.")
     assert (draft.output.__name__ if draft.output else None, draft.stop, draft.instructions) == (
         "Note", stop(0.2), "Write the note.")
-    assert [n.name for n in plan.needs] == ["draft"] and plan.max_turns == 2
+    assert [n.name for n in plan.needs] == ["draft"] and plan.max_turns == 2 and plan.max_messages == 300
     assert accept.output is None and accept.stop == stop(0.05, sampled=False)
     assert draft.output is not None and draft.question is not None
     assert draft.question(draft.output(text="hi"), Witnesses({})) == "Ship 'hi'?"

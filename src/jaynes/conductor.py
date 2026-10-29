@@ -567,7 +567,9 @@ class Conductor:
                     f"step {step.name} reads the web, and the {step.agent} runtime cannot open the web"], t0)
                 return None
             try:
-                web = {"web": True} if step.web else {}
+                web: dict[str, Any] = {"web": True} if step.web else {}
+                if step.max_messages and "max_messages" in inspect.signature(runtime.turn).parameters:
+                    web["max_messages"] = step.max_messages  # a runtime that counts no messages has no such limit
                 turn = runtime.turn(ws, scratch, self.prompt(role, step, task, s, files), step.deadline, **web)
             except QuotaExhausted as q:
                 until = q.until if q.until and q.until > self.clock() else self.clock() + UNKNOWN_RESET

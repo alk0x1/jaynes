@@ -164,6 +164,9 @@ def claude_failure(result: dict[str, Any], code: int, err: str) -> QuotaExhauste
     text = f"{said if own else ''} {err[-400:]}"
     if LIMIT.search(text):
         return QuotaExhausted(_reset_epoch(text))
+    if result.get("subtype") == "error_max_turns":
+        return RuntimeFailure("the turn ran out of messages before it finished; the step may need a higher "
+                              "max_messages")
     return RuntimeFailure(f"claude turn did not complete ({result.get('subtype') or code}): "
                           f"{f'{said} {err[-400:]}'.strip()[:300]}")
 
@@ -172,19 +175,21 @@ class ClaudeRuntime:
     name = "claude"
     scratch_dirs = (".claude",)  # Claude Code 2.1 creates .claude/.cc-writes in its working directory
 
-    def __init__(self, model: str | None = None, max_turns: int = 60) -> None:
+    def __init__(self, model: str | None = None, max_messages: int = 200) -> None:
         self.model = model or os.environ.get("JAYNES_CLAUDE_MODEL")
-        self.max_turns = max_turns
+        self.max_messages = max_messages  # the deadline is what usually ends a long turn
 
-    def command(self, workspace: Path, web: bool = False, scratch: Path | None = None) -> list[str]:
+    def command(self, workspace: Path, web: bool = False, scratch: Path | None = None,
+                max_messages: int | None = None) -> list[str]:
         args = [_binary("claude"), "-p", "--output-format", "stream-json", "--verbose", "--setting-sources", "",
                 "--settings", json.dumps(claude_settings(workspace, web, scratch)), "--strict-mcp-config",
                 "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
-                "--permission-mode", "dontAsk", "--max-turns", str(self.max_turns)]
+                "--permission-mode", "dontAsk", "--max-turns", str(max_messages or self.max_messages)]
         return args + (["--model", self.model] if self.model else [])
 
-    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False) -> TurnResult:
-        code, out, err = _run(self.command(workspace, web, scratch), workspace, scratch, prompt, deadline,
+    def turn(self, workspace: Path, scratch: Path, prompt: str, deadline: float, web: bool = False,
+             max_messages: int | None = None) -> TurnResult:
+        code, out, err = _run(self.command(workspace, web, scratch, max_messages), workspace, scratch, prompt, deadline,
                               {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", **_project_env(workspace, scratch)})
         result, read = claude_result(out)
         if result.get("is_error") or code != 0:

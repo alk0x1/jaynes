@@ -136,6 +136,7 @@ class Step(Generic[T]):
     web: bool = False  # the agent may read the web during this step
     effect: Effect = "pure"  # what a trusted executor does to the world
     ends: Callable[[Any], bool] | None = None  # an output it holds true for ends the run once a person accepts it
+    max_messages: int | None = None  # messages per agent turn, where the runtime counts them; None: its default
 
     @property
     def executor(self) -> str:
@@ -187,7 +188,8 @@ class Role:
              instructions: str = "", max_turns: int = 3, deadline: float = 900.0,
              question: Callable[[T, Witnesses], str] | None = None,
              project: Literal["read", "write"] | None = None, may_change: Sequence[str] = (),
-             web: bool = False, effect: Effect | None = None, ends: Callable[[T], bool] | None = None) -> Step[T]:
+             web: bool = False, effect: Effect | None = None, ends: Callable[[T], bool] | None = None,
+             max_messages: int | None = None) -> Step[T]:
         if any(s.name == name for s in self.steps):
             raise ValueError(f"step {name!r} defined twice")
         for n in needs:
@@ -227,7 +229,8 @@ class Role:
         checks = tuple(cast(Sequence[Check], check)) if isinstance(check, Sequence) else (check,)
         s: Step[T] = Step(self, name, output, tuple(needs), checks, stop, run_by, agent or self.agent,
                           instructions, max_turns, deadline, cast(Callable[[Any, Witnesses], str] | None, question),
-                          project, tuple(may_change), web, effect or "pure", cast(Callable[[Any], bool] | None, ends))
+                          project, tuple(may_change), web, effect or "pure", cast(Callable[[Any], bool] | None, ends),
+                          max_messages)
         self.steps.append(s)
         return s
 

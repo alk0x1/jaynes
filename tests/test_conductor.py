@@ -528,3 +528,12 @@ def test_return_at_a_stop_with_no_output_must_name_the_step_to_rerun(tmp_path: P
     c.answer(r, "r1", "accept", "return", note="shorter", to="draft", by="person")
     assert c.run(r, "t", run_id="r1") == RunResult("waiting", "accept")
     assert [p["round"] for p in payloads(c, "r1", "StepStarted")] == [1, 2]
+
+
+def test_a_step_s_message_limit_reaches_the_runtime_and_none_is_passed_without_one(tmp_path: Path) -> None:
+    r = role("long", agent="fake")
+    a = r.step("a", output=Note, max_messages=400)
+    r.step("b", output=Note, needs=[a])
+    agent = Scripted(default=lambda s: {"text": s})
+    assert Conductor(tmp_path, runtimes={"fake": lambda: agent}).run(r, "t", run_id="r1").status == "finished"
+    assert agent.limits == [400, None]

@@ -33,7 +33,8 @@ from jaynes.role import Role, Stop, Step, Witnesses, role, stop
 
 ROLE_KEYS = {"name", "agent", "method", "method_file", "step"}
 STEP_KEYS = {"name", "output", "needs", "check", "stop", "run_by", "agent", "instructions", "max_turns", "deadline",
-             "question", "project", "may_change", "web", "effect", "ends"}
+             "question", "project", "may_change", "web", "effect", "ends",
+             "max_messages"}
 STOP_KEYS = {"budget", "sampled", "audit_rate", "delta"}
 
 
@@ -102,7 +103,8 @@ def _step(r: Role, s: dict[str, Any]) -> Step[Any]:
         deadline=float(s.get("deadline", 900.0)),
         question=_question(name, s["question"], output) if "question" in s else None,
         project=s.get("project"), may_change=s.get("may_change", ()), web=s.get("web", False),
-        effect=s.get("effect"), ends=_callable(name, s["ends"]) if "ends" in s else None)
+        effect=s.get("effect"), ends=_callable(name, s["ends"]) if "ends" in s else None,
+        max_messages=s.get("max_messages"))
 
 
 def _known(where: str, table: dict[str, Any], keys: set[str]) -> None:
