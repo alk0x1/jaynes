@@ -791,7 +791,9 @@ class Review:
 
     def new_page(self, error: str = "", fields: dict[str, str] | None = None) -> str:
         f = fields or {}
-        chosen = f.get("role", DEMO)
+        last = next((str(ev.payload["ref"]) for ev in reversed(list(self.c.store.events("RunStarted")))
+                     if ev.payload.get("ref")), DEMO)  # the role run last, else the demo
+        chosen = f.get("role", last)
         options = "".join(f'<option value="{esc(ref)}"{" selected" if ref == chosen else ""}>'
                           f'{esc(f"{r.name} ({ref})" if (r := self.import_role(ref)) else ref)}</option>'
                           for ref in self.known_roles())
