@@ -120,6 +120,16 @@ class Store:
         rows = self.db.execute("select run_id from events where type = 'RunStarted' order by seq").fetchall()
         return [str(r[0]) for r in rows]
 
+    def unfinished_runs(self) -> list[str]:
+        """Conductor runs with no ``RunFinished`` yet, in the order they started: what a queue reads."""
+        rows = self.db.execute(
+            """
+            select s.run_id from events s where s.type = 'RunStarted' and not exists (
+              select 1 from events f where f.run_id = s.run_id and f.type = 'RunFinished')
+            order by s.seq
+            """).fetchall()
+        return [str(r[0]) for r in rows]
+
     # --- projections ---------------------------------------------------------
 
     def window(self, fingerprint: str) -> Window:

@@ -486,12 +486,16 @@ class Review:
     def __init__(self, home: Path, shared: Shared) -> None:
         self.c = Conductor(home)
         self.shared = shared
+        self._queue: list[Waiting] | None = None
 
     def seq(self) -> int:
         return self.c.store.max_run_seq()
 
     def queue(self) -> list[Waiting]:
-        return self.c.queue(idle_after=self.shared.idle_after)
+        """Read once per request: the sidebar and the page show the same queue."""
+        if self._queue is None:
+            self._queue = self.c.queue(idle_after=self.shared.idle_after)
+        return self._queue
 
     def role_of(self, run_id: str) -> Role | None:
         """The role a run was started with, if its module can be imported here. Edits need a restart."""

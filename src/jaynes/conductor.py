@@ -410,7 +410,7 @@ class Conductor:
         process is about to pick up after an answer does not flicker into the queue.
         """
         items: list[Waiting] = []
-        for run_id in self.store.runs():
+        for run_id in self.store.unfinished_runs():
             events = list(self.store.events(run_id=run_id))
             st = project(events)
             if st.started is None or st.finished:
@@ -440,7 +440,7 @@ class Conductor:
     def due(self) -> list[tuple[str, float]]:
         """Runs whose quota pause has ended and that no process continues yet, with the reset they waited for."""
         out: list[tuple[str, float]] = []
-        for run_id in self.store.runs():
+        for run_id in self.store.unfinished_runs():
             st = project(self.store.events(run_id=run_id))
             if st.finished or st.blocked is not None or any(x.open_stop for x in st.steps.values()):
                 continue

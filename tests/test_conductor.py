@@ -566,3 +566,11 @@ def test_the_queue_lists_what_needs_the_person_before_what_runs_or_waits_for_quo
     with c._lock("busy"):  # pyright: ignore[reportPrivateUsage]
         assert [(w.run_id, w.kind) for w in c.queue(idle_after=0)] == [
             ("stop", "stop"), ("busy", "running"), ("paused", "paused")]
+
+
+def test_the_store_lists_only_runs_that_have_not_finished_in_the_order_they_started(tmp_path: Path) -> None:
+    c = Conductor(tmp_path)
+    for run in ("a", "b", "c"):
+        c.store.append("RunStarted", {"role": "r", "task": "t"}, run_id=run)
+    c.store.append("RunFinished", {"outcome": "delivered"}, run_id="b")
+    assert c.store.unfinished_runs() == ["a", "c"]
