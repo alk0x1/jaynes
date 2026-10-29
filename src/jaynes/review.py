@@ -875,7 +875,7 @@ class Review:
                 f'<tr><td>policy</td><td class="m">{esc(str(g.policy))}'
                 f'{"" if g.policy.is_file() else " (written on install)"}</td></tr></table></div>'
                 + ('<div class="err">Jaynes is running from a temporary environment, so the hook would stop working '
-                   'when it is cleaned. Install it first with uv tool install jaynes-ai (or pip install jaynes-ai), '
+                   'when it is cleaned. Install it first with uv tool install git+https://github.com/alk0x1/jaynes, '
                    'then open this page with jaynes.</div>' if install.temporary() and not g.installed else '')
                 + f'<form method="post" action="/setup" class="checks"><input type="hidden" name="token" value="{self.shared.token}">'
                 f'{buttons}</form>'
