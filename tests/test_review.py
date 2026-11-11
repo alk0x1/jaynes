@@ -263,7 +263,7 @@ def test_a_picture_drawn_from_a_page_links_the_page_served_where_it_runs_nothing
     try:
         page = get(base + f"/stop/{run}/pick")
         link = f"/page/{run}/draw/direction-1.html"
-        assert f'<a href="{link}" target="_blank" rel="noopener">Open the page</a>' in page
+        assert f'<a class="btn" href="{link}" target="_blank" rel="noopener">Open the page ↗</a>' in page
         assert "missing.html" not in page  # a page the step did not leave is not linked
         with urllib.request.urlopen(base + link, timeout=10) as r:
             policy = r.headers["Content-Security-Policy"]

@@ -476,7 +476,9 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .card .txt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; }
 .card .txt b { font-weight: 500; }
 .card .txt p { margin: 2px 0 0; color: var(--dim); }
-.card .txt p.open { margin-top: 6px; font-size: 13px; }
+.card .txt p.open { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.card .txt p.open .btn { padding: 7px 12px; color: var(--blue); border-color: var(--blue-soft); text-decoration: none; }
+.card .txt p.open .btn:hover { border-color: var(--blue); }
 .card.pick { cursor: pointer; }
 .card.pick:hover { border-color: var(--line-2); }
 .card.pick:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -1380,9 +1382,9 @@ class Review:
             text = f"<p>{marked(str(x['text'])).replace(chr(10), '<br>')}</p>" if x.get("text") else ""
             pages = [(str(pic["step"]), str(pic.get("page") or "")) for pic in
                      cast(list[dict[str, Any]], x.get("pictures") or []) if pic.get("page")]
-            links = [f'<a href="/page/{q(run_id)}/{q(step)}/{q(page)}" target="_blank" rel="noopener">Open the page'
-                     '</a>' for step, page in pages if page in self._files(st, step)]
-            text += f'<p class="open">{" · ".join(links)}</p>' if links else ""
+            links = [f'<a class="btn" href="/page/{q(run_id)}/{q(step)}/{q(page)}" target="_blank" rel="noopener">'
+                     'Open the page ↗</a>' for step, page in pages if page in self._files(st, step)]
+            text += f'<p class="open">{"".join(links)}</p>' if links else ""
             cards.append(f'<div class="card{" pick" if pick else ""}"' + (f' data-id="{esc(ident)}" tabindex="0"' if pick else "")
                          + '><div class="txt">' + ('<i class="n"></i>' if pick else "")
                          + f'<div><b>{marked(str(x["title"]))}</b>{text}</div></div>{row}</div>')
