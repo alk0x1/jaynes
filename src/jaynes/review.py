@@ -476,8 +476,8 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .dec .dnote { display: none; grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--red); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .dec.no .dnote { display: block; }
 .whys { display: grid; gap: 10px; }
-.whys .qa b { display: block; font-weight: 600; }
-.whys .qa p { color: var(--dim); margin-top: 2px; white-space: pre-wrap; }
+.whys .qa b { display: block; font-family: var(--mono); font-size: 12px; font-weight: 400; color: var(--dim); }
+.whys .qa p { color: var(--ink); font-size: 15px; line-height: 1.55; max-width: 68ch; margin-top: 4px; white-space: pre-wrap; }
 .whys .qa.pending p { color: var(--faint); font-family: var(--mono); font-size: 12px; }
 .whys form { display: flex; gap: 8px; }
 .whys input[type=text] { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
@@ -643,6 +643,10 @@ if (form) {
     const n = document.querySelectorAll(".dec.no").length;
     accept.firstChild.textContent = n ? "Send: redo " + n + ", keep the rest" : "Accept";
   };
+  // back from asking Why?: to its answer, once the pictures above it have taken their place
+  if (location.hash === "#why") window.addEventListener("load", () => {
+    const at = document.getElementById("why"); if (at) at.scrollIntoView({block: "start"});
+  });
   // a Why? still being answered is fetched again until it is, without reloading what the person is typing
   const whys = document.querySelector(".whys [data-whys]");
   const again = () => setTimeout(async () => {
@@ -1440,7 +1444,7 @@ class Review:
         return "".join(rows)
 
     def _why_part(self, run_id: str, step: str) -> str:
-        return ('<div class="whys"><div class="label">Why? <span>a Claude reads this step and answers; it changes '
+        return ('<div class="whys" id="why"><div class="label">Why? <span>a Claude reads this step and answers; it changes '
                 f'nothing</span></div><div data-whys="/why/{q(run_id)}/{q(step)}">{self.whys(run_id, step)}</div>'
                 f'<form method="post" action="/why"><input type="hidden" name="token" value="{self.shared.token}">'
                 f'<input type="hidden" name="run" value="{esc(run_id)}"><input type="hidden" name="step" '
@@ -1450,20 +1454,34 @@ class Review:
     def ask_why(self, fields: dict[str, str]) -> tuple[int, str]:
         """Start answering the person's question about a step at an open stop; back to the stop at once."""
         run_id, step, question = fields.get("run", ""), fields.get("step", ""), fields.get("question", "").strip()
-        back = f"/stop/{q(run_id)}/{q(step)}"
+        back = f"/stop/{q(run_id)}/{q(step)}#why"  # back where the answer will appear
         role = self.role_of(run_id)
         target = next((x for x in role.steps if x.name == step), None) if role else None
         st = project(self.c.store.events(run_id=run_id))
         s = st.steps.get(step)
         if not question or role is None or target is None or s is None or s.checked is None:
             return 303, back
-        notes = [n for n in self.c.history(run_id).notes if n.step == step]
+        notes = self.c.history(run_id).notes
+        names = [x.name for x in role.steps]
+        before = role.steps[:names.index(step)]
+        run_md = [f"- {x.name}{' (this step)' if x.name == step else ''}: {who(x)}"
+                  + (f". {x.about}" if x.about else "") for x in role.steps]
+        events = list(self.c.store.events(run_id=run_id))
+        rejected_md = [f"- at {e.payload['step']}: " + "; ".join(str(r) for r in cast(list[Any], e.payload.get("reasons") or []))[:600]
+                       for e in events if e.type == "TurnRejected"][-20:]
         given = {"task.md": str((st.started or {}).get("task") or ""),
                  "step.md": "\n\n".join(x for x in (role.method_text().strip(), f"# Step: {step}",
                                                      target.instructions.strip(), target.about) if x),
                  "output.json": json.dumps(self._value(s, target), indent=1, ensure_ascii=False),
-                 "notes.md": "\n".join(f"- round {n.round}, {n.by} at {n.step} ({n.answer}): {n.note}"
-                                       for n in notes) or "Nothing was said about this step yet."}
+                 "run.md": "\n".join(run_md),
+                 "rejected.md": "\n".join(rejected_md) or "Jaynes rejected nothing in this run.",
+                 "notes.md": "\n".join(f"- about {n.step}, round {n.round}, {n.by} ({n.answer}): {n.note}"
+                                       + (f" Found: {'; '.join(n.reasons)}" if n.reasons else "")
+                                       for n in notes) or "Nothing was said in this run yet."}
+        for x in before:
+            done = st.steps.get(x.name)
+            if done is not None and done.checked is not None and x.output is not None and not x.hidden:
+                given[f"steps/{x.name}.json"] = json.dumps(self._value(done, x), indent=1, ensure_ascii=False)
         if decs := self.c.decisions_of(target, s.checked):  # what is locked, and what unlocks with what
             given["decisions.md"] = "\n".join(
                 f"- {d.label} = {d.value}: " + ("locked, the person accepted it" if s.locked.get(d.id) == d.value

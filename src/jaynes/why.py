@@ -22,16 +22,20 @@ MOST = 12  # questions kept per step
 
 PROMPT = """You explain one step of a run to the person who owns the run. In this folder:
 - task.md: what the person asked for;
-- step.md: what the step was told to do;
-- output.json: what the step delivered, as the person sees it now;
+- run.md: the run's steps in order, who of the team does each and what it does; this step is marked;
+- step.md: what this step was told to do;
+- output.json: what this step delivered, as the person sees it now;
 - previous.json: what it delivered in the round before, when there is one;
-- notes.md: what the person and Jaynes said in this run;
-- decisions.md: the decisions the person judges at this stop, which are locked and what unlocks with what, when the
-  step shows them;
-- files/: files the step left, such as pictures.
-Read what you need and change nothing. Answer the person's question in at most five short sentences, in plain words
-and in the language of the question, and say what in these files your answer rests on. If the files do not say, say
-that they do not.
+- steps/: what each earlier step of the run delivered, by step;
+- notes.md: what the person said and what Jaynes sent back, in the whole run;
+- rejected.md: what Jaynes rejected before the person saw it, and why;
+- decisions.md: the decisions the person judges at this stop, which are locked and what unlocks with what;
+- files/: files this step left, such as pictures.
+The reason for what this step shows often lies in an earlier step: follow it there.
+
+Change nothing. Answer in one to three short sentences, the first one answering the question directly. Speak of the
+team and the steps as the person knows them (the designer, the director), never of files, ids or JSON. If nothing
+here says why, say so in one sentence and name the step that decided it. Answer in the language of the question.
 
 Question: """
 
@@ -62,6 +66,7 @@ def ask(home: Path, run_id: str, step: str, round_: int, question: str, given: M
     here = root / str(n)
     (here / "files").mkdir(parents=True)
     for name, text in given.items():
+        (here / name).parent.mkdir(parents=True, exist_ok=True)
         (here / name).write_text(text)
     for rel, src in list(files.items())[:40]:
         dest = here / "files" / rel
