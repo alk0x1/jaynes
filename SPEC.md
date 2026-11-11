@@ -212,6 +212,18 @@ Rules:
   is checked again like a change. It is answered `choose` (section 6.2). In
   Claude Code's dialog, which has four options and no order, the items are
   listed in the evidence and typing their numbers in order chooses them.
+- `decides=fn` shows the output at the stop as decisions: `fn(output)` lists
+  `Decision(id, label, value, after=())`. The person rejects a decision with a
+  line, and the rest are kept: the answer becomes a return of the rejected ones
+  alone, whose note names each, and the others are locked, by id, with their
+  value. An accept with none rejected locks them all. Jaynes rejects a later
+  output of the step that changes or drops a locked decision, as a failed
+  check, so it never reaches the person; the prompt lists what is locked and
+  asks the agent to keep each decision's id across rounds. The person unlocks a
+  decision by rejecting it (Change on the page); `after` names the decisions
+  one follows from, and rejecting one of those unlocks it too. Jaynes sending
+  the step back keeps the locks; a person sending it back from another stop,
+  or a blocked run, clears them, since they could not reject a decision there.
 - `back=Back(to, when, rounds=2)` lets Jaynes send an earlier step back:
   when the checked output makes `when(output, needs)` return reasons, `to`
   and every step after it run again with the reasons in `to`'s prompt, as a
@@ -478,6 +490,7 @@ its stop closed changes nothing.
 | return | the step reruns with the person's note in the prompt, on top of its previous output; or, with an earlier step named, that step does, and the error counts on its stop; at a step Jaynes runs, with no step named, the agent's step before it does, since Jaynes reads no note, or the step that one reviews when it sends a step back | error |
 | context | the step reruns with the note; the agent was not at fault | not counted |
 | choose | the chosen items of the output, in the person's order, replace it and are rechecked | correct |
+| accept with decisions rejected | a return of the rejected decisions alone; the rest are locked | error |
 
 The label is not yet the count. An error, a change or a return, counts at
 once. What a stop lets through, accepted, chosen or skipped as certified,

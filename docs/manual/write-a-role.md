@@ -82,6 +82,21 @@ A key Jaynes does not know, a reference that does not import, or a question that
 
 `stop=stop(budget=0.2)` makes a step stop for you. The budget is the share of answers you would change that the stop may have once it asks less: with 0.2 it asks one time in ten after 20 clean deliveries in a row. `stop(budget=0.05, sampled=False)` always asks. Most stops show the output and the run goes on; `stop(0.2, waits=True)` holds the run until you answer, for a choice that is yours to make, such as a look among three. It always asks, and only you answer it. [Runs and stops](runs.md#a-stop-asks-less-as-it-proves-right) has how a stop earns that.
 
+## Show the output as decisions
+
+`decides` turns the stop into a list of decisions instead of a block of output. You reject the line that is wrong, with a sentence, and keep the rest: only what you rejected is redone, and what you kept is locked, so the agent cannot change it in the next round. Give each decision an id that stays the same across rounds.
+
+```python
+def decisions(o: Look) -> list[Decision]:
+    return [Decision("theme", "Theme", o.theme),
+            Decision("accent", "Accent colour", o.accent, after=("theme",)),
+            Decision("text", "Text face", o.text)]
+
+LOOK = ROLE.step("look", output=Look, stop=stop(0.2, waits=True), decides=decisions)
+```
+
+Change on a locked line opens it again. `after` says what a decision follows from: rejecting the theme unlocks the accent too, so the agent may change it to fit.
+
 ## Tell the person what each step does
 
 `about` on a step is one sentence for the person: what the step does and, at a stop, what they decide there and what it changes. A stop shows it under its question, and the run's steps in one line that opens into what each does; the role's page lists the steps with who does each. Keep it short: who does the step is shown beside it.

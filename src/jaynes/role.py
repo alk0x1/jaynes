@@ -290,6 +290,22 @@ class Shown:
 
 
 @dataclass(frozen=True)
+class Decision:
+    """One decision in a step's output, as the person judges it at the stop: accepted or rejected with a note.
+
+    ``id`` follows it across rounds, whatever its wording; ``label`` names it for the person; ``value`` is what was
+    decided, as text. What the person accepts is locked: Jaynes rejects an output that changes or drops it, until
+    the person rejects it. ``after`` names the decisions it follows from, such as an accent colour after the theme:
+    when one of those is rejected, this one unlocks too.
+    """
+
+    id: str
+    label: str
+    value: str
+    after: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Back:
     """Jaynes sends an earlier step back, with what it found, when a checked output says so.
 
@@ -333,6 +349,7 @@ class Step(Generic[T]):
     tools: tuple[Tool, ...] = ()  # the role's functions its agent may call, run by Jaynes and recorded
     about: str = ""  # for the person, in a sentence: what the step does and, at a stop, what they decide there
     by: str = ""  # who of the team does it, as the person knows them, such as "design director"; shown, never sent
+    decides: Callable[[Any], list[Decision]] | None = None  # the output's decisions, each judged at the stop
 
     @property
     def executor(self) -> str:
@@ -375,6 +392,7 @@ class Step(Generic[T]):
         question += [f"choose:{code_hash(self.choose.items)}:{code_hash(self.choose.keep)}"] if self.choose else []
         question += [f"inputs:{inputs}"] if inputs else []
         question += [f"shows:{code_hash(self.shows)}"] if self.shows else []
+        question += [f"decides:{code_hash(self.decides)}"] if self.decides else []
         return _sha("\0".join([self.role.name, self.name, self.prompt_hash(), self.check_hash(), *question,
                                repr(s.budget), repr(s.delta), repr(s.sampled), model]))[:16]
 
@@ -403,7 +421,7 @@ class Role:
              inputs: Sequence[str] = (), choose: Choice | None = None, back: Back | None = None,
              max_files: int = 20, shows: Callable[[T, Witnesses], list[Shown]] | None = None,
              hidden: bool = False, tools: Sequence[Callable[..., Any] | Tool] = (), about: str = "",
-             by: str = "") -> Step[T]:
+             by: str = "", decides: Callable[[T], list[Decision]] | None = None) -> Step[T]:
         if any(s.name == name for s in self.steps):
             raise ValueError(f"step {name!r} defined twice")
         for n in needs:
@@ -424,6 +442,9 @@ class Role:
             raise ValueError(f"step {name!r} has a question but no stop to ask it at")
         if shows is not None and stop is None:
             raise ValueError(f"step {name!r} says how its stop shows the output, but has no stop")
+        if decides is not None and (stop is None or output is None):
+            raise ValueError(f"step {name!r} shows its output as decisions, but has no stop" if stop is None else
+                             f"step {name!r} shows its output as decisions, but has no output")
         if unknown := [i for i in inputs if i not in self.inputs]:
             raise ValueError(f"step {name!r} lists inputs {', '.join(unknown)}, which {self.name!r} does not declare")
         if choose is not None and (stop is None or output is None):
@@ -478,7 +499,8 @@ class Role:
                           project, tuple(may_change), web, effect or "pure", cast(Callable[[Any], bool] | None, ends),
                           max_messages, cast(Callable[[Any, str], bool] | None, asks), tuple(inputs), choose,
                           back, max_files, cast(Callable[[Any, Witnesses], list[Shown]] | None, shows), hidden,
-                          offered, " ".join(about.split()), " ".join(by.split()))
+                          offered, " ".join(about.split()), " ".join(by.split()),
+                          cast(Callable[[Any], list[Decision]] | None, decides))
         self.steps.append(s)
         return s
 
@@ -488,6 +510,7 @@ class Role:
             + (f":asks:{code_hash(s.asks)}" if s.asks else "")  # appended only when set, so older roles keep theirs
             + (f":choose:{code_hash(s.choose.items)}:{code_hash(s.choose.keep)}" if s.choose else "")
             + (f":back:{s.back.to.name}:{s.back.rounds}:{code_hash(s.back.when)}" if s.back else "")
+            + (f":decides:{code_hash(s.decides)}" if s.decides else "")
             for s in self.steps
         ] + [f"input:{n}:{i.kind}:{i.required}:{i.default}" for n, i in self.inputs.items()]
         return _sha("\0".join(parts))[:16]

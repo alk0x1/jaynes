@@ -594,6 +594,26 @@ def test_a_person_chooses_among_the_items_from_the_page(tmp_path: Path) -> None:
     assert answered["chosen"] == ["M4", "M2"] and answered["by"] == "person"
 
 
+def test_a_person_rejects_one_decision_from_the_page_and_the_rest_is_locked(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.decided:ROLE", "--task", "a look",
+              "--runtime", "fake=tests.decided:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + "/next")
+        front = page.partition('<details class="fold"><summary>Details')[0]
+        assert '<div class="dec" data-id="text">' in front and "<small>Text face</small><span>Inter</span>" in front
+        assert 'name="reject:text" form="answer" disabled' in front and "Output" not in front
+        status, body = post(base + "/answer", {**form(page), "answer": "accept", "reject:text": " "})
+        assert status == 400 and "say what is wrong with Text face" in body
+        assert post(base + "/answer", {**form(page), "answer": "accept", "reject:text": "more character"})[0] == 303
+    finally:
+        server.shutdown()
+    [answered] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("StopAnswered", run_id=run)]
+    assert answered["answer"] == "return" and "Text face (Inter): more character" in answered["note"]
+    assert answered["locked"] == {"theme": "dark", "accent": "#e8a33d", "heading": "Fraunces"}
+
+
 def test_a_stop_shows_what_the_person_judges_in_front_and_its_output_behind_details(tmp_path: Path) -> None:
     cli.main(["run", "--home", str(tmp_path), "--role", "tests.shown:ROLE", "--task", "say the status",
               "--runtime", "quick=tests.shown:Agent"])

@@ -46,13 +46,13 @@ from pygments.util import ClassNotFound
 
 from jaynes import api, bounds, catalog, guard, install, outcome, plan, sandbox, skill, update
 from jaynes import project as repo
-from jaynes.conductor import (By, Conductor, RunState, StepState, Waiting, continue_in_background, holds, project,
+from jaynes.conductor import (REJECTED, By, Conductor, RunState, StepState, Waiting, continue_in_background, holds, project,
                               return_to)
 from jaynes.history import Report, past_calls, report
 from jaynes import inputs as run_inputs
 from jaynes.preview import Previews
 from jaynes.policy import find_policy, load_policy
-from jaynes.role import Role, Step
+from jaynes.role import Decision, Role, Step
 from jaynes.store import Event
 
 esc = html.escape
@@ -460,6 +460,21 @@ details.others > summary::-webkit-details-marker { display: none; }
 details.others > summary span:first-child::before { content: "\\25B8  "; }
 details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .cards { display: grid; gap: 12px; }
+.decs { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.dec { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; padding: 11px 16px; border-top: 1px solid var(--line); }
+.dec:first-child { border-top: 0; }
+.dec small { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+.dec .chip { margin-left: 8px; }
+.dec .da { display: flex; gap: 6px; align-items: center; }
+.dec .btn { padding: 5px 10px; }
+.dec .v.ok { color: var(--green); border-color: var(--green); }
+.dec.no .v.ok { color: var(--ink); border-color: var(--line-2); }
+.dec.no .v.no { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+.dec .lk { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.dec.locked .v, .dec.locked.open .lk, .dec.locked.open [data-unlock] { display: none; }
+.dec.locked.open .v { display: inline-block; }
+.dec .dnote { display: none; grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--red); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
+.dec.no .dnote { display: block; }
 .card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
 .card .pics { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 10px 10px; }
 .card .shot { position: relative; display: block; cursor: zoom-in; }
@@ -609,6 +624,20 @@ if (form) {
     c.addEventListener("keydown", (ev) => { if (ev.key === " " || ev.key === "Enter") { ev.preventDefault(); toggle(); } });
   });
   if (chosen.value) show();
+  // a decision rejected asks for its line, and Accept becomes Send: only what was rejected is redone
+  const relabel = () => {
+    const n = document.querySelectorAll(".dec.no").length;
+    accept.firstChild.textContent = n ? "Send: redo " + n + ", keep the rest" : "Accept";
+  };
+  document.querySelectorAll(".dec").forEach(d => {
+    const line = d.querySelector(".dnote");
+    d.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () => {
+      const no = b.dataset.v === "no";
+      d.classList.toggle("no", no); line.disabled = !no; if (no) line.focus(); relabel();
+    }));
+    const unlock = d.querySelector("[data-unlock]");
+    if (unlock) unlock.addEventListener("click", () => d.classList.add("open"));
+  });
   const send = (a) => {
     if (!form.querySelector("[data-a=" + a + "]")) return;
     if (a === "accept" && chosen.value.trim()) a = "choose";
@@ -1197,7 +1226,10 @@ class Review:
             sub += ('<div class="sub"><span class="chip red">braked</span> Too much of what this stop let through '
                     'turned out wrong lately, so the run waits for you here: nothing after it runs until you answer. '
                     'It stops holding runs once enough deliveries after the brake have held.</div>')
-        if s.note:
+        if s.note and REJECTED in s.note:  # the lines the person wrote, without what the agent is told around them
+            said = [x.removeprefix("- ") for x in s.note.replace(REJECTED, "").splitlines() if x.strip()]
+            sub += f'<div class="sub">You rejected in round {s.round - 1}: {marked("; ".join(said))}</div>'
+        elif s.note:
             sub += f'<div class="sub">You returned round {s.round - 1} with: {marked(s.note)}</div>'
         shown = cast(list[dict[str, Any]] | None, s.open_stop[1].get("shown")) if s.open_stop else None
         items = self._items(target, s)
@@ -1223,6 +1255,7 @@ class Review:
             if s.previous:
                 why = f"before {', '.join(s.changed)} changed" if s.changed else "returned"
                 outputs.append(self._output("Before", self._value_of(s.previous, target), f"round {s.round - 1}, {why}"))
+        decs = self.c.decisions_of(target, s.checked) if target is not None and s.open_stop is not None else []
         if shown:
             parts.append(self._shown(run_id, st, [x for x in shown if not x.get("more")], items))
             more = [x for x in shown if x.get("more")]
@@ -1230,11 +1263,16 @@ class Review:
                 parts.append(f'<details class="fold"><summary>More <span>{len(more)}</span></summary>'
                              f'{self._shown(run_id, st, more, [])}</details>')
             details = outputs + details
+        elif decs:
+            details = outputs + details
         else:
             if items:
                 parts.append(self._shown(run_id, st, [{"title": label, "id": i} for i, label in items], items))
             parts += details + outputs
             details = []
+        if decs and target is not None:
+            parts.insert(len(parts) - (1 if shown and any(x.get("more") for x in shown) else 0),
+                         self._decisions_part(decs, s, target))
         if target is not None and target.checks:
             # a Checked witness means every check passed; the names come from the role's code
             check_names = ", ".join(esc(getattr(c, "__name__", "check")) for c in target.checks)
@@ -1360,6 +1398,25 @@ class Review:
                 out += (f'<div class="wide"><div class="label">Pictures from {esc(x.name)}</div>'
                         f'<div class="pictures">{pics}</div></div>')
         return out
+
+    def _decisions_part(self, decs: list[Decision], s: StepState, target: Step[Any]) -> str:
+        """The output as decisions, each accepted unless the person rejects it with a line; what they accepted in an
+        earlier round is locked, and opens again with Change. A decision that differs from the round before is new."""
+        before = {d.id: d.value for d in self.c.decisions_of(target, s.previous)} if s.previous else None
+        rows: list[str] = []
+        for d in decs:
+            locked = s.locked.get(d.id) == d.value
+            new = '<span class="chip amber">new</span>' if before is not None and before.get(d.id) != d.value else ""
+            lock = ('<span class="lk">🔒 accepted</span><button type="button" class="btn" data-unlock>change</button>'
+                    if locked else "")
+            rows.append(f'<div class="dec{" locked" if locked else ""}" data-id="{esc(d.id)}"><div><small>'
+                        f'{esc(d.label)}</small><span>{swatch(d.value)}</span>{new}</div><div class="da">{lock}'
+                        '<button type="button" class="btn v ok" data-v="ok" title="Accept it">✓</button>'
+                        '<button type="button" class="btn v no" data-v="no" title="Reject it">✗</button></div>'
+                        f'<input type="text" class="dnote" name="reject:{esc(d.id)}" form="answer" disabled '
+                        f'placeholder="What is wrong with {esc(d.label.lower())}?"></div>')
+        return ('<div><div class="label">Decisions <span>reject what is wrong, with a line; the rest is kept</span>'
+                f'</div><div class="decs">{"".join(rows)}</div></div>')
 
     def _shown(self, run_id: str, st: RunState, shown: list[dict[str, Any]], items: list[tuple[str, str]]) -> str:
         """The stop's items as cards: their pictures, a title and a sentence. An item the person may choose is picked
