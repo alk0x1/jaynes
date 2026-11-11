@@ -83,6 +83,25 @@ instructions = &quot;Write one sentence about the topic in inputs/topic.json wit
 <p>A key Jaynes does not know, a reference that does not import, or a question that names a field the output lacks is refused, with the step it is in.</p>
 <h2 id="stops">Stops</h2>
 <p><code>stop=stop(budget=0.2)</code> makes a step stop for you. The budget is the share of answers you would change that the stop may have once it asks less: with 0.2 it asks one time in ten after 20 clean deliveries in a row. <code>stop(budget=0.05, sampled=False)</code> always asks. Most stops show the output and the run goes on; <code>stop(0.2, waits=True)</code> holds the run until you answer, for a choice that is yours to make, such as a look among three. It always asks, and only you answer it. <a href="runs.html#a-stop-asks-less-as-it-proves-right">Runs and stops</a> has how a stop earns that.</p>
+<h2 id="show-the-output-as-decisions">Show the output as decisions</h2>
+<p><code>decides</code> turns the stop into a list of decisions instead of a block of output. You reject the line that is wrong, with a sentence, and keep the rest: only what you rejected is redone, and what you kept is locked, so the agent cannot change it in the next round. Give each decision an id that stays the same across rounds.</p>
+<pre><code class="language-python">def decisions(o: Look) -&gt; list[Decision]:
+    return [Decision(&quot;theme&quot;, &quot;Theme&quot;, o.theme),
+            Decision(&quot;accent&quot;, &quot;Accent colour&quot;, o.accent, after=(&quot;theme&quot;,)),
+            Decision(&quot;text&quot;, &quot;Text face&quot;, o.text)]
+
+LOOK = ROLE.step(&quot;look&quot;, output=Look, stop=stop(0.2, waits=True), decides=decisions)
+</code></pre>
+<p>Change on a locked line opens it again. <code>after</code> says what a decision follows from: rejecting the theme unlocks the accent too, so the agent may change it to fit.</p>
+<h2 id="ask-a-few-questions-before-the-work">Ask a few questions before the work</h2>
+<p><code>ROLE.interview(questions)</code> makes the run's first step an interview. An agent reads the request and the project, marks the answer it would bet on for each question and says why, and may add a question only you can answer. You answer them all on one screen, by picking an option or writing your own, and the run goes on without you; every later step is told your answers.</p>
+<pre><code class="language-python">ROLE = role(&quot;visual-identity&quot;)
+ASK = ROLE.interview([
+    Question(&quot;theme&quot;, &quot;Which theme for the work screen?&quot;, (&quot;Dark&quot;, &quot;Light&quot;, &quot;Both&quot;)),
+    Question(&quot;work&quot;, &quot;Should it look like a work tool?&quot;, (&quot;Either way&quot;, &quot;I want it to&quot;, &quot;I want it not to&quot;)),
+])
+</code></pre>
+<p>Word each question for someone who does not know the role's vocabulary, and give two to five options, or none for an open question.</p>
 <h2 id="tell-the-person-what-each-step-does">Tell the person what each step does</h2>
 <p><code>about</code> on a step is one sentence for the person: what the step does and, at a stop, what they decide there and what it changes. A stop shows it under its question, and the run's steps in one line that opens into what each does; the role's page lists the steps with who does each. Keep it short: who does the step is shown beside it.</p>
 <pre><code class="language-python">PICK = ROLE.step(&quot;pick&quot;, output=Looks, needs=[LOOKS], stop=stop(0.2, waits=True),

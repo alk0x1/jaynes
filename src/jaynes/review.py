@@ -52,7 +52,7 @@ from jaynes.history import Report, past_calls, report
 from jaynes import inputs as run_inputs
 from jaynes.preview import Previews
 from jaynes.policy import find_policy, load_policy
-from jaynes.role import Decision, Role, Step
+from jaynes.role import Decision, Interview, Role, Step
 from jaynes.store import Event
 
 esc = html.escape
@@ -475,6 +475,14 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .dec.locked.open .v { display: inline-block; }
 .dec .dnote { display: none; grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--red); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .dec.no .dnote { display: block; }
+.qs { display: grid; gap: 22px; }
+.qs .t { font-weight: 600; margin-bottom: 8px; }
+.qs .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.qs .opt { border: 1px solid var(--line-2); border-radius: 999px; padding: 5px 14px; font-size: 14px; cursor: pointer; }
+.qs .opt input { display: none; }
+.qs .opt:has(input:checked) { border-color: var(--green); color: var(--green); background: var(--green-soft); font-weight: 600; }
+.qs .why { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 6px; }
+.qs .own { width: 100%; margin-top: 8px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
 .card .pics { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 10px 10px; }
 .card .shot { position: relative; display: block; cursor: zoom-in; }
@@ -1256,6 +1264,7 @@ class Review:
                 why = f"before {', '.join(s.changed)} changed" if s.changed else "returned"
                 outputs.append(self._output("Before", self._value_of(s.previous, target), f"round {s.round - 1}, {why}"))
         decs = self.c.decisions_of(target, s.checked) if target is not None and s.open_stop is not None else []
+        asked = value if target is not None and target.output is Interview and s.open_stop is not None else None
         if shown:
             parts.append(self._shown(run_id, st, [x for x in shown if not x.get("more")], items))
             more = [x for x in shown if x.get("more")]
@@ -1263,13 +1272,15 @@ class Review:
                 parts.append(f'<details class="fold"><summary>More <span>{len(more)}</span></summary>'
                              f'{self._shown(run_id, st, more, [])}</details>')
             details = outputs + details
-        elif decs:
+        elif decs or asked:
             details = outputs + details
         else:
             if items:
                 parts.append(self._shown(run_id, st, [{"title": label, "id": i} for i, label in items], items))
             parts += details + outputs
             details = []
+        if asked is not None and role is not None:
+            parts.append(self._interview_part(Interview.model_validate(asked), role))
         if decs and target is not None:
             parts.insert(len(parts) - (1 if shown and any(x.get("more") for x in shown) else 0),
                          self._decisions_part(decs, s, target))
@@ -1291,7 +1302,7 @@ class Review:
                                    default_to=return_to(role, step) if role and (
                                        pure or (target is not None and target.run_by is not None)) else None,
                                    floor=bool(s.open_stop and s.open_stop[1].get("status") == "floor"),
-                                   items=items,
+                                   items=items, accept="Start" if asked is not None else "Accept",
                                    evidence=str(s.open_stop[1].get("evidence") or "") if s.open_stop else ""))
         return page(f"Stop: {step}", self.sidebar((run_id, step)), main, self.seq())
 
@@ -1398,6 +1409,24 @@ class Review:
                 out += (f'<div class="wide"><div class="label">Pictures from {esc(x.name)}</div>'
                         f'<div class="pictures">{pics}</div></div>')
         return out
+
+    @staticmethod
+    def _interview_part(asked: Interview, role: Role) -> str:
+        """The questions on one screen, the agent's guess marked on each and why; the person picks another option or
+        writes their own answer, which wins over the option."""
+        worded = {q.id: q.text for q in role.questions}
+        rows: list[str] = []
+        for x in asked.questions:
+            ident = esc(x.id)
+            opts = "".join(f'<label class="opt"><input type="radio" name="pick:{ident}" value="{esc(o)}" form="answer"'
+                           f'{" checked" if o == x.guess else ""}>{esc(o)}</label>' for o in x.options)
+            own = "" if not x.options or x.guess in x.options else x.guess
+            why = f'<div class="why">Guess: {esc(x.why)}</div>' if x.why.strip() else ""
+            rows.append(f'<div><div class="t">{esc(worded.get(x.id, x.text))}</div>'
+                        + (f'<div class="opts">{opts}</div>' if opts else "") + why
+                        + f'<input type="text" class="own" name="own:{ident}" form="answer" value="{esc(own)}" '
+                        'placeholder="Or write what you want…"></div>')
+        return f'<div class="qs">{"".join(rows)}</div>'
 
     def _decisions_part(self, decs: list[Decision], s: StepState, target: Step[Any]) -> str:
         """The output as decisions, each accepted unless the person rejects it with a line; what they accepted in an
@@ -2324,7 +2353,7 @@ class Review:
     def _answer_bar(self, run_id: str, step: str, value: Any, error: str, fields: dict[str, str] | None,
                     editable: bool = True, earlier: list[str] | None = None, evidence: str = "",
                     default_to: str | None = None, floor: bool = False,
-                    items: list[tuple[str, str]] | None = None) -> str:
+                    items: list[tuple[str, str]] | None = None, accept: str = "Accept") -> str:
         """Accept and Return, with the note, in sight; Change, Context and going back to an earlier step in a menu.
         Where the person may choose, the cards they click fill ``chosen`` and Accept becomes Choose."""
         fields = fields or {}
@@ -2352,7 +2381,7 @@ class Review:
                 f'placeholder="What is wrong? (needed to return)">'
                 f'<div class="acts">{menu}'
                 f'<button type="button" class="btn" data-a="return">Return<kbd>R</kbd></button>'
-                f'<button type="button" class="btn solid" data-a="accept">Accept<kbd>A</kbd></button></div></div>'
+                f'<button type="button" class="btn solid" data-a="accept">{esc(accept)}<kbd>A</kbd></button></div></div>'
                 f'<div id="hint" class="err">{esc(error)}</div></form>')
 
     def _event_row(self, ev: Event) -> str:

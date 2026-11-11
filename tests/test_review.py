@@ -594,6 +594,29 @@ def test_a_person_chooses_among_the_items_from_the_page(tmp_path: Path) -> None:
     assert answered["chosen"] == ["M4", "M2"] and answered["by"] == "person"
 
 
+def test_a_person_answers_the_interview_on_one_screen_and_their_words_win(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.asked:ROLE", "--task", "a look",
+              "--runtime", "fake=tests.asked:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + "/next")
+        front = page.partition('<details class="fold"><summary>Details')[0]
+        assert "<h1>3 questions before the work starts</h1>" in front
+        assert '<input type="radio" name="pick:theme" value="Dark" form="answer" checked>Dark' in front
+        assert '<div class="why">Guess: you said dark mode</div>' in front and 'name="own:looks"' in front
+        assert 'data-a="accept">Start<kbd>' in page
+        assert post(base + "/answer", {**form(page), "answer": "accept", "pick:theme": "Light", "own:theme": "",
+                                       "pick:looks": "3", "own:looks": "one bold, one sober"})[0] == 303
+    finally:
+        server.shutdown()
+    [answered] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("StopAnswered", run_id=run)]
+    assert answered["answer"] == "change"
+    [checked] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("Checked", run_id=run)
+                 if e.payload["step"] == "interview" and e.payload.get("source") == "person"]
+    assert checked
+
+
 def test_a_person_rejects_one_decision_from_the_page_and_the_rest_is_locked(tmp_path: Path) -> None:
     cli.main(["run", "--home", str(tmp_path), "--role", "tests.decided:ROLE", "--task", "a look",
               "--runtime", "fake=tests.decided:Agent"])

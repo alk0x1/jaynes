@@ -41,7 +41,7 @@ from jaynes.gate import Window
 from jaynes.preview import link_dependencies
 from jaynes import inputs as run_inputs
 from jaynes import outcome, proof
-from jaynes.role import DISPUTES, OUTPUT, Asks, Blocked, Checked, Cost, Decision, Disputes, Fail, History, Note, Pass, Role, Step, StepContext, ToolContext, Witnesses
+from jaynes.role import DISPUTES, INTERVIEW, OUTPUT, Interview, Asks, Blocked, Checked, Cost, Decision, Disputes, Fail, History, Note, Pass, Role, Step, StepContext, ToolContext, Witnesses
 from jaynes import tools as role_tools
 from jaynes.runtime import QuotaExhausted, Runtime, RuntimeFailure, TurnTimeout
 from jaynes.store import Event, Store
@@ -426,7 +426,8 @@ class Conductor:
     def answer(self, role: Role, run_id: str, step: str, answer: Answer, *, note: str | None = None,
                output: BaseModel | Mapping[str, Any] | None = None, seconds_spent: float | None = None,
                to: str | None = None, by: By, evidence: str | None = None, via: str | None = None,
-               chosen: Sequence[str] | None = None, rejected: Mapping[str, str] | None = None) -> None:
+               chosen: Sequence[str] | None = None, rejected: Mapping[str, str] | None = None,
+               answers: Mapping[str, str] | None = None) -> None:
         """Record the answer at an open stop. ``change`` needs the edited output, which must pass the checks.
 
         ``to`` returns an earlier step instead of this one: it runs again with the note, and so does every step
@@ -440,6 +441,8 @@ class Conductor:
         ``choose`` keeps the ``chosen`` items of the output, in that order, at a step that lets the person choose.
         ``rejected`` names, at a step that shows decisions, the ones the person rejects, each with its note: the
         answer becomes a return of those alone, and the rest are locked. An accept with none rejected locks them all.
+        ``answers`` are the person's answers at the interview, by question: the guesses they leave stand, and the
+        answer is an accept when every guess stood, else a change to what they answered.
 
         It takes the run's lock for answers, not the run's own, so it is recorded while a process runs the run;
         that process sees it at its next action.
@@ -484,6 +487,16 @@ class Conductor:
                 raise AnswerRejected([f"the stop at {step!r} is braked after too many errors: only a person "
                                       "answers it, from the page"])
             target = next(x for x in role.steps if x.name == step)
+            if answers is not None:
+                if target.output is not Interview or s.checked is None:
+                    raise AnswerRejected([f"{step!r} asks no questions"])
+                asked = Interview.model_validate_json(self._object(str(s.checked["output_hash"])))
+                if unknown := [i for i in answers if i not in {q.id for q in asked.questions}]:
+                    raise AnswerRejected([f"{', '.join(map(repr, unknown))} is not a question of this interview"])
+                given = Interview(questions=[q.model_copy(update={"guess": " ".join(answers.get(q.id, "").split())
+                                                                  or q.guess}) for q in asked.questions])
+                if given != asked:
+                    answer, output = "change", given
             if rejected and target.decides is None:
                 raise AnswerRejected([f"{step!r} shows no decisions to reject"])
             locked: dict[str, str] | None = None
@@ -1012,7 +1025,8 @@ class Conductor:
                 web: dict[str, Any] = {"web": True} if step.web else {}
                 if step.max_messages and "max_messages" in inspect.signature(runtime.turn).parameters:
                     web["max_messages"] = step.max_messages  # a runtime that counts no messages has no such limit
-                prompt = self.prompt(role, step, task, s, files, st.started, on_top, self._history(run_id).notes)
+                prompt = self.prompt(role, step, task, s, files, st.started, on_top, self._history(run_id).notes,
+                                     self._answered(role, step, st))
                 if step.tools:
                     with role_tools.serve(step.tools, ToolContext(run_id, step.name, task, used,
                                                                   self._history(run_id))) as (served, offered):
@@ -1130,6 +1144,18 @@ class Conductor:
             return [str(r) for r in step.back.when(value, needs) if str(r).strip()]
         except Exception:
             return []
+
+    def _answered(self, role: Role, step: Step[Any], st: RunState) -> list[tuple[str, str]]:
+        """The interview's questions and the person's answers, once they answered, for every step after it."""
+        first = role.steps[0] if role.steps else None
+        if first is None or first is step or first.name != INTERVIEW or first.output is not Interview:
+            return []
+        x = st.steps.get(INTERVIEW)
+        if x is None or x.checked is None or not x.resolved:
+            return []
+        worded = {q.id: q.text for q in role.questions}  # the role's own words, whatever the agent copied
+        return [(worded.get(q.id, q.text).strip(), q.guess.strip()) for q in
+                Interview.model_validate_json(self._object(str(x.checked["output_hash"]))).questions]
 
     def _decisions(self, step: Step[Any], value: Any) -> list[Decision]:
         """The output's decisions as the step reads them, every field as text."""
@@ -1322,7 +1348,7 @@ class Conductor:
     def prompt(self, role: Role, step: Step[Any], task: str, s: StepState,
                files: Mapping[str, Mapping[str, str]] | None = None,
                started: Mapping[str, Any] | None = None, on_top: bool | None = None,
-               said: Sequence[Note] = ()) -> str:
+               said: Sequence[Note] = (), answered: Sequence[tuple[str, str]] = ()) -> str:
         """``on_top`` says whether the step's previous change to the project is applied in its copy, when it has one.
         ``said`` is what the person said in the run; what they said at other steps reaches this one too, since a
         person who asked for something once should not have to ask each step again."""
@@ -1346,6 +1372,10 @@ class Conductor:
             lines += ["What the person said earlier in this run, at other steps; it holds for this step too where it "
                       "applies:"]
             lines += [f"- at {n.step}: {n.note.strip()}" for n in elsewhere[-12:]]
+            lines.append("")
+        if answered and not step.hidden:
+            lines += ["What the person answered before the work started; it holds for every step:"]
+            lines += [f"- {question} {answer}" for question, answer in answered]
             lines.append("")
         if _plans(step):
             lines += self._roles(_root(started or {}))

@@ -212,6 +212,16 @@ Rules:
   is checked again like a change. It is answered `choose` (section 6.2). In
   Claude Code's dialog, which has four options and no order, the items are
   listed in the evidence and typing their numbers in order chooses them.
+- `ROLE.interview(questions)` makes the role's first step an interview:
+  each `Question(id, text, options=())` has two to five options or none.
+  An agent reads the request and, unless `project=False`, the project's copy,
+  and writes `Interview`: each question with its guess and why, plus
+  questions of its own with 3 to 5 options, checked before the person sees
+  them. The stop waits; the page shows every question with the guess marked
+  and a field for the person's own words, which win over the option. Leaving
+  every guess is an accept; any other answer is a change to what they
+  answered. Every later step, hidden ones aside, is told the questions, in the
+  role's words, and the answers.
 - `decides=fn` shows the output at the stop as decisions: `fn(output)` lists
   `Decision(id, label, value, after=())`. The person rejects a decision with a
   line, and the rest are kept: the answer becomes a return of the rejected ones

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -306,6 +306,35 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class Question:
+    """A question a role asks the person once, before the work: ``text`` in their words, never the role's jargon,
+    and two to five ``options``, or none for an open question. The person may always type their own answer."""
+
+    id: str
+    text: str
+    options: tuple[str, ...] = ()
+
+
+class Asked(BaseModel):
+    id: str = Field(description="the question's id; a question of your own gets a new short id")
+    text: str = Field(description="the question, in the person's words; for the role's questions, as given")
+    options: list[str] = Field(default_factory=list[str],
+                               description="the answers to choose from; for a question of your own, 3 to 5")
+    guess: str = Field(description="the answer you would bet on, from the project and the request: one of the "
+                                   "options, or your own words")
+    why: str = Field(default="", description="what the guess rests on, in a short phrase the person recognises")
+
+
+class Interview(BaseModel):
+    """What a run asks the person before its work, each with a guess; the person's answers replace the guesses."""
+
+    questions: list[Asked]
+
+
+INTERVIEW = "interview"
+
+
+@dataclass(frozen=True)
 class Back:
     """Jaynes sends an earlier step back, with what it found, when a checked output says so.
 
@@ -406,6 +435,35 @@ class Role:
     inputs: dict[str, Input] = field(default_factory=dict[str, Input])  # what a run starts with, by name
     merges: bool = False  # its delivery is a merge, which Jaynes makes alone once every proof passes
     about: str = ""  # what the role is for, in a sentence, as the list of roles shows it to whoever picks one
+    questions: tuple[Question, ...] = ()  # what its interview asks before the work, as the role words it
+
+    def interview(self, questions: Sequence[Question], *, instructions: str = "", project: bool = True,
+                  about: str = "") -> Step[Interview]:
+        """The run's first step: an agent reads the project and the request, guesses each answer and may add questions
+        only the person can answer; the run waits until the person answers them all on one screen, and every later
+        step is told the answers. ``project`` lets the agent read the project's copy for its guesses."""
+        if self.steps:
+            raise ValueError(f"{self.name!r} asks its questions before the work, so the interview is its first step")
+        ids = [q.id for q in questions]
+        if not questions or len(set(ids)) != len(ids) or not all(i.strip() and q.text.strip()
+                                                                  for i, q in zip(ids, questions, strict=True)):
+            raise ValueError(f"{self.name!r}: give the interview questions, each with its own id and a text")
+        if bad := [q.id for q in questions if q.options and not 2 <= len(q.options) <= 5]:
+            raise ValueError(f"{self.name!r}: questions {', '.join(bad)} need two to five options, or none")
+        listed = "\n".join(f"- {q.id}: {q.text}" + (f" Options: {' | '.join(q.options)}." if q.options else
+                                                       " Open question.") for q in questions)
+        told = ("Before any work starts, the person answers a few questions once, and the run goes on without them. "
+                "Read the request" + (" and the project" if project else "") + " first, and for each question below "
+                "write the answer you would bet on, with what it rests on. Keep each question's id, text and options "
+                "as given. Add a question of your own only for what you cannot find out and only the person knows, "
+                "with 3 to 5 options; never ask what the project or the request already answers.\n\n"
+                f"Questions:\n{listed}")
+        self.questions = tuple(questions)
+        return self.step(INTERVIEW, output=Interview, check=_interview_check(tuple(questions)),
+                         stop=stop(0.2, waits=True), project="read" if project else None,
+                         question=lambda out, _: f"{len(out.questions)} questions before the work starts",
+                         instructions=told + (f"\n\n{instructions.strip()}" if instructions.strip() else ""),
+                         about=about or "A few questions before the work. The guesses are marked; change what is wrong.")
 
     def method_text(self) -> str:
         return self.method.read_text() if isinstance(self.method, Path) else self.method
@@ -524,6 +582,20 @@ def role(name: str, agent: str = "claude", method: str | Path = "",
     if isinstance(method, Path) and not method.is_absolute():
         method = Path(inspect.stack()[1].filename).resolve().parent / method
     return Role(name, agent, method, inputs=dict(inputs or {}), merges=merges, about=about)
+
+
+def _interview_check(questions: tuple[Question, ...]) -> Check:
+    def interview_complete(out: Interview, _: Witnesses) -> Pass | Fail:
+        """Every question of the role is there once, each answer guessed, and a question added has 3 to 5 options."""
+        ids = [q.id for q in out.questions]
+        reasons = [f"answer the question {q.id!r}: {q.text}" for q in questions if q.id not in ids]
+        reasons += [f"the question {i!r} appears twice" for i in dict.fromkeys(i for i in ids if ids.count(i) > 1)]
+        reasons += [f"guess an answer to {q.id!r}" for q in out.questions if not q.guess.strip()]
+        own = {q.id for q in questions}
+        reasons += [f"give your question {q.id!r} a text and 3 to 5 options" for q in out.questions
+                    if q.id not in own and (not q.text.strip() or not 3 <= len(q.options) <= 5)]
+        return Fail(*reasons) if reasons else Pass()
+    return interview_complete
 
 
 def code_hash(fn: Callable[..., Any]) -> str:

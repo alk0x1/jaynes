@@ -97,6 +97,20 @@ LOOK = ROLE.step("look", output=Look, stop=stop(0.2, waits=True), decides=decisi
 
 Change on a locked line opens it again. `after` says what a decision follows from: rejecting the theme unlocks the accent too, so the agent may change it to fit.
 
+## Ask a few questions before the work
+
+`ROLE.interview(questions)` makes the run's first step an interview. An agent reads the request and the project, marks the answer it would bet on for each question and says why, and may add a question only you can answer. You answer them all on one screen, by picking an option or writing your own, and the run goes on without you; every later step is told your answers.
+
+```python
+ROLE = role("visual-identity")
+ASK = ROLE.interview([
+    Question("theme", "Which theme for the work screen?", ("Dark", "Light", "Both")),
+    Question("work", "Should it look like a work tool?", ("Either way", "I want it to", "I want it not to")),
+])
+```
+
+Word each question for someone who does not know the role's vocabulary, and give two to five options, or none for an open question.
+
 ## Tell the person what each step does
 
 `about` on a step is one sentence for the person: what the step does and, at a stop, what they decide there and what it changes. A stop shows it under its question, and the run's steps in one line that opens into what each does; the role's page lists the steps with who does each. Keep it short: who does the step is shown beside it.

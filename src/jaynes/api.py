@@ -192,9 +192,14 @@ def answer(r: Review, f: dict[str, Any], by: By, spent: float | None = None) -> 
     given = f.get("rejected")  # by id, each with its line; the page sends them as reject:<id>
     rejected = ({str(k): str(v) for k, v in cast(dict[Any, Any], given).items()} if isinstance(given, dict) else
                 {k[len("reject:"):]: str(v) for k, v in f.items() if k.startswith("reject:")})
+    answers: dict[str, str] | None = None  # the interview's, by question: written words win over the option picked
+    if isinstance(f.get("answers"), dict):
+        answers = {str(k): str(v) for k, v in cast(dict[Any, Any], f["answers"]).items()}
+    elif ids := {k.split(":", 1)[1] for k in f if k.startswith(("pick:", "own:"))}:
+        answers = {i: str(f.get(f"own:{i}") or "").strip() or str(f.get(f"pick:{i}") or "") for i in ids}
     try:
         r.c.answer(role, run_id, step, a, note=note, output=output, seconds_spent=spent, chosen=picked,
-                   rejected=rejected or None,
+                   rejected=rejected or None, answers=answers,
                    # the page's select goes with every answer; only return and context go back
                    to=(_text(f, "to") or None) if a in ("return", "context") else None,
                    by=by, evidence=_text(f, "evidence") or None)
