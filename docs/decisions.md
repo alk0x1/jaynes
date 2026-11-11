@@ -2,6 +2,25 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-11: A stop shows decisions, not text; an interview comes first
+
+**Decided.** A run starts with one interview: questions with 3 to 5 options, a
+pre-marked guess and a free text field, answered once on one screen. A stop
+shows the output as decisions with fixed ids, each accepted or rejected with a
+note; accepted ones are locked against the agent, checked by code, and only the
+rejected ones are redone. "Why?" explains a step and never changes it. Design
+in docs/specs/2026-11-11-decisions-at-stops-design.md.
+
+- Why: on a real run the person disagreed with one line and Return redid
+  everything, twice, until two specialists deadlocked on that line.
+- Ids, not names: the agent may add decisions without a cap, and an id lets
+  Jaynes follow one across rounds even when its wording changes.
+- A lock binds the agent, never the person: "change" unlocks it, and the
+  decisions that depend on it unlock with it.
+- One place: the page. Mirroring stops in the terminal doubles what to keep.
+- Open: how many questions an interview should hold in practice; we start at
+  3 to 5 per screen and read rounds until accepted and minutes per stop.
+
 ## 2026-11-11: Specialists talk inside a role, step by step; a return goes to the work, past its review
 
 **Decided.** A role can be a conversation between several specialists of a
