@@ -411,7 +411,10 @@ def test_a_run_blocked_at_its_branch_links_to_a_page_that_names_the_reason(
     assert result.status == "blocked" and result.step == "paint"
     base, server = serving(home)
     try:
-        [link] = re.findall(r'<a class="item[^"]*" href="([^"]+)"', get(base + "/"))
+        queue = get(base + "/")
+        [link] = re.findall(r'<a class="item[^"]*" href="([^"]+)"', queue)
+        # the run's row names its project: the folder's name, its whole path on hover
+        assert f'<div class="p" title="{repo}">repo</div>' in queue
         page = get(base + link)
         assert "blocked after its last step" in page and "the repository is locked" in page
         assert "Every attempt of the round was rejected" not in page
@@ -742,6 +745,7 @@ def test_a_blocked_run_waits_for_the_person_a_stop_after_every_step_ran_is_a_sam
     assert f'<a class="item holds blocked" href="/stop/{blocked}/final"' in page
     assert f'<a class="item stop" href="/stop/{run}/draft"' in page  # every step ran: it only lets the run finish
     assert len(re.findall(r"<span>started \d\d:\d\d</span>", page)) == 2
+    assert '<div class="p"' not in page  # runs with no project folder get no line for one
     call = get(f"{base}/run/{run}")
     assert ('<div class="call stop"><span>Waiting for you: Ship &#x27;draft one&#x27;?</span>'
             f'<a class="btn go" href="/stop/{run}/draft">Open the stop</a>') in call

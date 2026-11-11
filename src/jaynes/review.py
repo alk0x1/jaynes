@@ -331,6 +331,7 @@ details.way > .stages { margin-top: 14px; padding-top: 6px; border-top: 1px soli
 .foot { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--dim); display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
 .foot b { color: var(--ink); font-weight: 500; text-align: right; }
 .item .t { font-size: 14px; }
+.item .p { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .m { font-family: var(--mono); font-size: 11px; color: var(--dim); display: flex; gap: 8px; align-items: center; white-space: nowrap; }
 .item .m .s { overflow: hidden; text-overflow: ellipsis; }
 .qhead.look { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 14px; }
@@ -926,7 +927,12 @@ class Review:
             on = selected == (w.run_id, w.step) or selected == (w.run_id, "")
             events = list(self.c.store.events(run_id=w.run_id))
             names = self.names(self.role_of(w.run_id), events)
-            run_stages = stages(names, events, project(events), now)
+            st = project(events)
+            run_stages = stages(names, events, st, now)
+            info = (st.started or {}).get("project")
+            root = str(info["root"]) if info else ""
+            # the folder's name says which project the run is in; its whole path on hover
+            where_from = f'<div class="p" title="{esc(root)}">{esc(Path(root).name or root)}</div>' if root else ""
             chip = {"stop": ('<span class="chip amber">stop</span>' if w.holds else
                              '<span class="chip blue">sample</span>'), "blocked": '<span class="chip red">blocked</span>',
                     "idle": '<span class="chip blue">idle</span>', "running": '<span class="chip blue">running</span>',
@@ -946,7 +952,7 @@ class Review:
                          "running": "working", "paused": "paused for quota"}[w.kind]
                 t = totals(events)
                 row = (f'<div class="item on {w.kind}"><a href="{href}"><div class="t">{marked(headline(w.task))}</div>'
-                       f'<div class="m">{chip}<span class="s">Step {where} of {len(names)}, {state}</span>{started}'
+                       f'{where_from}<div class="m">{chip}<span class="s">Step {where} of {len(names)}, {state}</span>{started}'
                        f'</div></a><details class="steps"><summary>Steps</summary>{stage_list(run_stages)}'
                        f'<div class="foot"><span>started</span><b>{age(now - events[0].ts)} ago</b>'
                        f'<span>turns</span><b>{t.turns}</b>'
@@ -954,7 +960,7 @@ class Review:
                        f'<span>you answered</span><b>{t.answered} of {t.stops} stops</b></div></details></div>')
             else:
                 row = (f'<a class="item {w.kind}" href="{href}"><div class="t">{marked(headline(w.task))}</div>'
-                       f'<div class="m">{chip}<span class="s">{esc(w.step)}</span>{started}<span>{when}</span></div>'
+                       f'{where_from}<div class="m">{chip}<span class="s">{esc(w.step)}</span>{started}<span>{when}</span></div>'
                        f'{stage_strip(run_stages)}</a>')
             if w.holding:
                 row = row.replace('class="item ', 'class="item holds ', 1)
