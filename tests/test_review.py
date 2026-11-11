@@ -594,6 +594,45 @@ def test_a_person_chooses_among_the_items_from_the_page(tmp_path: Path) -> None:
     assert answered["chosen"] == ["M4", "M2"] and answered["by"] == "person"
 
 
+def test_why_asks_a_claude_that_reads_the_step_and_changes_nothing(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    from jaynes import why
+    seen: list[tuple[Path, str]] = []
+
+    def explains(here: Path, prompt: str) -> str:
+        seen.append((here, prompt))
+        output = json.loads((here / "output.json").read_text())
+        return f"It chose {output['text']} because the step asked for a sober face."
+
+    monkeypatch.setattr(why, "explainer", explains)
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.decided:ROLE", "--task", "a look",
+              "--runtime", "fake=tests.decided:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + "/next")
+        assert 'action="/why"' in page and f'data-whys="/why/{run}/look"' in page
+        token = re.search(r'name="token" value="([^"]+)"', page)
+        assert token
+        status, _ = post(base + "/why", {"token": token.group(1), "run": run, "step": "look",
+                                         "question": "Why Inter?"})
+        assert status == 303
+        for _ in range(50):
+            if "It chose Inter" in get(f"{base}/why/{run}/look"):
+                break
+            time.sleep(0.1)
+        assert "<b>Why Inter?</b><p>It chose Inter because the step asked for a sober face.</p>" in get(
+            f"{base}/why/{run}/look")
+    finally:
+        server.shutdown()
+    [(here, prompt)] = seen
+    assert prompt.endswith("Question: Why Inter?") and (here / "task.md").read_text() == "a look"
+    assert "# Step: look" in (here / "step.md").read_text()
+    assert list(Store(tmp_path / "jaynes.sqlite3").events("StopAnswered", run_id=run)) == []  # nothing changed
+    rules = why.settings(here)["permissions"]
+    assert rules["allow"] == ["Read(./**)", "Glob", "Grep"] and {"Edit", "Write", "Bash", "WebFetch"} <= set(rules["deny"])
+
+
 def test_a_person_answers_the_interview_on_one_screen_and_their_words_win(tmp_path: Path) -> None:
     cli.main(["run", "--home", str(tmp_path), "--role", "tests.asked:ROLE", "--task", "a look",
               "--runtime", "fake=tests.asked:Agent"])

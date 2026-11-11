@@ -44,7 +44,7 @@ from pygments.lexer import Lexer
 from pygments.lexers import get_lexer_for_filename  # pyright: ignore[reportUnknownVariableType]
 from pygments.util import ClassNotFound
 
-from jaynes import api, bounds, catalog, guard, install, outcome, plan, sandbox, skill, update
+from jaynes import api, bounds, catalog, guard, install, outcome, plan, sandbox, skill, update, why
 from jaynes import project as repo
 from jaynes.conductor import (REJECTED, By, Conductor, RunState, StepState, Waiting, continue_in_background, holds, project,
                               return_to)
@@ -475,6 +475,12 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .dec.locked.open .v { display: inline-block; }
 .dec .dnote { display: none; grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--red); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .dec.no .dnote { display: block; }
+.whys { display: grid; gap: 10px; }
+.whys .qa b { display: block; font-weight: 600; }
+.whys .qa p { color: var(--dim); margin-top: 2px; white-space: pre-wrap; }
+.whys .qa.pending p { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+.whys form { display: flex; gap: 8px; }
+.whys input[type=text] { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .qs { display: grid; gap: 22px; }
 .qs .t { font-weight: 600; margin-bottom: 8px; }
 .qs .opts { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -637,6 +643,16 @@ if (form) {
     const n = document.querySelectorAll(".dec.no").length;
     accept.firstChild.textContent = n ? "Send: redo " + n + ", keep the rest" : "Accept";
   };
+  // a Why? still being answered is fetched again until it is, without reloading what the person is typing
+  const whys = document.querySelector(".whys [data-whys]");
+  const again = () => setTimeout(async () => {
+    try {
+      const r = await fetch(whys.dataset.whys);
+      if (r.ok) whys.innerHTML = await r.text();
+    } catch (e) {}
+    if (whys.querySelector(".pending")) again();
+  }, 3000);
+  if (whys && whys.querySelector(".pending")) again();
   document.querySelectorAll(".dec").forEach(d => {
     const line = d.querySelector(".dnote");
     d.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () => {
@@ -1284,6 +1300,8 @@ class Review:
         if decs and target is not None:
             parts.insert(len(parts) - (1 if shown and any(x.get("more") for x in shown) else 0),
                          self._decisions_part(decs, s, target))
+        if target is not None and target.output is not None and s.open_stop is not None:
+            parts.append(self._why_part(run_id, step))
         if target is not None and target.checks:
             # a Checked witness means every check passed; the names come from the role's code
             check_names = ", ".join(esc(getattr(c, "__name__", "check")) for c in target.checks)
@@ -1409,6 +1427,57 @@ class Review:
                 out += (f'<div class="wide"><div class="label">Pictures from {esc(x.name)}</div>'
                         f'<div class="pictures">{pics}</div></div>')
         return out
+
+    def whys(self, run_id: str, step: str) -> str:
+        """The questions asked at this step and their answers, oldest first; one being answered says so."""
+        rows: list[str] = []
+        for x in why.asked(self.c.home, run_id, step):
+            if x.get("answer") is None and not x.get("error"):
+                said, cls = "Reading the step…", "qa pending"
+            else:
+                said, cls = str(x.get("answer") or f"It could not answer: {x.get('error')}"), "qa"
+            rows.append(f'<div class="{cls}"><b>{esc(str(x["question"]))}</b><p>{esc(said)}</p></div>')
+        return "".join(rows)
+
+    def _why_part(self, run_id: str, step: str) -> str:
+        return ('<div class="whys"><div class="label">Why? <span>a Claude reads this step and answers; it changes '
+                f'nothing</span></div><div data-whys="/why/{q(run_id)}/{q(step)}">{self.whys(run_id, step)}</div>'
+                f'<form method="post" action="/why"><input type="hidden" name="token" value="{self.shared.token}">'
+                f'<input type="hidden" name="run" value="{esc(run_id)}"><input type="hidden" name="step" '
+                f'value="{esc(step)}"><input type="text" name="question" placeholder="Why did it…?" '
+                'autocomplete="off"><button class="btn">Ask</button></form></div>')
+
+    def ask_why(self, fields: dict[str, str]) -> tuple[int, str]:
+        """Start answering the person's question about a step at an open stop; back to the stop at once."""
+        run_id, step, question = fields.get("run", ""), fields.get("step", ""), fields.get("question", "").strip()
+        back = f"/stop/{q(run_id)}/{q(step)}"
+        role = self.role_of(run_id)
+        target = next((x for x in role.steps if x.name == step), None) if role else None
+        st = project(self.c.store.events(run_id=run_id))
+        s = st.steps.get(step)
+        if not question or role is None or target is None or s is None or s.checked is None:
+            return 303, back
+        notes = [n for n in self.c.history(run_id).notes if n.step == step]
+        given = {"task.md": str((st.started or {}).get("task") or ""),
+                 "step.md": "\n\n".join(x for x in (role.method_text().strip(), f"# Step: {step}",
+                                                     target.instructions.strip(), target.about) if x),
+                 "output.json": json.dumps(self._value(s, target), indent=1, ensure_ascii=False),
+                 "notes.md": "\n".join(f"- round {n.round}, {n.by} at {n.step} ({n.answer}): {n.note}"
+                                       for n in notes) or "Nothing was said about this step yet."}
+        if decs := self.c.decisions_of(target, s.checked):  # what is locked, and what unlocks with what
+            given["decisions.md"] = "\n".join(
+                f"- {d.label} = {d.value}: " + ("locked, the person accepted it" if s.locked.get(d.id) == d.value
+                                                else "open") + (f"; follows {', '.join(d.after)}, and unlocks when "
+                                                                "one of those is rejected" if d.after else "")
+                for d in decs)
+        if s.previous:
+            given["previous.json"] = json.dumps(self._value_of(s.previous, target), indent=1, ensure_ascii=False)
+        files = {rel: self.c.home / "objects" / obj for rel, obj in self._files(st, step).items()}
+        try:
+            why.ask(self.c.home, run_id, step, s.round, question[:1000], given, files)
+        except ValueError as err:
+            return 400, self.stop_page(run_id, step, str(err))
+        return 303, back
 
     @staticmethod
     def _interview_part(asked: Interview, role: Role) -> str:
@@ -2589,6 +2658,8 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0, wake_eve
                     self._send(200, f"{app.seq()} {shared.token}", "text/plain")
                 case ["stop", run_id, step]:
                     self._send(200, app.stop_page(run_id, step))
+                case ["why", run_id, step]:
+                    self._send(200, app.whys(run_id, step))
                 case ["stop", run_id]:  # a run blocked with no step, in logs from before it had one
                     self._send(200, app.run_page(run_id))
                 case ["run", run_id]:
@@ -2650,7 +2721,7 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0, wake_eve
                         "/send-back": Review.send_back, "/correction": Review.correction, "/undo": Review.undo,
                         "/halt": Review.halt, "/resume": Review.resume_all,
                         "/start": Review.start, "/setup": Review.setup, "/packages": Review.packages, "/drop": Review.drop_run,
-                        "/update": Review.update,
+                        "/update": Review.update, "/why": Review.ask_why,
                         "/restart": Review.restart}
             if path not in handlers:
                 return self._send(404, "not found", "text/plain")

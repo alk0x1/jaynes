@@ -45,6 +45,17 @@ def _binary(name: str) -> str:
     return found
 
 
+def binary(name: str) -> str:
+    """Where a command-line tool is installed; fails when it is not."""
+    return _binary(name)
+
+
+def run(args: list[str], cwd: Path, scratch: Path, prompt: str, deadline: float,
+        env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    """Run an agent's command line in ``cwd`` with the prompt on stdin, killed at the deadline."""
+    return _run(args, cwd, scratch, prompt, deadline, env)
+
+
 def _run(args: list[str], cwd: Path, scratch: Path, prompt: str, deadline: float,
          env: dict[str, str] | None = None) -> tuple[int, str, str]:
     environ = {**os.environ, "TMPDIR": str(scratch), **(env or {})}

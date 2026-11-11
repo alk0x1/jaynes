@@ -34,6 +34,10 @@ A stop the role marks as a floor asks on every run and only you answer it, but t
 
 A return at a step Jaynes runs itself, such as one that only lays out the agent's work for you to choose, goes to the agent's step before it, since only an agent reads your note. When that step reviews another one, such as a director's critique of a designer's work, the return goes to the work it reviews, and the review runs again after it. What you say at one step reaches every later step of the run too: ask for dark mode once, and the steps after it know.
 
+Where a step shows its output as decisions, you reject only the line that is wrong, with a sentence; Accept becomes Send, only that line is redone, and the rest stays locked against the agent. Change on a locked line opens it again.
+
+Under any stop, Why? asks a Claude that reads the step, what it was told, what it delivered, what was said in the run, and answers in a few sentences. It cannot edit, run commands or read the web, and it changes nothing in the run.
+
 In Claude Code's dialog you Accept or Return with a note. The page has all five. At a floor, the A key accepts only when you press it twice within two seconds, so a stray key does not let it through.
 
 Only you answer as a person. The page takes answers only from the browser it opened with its link. An agent's answer, through `jaynes answer` or the API, lets a stop that holds its run go on, but it never counts as right, so an agent cannot make a stop ask less by accepting its own work.

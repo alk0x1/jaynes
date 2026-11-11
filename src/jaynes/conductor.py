@@ -1235,6 +1235,10 @@ class Conductor:
             raise AnswerRejected([f"the step made {type(kept).__name__} of the choice, not {step.output.__name__}"])
         return kept
 
+    def history(self, run_id: str) -> History:
+        """What people said and Jaynes sent back in the run, and what each step's turns cost."""
+        return self._history(run_id)
+
     def _history(self, run_id: str) -> History:
         """What people said and Jaynes sent back in the run, and what each step's turns cost."""
         notes: list[Note] = []
