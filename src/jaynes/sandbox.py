@@ -95,6 +95,9 @@ def profile(box: Box) -> str:
     lines += [f'(allow network-outbound (remote ip "localhost:{int(p)}"))' for p in box.ports]
     if box.local:
         lines.append('(allow network-outbound (remote ip "localhost:*"))')
+        # a suite's own servers on socket files, such as the role tools: only in its own folders, a rule each, since
+        # a socket rule with several paths holds only the first
+        lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
     lines += ["(deny signal)", "(allow signal (target same-sandbox))", "(deny user-preference-write)",
               "(deny appleevent-send)", "(deny lsopen)"]
     return "\n".join(lines) + "\n"

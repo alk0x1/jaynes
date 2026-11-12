@@ -150,6 +150,7 @@ def test_claude_offers_exactly_the_steps_tools_through_jaynes_mcp_server(tmp_pat
 def test_the_tools_socket_finds_a_folder_where_tmp_cannot_be_written(tmp_path: Path,
                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     """Jaynes's own suite runs in the box, where /tmp is refused: the socket goes to the temporary folder instead."""
+    import errno
     import tempfile
 
     from jaynes import tools
@@ -158,7 +159,7 @@ def test_the_tools_socket_finds_a_folder_where_tmp_cannot_be_written(tmp_path: P
 
     def refuse_tmp(*args: Any, **kw: Any) -> str:
         if kw.get("dir") == "/tmp":
-            raise PermissionError(1, "Operation not permitted", "/tmp/jt-x")
+            raise PermissionError(errno.EPERM, "refused", "/tmp/jt-x")  # not the box's words: Jaynes reads those
         return made(*args, **kw)
 
     monkeypatch.setattr(tools.tempfile, "mkdtemp", refuse_tmp)

@@ -89,6 +89,36 @@ def test_a_box_for_tests_reaches_every_local_port_and_still_no_internet(tmp_path
 
 
 @boxed
+def test_a_box_for_tests_reaches_unix_sockets_only_in_its_own_folders() -> None:
+    """A suite's own servers may listen on a socket file, as the role tools do; one outside the box stays closed."""
+    import shutil
+    import socket
+    import tempfile
+
+    # short folders, as a socket's path is limited; the socket is in the second of the box's folders, as a suite's TMPDIR
+    first, inside, outside = (Path(tempfile.mkdtemp(prefix="jb-")) for _ in range(3))
+    listeners = []
+    try:
+        for d in (inside, outside):
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.bind(str(d / "s"))
+            s.listen(2)
+            listeners.append(s)
+        probe = ("import socket, sys\nfor p in sys.argv[1:]:\n    c = socket.socket(socket.AF_UNIX)\n    try:\n"
+                 "        c.connect(p); print('open')\n    except OSError: print('closed')\n")
+        (inside / "probe.py").write_text(probe)
+        done = sh(f"{sys.executable} -I {inside}/probe.py {inside}/s {outside}/s", Box((first, inside), local=True))
+        assert done.stdout.split("\n")[:2] == ["open", "closed"], done.stderr
+        done = sh(f"{sys.executable} -I {inside}/probe.py {inside}/s", Box((inside,)))
+        assert done.stdout.split("\n")[:1] == ["closed"], done.stderr
+    finally:
+        for s in listeners:
+            s.close()
+        for d in (first, inside, outside):
+            shutil.rmtree(d)
+
+
+@boxed
 def test_it_cannot_signal_processes_outside_it(tmp_path: Path) -> None:
     outside = subprocess.Popen(["sleep", "30"])
     try:
