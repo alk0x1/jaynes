@@ -145,3 +145,21 @@ def test_claude_offers_exactly_the_steps_tools_through_jaynes_mcp_server(tmp_pat
     plain = ClaudeRuntime().command(tmp_path)
     assert json.loads(plain[plain.index("--mcp-config") + 1]) == {"mcpServers": {}}
 
+
+
+def test_the_tools_socket_finds_a_folder_where_tmp_cannot_be_written(tmp_path: Path,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jaynes's own suite runs in the box, where /tmp is refused: the socket goes to the temporary folder instead."""
+    import tempfile
+
+    from jaynes import tools
+
+    made = tempfile.mkdtemp
+
+    def refuse_tmp(*args: Any, **kw: Any) -> str:
+        if kw.get("dir") == "/tmp":
+            raise PermissionError(1, "Operation not permitted", "/tmp/jt-x")
+        return made(*args, **kw)
+
+    monkeypatch.setattr(tools.tempfile, "mkdtemp", refuse_tmp)
+    test_the_agent_calls_the_roles_tools_and_jaynes_records_each_call_and_keeps_its_pictures(tmp_path)

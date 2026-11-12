@@ -114,7 +114,10 @@ def serve(tools: Sequence[Tool], context: ToolContext) -> Generator[tuple[Served
     must be, and only the person's user can open it."""
     served = Served(tools, context)
     context.folder.mkdir(parents=True, exist_ok=True)
-    where = tempfile.mkdtemp(prefix="jt-", dir="/tmp" if Path("/tmp").is_dir() else None)
+    try:
+        where = tempfile.mkdtemp(prefix="jt-", dir="/tmp" if Path("/tmp").is_dir() else None)
+    except OSError:  # in the box, where Jaynes's own suite runs, /tmp is refused: TMPDIR is the box's own
+        where = tempfile.mkdtemp(prefix="jt-")
     os.chmod(where, 0o700)
     path = os.path.join(where, "s")
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
