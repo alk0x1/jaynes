@@ -12,7 +12,7 @@ import pytest
 
 from jaynes import runners, sandbox, suite
 from jaynes.conductor import Conductor
-from jaynes.role import Checked, Fail, Pass, Witnesses
+from jaynes.role import Blocked, Checked, Fail, Pass, Witnesses
 from software import fix_bug as fb
 from jaynes.runners import Runner
 from jaynes.verify import verify
@@ -220,8 +220,9 @@ def test_a_failure_the_box_caused_is_not_the_bug(repo: Path, tmp_path: Path) -> 
     blocked = f"touch {outside}; echo FAIL; exit 1; :"
     needs = Witnesses(ran_by(Runner(kind="given", suite=blocked, each=blocked, found="the test")),
                       copy(repo, tmp_path, {"tests/test_add.py": TEST}), source=repo)
-    refused = fb.fails_for_the_bug(reproduction(failure="FAIL"), needs)
-    assert isinstance(refused, Fail) and "the box refused" in refused.reasons[0] and str(outside) in refused.reasons[0]
+    with pytest.raises(Blocked) as refused:  # the run blocks at once: no attempt of the agent is spent on it
+        fb.fails_for_the_bug(reproduction(failure="FAIL"), needs)
+    assert "the box refused" in str(refused.value) and str(outside) in str(refused.value)
 
 
 def test_a_bare_status_word_is_not_a_quote_of_the_failure(repo: Path, tmp_path: Path) -> None:

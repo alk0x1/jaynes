@@ -97,7 +97,7 @@ def test_a_box_for_tests_reaches_unix_sockets_only_in_its_own_folders() -> None:
 
     # short folders, as a socket's path is limited; the socket is in the second of the box's folders, as a suite's TMPDIR
     first, inside, outside = (Path(tempfile.mkdtemp(prefix="jb-")) for _ in range(3))
-    listeners = []
+    listeners: list[socket.socket] = []
     try:
         for d in (inside, outside):
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

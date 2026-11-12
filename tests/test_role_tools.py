@@ -157,10 +157,10 @@ def test_the_tools_socket_finds_a_folder_where_tmp_cannot_be_written(tmp_path: P
 
     made = tempfile.mkdtemp
 
-    def refuse_tmp(*args: Any, **kw: Any) -> str:
-        if kw.get("dir") == "/tmp":
+    def refuse_tmp(prefix: str | None = None, dir: str | None = None) -> str:
+        if dir == "/tmp":
             raise PermissionError(errno.EPERM, "refused", "/tmp/jt-x")  # not the box's words: Jaynes reads those
-        return made(*args, **kw)
+        return made(prefix=prefix, dir=dir)
 
     monkeypatch.setattr(tools.tempfile, "mkdtemp", refuse_tmp)
     test_the_agent_calls_the_roles_tools_and_jaynes_records_each_call_and_keeps_its_pictures(tmp_path)

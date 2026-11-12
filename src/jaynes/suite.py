@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jaynes import preview, sandbox
-from jaynes.role import Fail, Witnesses
+from jaynes.role import Blocked, Witnesses
 
 TAIL = 3000  # characters of output kept, from the end, where test runners put their summary
 
@@ -90,16 +90,17 @@ def run(needs: Witnesses, command: str, timeout: float = 600.0, env: dict[str, s
         return Ran(code, text[-TAIL:], text)
 
 
-def ran(needs: Witnesses, command: str) -> Ran | Fail:
-    """The command's result for a check, or why it says nothing about the project: no box, or the box refused what
-    it tried."""
+def ran(needs: Witnesses, command: str) -> Ran:
+    """The command's result for a check. Raises ``Blocked`` when it says nothing about the project, as there is no
+    box or the box refused what it tried: the fault is Jaynes's, so the run blocks at once and no attempt of the
+    agent is spent on it."""
     try:
         done = run(needs, command)
     except sandbox.Unavailable as err:
-        return Fail(str(err))
+        raise Blocked(str(err)) from err
     refused = [line.strip() for line in done.printed.splitlines() if "operation not permitted" in line.lower()]
     if done.code != 0 and refused:
-        return Fail(f"the box refused what {command} tried to do, so its failure says nothing about the project. "
-                    "This is Jaynes's to fix, not yours; tell the person. What the box refused:\n"
-                    + "\n".join(refused[:5]))
+        raise Blocked(f"the box refused what {command} tried to do, so its failure says nothing about the project. "
+                      "This is Jaynes's to fix, not the agent's; tell the person. What the box refused:\n"
+                      + "\n".join(refused[:5]))
     return done
