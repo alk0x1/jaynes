@@ -44,9 +44,9 @@ from pygments.lexer import Lexer
 from pygments.lexers import get_lexer_for_filename  # pyright: ignore[reportUnknownVariableType]
 from pygments.util import ClassNotFound
 
-from jaynes import api, bounds, catalog, guard, install, outcome, plan, sandbox, skill, update, why
+from jaynes import api, bounds, catalog, conductor, guard, install, outcome, plan, sandbox, skill, update, why
 from jaynes import project as repo
-from jaynes.conductor import (REJECTED, By, Conductor, RunState, StepState, Waiting, continue_in_background, holds, project,
+from jaynes.conductor import (BASED, DROPPED, REJECTED, By, Conductor, RunState, StepState, Waiting, continue_in_background, holds, project,
                               return_to)
 from jaynes.history import Report, past_calls, report
 from jaynes import inputs as run_inputs
@@ -475,7 +475,14 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .dec.locked .v, .dec.locked.open .lk, .dec.locked.open [data-unlock] { display: none; }
 .dec.locked.open .v { display: inline-block; }
 .dec .dnote { display: none; grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--red); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
-.dec.no .dnote { display: block; }
+.dec.no .dnote, .dec.drop .dnote, .dec.base .dnote { display: block; }
+.dec.drop .dnote, .dec.base .dnote { border-color: var(--line-2); }
+.dec.drop .v.ok, .dec.base .v.ok { color: var(--ink); border-color: var(--line-2); }
+.dec.drop .v.drop { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+.dec.drop > div:first-child, .dec.drop .dpics { opacity: .45; }
+.dec.base .v.base { color: var(--blue); border-color: var(--blue); }
+.dec .dpics { grid-column: 1 / -1; }
+.dec .dpics .pics { margin: 0; }
 .whys { display: grid; gap: 10px; }
 .whys .qa b { display: block; font-family: var(--mono); font-size: 12px; font-weight: 400; color: var(--dim); }
 .whys .qa p { color: var(--ink); font-size: 15px; line-height: 1.55; max-width: 68ch; margin-top: 4px; white-space: pre-wrap; }
@@ -641,8 +648,14 @@ if (form) {
   if (chosen.value) show();
   // a decision rejected asks for its line, and Accept becomes Send: only what was rejected is redone
   const relabel = () => {
-    const n = document.querySelectorAll(".dec.no").length;
-    accept.firstChild.textContent = n ? "Send: redo " + n + ", keep the rest" : "Accept";
+    const n = (m) => document.querySelectorAll(".dec." + m).length;
+    const redo = n("no") + n("base"), left = [...document.querySelectorAll(".dec[data-choose]:not(.drop)")];
+    if (redo || (n("drop") && !document.querySelector(".dec[data-choose]")))
+      accept.firstChild.textContent = "Send: " + [n("no") && "redo " + n("no"), n("base") && "start from " + n("base"),
+        n("drop") && "drop " + n("drop")].filter(Boolean).join(", ");
+    else if (n("drop") && left.length)
+      accept.firstChild.textContent = left.length === 1 ? "Choose " + left[0].dataset.choose : "Choose " + left.length;
+    else accept.firstChild.textContent = "Accept";
   };
   // back from asking Why?: to its answer, once the pictures above it have taken their place
   if (location.hash === "#why") window.addEventListener("load", () => {
@@ -660,9 +673,18 @@ if (form) {
   if (whys && whys.querySelector(".pending")) again();
   document.querySelectorAll(".dec").forEach(d => {
     const line = d.querySelector(".dnote");
+    const asks = {no: ["reject:", "What is wrong with "], drop: ["drop:", "Why drop "], base: ["base:", "What to change in "]};
+    const label = d.querySelector("small").textContent.toLowerCase();
     d.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () => {
-      const no = b.dataset.v === "no";
-      d.classList.toggle("no", no); line.disabled = !no; if (no) line.focus(); relabel();
+      const m = d.classList.contains(b.dataset.v) ? "ok" : b.dataset.v;  // a second click undoes the mark
+      ["no", "drop", "base"].forEach(x => d.classList.toggle(x, x === m));
+      line.disabled = m === "ok";
+      if (m !== "ok") {
+        line.name = asks[m][0] + d.dataset.id;
+        line.placeholder = asks[m][1] + label + (m === "no" ? "?" : "? (optional)");
+        line.focus();
+      }
+      relabel();
     }));
     const unlock = d.querySelector("[data-unlock]");
     if (unlock) unlock.addEventListener("click", () => d.classList.add("open"));
@@ -1260,14 +1282,16 @@ class Review:
             sub += ('<div class="sub"><span class="chip red">braked</span> Too much of what this stop let through '
                     'turned out wrong lately, so the run waits for you here: nothing after it runs until you answer. '
                     'It stops holding runs once enough deliveries after the brake have held.</div>')
-        if s.note and REJECTED in s.note:  # the lines the person wrote, without what the agent is told around them
-            said = [x.removeprefix("- ") for x in s.note.replace(REJECTED, "").splitlines() if x.strip()]
-            sub += f'<div class="sub">You rejected in round {s.round - 1}: {marked("; ".join(said))}</div>'
+        if s.note and any(h in s.note for h in (REJECTED, DROPPED, BASED)):  # what the person marked, without
+            said: list[str] = []                                              # what the agent is told around it
+            for x in s.note.split(conductor.KEPT)[0].splitlines():
+                said += [x.removeprefix("- ")] if x.strip() and x not in (REJECTED, DROPPED, BASED) else []
+            sub += f'<div class="sub">You marked in round {s.round - 1}: {marked("; ".join(said))}</div>'
         elif s.note:
             sub += f'<div class="sub">You returned round {s.round - 1} with: {marked(s.note)}</div>'
         shown = cast(list[dict[str, Any]] | None, s.open_stop[1].get("shown")) if s.open_stop else None
         items = self._items(target, s)
-        if items:
+        if items and not (target is not None and target.decides is not None):
             sub += '<div class="sub">Click to choose, most important first. Accept keeps them all.</div>'
         if shown is None and target is not None and target.shows is not None:
             shown = self.c.shown(target, s, st)  # a stop opened before its step said how to show it
@@ -1292,7 +1316,9 @@ class Review:
         decs = self.c.decisions_of(target, s.checked) if target is not None and s.open_stop is not None else []
         asked = value if target is not None and target.output is Interview and s.open_stop is not None else None
         if shown:
-            parts.append(self._shown(run_id, st, [x for x in shown if not x.get("more")], items))
+            front = [x for x in shown if not x.get("more")]
+            if front:
+                parts.append(self._shown(run_id, st, front, [] if decs else items))
             more = [x for x in shown if x.get("more")]
             if more:
                 parts.append(f'<details class="fold"><summary>More <span>{len(more)}</span></summary>'
@@ -1309,7 +1335,7 @@ class Review:
             parts.append(self._interview_part(Interview.model_validate(asked), role))
         if decs and target is not None:
             parts.insert(len(parts) - (1 if shown and any(x.get("more") for x in shown) else 0),
-                         self._decisions_part(decs, s, target))
+                         self._decisions_part(run_id, st, decs, s, target, items))
         if target is not None and target.output is not None and s.open_stop is not None:
             parts.append(self._why_part(run_id, step))
         if target is not None and target.checks:
@@ -1521,24 +1547,43 @@ class Review:
                         'placeholder="Or write what you want…"></div>')
         return f'<div class="qs">{"".join(rows)}</div>'
 
-    def _decisions_part(self, decs: list[Decision], s: StepState, target: Step[Any]) -> str:
-        """The output as decisions, each accepted unless the person rejects it with a line; what they accepted in an
-        earlier round is locked, and opens again with Change. A decision that differs from the round before is new."""
+    def _decisions_part(self, run_id: str, st: RunState, decs: list[Decision], s: StepState, target: Step[Any],
+                        items: list[tuple[str, str]]) -> str:
+        """The output as decisions, each kept unless the person marks it: redo with a line, drop for good, or start
+        from it and change it a lot. What they kept in an earlier round is locked, and opens again with Change. A
+        decision that differs from the round before is new; one with pictures shows them."""
         before = {d.id: d.value for d in self.c.decisions_of(target, s.previous)} if s.previous else None
+        choosable = {i for i, _ in items}
         rows: list[str] = []
         for d in decs:
             locked = s.locked.get(d.id) == d.value
             new = '<span class="chip amber">new</span>' if before is not None and before.get(d.id) != d.value else ""
-            lock = ('<span class="lk">🔒 accepted</span><button type="button" class="btn" data-unlock>change</button>'
+            lock = ('<span class="lk">🔒 kept</span><button type="button" class="btn" data-unlock>change</button>'
                     if locked else "")
-            rows.append(f'<div class="dec{" locked" if locked else ""}" data-id="{esc(d.id)}"><div><small>'
-                        f'{esc(d.label)}</small><span>{swatch(d.value)}</span>{new}</div><div class="da">{lock}'
-                        '<button type="button" class="btn v ok" data-v="ok" title="Accept it">✓</button>'
-                        '<button type="button" class="btn v no" data-v="no" title="Reject it">✗</button></div>'
+            pics = [self._picture(f"/file/{q(run_id)}/{q(pic.step)}/{q(pic.file)}", self.c.home / "objects" / obj,
+                                  pic.caption, list(pic.region))
+                    for pic in d.pictures if (obj := self._files(st, pic.step).get(pic.file)) is not None]
+            links = [f'<a class="btn" href="/page/{q(run_id)}/{q(pic.step)}/{q(pic.page)}" target="_blank" '
+                     'rel="noopener">Open the page ↗</a>' for pic in d.pictures
+                     if pic.page and pic.page in self._files(st, pic.step)]
+            shown = (f'<div class="dpics"><div class="pics">{"".join(pics)}</div>'
+                     + (f'<p class="open">{"".join(links)}</p>' if links else "") + "</div>") if pics else ""
+            rows.append(f'<div class="dec{" locked" if locked else ""}{" big" if pics else ""}" data-id="{esc(d.id)}"'
+                        + (f' data-choose="{esc(d.label)}"' if d.id in choosable else "")
+                        + f'><div><small>{esc(d.label)}</small><span>{swatch(d.value)}</span>{new}</div>'
+                        f'<div class="da">{lock}'
+                        '<button type="button" class="btn v ok" data-v="ok" title="Keep it">✓</button>'
+                        '<button type="button" class="btn v no" data-v="no" title="Redo it, saying what is wrong">'
+                        '✗</button>'
+                        '<button type="button" class="btn v drop" data-v="drop" title="Drop it for good: it never '
+                        'comes back in this run">Drop</button>'
+                        '<button type="button" class="btn v base" data-v="base" title="Start from it and change it a '
+                        'lot">Start from</button></div>'
                         f'<input type="text" class="dnote" name="reject:{esc(d.id)}" form="answer" disabled '
-                        f'placeholder="What is wrong with {esc(d.label.lower())}?"></div>')
-        return ('<div><div class="label">Decisions <span>reject what is wrong, with a line; the rest is kept</span>'
-                f'</div><div class="decs">{"".join(rows)}</div></div>')
+                        f'placeholder="What is wrong with {esc(d.label.lower())}?">{shown}</div>')
+        how = ("drop what you never want, start from the best, the rest is chosen" if choosable else
+               "✗ redo with a line, drop for good, or start from one; the rest is kept")
+        return f'<div><div class="label">Decisions <span>{how}</span></div><div class="decs">{"".join(rows)}</div></div>'
 
     def _shown(self, run_id: str, st: RunState, shown: list[dict[str, Any]], items: list[tuple[str, str]]) -> str:
         """The stop's items as cards: their pictures, a title and a sentence. An item the person may choose is picked

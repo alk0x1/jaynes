@@ -234,6 +234,17 @@ Rules:
   one follows from, and rejecting one of those unlocks it too. Jaynes sending
   the step back keeps the locks; a person sending it back from another stop,
   or a blocked run, clears them, since they could not reject a decision there.
+  Besides rejecting, the person may drop a decision for good or start from it,
+  each with an optional line: either makes the answer a return, whose note
+  lists what was dropped, what to start from and change a lot, and what to
+  keep. What is dropped is recorded for the whole run: every later prompt,
+  hidden steps aside, lists it, checks read it as `needs.dropped`, and Jaynes
+  rejects a later output of the step that brings back a dropped value. At a
+  step that also lets the person choose, dropping alone chooses what is left.
+  A return of decisions at a step Jaynes runs goes to the agent before it, as
+  any return there does, and such a step is held to no lock: the agent was
+  told what to keep. `Decision(..., pictures=(Picture(...),))` shows pictures
+  in its line.
 - `back=Back(to, when, rounds=2)` lets Jaynes send an earlier step back:
   when the checked output makes `when(output, needs)` return reasons, `to`
   and every step after it run again with the reasons in `to`'s prompt, as a

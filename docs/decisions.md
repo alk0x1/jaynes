@@ -2,6 +2,21 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-11: A decision can be dropped for good or taken as the base
+
+**Decided.** Next to keep and redo, each decision at a stop can be dropped for
+good or marked as the base to start from and change a lot. A dropped value
+never comes back in the run: every later step is told, checks can see it, and
+Jaynes rejects an output of the same step that brings it back. Where a stop
+also lets the person choose, dropping alone chooses what is left. Decisions may
+carry pictures. A return of decisions at a step Jaynes runs goes to the agent
+before it.
+
+**Why.** On a real run the person hated two of three looks and found the third
+the least bad but still bad. Redo with a note could not say "never these
+again" or "this one, but much better", and a look the director had cut came
+back in a later round.
+
 ## 2026-11-11: A stop shows decisions, not text; an interview comes first
 
 **Decided.** A run starts with one interview: questions with 3 to 5 options, a

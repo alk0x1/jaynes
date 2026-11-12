@@ -679,6 +679,25 @@ def test_a_person_rejects_one_decision_from_the_page_and_the_rest_is_locked(tmp_
     assert answered["locked"] == {"theme": "dark", "accent": "#e8a33d", "heading": "Fraunces"}
 
 
+def test_a_person_drops_two_looks_from_the_page_and_the_one_left_is_chosen(tmp_path: Path) -> None:
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.offered:ROLE", "--task", "three looks",
+              "--runtime", "fake=tests.offered:Agent"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + "/next")
+        front = page.partition('<details class="fold"><summary>Details')[0]
+        assert '<div class="dec" data-id="ledger" data-choose="Ledger">' in front and 'data-v="drop"' in front
+        assert 'data-v="base"' in front and "Click to choose" not in front
+        assert post(base + "/answer", {**form(page), "answer": "accept", "drop:booklet": "hated it",
+                                       "drop:board": ""})[0] == 303
+    finally:
+        server.shutdown()
+    [answered] = [e.payload for e in Store(tmp_path / "jaynes.sqlite3").events("StopAnswered", run_id=run)]
+    assert answered["answer"] == "choose" and answered["chosen"] == ["ledger"]
+    assert [d["id"] for d in answered["dropped"]] == ["booklet", "board"]
+
+
 def test_a_stop_shows_what_the_person_judges_in_front_and_its_output_behind_details(tmp_path: Path) -> None:
     cli.main(["run", "--home", str(tmp_path), "--role", "tests.shown:ROLE", "--task", "say the status",
               "--runtime", "quick=tests.shown:Agent"])

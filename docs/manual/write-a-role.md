@@ -97,6 +97,8 @@ LOOK = ROLE.step("look", output=Look, stop=stop(0.2, waits=True), decides=decisi
 
 Change on a locked line opens it again. `after` says what a decision follows from: rejecting the theme unlocks the accent too, so the agent may change it to fit.
 
+A line has two more answers. Drop removes it for good: it never comes back in the run, and every later step is told so. Start from keeps it as the base to change a lot. Where the stop also lets you choose, dropping what you never want chooses what is left. Give a decision `pictures=` to show it, such as the screen a look was drawn on.
+
 ## Ask a few questions before the work
 
 `ROLE.interview(questions)` makes the run's first step an interview. An agent reads the request and the project, marks the answer it would bet on for each question and says why, and may add a question only you can answer. You answer them all on one screen, by picking an option or writing your own, and the run goes on without you; every later step is told your answers.

@@ -189,9 +189,12 @@ def answer(r: Review, f: dict[str, Any], by: By, spent: float | None = None) -> 
     chosen = f.get("chosen") or ""
     picked = ([x.strip() for x in chosen.replace(",", " ").split()] if isinstance(chosen, str)
               else [str(x).strip() for x in cast(list[Any], chosen) if str(x).strip()])
-    given = f.get("rejected")  # by id, each with its line; the page sends them as reject:<id>
-    rejected = ({str(k): str(v) for k, v in cast(dict[Any, Any], given).items()} if isinstance(given, dict) else
-                {k[len("reject:"):]: str(v) for k, v in f.items() if k.startswith("reject:")})
+    def marks(key: str, prefix: str) -> dict[str, str]:  # by id, each with its line; the page sends <prefix><id>
+        given = f.get(key)
+        return ({str(k): str(v) for k, v in cast(dict[Any, Any], given).items()} if isinstance(given, dict) else
+                {k[len(prefix):]: str(v) for k, v in f.items() if k.startswith(prefix)})
+
+    rejected, dropped, based = marks("rejected", "reject:"), marks("dropped", "drop:"), marks("based", "base:")
     answers: dict[str, str] | None = None  # the interview's, by question: written words win over the option picked
     if isinstance(f.get("answers"), dict):
         answers = {str(k): str(v) for k, v in cast(dict[Any, Any], f["answers"]).items()}
@@ -199,7 +202,7 @@ def answer(r: Review, f: dict[str, Any], by: By, spent: float | None = None) -> 
         answers = {i: str(f.get(f"own:{i}") or "").strip() or str(f.get(f"pick:{i}") or "") for i in ids}
     try:
         r.c.answer(role, run_id, step, a, note=note, output=output, seconds_spent=spent, chosen=picked,
-                   rejected=rejected or None, answers=answers,
+                   rejected=rejected or None, dropped=dropped or None, based=based or None, answers=answers,
                    # the page's select goes with every answer; only return and context go back
                    to=(_text(f, "to") or None) if a in ("return", "context") else None,
                    by=by, evidence=_text(f, "evidence") or None)
@@ -208,7 +211,8 @@ def answer(r: Review, f: dict[str, Any], by: By, spent: float | None = None) -> 
     except RunBusy:
         raise Refused(409, "busy: another answer to this run is being recorded; try again in a moment") from None
     continue_in_background(r.c.home, run_id)  # when a process already runs it, that one goes on with this
-    return {"run": run_id, "step": step, "answer": "return" if rejected else a, "by": by, "continuing": True}
+    last = [e.payload for e in r.c.store.events("StopAnswered", run_id=run_id) if e.payload["step"] == step]
+    return {"run": run_id, "step": step, "answer": last[-1]["answer"] if last else a, "by": by, "continuing": True}
 
 
 def continue_run(r: Review, f: dict[str, Any], by: By) -> dict[str, Any]:

@@ -80,14 +80,17 @@ class Witnesses:
     ``source`` is the person's repository, where installed dependencies are linked from when a check runs a
     project command (``jaynes.suite``); ``hidden`` is what such a command may not read, Jaynes's home.
     ``started`` is what the run started with, its inputs among it; ``files`` the files each needed step left,
-    by step and path, private ones included.
+    by step and path, private ones included. ``dropped`` is what the person dropped for good in the run, which a
+    check may hold an output to.
     """
 
     def __init__(self, by_name: Mapping[str, Checked[Any]], project: Path | None = None,
                  source: Path | None = None, hidden: tuple[Path, ...] = (),
                  started: Mapping[str, Any] | None = None,
-                 files: Mapping[str, Mapping[str, Path]] | None = None) -> None:
+                 files: Mapping[str, Mapping[str, Path]] | None = None,
+                 dropped: Sequence[Dropped] = ()) -> None:
         self._by_name = dict(by_name)
+        self.dropped = tuple(dropped)
         self.project = project
         self.source = source
         self.hidden = hidden
@@ -291,18 +294,32 @@ class Shown:
 
 @dataclass(frozen=True)
 class Decision:
-    """One decision in a step's output, as the person judges it at the stop: accepted or rejected with a note.
+    """One decision in a step's output, as the person judges it at the stop: kept, redone with a note, dropped for
+    good, or taken as the base to change a lot.
 
     ``id`` follows it across rounds, whatever its wording; ``label`` names it for the person; ``value`` is what was
-    decided, as text. What the person accepts is locked: Jaynes rejects an output that changes or drops it, until
-    the person rejects it. ``after`` names the decisions it follows from, such as an accent colour after the theme:
-    when one of those is rejected, this one unlocks too.
+    decided, as text. What the person keeps is locked: Jaynes rejects an output that changes or drops it, until
+    the person rejects it. What they drop never comes back in the run. ``after`` names the decisions it follows
+    from, such as an accent colour after the theme: when one of those is rejected, this one unlocks too.
+    ``pictures`` show it, such as the screen a look was drawn on.
     """
 
     id: str
     label: str
     value: str
     after: tuple[str, ...] = ()
+    pictures: tuple[Picture, ...] = ()
+
+
+@dataclass(frozen=True)
+class Dropped:
+    """A decision the person dropped for good at a step's stop, with what they said about it, if anything."""
+
+    step: str
+    id: str
+    label: str
+    value: str
+    note: str = ""
 
 
 @dataclass(frozen=True)

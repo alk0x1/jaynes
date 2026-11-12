@@ -41,7 +41,7 @@ from jaynes.gate import Window
 from jaynes.preview import link_dependencies
 from jaynes import inputs as run_inputs
 from jaynes import outcome, proof
-from jaynes.role import DISPUTES, INTERVIEW, OUTPUT, Interview, Asks, Blocked, Checked, Cost, Decision, Disputes, Fail, History, Note, Pass, Role, Step, StepContext, ToolContext, Witnesses
+from jaynes.role import DISPUTES, INTERVIEW, OUTPUT, Interview, Asks, Blocked, Checked, Cost, Decision, Disputes, Dropped, Fail, History, Note, Pass, Role, Step, StepContext, ToolContext, Witnesses
 from jaynes import tools as role_tools
 from jaynes.runtime import QuotaExhausted, Runtime, RuntimeFailure, TurnTimeout
 from jaynes.store import Event, Store
@@ -52,6 +52,9 @@ Answer = Literal["accept", "change", "return", "context", "choose"]
 By = Literal["person", "agent"]  # the page with its key, or anything else, such as the CLI an agent runs
 # choosing among the output's items is accepting it: the items were right, the person ranked them
 REJECTED = "The person rejected these decisions; redo these and keep the rest:"  # heads a return of decisions
+DROPPED = "The person dropped these for good; never bring one back, under its name or another:"
+BASED = "Start from these and change them a lot; keep what made them worth starting from:"
+KEPT = "Keep the rest as it is:"
 LABELS: dict[str, str] = {"accept": "correct", "change": "error", "return": "error", "context": "context",
                           "choose": "correct"}
 OUTPUT_BYTES = 1_000_000
@@ -148,6 +151,7 @@ class RunState:
     merged: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])  # each merge Jaynes made, oldest first
     not_merged: dict[str, Any] | None = None  # why the branch as it is now did not merge by itself
     undone: dict[str, Any] | None = None  # a person reverted the merges
+    dropped: list[Dropped] = field(default_factory=list[Dropped])  # what the person dropped for good, oldest first
 
     def step(self, name: str) -> StepState:
         return self.steps.setdefault(name, StepState())
@@ -192,6 +196,8 @@ def project(events: Iterable[Event]) -> RunState:
                 s.open_stop = None
                 if "locked" in p:
                     s.locked = dict(p["locked"])
+                st.dropped += [Dropped(str(p["step"]), str(d["id"]), str(d["label"]), str(d["value"]),
+                                       str(d.get("note") or "")) for d in p.get("dropped") or ()]
                 if p.get("to"):  # an earlier step returned from this stop: it runs again, and what it changes
                     _reset(st, p["to"], p["reset"], p.get("note"))
                 elif p["answer"] in ("accept", "change", "choose"):
@@ -427,6 +433,7 @@ class Conductor:
                output: BaseModel | Mapping[str, Any] | None = None, seconds_spent: float | None = None,
                to: str | None = None, by: By, evidence: str | None = None, via: str | None = None,
                chosen: Sequence[str] | None = None, rejected: Mapping[str, str] | None = None,
+               dropped: Mapping[str, str] | None = None, based: Mapping[str, str] | None = None,
                answers: Mapping[str, str] | None = None) -> None:
         """Record the answer at an open stop. ``change`` needs the edited output, which must pass the checks.
 
@@ -441,6 +448,9 @@ class Conductor:
         ``choose`` keeps the ``chosen`` items of the output, in that order, at a step that lets the person choose.
         ``rejected`` names, at a step that shows decisions, the ones the person rejects, each with its note: the
         answer becomes a return of those alone, and the rest are locked. An accept with none rejected locks them all.
+        ``dropped`` names the ones dropped for good, which never come back in the run, and ``based`` the ones to start
+        from and change a lot, each with an optional note; both make the answer a return, except that dropping alone
+        at a step that lets the person choose chooses what is left.
         ``answers`` are the person's answers at the interview, by question: the guesses they leave stand, and the
         answer is an accept when every guess stood, else a change to what they answered.
 
@@ -497,11 +507,19 @@ class Conductor:
                                                                   or q.guess}) for q in asked.questions])
                 if given != asked:
                     answer, output = "change", given
-            if rejected and target.decides is None:
+            if (rejected or dropped or based) and target.decides is None:
                 raise AnswerRejected([f"{step!r} shows no decisions to reject"])
             locked: dict[str, str] | None = None
+            gone: list[dict[str, str]] = []
             if target.decides is not None and s.checked is not None and answer in ("accept", "return"):
-                answer, note, locked = self._judged(target, s, answer, note, dict(rejected or {}))
+                answer, note, locked, gone, kept = self._judged(target, s, answer, note, dict(rejected or {}),
+                                                                dict(dropped or {}), dict(based or {}))
+                if kept is not None:
+                    chosen = kept
+                if answer == "return" and to is None and target.run_by is not None:
+                    need = return_to(role, step)  # Jaynes made what was judged; the agent before it redoes it
+                    if need is not None and role.steps[names.index(need)].run_by is None:
+                        to = need
             value: BaseModel | None = None
             if answer == "choose":
                 output = self._chosen(target, s, list(chosen or []))
@@ -536,7 +554,8 @@ class Conductor:
                 "fingerprint": opened["fingerprint"], "seconds_waited": round(self.clock() - opened_at, 3),
                 "seconds_spent": seconds_spent, "by": by, "opened": s.opened_seq, **({"via": via} if via else {}),
                 **({"chosen": list(chosen or [])} if answer == "choose" else {}),
-                **({"locked": locked} if locked is not None else {}), **back})]
+                **({"locked": locked} if locked is not None else {}), **({"dropped": gone} if gone else {}),
+                **back})]
             if value is not None:  # the edit and its witness are one write, so a crash cannot drop the edit
                 assert s.checked is not None
                 rows.append(self._witness(target, s, value, source=by, model=str(s.checked["model"]),
@@ -1026,7 +1045,7 @@ class Conductor:
                 if step.max_messages and "max_messages" in inspect.signature(runtime.turn).parameters:
                     web["max_messages"] = step.max_messages  # a runtime that counts no messages has no such limit
                 prompt = self.prompt(role, step, task, s, files, st.started, on_top, self._history(run_id).notes,
-                                     self._answered(role, step, st))
+                                     self._answered(role, step, st), st.dropped)
                 if step.tools:
                     with role_tools.serve(step.tools, ToolContext(run_id, step.name, task, used,
                                                                   self._history(run_id))) as (served, offered):
@@ -1098,7 +1117,7 @@ class Conductor:
             self._emit(run_id, "RunBlocked", {"step": step.name, "reasons": [str(err)[:2000]], "received": received,
                                               **({"asks": True} if isinstance(err, Asks) else {})})
             return None
-        failures += self._locks(step, value, s)
+        failures += self._locks(step, value, s, st.dropped)
         if failures:
             self._reject(run_id, step, attempt, "check", failures, t0)
             return None
@@ -1160,7 +1179,7 @@ class Conductor:
     def _decisions(self, step: Step[Any], value: Any) -> list[Decision]:
         """The output's decisions as the step reads them, every field as text."""
         assert step.decides is not None
-        return [Decision(str(d.id), str(d.label), str(d.value), tuple(str(a) for a in d.after))
+        return [Decision(str(d.id), str(d.label), str(d.value), tuple(str(a) for a in d.after), tuple(d.pictures))
                 for d in step.decides(value)]
 
     def decisions_of(self, step: Step[Any], checked: Mapping[str, Any] | None) -> list[Decision]:
@@ -1172,33 +1191,54 @@ class Conductor:
         except Exception:
             return []
 
-    def _judged(self, step: Step[Any], s: StepState, answer: Answer, note: str | None,
-                rejected: dict[str, str]) -> tuple[Answer, str | None, dict[str, str] | None]:
-        """An accept or return at a stop that shows decisions: the answer, its note and what is locked after it."""
+    def _judged(self, step: Step[Any], s: StepState, answer: Answer, note: str | None, rejected: dict[str, str],
+                dropped: dict[str, str], based: dict[str, str]
+                ) -> tuple[Answer, str | None, dict[str, str] | None, list[dict[str, str]], list[str] | None]:
+        """An accept or return at a stop that shows decisions: the answer, its note, what is locked after it, what was
+        dropped for good, and what is chosen when dropping alone chooses the rest."""
         assert step.output is not None and s.checked is not None
         try:
-            now = self._decisions(step, step.output.model_validate_json(self._object(str(s.checked["output_hash"]))))
+            value = step.output.model_validate_json(self._object(str(s.checked["output_hash"])))
+            now = self._decisions(step, value)
         except Exception as err:
             raise AnswerRejected([f"the step's decisions could not be read: {type(err).__name__}: {err}"]) from None
         by_id = {d.id: d for d in now}
-        reasons = [f"{i!r} is not a decision of this output" for i in rejected if i not in by_id]
+        marked = [*rejected, *dropped, *based]
+        reasons = [f"{i!r} is not a decision of this output" for i in dict.fromkeys(marked) if i not in by_id]
+        reasons += [f"{by_id[i].label} is marked twice; redo, drop or start from it" for i in dict.fromkeys(
+            i for i in marked if marked.count(i) > 1) if i in by_id]
         reasons += [f"say what is wrong with {by_id[i].label}" for i, n in rejected.items()
                     if i in by_id and not n.strip()]
         if reasons:
             raise AnswerRejected(reasons)
-        if not rejected:
-            return answer, note, {d.id: d.value for d in now} if answer == "accept" else dict(s.locked)
-        drop = set(rejected)
-        while more := {d.id for d in now if d.id not in drop and drop.intersection(d.after)}:
-            drop |= more  # what follows from a rejected decision is free to change with it
-        said = [note.strip()] if note and note.strip() else []
-        said += [REJECTED]
-        said += [f"- {by_id[i].label} ({by_id[i].value}): {n.strip()}" for i, n in rejected.items()]
-        return "return", "\n".join(said), {d.id: d.value for d in now if d.id not in drop}
+        gone = [{"id": i, "label": by_id[i].label, "value": by_id[i].value, **({"note": n.strip()} if n.strip() else {})}
+                for i, n in dropped.items()]
+        if not marked:
+            return answer, note, ({d.id: d.value for d in now} if answer == "accept" else dict(s.locked)), [], None
+        free = set(marked)
+        while more := {d.id for d in now if d.id not in free and free.intersection(d.after)}:
+            free |= more  # what follows from a rejected decision is free to change with it
+        locked = {d.id: d.value for d in now if d.id not in free}
+        if dropped and not rejected and not based and step.choose is not None:
+            left = [i for i, _ in step.choose.items(value) if i not in dropped]
+            if left:  # dropping alone, where the person chooses, chooses what is left
+                return "choose", note, locked, gone, left
+        def line(i: str, n: str) -> str:
+            return f"- {by_id[i].label} ({by_id[i].value})" + (f": {n.strip()}" if n.strip() else "")
 
-    def _locks(self, step: Step[Any], value: Any, s: StepState) -> list[str]:
-        """Why an output breaks what the person locked: a locked decision changed or dropped, or ids that clash."""
-        if step.decides is None:
+        said = [note.strip()] if note and note.strip() else []
+        said += [DROPPED, *(line(i, n) for i, n in dropped.items())] if dropped else []
+        said += [BASED, *(line(i, n) for i, n in based.items())] if based else []
+        said += [REJECTED, *(line(i, n) for i, n in rejected.items())] if rejected else []
+        if locked and not rejected:
+            said += [KEPT, *(f"- {by_id[i].label} ({v})" for i, v in locked.items())]
+        return "return", "\n".join(said), locked, gone, None
+
+    def _locks(self, step: Step[Any], value: Any, s: StepState, dropped: Sequence[Dropped] = ()) -> list[str]:
+        """Why an output breaks what the person locked: a locked decision changed or dropped, one they dropped for
+        good back, or ids that clash. A step Jaynes runs is held to none: what it shows comes from an agent before it,
+        which the person's answer reached."""
+        if step.decides is None or step.run_by is not None:
             return []
         try:
             now = self._decisions(step, value)
@@ -1208,6 +1248,9 @@ class Conductor:
         reasons = [f"two decisions share the id {i!r}; give each its own" for i in dict.fromkeys(
             i for i in ids if ids.count(i) > 1)]
         by_id = {d.id: d for d in now}
+        values = {d.value for d in now}
+        reasons += [f"the person dropped {d.label} ({d.value}) for good; leave it out" for d in dropped
+                    if d.step == step.name and d.value in values]
         for i, v in s.locked.items():
             d = by_id.get(i)
             if d is None:
@@ -1352,7 +1395,8 @@ class Conductor:
     def prompt(self, role: Role, step: Step[Any], task: str, s: StepState,
                files: Mapping[str, Mapping[str, str]] | None = None,
                started: Mapping[str, Any] | None = None, on_top: bool | None = None,
-               said: Sequence[Note] = (), answered: Sequence[tuple[str, str]] = ()) -> str:
+               said: Sequence[Note] = (), answered: Sequence[tuple[str, str]] = (),
+               dropped: Sequence[Dropped] = ()) -> str:
         """``on_top`` says whether the step's previous change to the project is applied in its copy, when it has one.
         ``said`` is what the person said in the run; what they said at other steps reaches this one too, since a
         person who asked for something once should not have to ask each step again."""
@@ -1380,6 +1424,10 @@ class Conductor:
         if answered and not step.hidden:
             lines += ["What the person answered before the work started; it holds for every step:"]
             lines += [f"- {question} {answer}" for question, answer in answered]
+            lines.append("")
+        if dropped and not step.hidden:
+            lines += ["What the person dropped for good in this run; never bring one back, under its name or another:"]
+            lines += [f"- at {d.step}: {d.label} ({d.value})" + (f": {d.note}" if d.note else "") for d in dropped]
             lines.append("")
         if _plans(step):
             lines += self._roles(_root(started or {}))
@@ -1596,7 +1644,7 @@ class Conductor:
         files = {n: {rel: self.home / "objects" / obj for rel, obj in fs.items()}
                  for n, fs in self._need_files(step, st, private=True).items()}
         return Witnesses(by_name, project, source, hidden=(self.home,) if project else (), started=st.started,
-                         files=files)
+                         files=files, dropped=st.dropped)
 
     def _object(self, h: str) -> bytes:
         return (self.home / "objects" / f"{h}.json").read_bytes()
