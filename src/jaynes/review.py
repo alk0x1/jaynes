@@ -498,14 +498,14 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .qs .why { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 6px; }
 .qs .own { width: 100%; margin-top: 8px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 14px; padding: 8px 10px; }
 .card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
-.card .pics { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 10px 10px; }
-.card .shot { position: relative; display: block; cursor: zoom-in; }
-.card .shot.wide { flex: 1 1 100%; }
-.card .shot.tall { flex: 1 1 calc(50% - 5px); }
-.card .shot .cut { overflow: hidden; border-radius: 4px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
-.card .shot img { display: block; max-width: none; }
-.card .shot > img { width: 100%; }
-.card .shot span { display: block; margin-bottom: 4px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+:is(.card, .dec) .pics { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 10px 10px; }
+:is(.card, .dec) .shot { position: relative; display: block; cursor: zoom-in; }
+:is(.card, .dec) .shot.wide { flex: 1 1 100%; }
+:is(.card, .dec) .shot.tall { flex: 1 1 calc(50% - 5px); }
+:is(.card, .dec) .shot .cut { overflow: hidden; border-radius: 4px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
+:is(.card, .dec) .shot img { display: block; max-width: none; }
+:is(.card, .dec) .shot > img { width: 100%; }
+:is(.card, .dec) .shot span { display: block; margin-bottom: 4px; font-family: var(--mono); font-size: 11px; color: var(--dim); }
 #zoom { position: fixed; inset: 0; z-index: 10; background: rgba(4, 6, 9, .94); overflow: auto; cursor: zoom-out; display: grid; place-items: start center; padding: 48px 24px; }
 #zoom.hidden { display: none; }
 #zoom img { max-width: none; box-shadow: 0 0 0 1px var(--line-2); }
@@ -560,7 +560,7 @@ details.menu .pop .btn { text-align: left; }
   .bar .acts { margin-left: auto; }
   .tiles { grid-template-columns: 1fr; }
   .previews { grid-template-columns: 1fr; }
-  .card .shot.tall { flex-basis: 100%; }  /* a phone's picture at about its own size, one to a row */
+  :is(.card, .dec) .shot.tall { flex-basis: 100%; }  /* a phone's picture at about its own size, one to a row */
 }
 """
 
