@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from jaynes.role import Fail, Pass, StepContext, Witnesses, role, stop
+from jaynes.role import Decision, Fail, Pass, StepContext, Witnesses, role, stop
 from jaynes.runtime import TurnResult
 
 
@@ -67,8 +67,12 @@ def ask(out: Requirements, needs: Witnesses) -> str:
 ROLE = role("screen-design-demo", agent="scripted")
 SNAPSHOT = ROLE.step("snapshot", output=Snapshot, run_by=take_snapshot)
 BREAKS = ROLE.step("breaks", output=Breaks, needs=[SNAPSHOT], check=breaks_cite_captures)
+def each_requirement(out: Requirements) -> list[Decision]:
+    return [Decision(r.id, f"{r.id}, fixes {r.fixes}", r.requirement) for r in out.requirements]
+
+
 REQUIREMENTS = ROLE.step("requirements", output=Requirements, needs=[BREAKS], check=one_requirement_per_break,
-                         stop=stop(0.10), question=ask)
+                         stop=stop(0.10), question=ask, decides=each_requirement)
 IMPLEMENT = ROLE.step("implement", output=Patch, needs=[REQUIREMENTS])
 ROLE.step("accept", needs=[IMPLEMENT], stop=stop(0.05, sampled=False))
 

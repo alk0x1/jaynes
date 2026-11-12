@@ -44,7 +44,7 @@ from pygments.lexer import Lexer
 from pygments.lexers import get_lexer_for_filename  # pyright: ignore[reportUnknownVariableType]
 from pygments.util import ClassNotFound
 
-from jaynes import api, bounds, catalog, conductor, guard, install, outcome, plan, sandbox, skill, update, why
+from jaynes import api, bounds, catalog, conductor, guard, install, opinion, outcome, plan, sandbox, skill, update, why
 from jaynes import project as repo
 from jaynes.conductor import (BASED, DROPPED, REJECTED, By, Conductor, RunState, StepState, Waiting, continue_in_background, holds, project,
                               return_to)
@@ -484,6 +484,12 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .dec .dpics { grid-column: 1 / -1; }
 .dec .dpics .pics { margin: 0; }
 .whys { display: grid; gap: 10px; }
+.opinion { display: grid; gap: 8px; margin-bottom: 18px; }
+.opinion form { display: flex; gap: 8px; align-items: flex-end; }
+.opinion textarea { flex: 1; min-width: 0; min-height: 44px; resize: vertical; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); font: inherit; font-size: 15px; line-height: 1.5; padding: 9px 11px; }
+.opinion textarea:focus { outline: none; border-color: var(--blue); }
+.opinion .said { color: var(--ink); font-size: 14px; line-height: 1.5; max-width: 68ch; }
+.opinion .pending { color: var(--faint); font-family: var(--mono); font-size: 12px; }
 .whys .qa b { display: block; font-family: var(--mono); font-size: 12px; font-weight: 400; color: var(--dim); }
 .whys .qa p { color: var(--ink); font-size: 15px; line-height: 1.55; max-width: 68ch; margin-top: 4px; white-space: pre-wrap; }
 .whys .qa.pending p { color: var(--faint); font-family: var(--mono); font-size: 12px; }
@@ -675,19 +681,47 @@ if (form) {
     const line = d.querySelector(".dnote");
     const asks = {no: ["reject:", "What is wrong with "], drop: ["drop:", "Why drop "], base: ["base:", "What to change in "]};
     const label = d.querySelector("small").textContent.toLowerCase();
-    d.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () => {
-      const m = d.classList.contains(b.dataset.v) ? "ok" : b.dataset.v;  // a second click undoes the mark
+    d.mark = (m, focus) => {
       ["no", "drop", "base"].forEach(x => d.classList.toggle(x, x === m));
       line.disabled = m === "ok";
       if (m !== "ok") {
         line.name = asks[m][0] + d.dataset.id;
         line.placeholder = asks[m][1] + label + (m === "no" ? "?" : "? (optional)");
-        line.focus();
+        if (focus) line.focus();
       }
       relabel();
-    }));
+    };
+    d.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () =>
+      d.mark(d.classList.contains(b.dataset.v) ? "ok" : b.dataset.v, true)));  // a second click undoes the mark
     const unlock = d.querySelector("[data-unlock]");
     if (unlock) unlock.addEventListener("click", () => d.classList.add("open"));
+  });
+  // What do you think?: the marks a Claude read from the person's words press the buttons above, as clicks would;
+  // nothing is sent, and the person changes any of them by hand. Locked lines stay as they are.
+  const opinion = document.querySelector(".opinion [data-opinion]");
+  let marked = null;
+  const apply = () => {
+    const said = opinion.querySelector("[data-marks]");
+    if (!said || said.dataset.n === marked) return;
+    marked = said.dataset.n;
+    const marks = JSON.parse(said.dataset.marks);
+    document.querySelectorAll(".dec").forEach(d => {
+      if (!d.mark || (d.classList.contains("locked") && !d.classList.contains("open"))) return;
+      const m = marks[d.dataset.id];
+      d.mark(m ? m.mark : "ok", false);
+      if (m) d.querySelector(".dnote").value = m.note || "";
+    });
+  };
+  const reread = () => setTimeout(async () => {
+    try {
+      const r = await fetch(opinion.dataset.opinion);
+      if (r.ok) opinion.innerHTML = await r.text();
+    } catch (e) {}
+    if (opinion.querySelector(".pending")) reread(); else apply();
+  }, 2000);
+  if (opinion) { if (opinion.querySelector(".pending")) reread(); else apply(); }
+  if (location.hash === "#opinion") window.addEventListener("load", () => {
+    const at = document.getElementById("opinion"); if (at) at.scrollIntoView({block: "start"});
   });
   const send = (a) => {
     if (!form.querySelector("[data-a=" + a + "]")) return;
@@ -1583,7 +1617,58 @@ class Review:
                         f'placeholder="What is wrong with {esc(d.label.lower())}?">{shown}</div>')
         how = ("drop what you never want, start from the best, the rest is chosen" if choosable else
                "✗ redo with a line, drop for good, or start from one; the rest is kept")
-        return f'<div><div class="label">Decisions <span>{how}</span></div><div class="decs">{"".join(rows)}</div></div>'
+        return (f'<div>{self._opinion_part(run_id, target.name)}<div class="label">Decisions <span>{how}</span></div>'
+                f'<div class="decs">{"".join(rows)}</div></div>')
+
+    def opinions(self, run_id: str, step: str) -> str:
+        """What came of the last opinion written at this step: being read, the marks with what was understood, or
+        why it could not mark."""
+        x = opinion.latest(self.c.home, run_id, step)
+        if x is None:
+            return ""
+        if x.get("error"):
+            return f'<p class="err">It could not mark the lines ({esc(str(x["error"]))}); mark them by hand.</p>'
+        if x.get("marks") is None:
+            return '<p class="pending">Reading what you wrote…</p>'
+        marks = cast(dict[str, Any], x["marks"])
+        said = str(x.get("understood") or "")
+        told = (f"{said} " if said else "") + ("Check the marks below, then send." if marks else
+                                               "Nothing to mark: every line stays as it is.")
+        return (f'<p class="said" data-marks="{esc(json.dumps(marks, ensure_ascii=False))}" '
+                f'data-n="{esc(str(x.get("asked")))}">{esc(told)}</p>')
+
+    def _opinion_part(self, run_id: str, step: str) -> str:
+        last = opinion.latest(self.c.home, run_id, step)
+        text = str(last.get("text") or "") if last else ""
+        return ('<div class="opinion" id="opinion"><div class="label">What do you think? <span>in your own words; a '
+                'Claude marks the lines below for you to check</span></div>'
+                f'<form method="post" action="/opinion"><input type="hidden" name="token" value="{self.shared.token}">'
+                f'<input type="hidden" name="run" value="{esc(run_id)}"><input type="hidden" name="step" '
+                f'value="{esc(step)}"><textarea name="text" rows="2" placeholder="I like…, but…; never show me…">'
+                f'{esc(text)}</textarea><button class="btn">Mark for me</button></form>'
+                f'<div data-opinion="/opinion/{q(run_id)}/{q(step)}">{self.opinions(run_id, step)}</div></div>')
+
+    def mark_opinion(self, fields: dict[str, str]) -> tuple[int, str]:
+        """Start reading what the person thinks of a stop's decisions; back to the stop at once, where the marks
+        fill the form once they are read. Nothing is sent to the run."""
+        run_id, step, text = fields.get("run", ""), fields.get("step", ""), fields.get("text", "").strip()
+        back = f"/stop/{q(run_id)}/{q(step)}#opinion"
+        role = self.role_of(run_id)
+        target = next((x for x in role.steps if x.name == step), None) if role else None
+        st = project(self.c.store.events(run_id=run_id))
+        s = st.steps.get(step)
+        if not text or target is None or s is None or s.checked is None:
+            return 303, back
+        decs = self.c.decisions_of(target, s.checked)
+        if not decs:
+            return 303, back
+        locked = {d.id for d in decs if s.locked.get(d.id) == d.value}
+        files = {rel: self.c.home / "objects" / obj for rel, obj in self._files(st, step).items()}
+        try:
+            opinion.ask(self.c.home, run_id, step, s.round, text[:4000], decs, locked, files)
+        except ValueError as err:
+            return 400, self.stop_page(run_id, step, str(err))
+        return 303, back
 
     def _shown(self, run_id: str, st: RunState, shown: list[dict[str, Any]], items: list[tuple[str, str]]) -> str:
         """The stop's items as cards: their pictures, a title and a sentence. An item the person may choose is picked
@@ -2729,6 +2814,8 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0, wake_eve
                     self._send(200, app.stop_page(run_id, step))
                 case ["why", run_id, step]:
                     self._send(200, app.whys(run_id, step))
+                case ["opinion", run_id, step]:
+                    self._send(200, app.opinions(run_id, step))
                 case ["stop", run_id]:  # a run blocked with no step, in logs from before it had one
                     self._send(200, app.run_page(run_id))
                 case ["run", run_id]:
@@ -2790,7 +2877,7 @@ def make_server(home: Path, port: int = 8740, idle_after: float = 10.0, wake_eve
                         "/send-back": Review.send_back, "/correction": Review.correction, "/undo": Review.undo,
                         "/halt": Review.halt, "/resume": Review.resume_all,
                         "/start": Review.start, "/setup": Review.setup, "/packages": Review.packages, "/drop": Review.drop_run,
-                        "/update": Review.update, "/why": Review.ask_why,
+                        "/update": Review.update, "/why": Review.ask_why, "/opinion": Review.mark_opinion,
                         "/restart": Review.restart}
             if path not in handlers:
                 return self._send(404, "not found", "text/plain")
