@@ -98,6 +98,9 @@ pub enum Event {
         reasons: Vec<String>,
         ceilings: Ceilings,
         ceiling: Ceiling,
+        /// Each stop's count as it stood at the start, by step.
+        #[serde(default)]
+        attention: std::collections::BTreeMap<String, crate::attention::Count>,
     },
     RiskRaised {
         to: Risk,
@@ -223,6 +226,18 @@ pub enum Event {
     DeliveryCorrected {
         note: String,
         by: By,
+        /// The step whose output was wrong, when known: the error counts on the first stop at or after it.
+        #[serde(default)]
+        step: Option<String>,
+    },
+    /// A certified stop did not ask this round: the coin fell outside its sample.
+    StopSkipped {
+        step: String,
+        round: u32,
+        key: Digest,
+        coin: crate::manifest::Rate,
+        n: u64,
+        k: u64,
     },
 }
 
@@ -255,6 +270,7 @@ impl Event {
             Event::Delivered { .. } => "Delivered",
             Event::RunFinished { .. } => "RunFinished",
             Event::DeliveryCorrected { .. } => "DeliveryCorrected",
+            Event::StopSkipped { .. } => "StopSkipped",
         }
     }
 }

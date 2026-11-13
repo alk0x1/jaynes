@@ -28,6 +28,8 @@ pub struct Run {
     pub delivering: Option<Digest>,
     pub delivered: Option<Digest>,
     pub counts: Counts,
+    /// Each stop's count as it stood at the start.
+    pub attention: std::collections::BTreeMap<String, crate::attention::Count>,
     /// Events folded into this state.
     pub seq: u64,
 }
@@ -77,6 +79,8 @@ pub struct StepState {
     pub question: Option<String>,
     /// What a role step asked in this round, in order.
     pub inputs: Vec<String>,
+    /// The round a certified stop skipped asking.
+    pub skipped: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -138,7 +142,7 @@ impl Run {
     }
 
     pub fn started(e: &Event) -> Option<Run> {
-        let Event::RunStarted { run, request, manifest, role_fingerprint, engine, protocol, format, risk, ceilings, ceiling, .. } = e else {
+        let Event::RunStarted { run, request, manifest, role_fingerprint, engine, protocol, format, risk, ceilings, ceiling, attention, .. } = e else {
             return None;
         };
         Some(Run {
@@ -160,6 +164,7 @@ impl Run {
             delivering: None,
             delivered: None,
             counts: Counts::default(),
+            attention: attention.clone(),
             seq: 1,
         })
     }
@@ -393,6 +398,11 @@ impl Run {
             }
             Event::RunFinished { outcome, .. } => self.phase = Phase::Finished { outcome: *outcome },
             Event::DeliveryCorrected { .. } => self.counts.corrections += 1,
+            Event::StopSkipped { step, round, .. } => {
+                if let Some(s) = self.step_mut(step) {
+                    s.skipped = Some(*round);
+                }
+            }
         }
     }
 

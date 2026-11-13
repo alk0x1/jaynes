@@ -11,6 +11,7 @@ create table if not exists events (
   seq integer primary key,
   run text not null,
   type text not null,
+  ts integer not null,
   body text not null,
   hash text not null
 );
@@ -19,6 +20,11 @@ create table if not exists objects (digest text primary key, body text not null)
 create table if not exists runs (run text primary key, setup text not null);
 create table if not exists inbox (id integer primary key, run text not null, input text not null);
 ";
+
+/// Seconds since 1970, as the record keeps time.
+pub fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 pub struct Store {
     db: Connection,
@@ -48,10 +54,12 @@ impl Store {
             .optional()
             .map_err(|e| e.to_string())?;
         let mut previous = last.map(Digest).unwrap_or_else(chain::genesis);
+        let ts = now();
         for e in events {
             let body = serde_json::to_string(e).map_err(|e| e.to_string())?;
-            let hash = chain::link(&previous, &body);
-            tx.execute("insert into events(run, type, body, hash) values (?1, ?2, ?3, ?4)", params![run, e.name(), body, hash.0])
+            // The time is part of what the chain fingerprints: a stop's count reads it.
+            let hash = chain::link(&previous, &format!("{ts}\n{body}"));
+            tx.execute("insert into events(run, type, ts, body, hash) values (?1, ?2, ?3, ?4, ?5)", params![run, e.name(), ts as i64, body, hash.0])
                 .map_err(|e| e.to_string())?;
             previous = hash;
         }
@@ -69,6 +77,18 @@ impl Store {
         Ok(out)
     }
 
+    /// Every event of every run, with its run and when it was recorded: what a stop's count reads.
+    pub fn history(&self) -> Result<Vec<(u64, String, Event)>, String> {
+        let mut q = self.db.prepare("select ts, run, body from events order by seq").map_err(|e| e.to_string())?;
+        let rows = q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (ts, run, body) = row.map_err(|e| e.to_string())?;
+            out.push((ts as u64, run, serde_json::from_str(&body).map_err(|e| e.to_string())?));
+        }
+        Ok(out)
+    }
+
     pub fn state(&self, run: &str) -> Result<Option<Run>, String> {
         Ok(Run::fold(&self.events(run)?))
     }
@@ -81,9 +101,9 @@ impl Store {
 
     /// The first entry of the whole record, counting from 0, that does not follow from those before it.
     pub fn verify(&self) -> Result<Option<(u64, String)>, String> {
-        let mut q = self.db.prepare("select seq, body, hash from events order by seq").map_err(|e| e.to_string())?;
+        let mut q = self.db.prepare("select seq, ts, body, hash from events order by seq").map_err(|e| e.to_string())?;
         let rows: Vec<(u64, String, Digest)> = q
-            .query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?, Digest(r.get(2)?))))
+            .query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, format!("{}\n{}", r.get::<_, i64>(1)?, r.get::<_, String>(2)?), Digest(r.get(3)?))))
             .map_err(|e| e.to_string())?
             .collect::<Result<_, _>>()
             .map_err(|e| e.to_string())?;
@@ -168,5 +188,9 @@ mod tests {
         assert_eq!(s.verify().expect("verify"), None);
         s.tamper(2, r#"{"type":"Resumed","by":{"by":"agent","who":"x"}}"#);
         assert_eq!(s.verify().expect("verify").map(|(n, _)| n), Some(2));
+        s.tamper(2, r#"{"type":"Resumed","by":{"by":"person"}}"#);
+        assert_eq!(s.verify().expect("verify"), None);
+        let _changed = s.db.execute("update events set ts = 0 where seq = 3", []);
+        assert_eq!(s.verify().expect("verify").map(|(n, _)| n), Some(3));
     }
 }

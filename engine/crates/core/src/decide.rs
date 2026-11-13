@@ -43,7 +43,7 @@ pub const PAUSE_OVER: &str = "pause-over";
 const MAX_MOVES: usize = 10_000;
 
 pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
-    if let Input::Start { run: id, request, manifest, role_fingerprint, raise } = input {
+    if let Input::Start { run: id, request, manifest, role_fingerprint, raise, attention } = input {
         if run.is_some() {
             return refuse("the run already started");
         }
@@ -69,6 +69,12 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             reasons,
             ceilings,
             ceiling: ceilings.at(level),
+            // A count for another stop than the one this run has (another key) is ignored: the stop starts at none.
+            attention: attention
+                .iter()
+                .filter(|(step, c)| manifest.index(step).is_some_and(|i| c.key == crate::attention::stop_key(manifest, role_fingerprint, i)))
+                .map(|(s, c)| (s.clone(), c.clone()))
+                .collect(),
         };
         let Some(state) = Run::started(&start) else { return refuse("the run could not start") };
         let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() } };
@@ -157,14 +163,17 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             let cost = c.run.cost();
             c.emit(Event::RunFinished { outcome: Outcome::Abandoned, cost });
         }
-        Input::Correct { note, by } => {
+        Input::Correct { note, by, step } => {
             if c.run.delivered.is_none() {
                 return refuse("only a delivered run takes a correction; while it runs, answer its questions");
             }
             if note.trim().is_empty() {
                 return refuse("say what was wrong");
             }
-            c.emit(Event::DeliveryCorrected { note: note.clone(), by: by.clone() });
+            if let Some(s) = step {
+                c.index(s)?;
+            }
+            c.emit(Event::DeliveryCorrected { note: note.clone(), by: by.clone(), step: step.clone() });
         }
     }
     Ok(c.out)
@@ -233,7 +242,9 @@ impl Ctx {
             return false;
         }
         if let Some(i) = self.owed_question(&path) {
-            self.ask_output(i);
+            if !self.sample_skips(i) {
+                self.ask_output(i);
+            }
             return true;
         }
         let Some(&i) = path.iter().find(|&&i| !self.run.fresh(i)) else {
@@ -266,7 +277,33 @@ impl Ctx {
                 && d.stop.as_ref().is_some_and(|s| s.from_risk <= self.run.risk)
                 && self.run.fresh(i)
                 && self.run.steps[i].question.is_none()
+                && self.run.steps[i].skipped != Some(self.run.steps[i].round)
         })
+    }
+
+    /// Whether a certified stop skips this round, by its coin: then it is recorded as skipped and not asked.
+    fn sample_skips(&mut self, i: usize) -> bool {
+        let Some(stop) = self.run.manifest.steps[i].stop.clone() else { return false };
+        let name = self.name(i);
+        let Some(count) = self.run.attention.get(&name).cloned() else { return false };
+        let budget = stop.budget.map(|b| b.0);
+        if count.braked || crate::attention::status(&count, budget, crate::DELTA) != crate::attention::Status::Certified {
+            return false;
+        }
+        let round = self.run.steps[i].round;
+        let coin = crate::attention::coin(&self.run.id, &name, round);
+        if coin < stop.audit_rate.0 {
+            return false;
+        }
+        self.emit(Event::StopSkipped {
+            step: name,
+            round,
+            key: count.key.clone(),
+            coin: crate::manifest::Rate(coin),
+            n: count.n,
+            k: count.k,
+        });
+        true
     }
 
     fn ask_output(&mut self, i: usize) {
@@ -282,11 +319,16 @@ impl Ctx {
             kind: QuestionKind::Decision,
             items,
             offered: stop.verdicts.clone(),
-            holds: stop.holds,
+            holds: stop.holds || self.braked(i),
             about: stop.about.clone(),
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
+    }
+
+    /// A stop with two errors among its last ten outcomes asks every run and holds it.
+    fn braked(&self, i: usize) -> bool {
+        self.run.attention.get(&self.run.manifest.steps[i].name).is_some_and(|c| c.braked)
     }
 
     fn invalidate(&mut self, i: usize, because: Vec<String>, notes: Vec<String>) {
@@ -305,8 +347,8 @@ impl Ctx {
             return self.ask_person(i);
         }
         for j in self.run.sources(i) {
-            let holds = self.run.manifest.steps[j].stop.as_ref().is_some_and(|s| s.holds && s.from_risk <= self.run.risk);
-            if let (true, Some(q)) = (holds, self.run.open_question(j)) {
+            // The question as asked says whether it holds: a braked stop holds even when its role says it need not.
+            if let Some(q) = self.run.open_question(j).filter(|q| q.question.holds) {
                 let on = vec![q.question.id.clone()];
                 let why = format!("{name} waits for your answer about {}", self.name(j));
                 self.wait(Some(name), on, why);
@@ -823,6 +865,9 @@ impl Ctx {
             }
             if answer.verdicts.values().any(|v| *v != Verdict::Keep) {
                 return refuse("an agent may only let the result go on as it is; sending it back is yours");
+            }
+            if self.braked(i) {
+                return refuse("this stop is braked after errors: only you answer it until it proves right again");
             }
             if q.answer.is_some() {
                 return refuse("this question was already answered");

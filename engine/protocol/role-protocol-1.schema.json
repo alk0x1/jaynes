@@ -325,6 +325,11 @@
       ],
       "type": "string"
     },
+    "Rate": {
+      "description": "A rate in (0, 1), compared by its bits so a role stays comparable.",
+      "format": "double",
+      "type": "number"
+    },
     "Reach": {
       "description": "What a step may reach. Jaynes turns it into the agent program's own settings for the step.",
       "properties": {
@@ -951,6 +956,23 @@
         "about": {
           "default": "",
           "type": "string"
+        },
+        "audit_rate": {
+          "$ref": "#/$defs/Rate",
+          "default": 0.1,
+          "description": "The share of runs a certified stop still asks."
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The error rate the stop may have once it asks only a sample. None: it always asks."
         },
         "from_risk": {
           "$ref": "#/$defs/Risk",

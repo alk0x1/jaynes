@@ -56,6 +56,15 @@ such as fix-bug's proof reading the hidden cases. Only a hidden check may read a
 counts for whether its step is fresh. Added for fix-bug, the first role that needed it. A hidden step may now
 read the project as it was, since no step before it has changed it.
 
+**Sampled stops (G17), ported from the Python engine.** A stop declares `budget` and `audit_rate`. When a run
+starts, the shell asks the core for each stop's count (`attention::count`, a pure function of the whole record and
+of the time, which the shell passes in) and the run records it; a count for another stop's key is ignored. A
+stop's key is its role, its step as declared and the role's fingerprint, so any change to the role starts a new
+count. A certified stop skips asking when the run's coin (a fingerprint of the run, the step and the round) falls
+outside its sample, recorded as `StopSkipped`. A braked stop holds the run and no agent may release it. The
+statistic, the 7 days, the brake at two errors in ten and the labels needed (88 at 5%, 20 at 20%) are the Python
+engine's. Each event's time is now part of what the record's chain fingerprints, since the count reads it.
+
 **Steps are gates, not agents.** `session = "continue"` lets an agent step go on in the session of the agent step
 before it. A fix in place resumes the same session. A hidden step never shares a session.
 
@@ -101,8 +110,6 @@ version, the protocol and the record's format.
 
 ## Not in this slice
 
-- The attention engine (sampled stops, the anytime-valid certification, the brake): every declared stop asks.
-  It is a projection over the record and ports next.
 - The page; plans of runs; merging alone and Undo; build-feature and the design roles; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
   Code runs in `dontAsk`, so none arise yet).
 - Replaying the Python engine's 53 recorded runs as an oracle; the small model of the core with proofs.

@@ -82,6 +82,9 @@ class Stop:
     from_risk: str = "low"
     # The stop only asks whether a result may go on, not a matter of taste or direction: an agent may let it go on.
     release: bool = False
+    # The error rate the stop may have once it asks only a sample; None: it always asks.
+    budget: float | None = None
+    audit_rate: float = 0.1
     about: str = ""
 
 
@@ -152,7 +155,8 @@ class Role:
                                  "checks": [{"name": n, "kind": k, "about": a, "reads": r} for n, (k, a, r, _) in s.checks.items()]}
             if s.stop is not None:
                 d["stop"] = {"verdicts": s.stop.verdicts, "holds": s.stop.holds, "from_risk": s.stop.from_risk,
-                             "release": s.stop.release, "about": s.stop.about}
+                             "release": s.stop.release, "budget": s.stop.budget,
+                             "audit_rate": s.stop.audit_rate, "about": s.stop.about}
             steps.append(d)
         return {"role": self.name, "version": self.version, "protocol": PROTOCOL, "steps": steps}
 

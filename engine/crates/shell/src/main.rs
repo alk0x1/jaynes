@@ -29,7 +29,7 @@ const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--send]
   raise RUN high|--seconds N|--tokens N
   halt RUN | resume RUN | abandon RUN
-  correct RUN --note TEXT  record that a delivery was wrong, so the rework it caused is counted
+  correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   conformance DIR         check a role against the protocol
   schema                  print the protocol's schema
@@ -130,8 +130,9 @@ fn run(args: &[String]) -> Result<(), String> {
         "correct" => {
             let id = rest.first().ok_or("which run?")?;
             let note = flag(rest, "--note").ok_or("--note TEXT says what was wrong")?;
+            let step = flag(rest, "--step");
             let mut s = store()?;
-            let (_, events, _) = drive::decide_and_record(&mut s, id, &Input::Correct { note, by: who() })?;
+            let (_, events, _) = drive::decide_and_record(&mut s, id, &Input::Correct { note, by: who(), step })?;
             say(&format!("recorded: {} event", events.len()));
             Ok(())
         }
@@ -218,13 +219,22 @@ fn start(args: &[String]) -> Result<(), String> {
         project::Copy::make(p, &dir.join("project"), &branch)?;
     }
     let mut s = store()?;
+    // Each stop's count, from everything the record holds, as it stands now.
+    let history = s.history()?;
+    let mut attention = BTreeMap::new();
+    for (i, step) in manifest.steps.iter().enumerate() {
+        let Some(stop) = &step.stop else { continue };
+        let key = jaynes_core::attention::stop_key(&manifest, &fingerprint, i);
+        let c = jaynes_core::attention::count(&history, &key, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
+        attention.insert(step.name.clone(), c);
+    }
     s.put_setup(&id, &json!({
         "role_given": role_dir, "fingerprint": fingerprint, "agent": agent,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
     }))?;
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
-    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, raise })?;
+    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, raise, attention })?;
     print_state(&end);
     Ok(())
 }

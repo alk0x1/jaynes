@@ -9,6 +9,7 @@ use jaynes_core::manifest::{CheckDecl, CheckKind, Effect, Executor, Manifest, Pr
 use jaynes_core::question::{Answer, Ask, AskKind, By, Item, Question, QuestionKind, Verdict, VerdictKind};
 use jaynes_core::risk::{self, Changed, Risk};
 use jaynes_core::run::{Phase, Run, Status};
+use jaynes_core::attention::{stop_key, Count};
 use jaynes_core::{chain, decide, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,7 +96,8 @@ fn role(rng: &mut Rng) -> Manifest {
                 }
                 let stop_risk = if from_risk == Risk::High || rng.chance(20) { Risk::High } else { Risk::Low };
                 let release = executor != Executor::Person && rng.chance(40);
-                Some(StopDecl { verdicts, holds: rng.chance(30), from_risk: stop_risk, release, about: String::new() })
+                let budget = (executor != Executor::Person && rng.chance(50)).then_some(jaynes_core::manifest::Rate(0.2));
+                Some(StopDecl { verdicts, holds: rng.chance(30), from_risk: stop_risk, release, budget, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new() })
             } else {
                 None
             };
@@ -292,6 +294,24 @@ impl World {
                 Event::AttemptFailed { step, attempt, .. } | Event::AttemptInterrupted { step, attempt, .. } => {
                     *self.ended.entry((step.clone(), *attempt)).or_default() += 1;
                 }
+                Event::StopSkipped { step, round, coin, .. } => {
+                    // G17: a stop skips asking only when certified, not braked, and its coin falls outside its sample.
+                    let i = pre.manifest.index(step).expect("step");
+                    let stop = pre.manifest.steps[i].stop.clone().expect("a stop");
+                    let c = pre.attention.get(step).expect("a count");
+                    assert_eq!(c.key, stop_key(&pre.manifest, &pre.role_fingerprint, i), "seed {seed}: G17 a count of another stop was used");
+                    assert!(!c.braked, "seed {seed}: G17 a braked stop skipped");
+                    let b = stop.budget.expect("a budget").0;
+                    assert!(jaynes_core::attention::certified(c.n, c.k, b, jaynes_core::DELTA), "seed {seed}: G17 an uncertified stop skipped");
+                    assert!(coin.0 >= stop.audit_rate.0, "seed {seed}: G17 a sampled run skipped");
+                    assert_eq!(coin.0, jaynes_core::attention::coin(&pre.id, step, *round));
+                }
+                Event::QuestionOpened { question } if question.kind == QuestionKind::Decision => {
+                    // G17: a braked stop holds the run.
+                    if pre.attention.get(&question.step).is_some_and(|c| c.braked) {
+                        assert!(question.holds, "seed {seed}: G17 a braked stop did not hold");
+                    }
+                }
                 Event::StepInvalidated { step, because, .. } => {
                     // G13: a step runs again only when what it used changed, or when it was sent back.
                     let i = pre.manifest.index(step).expect("step");
@@ -315,6 +335,7 @@ impl World {
                                     && d.executor != Executor::Person
                                     && d.stop.as_ref().is_some_and(|s| s.release)
                                     && !pre.steps[i].inputs.contains(&q.id)
+                                    && !pre.attention.get(&q.step).is_some_and(|c| c.braked)
                                     && answer.verdicts.values().all(|v| *v == Verdict::Keep),
                                 "seed {seed}: G9 an agent answered what is yours: {answer:?}"
                             );
@@ -613,6 +634,7 @@ impl World {
             && run.manifest.steps[i].executor != Executor::Person
             && run.manifest.steps[i].stop.as_ref().is_some_and(|s| s.release)
             && !run.steps[i].inputs.contains(&q.id)
+            && !run.attention.get(&q.step).is_some_and(|c| c.braked)
             && answer_keeps_all(&answer)
             && state.answer.is_none();
         let not_allowed = match &by {
@@ -722,17 +744,35 @@ impl World {
     }
 }
 
-fn simulate(seed: u64) {
-    let mut w = World::new(seed);
+/// Start a random role, with random counts for its stops, some of another stop.
+fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
     let manifest = role(&mut w.rng);
     let raise = if w.rng.chance(20) { Some(Risk::High) } else { None };
+    let fingerprint = Digest("role".to_string());
+    let mut attention = BTreeMap::new();
+    for (i, s) in manifest.steps.iter().enumerate() {
+        if s.stop.is_none() || !w.rng.chance(60) {
+            continue;
+        }
+        // a count of this stop, or of another one (a wrong key the core must ignore)
+        let key = if w.rng.chance(85) { stop_key(&manifest, &fingerprint, i) } else { Digest("another stop".to_string()) };
+        let (n, k) = match w.rng.below(3) { 0 => (40, 0), 1 => (30, 12), _ => (5, 0) };
+        attention.insert(s.name.clone(), Count { key, n, k, pending: 0, braked: w.rng.chance(25) });
+    }
     let started = w.send(Input::Start {
         run: format!("run-{seed}"),
         request: "change the button's text".to_string(),
         manifest: manifest.clone(),
-        role_fingerprint: Digest("role".to_string()),
+        role_fingerprint: fingerprint,
         raise,
+        attention,
     });
+    (manifest, started)
+}
+
+fn simulate(seed: u64) {
+    let mut w = World::new(seed);
+    let (manifest, started) = start_random(&mut w, seed);
     assert!(started, "seed {seed}: a valid role did not start");
     // G16: the run says what it started on, and does not start twice.
     let Some(Event::RunStarted { engine, protocol, format, .. }) = w.log.first() else { panic!("no start") };
@@ -742,7 +782,8 @@ fn simulate(seed: u64) {
         request: String::new(),
         manifest,
         role_fingerprint: Digest("other".to_string()),
-        raise: None
+        raise: None,
+        attention: BTreeMap::new()
     })
     .is_err());
     for _ in 0..400 {
@@ -848,6 +889,7 @@ fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
         manifest,
         role_fingerprint: Digest("f".to_string()),
         raise: None,
+        attention: BTreeMap::new(),
     })
     .expect("start");
     (Run::fold(&out.events).expect("run"), out.commands)
@@ -896,7 +938,7 @@ fn item(id: &str, d: &str) -> Item {
 fn g13_a_correction_reruns_only_what_used_it() {
     // look → copy (uses look) and tests (uses nothing): changing look reruns copy, not tests.
     let mut look = step("look", Executor::Agent);
-    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, about: String::new() });
+    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
     let mut copy = step("copy", Executor::Agent);
     copy.needs = vec!["look".to_string()];
     let tests = step("tests", Executor::Agent);
@@ -933,7 +975,7 @@ fn g13_a_correction_reruns_only_what_used_it() {
 #[test]
 fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     let mut plan = step("plan", Executor::Agent);
-    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, about: String::new() });
+    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
     let mut push = step("push", Executor::Role);
     push.needs = vec!["plan".to_string()];
     push.effect = Effect::Irreversible { idempotent: true };
@@ -1038,7 +1080,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
     let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b] };
-    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), raise: None });
+    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), raise: None, attention: BTreeMap::new() });
     assert!(refused.is_err());
 }
 
@@ -1050,9 +1092,9 @@ fn unused(_: QuestionKind) {}
 fn the_random_runs_reach_what_the_guarantees_are_about() {
     let mut seen: BTreeMap<&'static str, u32> = BTreeMap::new();
     for seed in 1..=1000u64 {
-        let mut w = World::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        let manifest = role(&mut w.rng);
-        w.send(Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), raise: None });
+        let seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut w = World::new(seed);
+        start_random(&mut w, seed);
         for _ in 0..400 {
             w.act();
             if w.run().finished() {
@@ -1076,6 +1118,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::AnswerRecorded { answer, .. } if matches!(answer.by, By::Agent { .. }) => hit("released by an agent"),
                 Event::QuestionSuperseded { .. } => hit("question superseded"),
                 Event::Delivered { .. } => hit("delivered"),
+                Event::StopSkipped { .. } => hit("a certified stop skipped"),
                 _ => {}
             }
         }
@@ -1083,7 +1126,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     eprintln!("{seen:#?}");
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
-        "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "question superseded", "delivered",
+        "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -1105,7 +1148,7 @@ fn simulate_logged(seed: u64) {
     let manifest = role(&mut w.rng);
     eprintln!("{}", serde_json::to_string_pretty(&manifest).expect("json"));
     let raise = if w.rng.chance(20) { Some(Risk::High) } else { None };
-    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), raise });
+    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), raise, attention: BTreeMap::new() });
 
     let mut printed = 0;
     for _ in 0..400 {
@@ -1126,7 +1169,7 @@ fn simulate_logged(seed: u64) {
 #[test]
 fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, about: String::new() });
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
     let mut tests = step("tests", Executor::Agent);
     tests.needs = vec!["change".to_string()];
     let mut push = step("push", Executor::Role);
@@ -1153,4 +1196,125 @@ fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() 
     let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person } });
     let c = probe_ok(&mut run, c);
     assert!(c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "{c:?}");
+}
+
+// --- G17: a stop stops asking only on evidence ----------------------------------------------------------------
+
+/// G17: if a stop's true error rate is at its budget, the chance it is ever made sampled is at most δ, however
+/// often the test is checked. 3,000 streams of 300 outcomes each, checked after every outcome.
+#[test]
+fn g17_a_stop_at_its_budget_is_rarely_made_sampled() {
+    let (budget, delta) = (0.2, jaynes_core::DELTA);
+    let mut rng = Rng(0x5eed);
+    let streams = 3000;
+    let mut wrongly = 0;
+    for _ in 0..streams {
+        let (mut n, mut k) = (0u64, 0u64);
+        for _ in 0..300 {
+            n += 1;
+            if (rng.next() % 10_000) < (budget * 10_000.0) as u64 {
+                k += 1;
+            }
+            if jaynes_core::attention::certified(n, k, budget, delta) {
+                wrongly += 1;
+                break;
+            }
+        }
+    }
+    let rate = wrongly as f64 / streams as f64;
+    assert!(rate <= delta + 0.012, "{rate} of the streams were made sampled, more than δ = {delta}");
+}
+
+fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &Manifest) -> Vec<(u64, String, Event)> {
+    use jaynes_core::event::{Cost, Effects, Outcome};
+    use jaynes_core::risk::Ceilings;
+    let question = Question {
+        id: "q1-change".to_string(),
+        step: "change".to_string(),
+        round: 0,
+        kind: QuestionKind::Decision,
+        items: vec![item("change", "c")],
+        offered: vec![VerdictKind::Keep, VerdictKind::Redo],
+        holds: false,
+        about: String::new(),
+    };
+    let verdicts: BTreeMap<String, Verdict> = verdict.into_iter().map(|v| ("change".to_string(), v)).collect();
+    let answer = Answer { question: question.id.clone(), shown: question.shown(), verdicts, by };
+    let c = Ceilings::default();
+    let r = run.to_string();
+    vec![
+        (at, r.clone(), Event::RunStarted {
+            run: r.clone(), request: String::new(), manifest: manifest.clone(), role_fingerprint: Digest("f".to_string()),
+            engine: String::new(), protocol: 1, format: 1, risk: Risk::Low, reasons: Vec::new(), ceilings: c, ceiling: c.low,
+            attention: BTreeMap::new(),
+        }),
+        (at, r.clone(), Event::QuestionOpened { question }),
+        (at, r.clone(), Event::AnswerRecorded { answer, effects: Effects::default() }),
+        (at, r, Event::RunFinished { outcome: Outcome::Delivered, cost: Cost::default() }),
+    ]
+}
+
+#[test]
+fn g17_the_count_comes_from_what_happened_after_delivery() {
+    use jaynes_core::attention::count;
+    let mut change = step("change", Executor::Agent);
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change] };
+    let key = stop_key(&manifest, &Digest("f".to_string()), 0);
+    let day = 24 * 3600;
+    let mut h = Vec::new();
+    for n in 0..25 {
+        h.extend(history_run(&format!("r{n}"), 1000, None, By::Person, &manifest));
+    }
+    // an accept counts as right only once its delivery held seven days
+    assert_eq!(count(&h, &key, 1000 + day, Some(0.2), 0.05).n, 0);
+    assert_eq!(count(&h, &key, 1000 + day, Some(0.2), 0.05).pending, 25);
+    let c = count(&h, &key, 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (25, 0, false));
+    assert!(jaynes_core::attention::certified(c.n, c.k, 0.2, 0.05));
+    // what an agent let through never earns a right
+    let mut agent = h.clone();
+    agent.extend(history_run("ra", 1000, None, By::Agent { who: "claude".to_string() }, &manifest));
+    assert_eq!(count(&agent, &key, 1000 + 8 * day, Some(0.2), 0.05).n, 25);
+    // a correction after delivery turns a right into an error, and two errors among the last ten brake the stop
+    let mut corrected = h.clone();
+    for run in ["r23", "r24"] {
+        corrected.push((2000, run.to_string(), Event::DeliveryCorrected { note: "wrong".to_string(), by: By::Person, step: Some("change".to_string()) }));
+    }
+    let c = count(&corrected, &key, 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (25, 2, true));
+    // a send-back counts at once
+    let mut back = h.clone();
+    back.extend(history_run("rb", 1000, Some(Verdict::Redo { note: "no".to_string() }), By::Person, &manifest));
+    assert_eq!(count(&back, &key, 1000 + day, Some(0.2), 0.05).k, 1);
+}
+
+#[test]
+fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
+    let mut change = step("change", Executor::Agent);
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change] };
+    let f = Digest("f".to_string());
+    let key = stop_key(&manifest, &f, 0);
+    let run_with = |id: &str, braked: bool| {
+        let attention = [("change".to_string(), Count { key: key.clone(), n: 40, k: 0, pending: 0, braked })].into_iter().collect();
+        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), raise: None, attention }).expect("start");
+        let mut run = Run::fold(&out.events).expect("run");
+        let c = probe_ok(&mut run, out.commands);
+        let _ = c;
+        deliver(&mut run, "change", 1, "o", Vec::new());
+        run
+    };
+    let mut asked = 0;
+    for n in 0..400 {
+        let run = run_with(&format!("r{n}"), false);
+        asked += run.questions.len();
+        assert!(run.questions.len() + run.steps[0].skipped.iter().count() == 1);
+    }
+    assert!((20..=65).contains(&asked), "a certified stop asked {asked} times in 400 runs, about one in ten expected");
+    let run = run_with("braked", true);
+    let q = run.questions.values().next().expect("a braked stop always asks");
+    assert!(q.question.holds);
+    let agent = Answer { question: q.question.id.clone(), shown: q.question.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "claude".to_string() } };
+    assert!(decide(Some(&run), &Input::Answer { answer: agent }).is_err(), "an agent may not release a braked stop");
 }

@@ -50,6 +50,22 @@ pub struct StepDecl {
     pub about: String,
 }
 
+/// A rate in (0, 1), compared by its bits so a role stays comparable.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct Rate(pub f64);
+
+impl PartialEq for Rate {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+impl Eq for Rate {}
+
+fn tenth() -> Rate {
+    Rate(0.1)
+}
+
 fn three() -> u32 {
     3
 }
@@ -171,6 +187,12 @@ pub struct StopDecl {
     /// go on, recorded as the agent's, and the person can still change that.
     #[serde(default)]
     pub release: bool,
+    /// The error rate the stop may have once it asks only a sample. None: it always asks.
+    #[serde(default)]
+    pub budget: Option<Rate>,
+    /// The share of runs a certified stop still asks.
+    #[serde(default = "tenth")]
+    pub audit_rate: Rate,
     #[serde(default)]
     pub about: String,
 }
@@ -266,6 +288,12 @@ impl Manifest {
             if let Some(stop) = &s.stop {
                 if stop.verdicts.is_empty() {
                     errors.push(format!("{at} has a stop with no verdict to give"));
+                }
+                if stop.budget.is_some_and(|b| !(b.0 > 0.0 && b.0 < 1.0)) || !(stop.audit_rate.0 > 0.0 && stop.audit_rate.0 <= 1.0) {
+                    errors.push(format!("{at} has a budget or an audit rate outside (0, 1)"));
+                }
+                if stop.budget.is_some() && s.executor == Executor::Person {
+                    errors.push(format!("{at} is the person's, and the person's steps always ask"));
                 }
                 if stop.release && s.executor == Executor::Person {
                     errors.push(format!("{at} is the person's, so an agent may not release it"));

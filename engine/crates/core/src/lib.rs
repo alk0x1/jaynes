@@ -7,6 +7,7 @@
 //! What the core promises is in `docs/guarantees.md`; each promise has a test of the same number in
 //! `tests/guarantees.rs`.
 
+pub mod attention;
 pub mod chain;
 pub mod decide;
 pub mod digest;
@@ -31,3 +32,5 @@ pub const ENGINE: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL: u32 = 1;
 /// The version of the record's format.
 pub const FORMAT: u32 = 1;
+/// The chance a stop is made sampled although its true error rate is at or above its budget.
+pub const DELTA: f64 = 0.05;

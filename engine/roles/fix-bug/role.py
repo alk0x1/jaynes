@@ -119,7 +119,7 @@ def written(call: dict[str, Any]) -> Any:
 
 role.step(
     "reproduce", executor="agent", needs=["runner"], reach={"project": "write", "write": TESTS, "commands": True},
-    stop=Stop(verdicts=["keep", "redo"], about="Do these tests show the bug?"),
+    stop=Stop(verdicts=["keep", "redo"], budget=0.2, about="Do these tests show the bug?"),
     about="Writes the smallest test that fails because of the bug.",
     instructions=(
         "Find the bug the task describes and write the smallest test that fails because of it, next to the "

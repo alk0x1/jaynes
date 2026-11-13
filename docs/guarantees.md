@@ -43,6 +43,16 @@ What the page does not promise is said at the end, so nobody reads more into it.
 - **G12.** Something you kept stays as it is unless you change it, and something you dropped
   never comes back in the run.
 
+## Asking less
+
+- **G17.** A stop asks you less only on evidence. With an error budget, it asks only a sample of
+  runs once its record proves, by a test that holds however often it is checked, that its error
+  rate is below the budget; if the true rate is at or above it, the chance of that ever happening
+  is at most 5%. What counts is what happened after delivery: an accept counts as right only
+  after its delivery held 7 days, and a send-back or a correction counts as an error at once. Two
+  errors among its last ten outcomes make it ask on every run and hold the run, and then only
+  you answer it. *(Carried over from the Python engine's guarantee; awaits your approval.)*
+
 ## Going on before you answer
 
 - **G13.** When you change an answer, only the steps that used what changed run again. Every

@@ -20,6 +20,9 @@ pub enum Input {
         /// A risk the person raises the run to from the start.
         #[serde(default)]
         raise: Option<Risk>,
+        /// Each stop's count from the record (`attention::count`), by step.
+        #[serde(default)]
+        attention: std::collections::BTreeMap<String, crate::attention::Count>,
     },
     /// Go on as far as the run can without anything from outside.
     Tick,
@@ -81,6 +84,8 @@ pub enum Input {
     Correct {
         note: String,
         by: By,
+        #[serde(default)]
+        step: Option<String>,
     },
 }
 
