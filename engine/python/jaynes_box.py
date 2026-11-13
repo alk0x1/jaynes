@@ -307,6 +307,27 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
 HARMLESS = ("xcrun_db",)
 
 
+def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str | None:
+    """Why the project's tests cannot run here at all, before any agent works on them, or None. A machine without
+    the test runner is not the agent's to fix: the role refuses at once, with what to install."""
+    program = shlex.split(runner.suite)[0] if runner.suite.strip() else ""
+    if not program:
+        return None
+    probe = f"command -v {shlex.quote(program)} >/dev/null || {{ echo 'not found: {program}'; exit 127; }}"
+    if runner.kind == "pytest":
+        probe += f" && {shlex.quote(program)} -c 'import pytest'"
+    try:
+        ran = run(project, probe, source=source, timeout=120)
+    except Unavailable as e:
+        return str(e)
+    if ran.code == 0:
+        return None
+    said = ran.output.strip().splitlines()[-1] if ran.output.strip() else f"exit {ran.code}"
+    hint = ("install pytest where the project's tests run (its .venv, or the python3 on the PATH)"
+            if runner.kind == "pytest" else f"install {program}")
+    return f"the project's tests cannot run on this machine ({runner.suite}: {said}); {hint}, then continue the run"
+
+
 def refused(ran: Ran) -> list[str]:
     """What the box refused, when the command failed for it: then its failure says nothing about the project."""
     lines = [line.strip() for line in ran.printed.splitlines()

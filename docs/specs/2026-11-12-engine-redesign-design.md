@@ -147,7 +147,8 @@ step reads; the comparison covers the states the random runs reach.
 Claude Code runs in its default permission mode with `--permission-prompt-tool mcp__jaynes__permit`: what a step's
 settings did not allow comes to `jaynes permit`, an MCP server started for the turn. It records a
 `PermissionAsked` in the core, in one transaction with reading the state. The core's rule grants reading inside the
-project; anything else is a question on the page, which the agent waits for. The answer is recorded at once even
+project, and a command when the role lets the step run commands (Claude Code's own box confines every command);
+anything else is a question on the page, which the agent waits for. The answer is recorded at once even
 while the run's process is blocked on the turn, and the server reads it from the record. A leave refused is not
 counted as work sent back. Checked with a real Claude Code turn: it asked to write outside its folder, the person
 refused with a reason, the agent went on, and the run was delivered in 20 s.
@@ -169,6 +170,14 @@ Jaynes keeps a copy of each picture by the fingerprint of its bytes, outside the
 fingerprint covers its pictures, so an answer is bound to the pictures shown and a kept item keeps them. The page
 puts each picture inside itself as data; no address of the page reads a file. A picture outside the step's folder,
 or not an image, is Jaynes's fault.
+
+## Found by the first run through the plugin (2026-11-13)
+
+A fresh Claude Code session, told only "pode fazer, com a Jaynes", ran the skill, updated Jaynes, read the guide,
+started small-change and opened the page by itself. Two faults came out, both fixed: a machine without the project's
+test runner (pytest) made the agent spend fixes and an attempt on what it could not fix, so the roles now check, in
+the box, that the runner can start before any agent works, and refuse with what to install; and a command inside the
+project became a question for the person, so a rule now grants commands to a step its role lets run them.
 
 ## How it was checked
 

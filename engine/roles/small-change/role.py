@@ -22,7 +22,12 @@ def find_suite(call: dict[str, Any]) -> Any:
     if not project:
         return Refused("small-change needs a project")
     found = box.detect(Path(project), "")
-    return {"command": found.suite if found else ""}
+    if found is None:
+        return {"command": ""}
+    why = box.missing(Path(project), found, source=Path(call["source"]) if call.get("source") else None)
+    if why:
+        return Refused(why)
+    return {"command": found.suite}
 
 
 role.step("runner", executor="role", reach={"project": "read"}, attempts=1, run=find_suite,

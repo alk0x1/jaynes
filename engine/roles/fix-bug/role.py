@@ -84,6 +84,9 @@ def find_runner(call: dict[str, Any]) -> Any:
     found = box.detect(Path(call["project"]), "") if call.get("project") else None
     if found is None:
         return Refused(NO_RUNNER)
+    why = box.missing(Path(call["project"]), found, source=Path(call["source"]) if call.get("source") else None)
+    if why:
+        return Refused(why)
     return found.to_dict()
 
 

@@ -677,3 +677,23 @@ fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     assert!(!ok && said.contains("no run nope"), "{said}");
     let _killed = mcp.child.kill();
 }
+
+#[test]
+fn a_machine_that_cannot_run_the_tests_stops_the_run_before_any_agent_works() {
+    if Command::new("python3").args(["-c", "import pytest"]).status().is_ok_and(|s| s.success()) {
+        eprintln!("skipped: this machine's python3 has pytest");
+        return;
+    }
+    let s = scratch("nopytest");
+    std::fs::write(s.project.join("pytest.ini"), "[pytest]\n").expect("write");
+    std::fs::write(s.project.join("test_greet.py"), "def test_it():\n    assert True\n").expect("write");
+    std::fs::remove_file(s.project.join("Makefile")).expect("rm");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "pytest"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    let out = start(&s, "nopytest", "touch agent-ran");
+    assert!(out.contains("cannot run on this machine") && out.contains("install pytest"), "{out}");
+    let t = types(&events(&s, "nopytest"));
+    assert_eq!(t.iter().filter(|x| *x == "AttemptStarted").count(), 1, "only the role's own step started: {t:?}");
+    assert!(!s.home.join("runs/nopytest/project/agent-ran").exists(), "no agent worked");
+}

@@ -349,7 +349,7 @@ impl World {
                     match &answer.by {
                         By::Person => {}
                         By::Rule { rule } => {
-                            assert_eq!(rule, READ_INSIDE_PROJECT, "seed {seed}: G9 unknown rule");
+                            assert!(rule == READ_INSIDE_PROJECT || rule == jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN, "seed {seed}: G9 unknown rule");
                             assert_eq!(q.kind, QuestionKind::Permission, "seed {seed}: G9 a rule answered a decision");
                         }
                         By::Agent { .. } => {
@@ -568,7 +568,7 @@ impl World {
             Command::RunAgent(turn) => {
                 if self.rng.chance(6) {
                     let target = if self.rng.chance(50) { "src/a.rs".to_string() } else { "/etc/passwd".to_string() };
-                    let kind = if self.rng.chance(80) { AskKind::Read } else { AskKind::Network };
+                    let kind = match self.rng.below(10) { 0..=6 => AskKind::Read, 7 => AskKind::Command, _ => AskKind::Network };
                     self.send(Input::PermissionAsked { step: turn.step.clone(), attempt: turn.attempt, ask: Ask { kind, target } });
                 }
                 let outcome = match self.rng.below(100) {
@@ -1131,8 +1131,12 @@ fn g9_a_routine_leave_is_granted_by_a_rule_and_recorded() {
     assert!(c.iter().any(|c| matches!(c, Command::Permit { allow: true, .. })));
     let q = run.questions.values().next().expect("recorded");
     assert_eq!(q.answer.as_ref().map(|a| a.by.clone()), Some(By::Rule { rule: READ_INSIDE_PROJECT.to_string() }));
-    assert!(!routine(&ProjectAccess::Read, &Ask { kind: AskKind::Read, target: "../secrets".to_string() }));
-    assert!(!routine(&ProjectAccess::Read, &Ask { kind: AskKind::Network, target: "example.com".to_string() }));
+    let reads = Reach { project: ProjectAccess::Read, ..Reach::default() };
+    assert_eq!(routine(&reads, &Ask { kind: AskKind::Read, target: "../secrets".to_string() }), None);
+    assert_eq!(routine(&reads, &Ask { kind: AskKind::Network, target: "example.com".to_string() }), None);
+    assert_eq!(routine(&reads, &Ask { kind: AskKind::Command, target: "make test".to_string() }), None, "a step that runs no commands");
+    let runs = Reach { commands: true, ..reads };
+    assert_eq!(routine(&runs, &Ask { kind: AskKind::Command, target: "make test".to_string() }), Some(jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN));
 }
 
 #[test]

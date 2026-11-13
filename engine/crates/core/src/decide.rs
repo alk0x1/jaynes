@@ -32,8 +32,11 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Refusal> {
     Err(Refusal(why.into()))
 }
 
-/// The rule that answers routine leaves.
+/// The rule that answers routine leaves: reading inside the project.
 pub const READ_INSIDE_PROJECT: &str = "read-inside-project";
+/// The rule that lets a step run a command when its role says the step runs commands: the agent program's own box
+/// confines every command it runs.
+pub const COMMAND_THE_STEP_MAY_RUN: &str = "command-the-step-may-run";
 /// The rule that raises a run's risk from what its change touches.
 pub const WHAT_THE_CHANGE_TOUCHES: &str = "what-the-change-touches";
 /// The rule that continues a run paused from outside once the pause is over.
@@ -833,12 +836,12 @@ impl Ctx {
             about,
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
-        if routine(&self.run.manifest.steps[i].reach.project, ask) {
+        if let Some(rule) = routine(&self.run.manifest.steps[i].reach, ask) {
             let answer = Answer {
                 question: question.id.clone(),
                 shown: question.shown(),
                 verdicts: [("leave".to_string(), Verdict::Keep)].into_iter().collect(),
-                by: By::Rule { rule: READ_INSIDE_PROJECT.to_string() },
+                by: By::Rule { rule: rule.to_string() },
                 context: String::new(),
             };
             let effects = effects(&self.run, &question, &answer);
@@ -967,16 +970,17 @@ fn describe_ask(ask: &Ask) -> String {
     }
 }
 
-/// Whether a rule may grant a leave without the person: reading a path inside the step's copy of the project,
-/// for a step that may read it. Anything else is the person's.
-pub fn routine(access: &ProjectAccess, ask: &Ask) -> bool {
+/// The rule that may grant a leave without the person, if any: reading a path inside the step's copy of the project,
+/// for a step that may read it, or running a command, for a step its role lets run commands. Anything else is the
+/// person's.
+pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str> {
     let t = &ask.target;
-    ask.kind == AskKind::Read
-        && *access != ProjectAccess::None
-        && !t.is_empty()
-        && !t.starts_with('/')
-        && !t.starts_with('~')
-        && !t.split('/').any(|part| part == "..")
+    let inside = !t.is_empty() && !t.starts_with('/') && !t.starts_with('~') && !t.split('/').any(|part| part == "..");
+    match ask.kind {
+        AskKind::Read if reach.project != ProjectAccess::None && inside => Some(READ_INSIDE_PROJECT),
+        AskKind::Command if reach.commands => Some(COMMAND_THE_STEP_MAY_RUN),
+        _ => None,
+    }
 }
 
 fn note(item: &Item, v: &Verdict) -> String {
