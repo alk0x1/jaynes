@@ -726,6 +726,24 @@ impl Ctx {
             return Ok(());
         }
         let decl = self.run.manifest.steps[i].clone();
+        let sources: Vec<String> = self.run.sources(i).into_iter().map(|j| self.name(j)).collect();
+        let checks = decl
+            .checks
+            .iter()
+            .filter_map(|c| {
+                let verdict = &results.iter().find(|r| r.check == c.name)?.verdict;
+                let mut read = sources.clone();
+                read.extend(c.reads.iter().filter(|r| !read.contains(r)).cloned().collect::<Vec<_>>());
+                Some(crate::event::CheckRecord {
+                    check: c.name.clone(),
+                    kind: c.kind,
+                    passed: *verdict == CheckVerdict::Pass,
+                    blocked: matches!(verdict, CheckVerdict::Blocked { .. }),
+                    read,
+                })
+            })
+            .collect();
+        self.emit(Event::ChecksJudged { step: step.to_string(), attempt, fix, checks });
         let mut shape = Vec::new();
         let mut behaviour = Vec::new();
         for c in &decl.checks {

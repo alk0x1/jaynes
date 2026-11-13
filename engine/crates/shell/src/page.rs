@@ -511,6 +511,21 @@ fn stage_list(r: &Run) -> String {
             let mark = if mark.is_empty() { String::new() } else { format!("<span class=\"who\">{}</span>", esc(&mark)) };
             let about = if d.about.is_empty() { String::new() } else { format!("<p class=\"about\">{}</p>", esc(&d.about)) };
             let detail = if detail.is_empty() { String::new() } else { format!("<small>{}</small>", esc(&detail)) };
+            // what the checks said, with where their answer comes from: the person's eyes only
+            let checks: Vec<String> = s
+                .checks
+                .iter()
+                .map(|c| {
+                    let kind = match c.kind {
+                        jaynes_core::manifest::CheckKind::Open => "open",
+                        jaynes_core::manifest::CheckKind::Hidden => "hidden",
+                    };
+                    let said = if c.blocked { "could not judge" } else if c.passed { "passed" } else { "failed" };
+                    let read = if c.read.is_empty() { String::new() } else { format!(", read {}", c.read.join(", ")) };
+                    format!("{} ({kind}{read}) {said}", c.check)
+                })
+                .collect();
+            let detail = if checks.is_empty() { detail } else { format!("{detail}<small class=\"checks\">checks: {}</small>", esc(&checks.join(" · "))) };
             format!("<li class=\"{class}\"><span class=\"dot\"></span><div><div class=\"r\"><b>{}{mark}</b></div>{about}{detail}</div></li>", esc(&d.name))
         })
         .collect();

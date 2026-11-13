@@ -448,6 +448,8 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let me = "jaynes_key=k3y";
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you") && view.contains("data-act=\"halt\""), "{view}");
+    // what each check said, and where its answer comes from
+    assert!(view.contains("suite (open, read runner) passed"), "{view}");
     // what the step changed, line by line, as git shows it
     assert!(view.contains("What change changed · 2 files") && view.contains("<span class=\"del\"><i>-</i>hello") && view.contains("<span class=\"file\">greeting.txt</span>"), "{view}");
     // an agent may halt, only the person resumes

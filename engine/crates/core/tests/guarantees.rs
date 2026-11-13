@@ -1210,6 +1210,38 @@ fn an_attempt_cut_off_from_outside_goes_on_in_its_session_and_a_failed_one_start
 }
 
 #[test]
+fn every_check_leaves_its_kind_its_verdict_and_what_it_read_in_the_record() {
+    use jaynes_core::manifest::{CheckDecl, CheckKind};
+    let cases = step("cases", Executor::Agent);
+    let mut build = step("build", Executor::Agent);
+    build.checks = vec![
+        CheckDecl { name: "suite".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() },
+        CheckDecl { name: "proof".to_string(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".to_string()] },
+    ];
+    let (mut run, cmds) = start(vec![cases, build]);
+    let c = probe_ok(&mut run, cmds);
+    let _ = c;
+    let c = deliver(&mut run, "cases", 1, "c", Vec::new());
+    probe_ok(&mut run, c);
+    deliver(&mut run, "build", 1, "b", Vec::new());
+    let out = decide(Some(&run), &Input::ChecksEnded {
+        step: "build".to_string(),
+        attempt: 1,
+        fix: 0,
+        results: vec![
+            CheckResult { check: "suite".to_string(), verdict: CheckVerdict::Pass },
+            CheckResult { check: "proof".to_string(), verdict: CheckVerdict::Pass },
+        ],
+    })
+    .expect("checked");
+    let judged = out.events.iter().find_map(|e| match e { Event::ChecksJudged { checks, .. } => Some(checks.clone()), _ => None }).expect("recorded");
+    assert_eq!(judged.len(), 2);
+    assert_eq!((judged[0].check.as_str(), judged[0].kind, judged[0].passed), ("suite", CheckKind::Open, true));
+    assert_eq!((judged[1].check.as_str(), judged[1].kind), ("proof", CheckKind::Hidden));
+    assert_eq!(judged[1].read, vec!["cases".to_string()], "the hidden check read the cases");
+}
+
+#[test]
 fn g9_a_leave_asked_again_gets_the_person_s_earlier_answer_without_asking_them() {
     let mut build = step("build", Executor::Agent);
     build.reach = Reach { project: ProjectAccess::Read, ..Reach::default() };

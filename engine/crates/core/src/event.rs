@@ -172,6 +172,13 @@ pub enum Event {
         attempt: u32,
         question: Question,
     },
+    /// What each check of an attempt said, passed or not: its kind, and the earlier steps whose outputs it read.
+    ChecksJudged {
+        step: String,
+        attempt: u32,
+        fix: u32,
+        checks: Vec<CheckRecord>,
+    },
     /// The session an attempt runs in, known as its turn started.
     SessionStarted {
         step: String,
@@ -280,6 +287,7 @@ impl Event {
             Event::InputNeeded { .. } => "InputNeeded",
             Event::AttemptImpossible { .. } => "AttemptImpossible",
             Event::SessionStarted { .. } => "SessionStarted",
+            Event::ChecksJudged { .. } => "ChecksJudged",
             Event::StepDone { .. } => "StepDone",
             Event::StepInvalidated { .. } => "StepInvalidated",
             Event::QuestionOpened { .. } => "QuestionOpened",
@@ -298,4 +306,19 @@ impl Event {
             Event::MergeUndone { .. } => "MergeUndone",
         }
     }
+}
+
+/// One check's verdict on an attempt, as the record keeps it: where its answer comes from (an open check the agent
+/// knew, or a hidden proof) and what it could see besides the step's own output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CheckRecord {
+    pub check: String,
+    pub kind: crate::manifest::CheckKind,
+    pub passed: bool,
+    /// It could not judge: a fault of Jaynes or of the machine.
+    #[serde(default)]
+    pub blocked: bool,
+    /// The earlier steps whose outputs it read.
+    #[serde(default)]
+    pub read: Vec<String>,
 }

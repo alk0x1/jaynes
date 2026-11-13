@@ -92,6 +92,9 @@ pub struct StepState {
     /// that ended by itself clears it.
     #[serde(default)]
     pub resume: Option<String>,
+    /// What the checks said of the last attempt they judged. For the person: an agent's turn never carries it.
+    #[serde(default)]
+    pub checks: Vec<crate::event::CheckRecord>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -284,6 +287,11 @@ impl Run {
                 }
             }
             Event::StaleReport { .. } => {}
+            Event::ChecksJudged { step, checks, .. } => {
+                if let Some(s) = self.step_mut(step) {
+                    s.checks = checks.clone();
+                }
+            }
             Event::FixAsked { step, attempt, fix, reasons } => {
                 self.counts.fixes += 1;
                 if let Some(s) = self.step_mut(step) {
