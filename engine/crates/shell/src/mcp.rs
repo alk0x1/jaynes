@@ -99,7 +99,7 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             let q = run.questions.get(qid).ok_or_else(|| format!("there is no question {qid}"))?;
             let verdicts = q.question.items.iter().map(|x| (x.id.clone(), Verdict::Keep)).collect();
             let answer = Answer { question: qid.to_string(), shown: q.question.shown(), verdicts, by: agent(), context: String::new() };
-            let effects = jaynes_core::effects(&run, &q.question, &answer);
+            let effects = drive::effects(home, &run, &q.question, &answer)?;
             let when = drive::submit(home, &exe, &run, Input::Answer { answer })?;
             Ok(format!("Let go on ({when}). {}", effects.sentences.join(" ")))
         }

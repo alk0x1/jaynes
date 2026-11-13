@@ -83,8 +83,29 @@ fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     };
     let rest = &args[1..];
+    // A command on a run of another engine is that engine's: this process becomes it.
+    if matches!(cmd, "continue" | "answer" | "raise" | "halt" | "resume" | "abandon" | "undo" | "correct")
+        && let Some(id) = rest.first()
+        && let Ok(Some(state)) = store().and_then(|s| s.state(id))
+        && state.engine != jaynes_core::ENGINE
+    {
+        use std::os::unix::process::CommandExt;
+        let exe = drive::engine_exe(&home(), &state.engine)
+            .ok_or_else(|| format!("run {id} started on engine {}, which is no longer on this machine: this one ({}) cannot carry it on", state.engine, jaynes_core::ENGINE))?;
+        return Err(format!("the engine of run {id} did not start: {}", std::process::Command::new(exe).args(args).exec()));
+    }
     match cmd {
         "start" => start(rest),
+        "act" => {
+            // an act handed over by another engine, on a run of this one: JSON in, JSON out
+            let id = rest.first().ok_or("which run?")?;
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map_err(|e| e.to_string())?;
+            let act: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            println!("{}", drive::act_here(&home(), &exe, id, &act));
+            Ok(())
+        }
         "continue" => {
             let id = rest.first().ok_or("which run?")?;
             let mut s = store()?;
@@ -287,6 +308,8 @@ fn start(args: &[String]) -> Result<(), String> {
         Body::Manifest { manifest } => manifest,
         other => return Err(format!("the role answered describe with {other:?}")),
     };
+    // the program that starts the run carries it on to the end, after any update
+    drive::keep_engine(&home())?;
     let branch = format!("jaynes/{id}");
     if let Some(p) = &project {
         project::Copy::make(p, &dir.join("project"), &branch)?;
@@ -305,6 +328,7 @@ fn start(args: &[String]) -> Result<(), String> {
         "role_given": role_dir, "fingerprint": fingerprint, "agent": agent,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
     }))?;
+    drive::sweep_engines(&home(), &s)?;
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
@@ -338,7 +362,7 @@ fn answer(args: &[String]) -> Result<(), String> {
     }
     let context = flag(args, "--context").unwrap_or_default();
     let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };
-    let effects = jaynes_core::effects(&state, &q, &answer);
+    let effects = drive::effects(&home(), &state, &q, &answer)?;
     println!("What this answer will do:");
     for line in &effects.sentences {
         println!("  {line}");

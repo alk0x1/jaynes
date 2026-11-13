@@ -61,6 +61,11 @@ impl Store {
         let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
         let events = Self::events_in(&tx, run)?;
         let state = Run::fold(&events);
+        if let Some(r) = &state
+            && r.engine != jaynes_core::ENGINE
+        {
+            return Err(format!("run {run} belongs to engine {}, and this is {}: a run is decided only by the engine it started on", r.engine, jaynes_core::ENGINE));
+        }
         let out = jaynes_core::decide(state.as_ref(), input).map_err(|r| r.0)?;
         Self::append_in(&tx, run, &out.events)?;
         let mut after = state;

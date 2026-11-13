@@ -183,7 +183,7 @@ impl Page {
 
     fn effects(&self, body: &Value, by: By) -> Result<Value, String> {
         let (run, q, answer) = self.answer_from(body, by)?;
-        let fx = jaynes_core::effects(&run, &q.question, &answer);
+        let fx = drive::effects(&self.home, &run, &q.question, &answer)?;
         let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
         Ok(json!({"ok": refused.is_none(), "sentences": fx.sentences, "refused": refused}))
     }

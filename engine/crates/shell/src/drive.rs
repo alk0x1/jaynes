@@ -78,6 +78,10 @@ pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str,
 /// Revert every merge of a run and record it: the core is asked first, so nothing is reverted it would refuse.
 pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_core::question::By) -> Result<String, String> {
     let state = store.state(run)?.ok_or("no such run")?;
+    if state.engine != jaynes_core::ENGINE {
+        let said = act_elsewhere(home, &state, &json!({"undo": {"note": note, "by": by}}))?;
+        return Ok(said["recorded"].as_str().unwrap_or("").to_string());
+    }
     let input = Input::Undo { note, by };
     jaynes_core::decide(Some(&state), &input).map_err(|r| r.0)?;
     let setup = Setup::load(store, home, run)?;
@@ -92,6 +96,10 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
 /// of its own when nothing drives the run, or left in its inbox for the process that does. A leave is recorded at
 /// once in any case, since an agent inside a turn waits for it. Says which.
 pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'static str, String> {
+    if run.engine != jaynes_core::ENGINE {
+        let said = act_elsewhere(home, run, &json!({"submit": input}))?;
+        return Ok(if said["recorded"] == "inbox" { "inbox" } else { "now" });
+    }
     jaynes_core::decide(Some(run), &input).map_err(|r| r.0)?;
     let mut store = Store::open(&home.join("record.sqlite3"))?;
     if let Input::Answer { answer } = &input
@@ -125,6 +133,111 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         }
         Ok("inbox")
     }
+}
+
+// --- each run on its own engine ----------------------------------------------------------------------------------
+
+/// Where the program of each engine that started a run is kept, by version.
+fn engines(home: &Path) -> PathBuf {
+    home.join("engines")
+}
+
+/// The program of an engine, if it is still kept on this machine.
+pub fn engine_exe(home: &Path, engine: &str) -> Option<PathBuf> {
+    Some(engines(home).join(engine).join("jaynes")).filter(|p| p.is_file())
+}
+
+/// Keep this engine's program, so the runs it starts can be carried on by it after Jaynes is updated.
+pub fn keep_engine(home: &Path) -> Result<(), String> {
+    let dir = engines(home).join(jaynes_core::ENGINE);
+    if dir.join("jaynes").is_file() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let tmp = dir.join(format!("jaynes.{}.tmp", std::process::id()));
+    std::fs::copy(&exe, &tmp).map_err(|e| format!("Jaynes could not keep its program for this run: {e}"))?;
+    std::fs::rename(&tmp, dir.join("jaynes")).map_err(|e| e.to_string())
+}
+
+/// Drop the programs of engines no unfinished run is on, except this one.
+pub fn sweep_engines(home: &Path, store: &Store) -> Result<(), String> {
+    let mut used = std::collections::BTreeSet::from([jaynes_core::ENGINE.to_string()]);
+    for id in store.runs()? {
+        if let Ok(Some(r)) = store.state(&id)
+            && !r.finished()
+        {
+            used.insert(r.engine);
+        }
+    }
+    for e in std::fs::read_dir(engines(home)).into_iter().flatten().flatten() {
+        if !used.contains(&e.file_name().to_string_lossy().to_string()) {
+            let _gone = std::fs::remove_dir_all(e.path());
+        }
+    }
+    Ok(())
+}
+
+/// Hand an act on a run to the engine the run started on: `{"submit": input}`, `{"effects": {question, answer}}`
+/// or `{"undo": {note, by}}`, answered as JSON.
+fn act_elsewhere(home: &Path, run: &Run, act: &Value) -> Result<Value, String> {
+    let exe = engine_exe(home, &run.engine).ok_or_else(|| {
+        format!("run {} started on engine {}, which is no longer on this machine: it cannot be carried on by this one ({})", run.id, run.engine, jaynes_core::ENGINE)
+    })?;
+    let mut child = std::process::Command::new(&exe)
+        .args(["act", &run.id])
+        .env("JAYNES_ENGINE_HOME", home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("the engine of run {} did not start: {e}", run.id))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(act.to_string().as_bytes()).map_err(|e| e.to_string())?;
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let said: Value = String::from_utf8_lossy(&out.stdout).lines().rev().find_map(|l| serde_json::from_str(l).ok()).unwrap_or(Value::Null);
+    if said["ok"] == true {
+        Ok(said)
+    } else {
+        Err(said["refused"].as_str().map(str::to_string).unwrap_or_else(|| String::from_utf8_lossy(&out.stderr).trim().to_string()))
+    }
+}
+
+/// What an answer will do, as the engine the run started on writes it.
+pub fn effects(home: &Path, run: &Run, question: &jaynes_core::question::Question, answer: &jaynes_core::question::Answer) -> Result<jaynes_core::event::Effects, String> {
+    if run.engine == jaynes_core::ENGINE {
+        return Ok(jaynes_core::effects(run, question, answer));
+    }
+    let said = act_elsewhere(home, run, &json!({"effects": {"question": question.id, "answer": answer}}))?;
+    serde_json::from_value(said["effects"].clone()).map_err(|e| e.to_string())
+}
+
+/// Carry out an act handed over by another engine, on a run of this one.
+pub fn act_here(home: &Path, exe: &Path, run_id: &str, act: &Value) -> Value {
+    let attempt = || -> Result<Value, String> {
+        let store = Store::open(&home.join("record.sqlite3"))?;
+        let run = store.state(run_id)?.ok_or("no such run")?;
+        drop(store);
+        if let Some(input) = act.get("submit") {
+            let input: Input = serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            return Ok(json!({"ok": true, "recorded": submit(home, exe, &run, input)?}));
+        }
+        if let Some(fx) = act.get("effects") {
+            let qid = fx["question"].as_str().unwrap_or("");
+            let q = run.questions.get(qid).ok_or("no such question")?;
+            let answer: jaynes_core::question::Answer = serde_json::from_value(fx["answer"].clone()).map_err(|e| e.to_string())?;
+            return Ok(json!({"ok": true, "effects": jaynes_core::effects(&run, &q.question, &answer)}));
+        }
+        if let Some(u) = act.get("undo") {
+            let by: jaynes_core::question::By = serde_json::from_value(u["by"].clone()).map_err(|e| e.to_string())?;
+            let mut store = Store::open(&home.join("record.sqlite3"))?;
+            return Ok(json!({"ok": true, "recorded": undo(&mut store, home, run_id, u["note"].as_str().unwrap_or("").to_string(), by)?}));
+        }
+        Err("no such act".into())
+    };
+    attempt().unwrap_or_else(|e| json!({"ok": false, "refused": e}))
 }
 
 /// What a person sees as the process goes: one line each.
@@ -800,5 +913,67 @@ pub fn narrate(e: &Event) {
             cost.usage.seconds, cost.usage.tokens, cost.attempts, cost.spent, cost.fixes, cost.sent_back
         )),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jaynes_core::manifest::{Executor, Manifest, Reach, SessionKind, StepDecl};
+    use jaynes_core::question::By;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A record holding one run that an older engine started.
+    fn old_run(home: &Path) -> Run {
+        let step = StepDecl {
+            name: "change".into(), needs: vec![], executor: Executor::Agent, session: SessionKind::Fresh, reach: Reach::default(),
+            effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: String::new(),
+        };
+        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], delivery: Default::default() };
+        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), raise: None, attention: Default::default() };
+        let out = jaynes_core::decide(None, &start).expect("start");
+        let events: Vec<Event> = out
+            .events
+            .into_iter()
+            .map(|e| {
+                let mut v = serde_json::to_value(&e).expect("json");
+                if v["type"] == "RunStarted" {
+                    v["engine"] = "0.0.0+old".into();
+                }
+                serde_json::from_value(v).expect("event")
+            })
+            .collect();
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("old", &events).expect("append");
+        std::fs::create_dir_all(home.join("runs/old")).expect("dir");
+        store.state("old").expect("state").expect("run")
+    }
+
+    #[test]
+    fn a_run_is_decided_only_by_the_engine_it_started_on() {
+        let home = std::env::temp_dir().join(format!("jaynes-engines-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let run = old_run(&home);
+        assert_eq!(run.engine, "0.0.0+old");
+        // this engine records nothing for it
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let refused = store.decide("old", &Input::Halt { by: By::Person }).expect_err("refused");
+        assert!(refused.contains("0.0.0+old"), "{refused}");
+        // with the older engine gone from the machine, an input is refused and says so
+        let gone = submit(&home, Path::new("/bin/false"), &run, Input::Halt { by: By::Person }).expect_err("refused");
+        assert!(gone.contains("0.0.0+old"), "{gone}");
+        // with it kept, the input goes to that engine
+        let kept = home.join("engines/0.0.0+old");
+        std::fs::create_dir_all(&kept).expect("dir");
+        let called = home.join("called");
+        std::fs::write(kept.join("jaynes"), format!("#!/bin/sh\necho \"$@\" > {c}\ncat >> {c}\necho '{{\"ok\":true,\"recorded\":\"now\"}}'\n", c = called.display())).expect("stub");
+        std::fs::set_permissions(kept.join("jaynes"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert_eq!(submit(&home, Path::new("/bin/false"), &run, Input::Halt { by: By::Person }), Ok("now"));
+        let said = std::fs::read_to_string(&called).expect("called");
+        assert!(said.starts_with("act old") && said.contains("\"halt\""), "{said}");
+        // and a run started now keeps this engine's program for later
+        keep_engine(&home).expect("kept");
+        assert!(home.join("engines").join(jaynes_core::ENGINE).join("jaynes").is_file());
+        assert!(jaynes_core::ENGINE.contains('+'), "the version names the core's code: {}", jaynes_core::ENGINE);
     }
 }
