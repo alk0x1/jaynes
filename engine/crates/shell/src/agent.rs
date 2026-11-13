@@ -35,14 +35,22 @@ pub struct Spec<'a> {
     /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
     /// it counts neither towards the deadline nor in the turn's time.
     pub paused: Option<PathBuf>,
-    /// Told the session as soon as the agent program names it, so a turn cut off from outside can go on in it.
-    pub on_session: Option<Box<dyn FnMut(String) + Send>>,
+    /// Told the session as soon as the agent program names it, so a turn cut off from outside can go on in it, with
+    /// what the program says it runs with.
+    pub on_session: OnSession,
 }
 
-/// The session a line of the agent program's output names as its turn starts: `{"type":"system","session_id":..}`.
-fn session_of(line: &str) -> Option<String> {
+/// The session a line of the agent program's output names as its turn starts (`{"type":"system","session_id":..}`),
+/// and what it says it runs with: its model, its permission mode, its tools.
+fn session_of(line: &str) -> Option<(String, jaynes_core::event::Confirmed)> {
     let v: Value = serde_json::from_str(line).ok()?;
-    (v["type"] == "system").then(|| v["session_id"].as_str().map(str::to_string)).flatten()
+    if v["type"] != "system" {
+        return None;
+    }
+    let session = v["session_id"].as_str()?.to_string();
+    let text = |k: &str| v[k].as_str().unwrap_or("").to_string();
+    let tools = v["tools"].as_array().map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    Some((session, jaynes_core::event::Confirmed { model: text("model"), permission_mode: text("permissionMode"), tools }))
 }
 
 #[derive(Debug)]
@@ -71,7 +79,7 @@ pub trait Agent {
 
 /// Run a program with `input` on its standard input, killed with its whole group at the deadline. The time
 /// `paused` exists is not counted: neither towards the deadline nor in the time returned.
-type OnSession = Option<Box<dyn FnMut(String) + Send>>;
+pub type OnSession = Option<Box<dyn FnMut(String, jaynes_core::event::Confirmed) + Send>>;
 
 fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     use std::os::unix::process::CommandExt;
@@ -127,9 +135,9 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
         let mut line = String::new();
         while lines.read_line(&mut line).is_ok_and(|n| n > 0) {
             if let Some(f) = on_session.as_mut()
-                && let Some(session) = session_of(&line)
+                && let Some((session, confirmed)) = session_of(&line)
             {
-                f(session);
+                f(session, confirmed);
                 on_session = None;
             }
             if let Ok(mut t) = kept.lock() {

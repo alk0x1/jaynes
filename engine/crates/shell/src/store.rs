@@ -192,7 +192,18 @@ impl Store {
 
     pub fn put_setup(&self, run: &str, setup: &Value) -> Result<(), String> {
         let body = serde_json::to_string(setup).map_err(|e| e.to_string())?;
-        self.db.execute("insert into runs(run, setup) values (?1, ?2)", params![run, body]).map_err(|e| e.to_string())?;
+        // a start that died before recording anything left its setup: the next start of that run replaces it
+        let changed = self
+            .db
+            .execute(
+                "insert into runs(run, setup) values (?1, ?2) on conflict(run) do update set setup = excluded.setup \
+                 where not exists (select 1 from events where events.run = ?1)",
+                params![run, body],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err(format!("run {run} exists"));
+        }
         Ok(())
     }
 

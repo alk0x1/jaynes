@@ -290,17 +290,24 @@ fn start(args: &[String]) -> Result<(), String> {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         format!("r{t}-{}", std::process::id() % 1000)
     });
-    let dir = home().join("runs").join(&id);
+    let runs = home().join("runs");
+    let dir = runs.join(&id);
     if dir.exists() {
-        // a start that died before the run was recorded left only its folder: it never started
+        // a start that died before the run was recorded left its folder whole (it is moved in only once complete):
+        // the run never started
         if !store()?.events(&id)?.is_empty() {
             return Err(format!("run {id} exists"));
         }
         std::fs::remove_dir_all(&dir).map_err(|e| format!("Jaynes could not clear what a start that died left in {}: {e}", dir.display()))?;
     }
+    // The run's folder is made aside and moved into place whole: a start killed while it copies leaves children
+    // (git, the role) still writing, and they write only into a folder nothing reads.
+    clear_unfinished_starts(&runs);
+    let building = runs.join(format!(".building-{id}-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&building);
     let given = RoleProgram::new(Path::new(&role_dir), &library());
     let fingerprint = given.fingerprint()?;
-    let role = given.pin(&dir)?;
+    let role = given.pin(&building)?;
     match role.call(Call::Hello { engine: jaynes_core::ENGINE.into(), features: protocol::FEATURES.iter().map(|s| s.to_string()).collect(), extensions: Default::default() })? {
         Body::Hello { required, .. } => {
             let unknown: Vec<String> = required.into_iter().filter(|r| !protocol::FEATURES.contains(&r.as_str())).collect();
@@ -318,8 +325,10 @@ fn start(args: &[String]) -> Result<(), String> {
     drive::keep_engine(&home())?;
     let branch = format!("jaynes/{id}");
     if let Some(p) = &project {
-        project::Copy::make(p, &dir.join("project"), &branch)?;
+        project::Copy::make(p, &building.join("project"), &branch)?;
     }
+    drop(role);
+    std::fs::rename(&building, &dir).map_err(|e| format!("Jaynes could not put the run's folder in place: {e}"))?;
     let mut s = store()?;
     // Each stop's count, from everything the record holds, as it stands now.
     let history = s.history()?;
@@ -342,6 +351,16 @@ fn start(args: &[String]) -> Result<(), String> {
     let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention })?;
     print_state(&end);
     Ok(())
+}
+
+/// Remove the folders of starts that died while they made them, once nothing can still be writing in them.
+fn clear_unfinished_starts(runs: &Path) {
+    let old = |p: &Path| p.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 600);
+    for e in std::fs::read_dir(runs).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().starts_with(".building-") && old(&e.path()) {
+            let _gone = std::fs::remove_dir_all(e.path());
+        }
+    }
 }
 
 fn parse_verdict(s: &str) -> Result<Verdict, String> {

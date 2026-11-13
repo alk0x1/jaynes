@@ -672,9 +672,9 @@ impl<'a> Driver<'a> {
             paused: Some(crate::permit::waiting_mark(self.setup.dir.parent().and_then(Path::parent).unwrap_or(Path::new("/")), &self.setup.run)),
             on_session: {
                 let (home, run, step, attempt) = (self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default(), self.setup.run.clone(), turn.step.clone(), turn.attempt);
-                Some(Box::new(move |session: String| {
+                Some(Box::new(move |session: String, confirmed: jaynes_core::event::Confirmed| {
                     // recorded at once, so a turn cut off from outside goes on in this session
-                    let recorded = Store::open(&home.join("record.sqlite3")).and_then(|mut s| s.decide(&run, &Input::SessionStarted { step: step.clone(), attempt, session }));
+                    let recorded = Store::open(&home.join("record.sqlite3")).and_then(|mut s| s.decide(&run, &Input::SessionStarted { step: step.clone(), attempt, session, confirmed }));
                     if let Err(e) = recorded {
                         say(&format!("the agent's session was not recorded: {e}"));
                     }

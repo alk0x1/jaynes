@@ -59,6 +59,9 @@ pub enum Input {
         step: String,
         attempt: u32,
         session: String,
+        /// What the agent program says it runs with, in its first message.
+        #[serde(default)]
+        confirmed: crate::event::Confirmed,
     },
     Answer {
         answer: Answer,

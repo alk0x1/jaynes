@@ -99,10 +99,10 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
         Input::AttemptEnded { step, attempt, fix, outcome } => c.attempt_ended(step, *attempt, *fix, outcome)?,
         Input::ChecksEnded { step, attempt, fix, results } => c.checks_ended(step, *attempt, *fix, results)?,
         Input::PermissionAsked { step, attempt, ask } => c.permission(step, *attempt, ask)?,
-        Input::SessionStarted { step, attempt, session } => {
+        Input::SessionStarted { step, attempt, session, confirmed } => {
             let i = c.index(step)?;
             if matches!(c.run.steps[i].status, Status::Running { attempt: a, .. } if a == *attempt) {
-                c.emit(Event::SessionStarted { step: step.clone(), attempt: *attempt, session: session.clone() });
+                c.emit(Event::SessionStarted { step: step.clone(), attempt: *attempt, session: session.clone(), confirmed: confirmed.clone() });
             } else {
                 c.stale(step, *attempt, "a session was named by an attempt that is no longer under way");
             }

@@ -368,7 +368,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     let mark = s.home.join("mark");
     std::fs::create_dir_all(&mark).expect("dir");
     let agent = format!(
-        "if [ ! -e {m}/started ]; then echo '{{\"type\":\"system\",\"session_id\":\"s9\"}}'; touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; echo \"$JAYNES_SESSION\" > {m}/resumed; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
+        "if [ ! -e {m}/started ]; then echo '{{\"type\":\"system\",\"session_id\":\"s9\",\"model\":\"m9\",\"permissionMode\":\"default\",\"tools\":[\"Read\",\"Bash\"]}}'; touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; echo \"$JAYNES_SESSION\" > {m}/resumed; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
         m = mark.display()
     );
     let role = root().join("roles/small-change");
@@ -404,6 +404,9 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     assert!(!mark.join("orphan-finished").exists(), "the stopped agent never finished its work");
     // the session was recorded as the turn started, and the next attempt went on in it
     assert_eq!(std::fs::read_to_string(mark.join("resumed")).expect("resumed").trim(), "s9");
+    // what the agent program said it runs with, in its first message, is in the record
+    let started = events(&s, "crash").into_iter().find(|e| e["type"] == "SessionStarted").expect("session");
+    assert_eq!((started["confirmed"]["model"].as_str(), started["confirmed"]["tools"][1].as_str()), (Some("m9"), Some("Bash")), "{started}");
     let e = events(&s, "crash");
     assert!(e.iter().any(|e| e["type"] == "AttemptInterrupted"), "{:?}", types(&e));
     let finished = e.iter().find(|e| e["type"] == "RunFinished").expect("finished");
@@ -889,7 +892,7 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let role = root().join("roles/fix-bug");
     let mut outcomes = Vec::new();
-    for trial in 0..10u64 {
+    for trial in 0..16u64 {
         let s = bug_project(&format!("kill{trial}"));
         let prompts = s.home.join("prompts");
         std::fs::create_dir_all(&prompts).expect("dir");
@@ -902,8 +905,9 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
                     "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
         envs(&mut first);
         let mut p = first.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().expect("start");
-        // a moment spread over the run's length, different each trial
-        std::thread::sleep(std::time::Duration::from_millis(40 + (trial * 389) % 2600));
+        // the first six in the start, where the run is being set up; the rest spread over the run's length
+        let at = if trial < 6 { trial * 50 } else { 40 + (trial * 389) % 2600 };
+        std::thread::sleep(std::time::Duration::from_millis(at));
         let _killed = p.kill();
         let _waited = p.wait();
         if events(&s, &run).is_empty() {

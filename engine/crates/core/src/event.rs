@@ -184,6 +184,8 @@ pub enum Event {
         step: String,
         attempt: u32,
         session: String,
+        #[serde(default)]
+        confirmed: Confirmed,
     },
     /// The agent said the step cannot be done as asked; the question for the person follows.
     AttemptImpossible {
@@ -321,4 +323,16 @@ pub struct CheckRecord {
     /// The earlier steps whose outputs it read.
     #[serde(default)]
     pub read: Vec<String>,
+}
+
+/// What an agent program says, in the first message of a turn, it runs with: what actually held, beside what Jaynes
+/// asked for.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Confirmed {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub permission_mode: String,
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
