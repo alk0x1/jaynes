@@ -117,9 +117,12 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     }
     let stdout = child.stdout.take().ok_or("no output pipe")?;
     let mut stderr = child.stderr.take().ok_or("no error pipe")?;
+    // what is read so far, kept outside the readers: a process the turn left behind may hold the pipes open
+    let out_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let err_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let kept = out_text.clone();
     let out = std::thread::spawn(move || {
         use std::io::BufRead;
-        let mut s = String::new();
         let mut lines = std::io::BufReader::new(stdout);
         let mut line = String::new();
         while lines.read_line(&mut line).is_ok_and(|n| n > 0) {
@@ -129,16 +132,25 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
                 f(session);
                 on_session = None;
             }
-            s.push_str(&line);
+            if let Ok(mut t) = kept.lock() {
+                t.push_str(&line);
+            }
             line.clear();
         }
-        s
     });
+    let kept = err_text.clone();
     let err = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _read = stderr.read_to_string(&mut s);
-        s
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = stderr.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            if let Ok(mut t) = kept.lock() {
+                t.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        }
     });
+    let group = |sig: &str| Command::new("kill").args([sig, &format!("-{pid}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     let mut timed_out = false;
     let mut waited = Duration::ZERO;
     let mut last = Instant::now();
@@ -152,9 +164,9 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             Ok(Some(status)) => break status.code(),
             Ok(None) if started.elapsed().saturating_sub(waited) > deadline => {
                 timed_out = true;
-                let _term = Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
+                let _term = group("-TERM");
                 std::thread::sleep(Duration::from_secs(3));
-                let _kill = Command::new("kill").args(["-KILL", &format!("-{pid}")]).status();
+                let _kill = group("-KILL");
                 let _waited = child.wait();
                 break None;
             }
@@ -162,7 +174,25 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             Err(e) => return Err(format!("the agent program could not be watched: {e}")),
         }
     };
-    Ok((code, out.join().unwrap_or_default(), err.join().unwrap_or_default(), started.elapsed().saturating_sub(waited), timed_out))
+    let took = started.elapsed().saturating_sub(waited);
+    // what the turn left running in its group ends with it
+    if group("-0") {
+        let _term = group("-TERM");
+        for _ in 0..20 {
+            if !group("-0") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _kill = group("-KILL");
+    }
+    // a process that left the group may still hold the pipes: read for a moment more, then take what came
+    let until = Instant::now() + Duration::from_secs(3);
+    while !(out.is_finished() && err.is_finished()) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let text = |t: &std::sync::Arc<std::sync::Mutex<String>>| t.lock().map(|t| t.clone()).unwrap_or_default();
+    Ok((code, text(&out_text), text(&err_text), took, timed_out))
 }
 
 // --- a command of the person's: for tests and for agent programs without an adapter --------------------------
@@ -453,6 +483,18 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_ends_even_when_something_it_left_running_holds_its_output() {
+        // a process in the turn's group, and one that left the group, both keep the output pipe open for 30 s
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & python3 -c 'import os,time; os.setsid(); time.sleep(30)' & echo hi");
+        let started = Instant::now();
+        let (code, out, _, _, timed_out) = run(cmd, "", Duration::from_secs(60), None, None, None).expect("ran");
+        assert_eq!((code, timed_out), (Some(0), false));
+        assert!(out.contains("hi"), "{out}");
+        assert!(started.elapsed() < Duration::from_secs(15), "the turn waited {:?} for what it left running", started.elapsed());
+    }
 
     #[test]
     fn time_spent_waiting_for_the_person_is_not_the_agent_s() {
