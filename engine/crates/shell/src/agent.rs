@@ -477,6 +477,10 @@ mod tests {
         assert!(allow.contains(&"Edit(./.jaynes/**)"));
         assert!(!allow.contains(&"Edit(./**)"));
         assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "Bash"));
+        // the shell's box reads nothing in the person's home but the step's folder (a real run: `cat ~/file` was
+        // refused with "Operation not permitted")
+        assert_eq!(s["sandbox"]["filesystem"]["denyRead"], json!(["~/"]));
+        assert_eq!(s["sandbox"]["filesystem"]["allowRead"][0], "/w");
     }
 
     #[test]
