@@ -114,3 +114,20 @@ version, the protocol and the record's format.
   delivered as a branch with no stop; a failing suite fixed in the same session with no attempt spent; a change
   to a Makefile raising the risk and asking; an agent program that does not start spending no attempt.
 - A real Claude Code turn on a scratch project: 59 s, one attempt, 8,355 tokens, delivered.
+
+## Acceptance: the change of 678acbc
+
+The change the Python engine's build-feature failed to deliver three times (1 h 35 min, nothing delivered) and
+that took about 20 minutes made directly. Same request, on a throwaway clone at `ccff401`, through this engine
+with Claude Code (Opus 5.5, high effort), role small-change, the risk raised to high at the start:
+
+- 9 min 51 s from start to the delivered branch; one attempt, none spent, no fix needed.
+- 114,383 tokens sent and received, 2,599,358 read back from the cache.
+- The suite (the whole Python test suite, in the box) passed as the engine's check.
+- The delivery: `opinion.py`, its tests, the page and the demo, 390 lines added and 22 removed, the same four
+  files as the direct commit. Its new tests pass. Two preview tests of `test_review_start.py` fail when run
+  outside the box on this machine, and fail the same way on `ccff401` without the change.
+- The run then waits, delivered, for the person's answer at the stop, since the change is not small; it goes on
+  without holding anything.
+
+Not compared: the quality of the delivery against the direct commit, line by line. One run is one run.
