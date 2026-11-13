@@ -98,6 +98,7 @@ impl Page {
             let view = match parts.as_slice() {
                 ["q", run, q] => View::Question(run.to_string(), q.to_string()),
                 ["run", run] => View::Run(run.to_string()),
+                ["home"] => View::Overview,
                 _ => View::Home,
             };
             return match self.render(view, self.person(req)) {
@@ -232,7 +233,7 @@ impl Page {
             View::Question(r, q) => Some((r.clone(), q.clone())),
             _ => None,
         };
-        let current = if let View::Run(_) = view {
+        let current = if matches!(view, View::Run(_) | View::Overview) {
             None
         } else {
             chosen
@@ -285,7 +286,7 @@ impl Page {
                 Some(r) => run_html(r, &changes_html(&self.home, r, None)),
                 None => "<div class=\"empty\">There is no such run.</div>".to_string(),
             },
-            (_, None) => "<div class=\"empty\">Nothing waits for you.</div>".to_string(),
+            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
                     let d = store.display(&it.digest);
@@ -422,6 +423,7 @@ fn where_in(r: &Run) -> String {
 
 enum View {
     Home,
+    Overview,
     Question(String, String),
     Run(String),
 }
@@ -687,6 +689,80 @@ fn diff_html(text: &str) -> String {
         .collect()
 }
 
+/// How long ago, in a word or two.
+fn ago(seconds: u64) -> String {
+    match seconds {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{} min ago", seconds / 60),
+        3600..86_400 => format!("{} h ago", seconds / 3600),
+        _ => format!("{} days ago", seconds / 86_400),
+    }
+}
+
+/// Home: what waits, what runs, and what was delivered, newest first, the last week in front and the rest folded;
+/// the runs that delivered nothing at the end.
+fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, home: &std::path::Path) -> String {
+    use jaynes_core::event::Outcome;
+    let now = crate::store::now();
+    let at = |r: &Run| times.get(&r.id).map(|t| t.1).unwrap_or(0);
+    let row = |r: &Run, said: String, chip: &str| -> String {
+        let c = &r.counts;
+        let mut facts = vec![esc(&r.manifest.role)];
+        if c.corrections > 0 {
+            facts.push(format!("{} correction{}", c.corrections, if c.corrections == 1 { "" } else { "s" }));
+        }
+        if c.sent_back > 0 {
+            facts.push(format!("{} sent back", c.sent_back));
+        }
+        facts.push(format!("{} min, {} tokens", r.spent.seconds / 60, r.spent.tokens));
+        facts.push(ago(now.saturating_sub(at(r))));
+        format!(
+            "<a class=\"hrow\" href=\"/run/{}\"><div class=\"t\">{}</div><div class=\"hq\">{}</div><div class=\"hm\">{chip}{}</div>{}</a>",
+            esc(&r.id),
+            esc(&short(&r.request)),
+            esc(&said),
+            facts.iter().map(|f| format!("<span>{f}</span>")).collect::<String>(),
+            strip(r)
+        )
+    };
+    let landed = |r: &Run| -> (String, &'static str) {
+        let merges = drive::merges(&home.join("runs").join(&r.id));
+        if r.undone {
+            ("reverted by you".into(), "<span class=\"chip red\">undone</span>")
+        } else if !merges.is_empty() {
+            let into = std::fs::read_to_string(home.join("runs").join(&r.id).join("project/.git/jaynes-start")).unwrap_or_default();
+            let into = into.trim();
+            (if into.is_empty() { "merged into your branch".into() } else { format!("merged into {into}") }, "<span class=\"chip green\">merged</span>")
+        } else {
+            ("its result is on the run's page".into(), "<span class=\"chip green\">delivered</span>")
+        }
+    };
+    let mut done: Vec<&Run> = runs.iter().filter(|r| matches!(r.phase, Phase::Finished { outcome: Outcome::Delivered })).collect();
+    done.sort_by_key(|r| std::cmp::Reverse(at(r)));
+    let week = now.saturating_sub(7 * 86_400);
+    let (new, earlier): (Vec<&Run>, Vec<&Run>) = done.into_iter().partition(|r| at(r) >= week);
+    let delivered = |list: &[&Run]| list.iter().map(|r| { let (said, chip) = landed(r); row(r, said, chip) }).collect::<String>();
+    let mut moving: Vec<&Run> = runs.iter().filter(|r| !r.finished()).collect();
+    moving.sort_by_key(|r| std::cmp::Reverse(at(r)));
+    let moving: String = moving.iter().map(|r| row(r, format!("{}, {}", where_in(r), phase_word(r)).replace("<span class=\"goes\">", "").replace("<span class=\"holds\">", "").replace("<span class=\"bad\">", "").replace("</span>", ""), "")).collect();
+    let mut dropped: Vec<&Run> = runs.iter().filter(|r| matches!(r.phase, Phase::Finished { outcome: Outcome::Abandoned })).collect();
+    dropped.sort_by_key(|r| std::cmp::Reverse(at(r)));
+    let abandoned = dropped.len();
+    let dropped: String = dropped.iter().map(|r| row(r, "abandoned".into(), "<span class=\"chip\">abandoned</span>")).collect();
+    let part = |title: &str, sub: &str, rows: &str, none: &str| {
+        let body = if rows.is_empty() { format!("<div class=\"none\">{none}</div>") } else { format!("<div class=\"rows\">{rows}</div>") };
+        format!("<section class=\"part\"><h2>{title}</h2><p class=\"sub\">{sub}</p>{body}</section>")
+    };
+    let fold = |title: &str, n: usize, rows: &str| if n == 0 { String::new() } else { format!("<details class=\"fold\"><summary>{title} <span>{n}</span></summary><div class=\"rows\">{rows}</div></details>") };
+    let wait = if waiting == 0 { "Nothing waits for you.".to_string() } else { format!("{waiting} question{} wait{} for you, in the list beside.", if waiting == 1 { "" } else { "s" }, if waiting == 1 { "s" } else { "" }) };
+    format!(
+        "<h1>Home</h1><p class=\"sub\">{wait}</p>{}{}{}",
+        part("Running", "Runs not finished: working, or waiting for you.", &moving, "Nothing runs."),
+        part("Delivered", "The last 7 days, newest first. Undo and Correct are on each run's page.", &delivered(&new), "Nothing was delivered this week.") + &fold("Earlier", earlier.len(), &delivered(&earlier)),
+        fold("Abandoned", abandoned, &dropped),
+    )
+}
+
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
@@ -727,7 +803,7 @@ const PAGE: &str = r##"<!doctype html>
   --red:#ff6f6f; --red-soft:rgba(255,111,111,.12); --display:"Instrument Sans","Helvetica Neue",Arial,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; }
 * { box-sizing:border-box; } html,body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--display); font-size:15px; line-height:1.5; }
 button { font:inherit; color:inherit; cursor:pointer; } a { color:inherit; text-decoration:none; }
-.top { display:flex; align-items:center; gap:18px; padding:14px 24px; border-bottom:1px solid var(--line); } .top b { font-weight:600; }
+.top { display:flex; align-items:center; gap:18px; padding:14px 24px; border-bottom:1px solid var(--line); } .top b { font-weight:600; } .nav { margin-left:auto; } .nav a { color:var(--dim); text-decoration:none; font-size:13px; } .nav a:hover { color:var(--ink); }
 .wrap { display:grid; grid-template-columns:280px 1fr; min-height:calc(100vh - 54px); }
 aside { border-right:1px solid var(--line); padding:16px 0; }
 .qh { padding:0 18px 8px; font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
@@ -788,6 +864,14 @@ pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius
 .diff > .del { background:var(--red-soft); } .diff > .del > i { color:var(--red); }
 .diff > .hunk { color:var(--blue); }
 .diff > .file { color:var(--ink); font-weight:600; margin-top:12px; } .diff > .file:first-child { margin-top:0; }
+.part { margin-top:26px; } .part h2 { font-size:15px; font-weight:600; margin:0; } .part .sub { margin:2px 0 10px; font-size:13px; }
+.rows { border:1px solid var(--line); border-radius:8px; overflow:hidden; } .none { color:var(--faint); font-size:13px; }
+.hrow { display:block; padding:11px 16px; border-top:1px solid var(--line); color:inherit; text-decoration:none; } .hrow:first-child { border-top:0; }
+.hrow:hover { background:var(--panel); } .hrow .t { font-size:14px; } .hrow .hq { font-size:13px; color:var(--dim); }
+.hrow .hm { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:3px; font-family:var(--mono); font-size:11px; color:var(--faint); }
+.chip { font-family:var(--mono); font-size:10.5px; padding:1px 7px; border-radius:10px; border:1px solid var(--line-2); color:var(--dim); }
+.chip.green { color:var(--green); border-color:var(--green-soft); background:var(--green-soft); } .chip.red { color:var(--red); border-color:var(--red-soft); background:var(--red-soft); }
+details.fold { margin-top:12px; } details.fold summary { cursor:pointer; color:var(--dim); font-size:13px; } details.fold summary span { color:var(--faint); font-family:var(--mono); font-size:11px; } details.fold .rows { margin-top:8px; }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
@@ -800,7 +884,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 .effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; }
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
-<div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span></div>
+<div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a></nav></div>
 <div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}</main></div>
 <div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
 <script>

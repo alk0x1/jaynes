@@ -313,6 +313,10 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     assert!(finished, "{:?}", types(&events(&s, "page")));
     let answered = events(&s, "page").into_iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
     assert_eq!(answered["answer"]["by"]["by"], "person");
+    // with nothing waiting, the page opens on home: what was delivered, newest first, each a link to its run
+    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    assert!(home.contains("<h2>Delivered</h2>") && home.contains("<a class=\"hrow\" href=\"/run/page\">") && home.contains("Nothing waits for you"), "{home}");
+    assert!(http(port, &format!("GET /home HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n")).contains("<a class=\"hrow\" href=\"/run/page\">"));
     assert_eq!(answered["answer"]["context"], "for accountants");
 }
 

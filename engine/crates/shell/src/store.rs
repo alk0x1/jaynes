@@ -132,6 +132,13 @@ impl Store {
         Ok(out)
     }
 
+    /// When each run's first and last entries were recorded.
+    pub fn times(&self) -> Result<std::collections::BTreeMap<String, (u64, u64)>, String> {
+        let mut q = self.db.prepare("select run, min(ts), max(ts) from events group by run").map_err(|e| e.to_string())?;
+        let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64))).map_err(|e| e.to_string())?;
+        rows.map(|r| r.map(|(run, a, b)| (run, (a, b))).map_err(|e| e.to_string())).collect()
+    }
+
     pub fn state(&self, run: &str) -> Result<Option<Run>, String> {
         Ok(Run::fold(&self.events(run)?))
     }
