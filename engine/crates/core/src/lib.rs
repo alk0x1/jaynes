@@ -26,8 +26,9 @@ pub use io::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Inpu
 pub use manifest::Manifest;
 pub use run::Run;
 
-/// The engine's version, recorded in every run it starts.
-pub const ENGINE: &str = env!("CARGO_PKG_VERSION");
+/// The engine's version, recorded in every run it starts: the package version and a fingerprint of the core's code
+/// (build.rs), so a change of the rules is a change of engine.
+pub const ENGINE: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("JAYNES_CORE_FINGERPRINT"));
 /// The major version of the protocol between the engine and a role.
 pub const PROTOCOL: u32 = 1;
 /// The version of the record's format.
