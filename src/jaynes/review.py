@@ -1663,9 +1663,10 @@ class Review:
         if not decs:
             return 303, back
         locked = {d.id for d in decs if s.locked.get(d.id) == d.value}
-        files = {rel: self.c.home / "objects" / obj for rel, obj in self._files(st, step).items()}
+        pictures = {d.id: {pic.file: self.c.home / "objects" / obj for pic in d.pictures
+                           if (obj := self._files(st, pic.step).get(pic.file)) is not None} for d in decs}
         try:
-            opinion.ask(self.c.home, run_id, step, s.round, text[:4000], decs, locked, files)
+            opinion.ask(self.c.home, run_id, step, s.round, text[:4000], decs, locked, pictures)
         except ValueError as err:
             return 400, self.stop_page(run_id, step, str(err))
         return 303, back

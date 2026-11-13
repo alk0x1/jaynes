@@ -12,8 +12,9 @@ from pathlib import Path
 import pytest
 
 from jaynes import cli, opinion
-from jaynes.role import Decision
+from jaynes.role import Decision, StepContext, role, stop
 from jaynes.store import Store
+from tests.test_decisions import ITEMS, THREE, Items, item_decisions
 from tests.test_review import form, get, post, serving
 
 DECS = [Decision("theme", "Theme", "dark"), Decision("accent", "Accent colour", "#e8a33d"),
@@ -100,3 +101,46 @@ def test_a_reader_that_fails_says_so_and_marks_nothing(tmp_path: Path, monkeypat
         assert "It could not mark the lines" in part and "mark them by hand" in part and "data-marks" not in part
     finally:
         server.shutdown()
+
+
+def draws(ctx: StepContext) -> Items:
+    """Three looks, each drawn as a picture among the step's files, as a designer step leaves them."""
+    (ctx.workspace / "files").mkdir()
+    for item in THREE["items"]:
+        (ctx.workspace / "files" / f"{item['id']}.png").write_bytes(b"\x89PNG " + item["id"].encode())
+    return Items.model_validate(THREE)
+
+
+PICTURED = role("pictured", agent="fake")
+DRAWN = PICTURED.step("looks", output=Items, run_by=draws, effect="pure", max_turns=1)
+PICKED = PICTURED.step("shown", output=Items, needs=[DRAWN], run_by=lambda ctx: ctx.needs[DRAWN].value,
+                       effect="pure", max_turns=1, stop=stop(0.2, waits=True), choose=ITEMS, decides=item_decisions)
+
+
+def test_the_reader_sees_each_decisions_pictures_though_another_step_drew_them(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[dict[str, bytes], str]] = []
+
+    def reads(here: Path, prompt: str) -> str:
+        files = {str(f.relative_to(here)): f.read_bytes() for f in (here / "files").rglob("*") if f.is_file()}
+        seen.append((files, prompt))
+        return json.dumps({"marks": {"board": {"mark": "drop", "note": "the left one"}}, "understood": "ok"})
+
+    monkeypatch.setattr(opinion, "reader", reads)
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.test_opinion:PICTURED", "--task", "three looks"])
+    [run] = Store(tmp_path / "jaynes.sqlite3").runs()
+    base, server = serving(tmp_path)
+    try:
+        page = get(base + "/next")
+        post(base + "/opinion", {"token": form(page)["token"], "run": run, "step": "shown", "text": "not the left one"})
+        for _ in range(50):
+            if "data-marks" in get(f"{base}/opinion/{run}/shown"):
+                break
+            time.sleep(0.1)
+    finally:
+        server.shutdown()
+    [(files, prompt)] = seen
+    assert files == {"files/1/ledger.png": b"\x89PNG ledger", "files/2/booklet.png": b"\x89PNG booklet",
+                     "files/3/board.png": b"\x89PNG board"}
+    assert "- ledger: Ledger = a bank statement (pictures: files/1/ledger.png)" in prompt
+    assert "- board: Board = a tactics board (pictures: files/3/board.png)" in prompt

@@ -30,7 +30,7 @@ Mark each decision as they meant it:
 - drop: they never want it again, in this run; the note says why, if they said;
 - base: they want to start from it and change a lot; the note says what to change;
 - none: they did not speak of it, or you cannot tell.
-Pictures of the decisions, when there are any, are in files/. Read nothing else and change nothing.
+Pictures of the decisions, when there are any, are in files/, named on each decision's line. Read nothing else and change nothing.
 
 Answer with one JSON object and nothing else:
 {"marks": {"<id>": {"mark": "keep|redo|drop|base|none", "note": "<in their words, or empty>"}},
@@ -90,8 +90,10 @@ def marks(raw: str, decisions: list[Decision], locked: Collection[str]) -> tuple
 
 
 def ask(home: Path, run_id: str, step: str, round_: int, text: str, decisions: list[Decision],
-        locked: Collection[str], files: Mapping[str, Path], wait: bool = False) -> None:
-    """Start reading what the person wrote, in the background, against the stop's ``decisions``."""
+        locked: Collection[str], pictures: Mapping[str, Mapping[str, Path]], wait: bool = False) -> None:
+    """Start reading what the person wrote, in the background, against the stop's ``decisions``. ``pictures`` are
+    each decision's, by its id, as path to file: the reader finds them in files/<its number>/, whatever step drew
+    them, so it can tell "the left one" from the rest."""
     root = folder(home, run_id, step)
     root.mkdir(parents=True, exist_ok=True)
     n = 1 + max((int(p.name) for p in root.iterdir() if p.name.isdigit()), default=0)
@@ -99,13 +101,19 @@ def ask(home: Path, run_id: str, step: str, round_: int, text: str, decisions: l
         raise ValueError(f"{MOST} opinions were written at this step already")
     here = root / str(n)
     (here / "files").mkdir(parents=True)
-    for rel, src in list(files.items())[:40]:
-        dest = here / "files" / rel
-        if dest.resolve().is_relative_to((here / "files").resolve()) and src.is_file():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
-    lines = "\n".join(f"- {d.id}: {d.label} = {d.value}" + (" (locked: the person kept it)" if d.id in locked else "")
-                      for d in decisions)
+    shown: dict[str, list[str]] = {}
+    room = 40
+    for n, d in enumerate(decisions, 1):
+        for rel, src in list(pictures.get(d.id, {}).items())[:max(room, 0)]:
+            dest = here / "files" / str(n) / rel
+            if dest.resolve().is_relative_to((here / "files").resolve()) and src.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest)
+                shown.setdefault(d.id, []).append(f"files/{n}/{rel}")
+                room -= 1
+    lines = "\n".join(f"- {d.id}: {d.label} = {d.value}"
+                      + (f" (pictures: {', '.join(shown[d.id])})" if d.id in shown else "")
+                      + (" (locked: the person kept it)" if d.id in locked else "") for d in decisions)
     record = here / "asked.json"
     base = {"text": text, "round": round_, "asked": time.time()}
     record.write_text(json.dumps({**base, "marks": None}))
