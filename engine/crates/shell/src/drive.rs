@@ -289,6 +289,10 @@ impl<'a> Driver<'a> {
             Err(e) => return failed(format!("{EXCHANGE}/output.json is not JSON: {e}")),
         };
         let decl = &run.manifest.steps[i];
+        if decl.hidden {
+            // What a hidden step wrote must not stay where a later agent works.
+            let _gone = std::fs::remove_file(exchange.join("output.json"));
+        }
         let mut changed = Vec::new();
         let mut tree = Value::Null;
         if let (Some(copy), ProjectAccess::Write | ProjectAccess::Read) = (&self.setup.copy, decl.reach.project) {

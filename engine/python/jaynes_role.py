@@ -103,7 +103,7 @@ class _Step:
     schema: dict[str, Any]
     run: Callable[[dict[str, Any]], Any] | None = None
     items: Callable[[Any], list[dict[str, Any]]] | None = None
-    checks: dict[str, tuple[str, str, Callable[[dict[str, Any]], Any]]] = field(default_factory=dict)
+    checks: dict[str, tuple[str, str, list[str], Callable[[dict[str, Any]], Any]]] = field(default_factory=dict)
 
 
 class Role:
@@ -125,11 +125,13 @@ class Role:
                                  dict(schema or {"type": "object"}), run)
         return name
 
-    def check(self, step: str, name: str, *, kind: str = "open", about: str = "") -> Callable[[Callable[[dict[str, Any]], Any]], Callable[[dict[str, Any]], Any]]:
+    def check(self, step: str, name: str, *, kind: str = "open", about: str = "",
+              reads: list[str] | None = None) -> Callable[[Callable[[dict[str, Any]], Any]], Callable[[dict[str, Any]], Any]]:
         """A check of ``step``'s output. ``open``: the agent knows it and fixes a failure in place. ``hidden``: the
-        maker never sees it, and is told only the sentences of a failure."""
+        maker never sees it, and is told only the sentences of a failure. ``reads`` names earlier steps the check
+        reads besides what its step uses, such as hidden cases; they come in ``call["given"]``."""
         def add(fn: Callable[[dict[str, Any]], Any]) -> Callable[[dict[str, Any]], Any]:
-            self.steps[step].checks[name] = (kind, about, fn)
+            self.steps[step].checks[name] = (kind, about, list(reads or []), fn)
             return fn
         return add
 
@@ -147,7 +149,7 @@ class Role:
             d: dict[str, Any] = {"name": s.name, "needs": s.needs, "executor": s.executor, "session": s.session,
                                  "reach": s.reach, "effect": s.effect, "from_risk": s.from_risk,
                                  "attempts": s.attempts, "fixes": s.fixes, "hidden": s.hidden, "about": s.about,
-                                 "checks": [{"name": n, "kind": k, "about": a} for n, (k, a, _) in s.checks.items()]}
+                                 "checks": [{"name": n, "kind": k, "about": a, "reads": r} for n, (k, a, r, _) in s.checks.items()]}
             if s.stop is not None:
                 d["stop"] = {"verdicts": s.stop.verdicts, "holds": s.stop.holds, "from_risk": s.stop.from_risk,
                              "release": s.stop.release, "about": s.stop.about}
@@ -175,7 +177,7 @@ class Role:
             found = step.checks.get(str(request.get("check")))
             if found is None:
                 return {"reply": "error", "message": f"{step.name} has no check {request.get('check')}"}
-            return {"reply": "verdict", "verdict": _verdict(found[2](request))}
+            return {"reply": "verdict", "verdict": _verdict(found[3](request))}
         if call == "items":
             output = request.get("output")
             listed = step.items(output) if step.items else [{"id": step.name, "label": f"what {step.name} made",
@@ -186,11 +188,11 @@ class Role:
     def serve(self) -> None:
         """Answer the one request on standard input."""
         line = sys.stdin.readline()
+        request: dict[str, Any] = {}
         try:
             request = json.loads(line)
             body = self.handle(request)
         except Exception:  # the engine counts a role that cannot answer as its own fault, never the agent's
-            request = {}
             body = {"reply": "error", "message": traceback.format_exc(limit=5)[-2000:]}
         reply = {"jaynes": PROTOCOL, "id": request.get("id", ""), **body}
         sys.stdout.write(json.dumps(reply) + "\n")

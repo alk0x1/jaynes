@@ -23,7 +23,8 @@ person ── jaynes-engine (CLI today, the page next)
   the engine starts the role program per call, writes one request line, reads one reply line. Calls: `hello`,
   `describe`, `prompt`, `execute`, `check`, `items`. The role never decides what runs next and never writes what
   an answer will do. A role is correct when it passes `jaynes-engine conformance DIR`, not when it uses a library.
-- **Roles**: `engine/roles/small-change` is the first, in Python, using the Python engine's box for the suite.
+- **Roles**: `engine/roles/small-change` and `engine/roles/fix-bug`, in Python, using the Python engine's box for the
+  project's commands. fix-bug's docstring says what changed in the port.
 
 ## Core and packages
 
@@ -49,6 +50,11 @@ agent may know it. An open check (a field, a length, and also the project's own 
 itself) is listed in the prompt, and a failure goes back to the same agent session to be fixed in place (up to
 `fixes`, default 2), spending no attempt. A hidden check is never named to the agent; a failure tells it only the
 check's sentence and spends the attempt.
+
+**A check may read more than its step.** `reads` names earlier steps a check reads besides what its step uses,
+such as fix-bug's proof reading the hidden cases. Only a hidden check may read a hidden step; what a check reads
+counts for whether its step is fresh. Added for fix-bug, the first role that needed it. A hidden step may now
+read the project as it was, since no step before it has changed it.
 
 **Steps are gates, not agents.** `session = "continue"` lets an agent step go on in the session of the agent step
 before it. A fix in place resumes the same session. A hidden step never shares a session.
@@ -97,8 +103,7 @@ version, the protocol and the record's format.
 
 - The attention engine (sampled stops, the anytime-valid certification, the brake): every declared stop asks.
   It is a projection over the record and ports next.
-- The page; plans of runs; merging alone and Undo; the hidden proof helpers of build-feature and fix-bug; roles
-  other than small-change; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
+- The page; plans of runs; merging alone and Undo; build-feature and the design roles; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
   Code runs in `dontAsk`, so none arise yet).
 - Replaying the Python engine's 53 recorded runs as an oracle; the small model of the core with proofs.
 

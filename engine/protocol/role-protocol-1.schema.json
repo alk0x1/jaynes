@@ -92,6 +92,14 @@
         },
         "name": {
           "type": "string"
+        },
+        "reads": {
+          "default": [],
+          "description": "Earlier steps the check reads besides what its step uses, such as the hidden cases a proof runs. Only a\nhidden check may read a hidden step.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

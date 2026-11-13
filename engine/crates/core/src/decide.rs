@@ -511,7 +511,7 @@ impl Ctx {
                 if decl.checks.is_empty() {
                     self.checks_ended(step, attempt, fix, &[])?;
                 } else {
-                    let given = self.given(i);
+                    let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
                     let checks = decl.checks.iter().map(|c| c.name.clone()).collect();
                     self.command(Command::RunChecks { step: step.to_string(), attempt, fix, output: output.clone(), given, checks });
                 }
@@ -730,7 +730,7 @@ impl Ctx {
                 }
                 Status::Checking { attempt, fix } => {
                     if let Some(p) = self.run.steps[i].pending.clone() {
-                        let given = self.given(i);
+                        let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
                         let checks = decl.checks.iter().map(|c| c.name.clone()).collect();
                         self.command(Command::RunChecks { step: name, attempt, fix, output: p.output, given, checks });
                     }

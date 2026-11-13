@@ -420,6 +420,15 @@ impl Run {
     pub fn sources(&self, i: usize) -> Vec<usize> {
         let decl = &self.manifest.steps[i];
         let mut out: Vec<usize> = decl.needs.iter().filter_map(|n| self.manifest.index(n)).collect();
+        for c in &decl.checks {
+            for r in &c.reads {
+                if let Some(j) = self.manifest.index(r) {
+                    if !out.contains(&j) {
+                        out.push(j);
+                    }
+                }
+            }
+        }
         if decl.reach.project != ProjectAccess::None {
             for j in self.path() {
                 if j < i && self.manifest.steps[j].reach.project == ProjectAccess::Write && !out.contains(&j) {

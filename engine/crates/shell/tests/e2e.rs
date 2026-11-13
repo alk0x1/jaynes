@@ -195,3 +195,51 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     assert!(t.contains(&"Halted".to_string()), "{t:?}");
     assert!(!t.contains(&"Delivered".to_string()), "nothing is delivered while halted: {t:?}");
 }
+
+fn bug_project(name: &str) -> Scratch {
+    let s = scratch(name);
+    std::fs::write(s.project.join("greet.sh"), "echo \"hello $1\"\n").expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tfor t in tests/*.sh; do [ -e \"$$t\" ] || continue; sh \"$$t\" || exit 1; done\n").expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "bug"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    s
+}
+
+#[test]
+fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
+    let s = bug_project("fixbug");
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let role = root().join("roles/fix-bug");
+    let out = Command::new(BIN)
+        .args(["start", "--run", "fixbug", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PROMPTS", &prompts)
+        .output()
+        .expect("start");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(said.contains("delivered: jaynes/fixbug"), "{said}");
+    let e = events(&s, "fixbug");
+    // the incomplete fix passed the open checks and was caught by the hidden one, spending one attempt
+    let failed: Vec<&Value> = e.iter().filter(|e| e["type"] == "AttemptFailed" && e["step"] == "fix").collect();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0]["reasons"][0], "A check you cannot see found that this does not hold: greet says hi with the name");
+    // G3: no prompt but the hidden step's own shows the case's command, and no agent was told the check's name
+    let mut seen_sentence = false;
+    for f in std::fs::read_dir(&prompts).expect("prompts").flatten() {
+        let p = std::fs::read_to_string(f.path()).expect("read");
+        if p.contains("# Your step: cases") {
+            continue;
+        }
+        assert!(!p.contains("grep -q") && !p.contains("proof"), "a prompt leaked the hidden check:\n{p}");
+        seen_sentence |= p.contains("greet says hi with the name");
+    }
+    assert!(seen_sentence, "the second fix was told the sentence of the failed case");
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/fixbug:greet.sh"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "echo \"hi $1\"\n");
+}

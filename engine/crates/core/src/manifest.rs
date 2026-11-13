@@ -139,6 +139,10 @@ pub struct CheckDecl {
     /// What the check holds the output to. For an open check the agent reads it before it delivers.
     #[serde(default)]
     pub about: String,
+    /// Earlier steps the check reads besides what its step uses, such as the hidden cases a proof runs. Only a
+    /// hidden check may read a hidden step.
+    #[serde(default)]
+    pub reads: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -223,6 +227,19 @@ impl Manifest {
                 if !names.insert(&c.name) {
                     errors.push(format!("{at} has two checks named {}", c.name));
                 }
+                for r in &c.reads {
+                    match self.index(r) {
+                        Some(j) if j < i => {
+                            if self.steps[j].hidden && c.kind != CheckKind::Hidden {
+                                errors.push(format!("{at}: the check {} reads hidden {r}, so it must be hidden", c.name));
+                            }
+                            if self.steps[j].from_risk > s.from_risk {
+                                errors.push(format!("{at}: the check {} reads {r}, which a run at its risk does not take", c.name));
+                            }
+                        }
+                        _ => errors.push(format!("{at}: the check {} reads {r}, which is not an earlier step", c.name)),
+                    }
+                }
             }
             if s.attempts == 0 {
                 errors.push(format!("{at} allows no attempt"));
@@ -280,8 +297,9 @@ impl Manifest {
                 if s.executor != Executor::Agent {
                     errors.push(format!("{at} is hidden and is not an agent's"));
                 }
-                if !s.needs.is_empty() || s.reach.project != ProjectAccess::None {
-                    errors.push(format!("{at} is hidden and reads more than the request"));
+                // It may read the project as it was: no step before it has changed it.
+                if !s.needs.is_empty() || s.reach.project == ProjectAccess::Write {
+                    errors.push(format!("{at} is hidden and reads more than the request and the project as it was"));
                 }
                 if first_writer.is_some_and(|w| w < i) {
                     errors.push(format!("{at} is hidden and comes after a step that changes the project"));

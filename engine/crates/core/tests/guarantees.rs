@@ -80,7 +80,12 @@ fn role(rng: &mut Rng) -> Manifest {
                         CheckKind::Open => format!("shapecheck{i}x{k}"),
                         CheckKind::Hidden => format!("hiddencheck{i}x{k}"),
                     };
-                    checks.push(CheckDecl { name, kind, about: format!("holds {k}") });
+                    // a hidden check sometimes reads an earlier hidden step, as a proof reads its cases
+                    let reads: Vec<String> = match kind {
+                        CheckKind::Hidden => steps.iter().filter(|s| s.hidden && rng.chance(70)).map(|s| s.name.clone()).collect(),
+                        CheckKind::Open => Vec::new(),
+                    };
+                    checks.push(CheckDecl { name, kind, about: format!("holds {k}"), reads });
                 }
             }
             let stop = if executor == Executor::Person || rng.chance(45) {
@@ -99,7 +104,7 @@ fn role(rng: &mut Rng) -> Manifest {
                 (Executor::Agent | Executor::Role, 1) => Effect::Confined,
                 _ => Effect::None,
             };
-            let hidden = executor == Executor::Agent && needs.is_empty() && project == ProjectAccess::None && rng.chance(20);
+            let hidden = executor == Executor::Agent && needs.is_empty() && project != ProjectAccess::Write && rng.chance(20);
             let session = if executor == Executor::Agent && rng.chance(30) { SessionKind::Continue } else { SessionKind::Fresh };
             steps.push(StepDecl {
                 name: format!("s{i}"),
@@ -406,6 +411,7 @@ fn really_fresh(run: &Run, i: usize) -> bool {
     let Some(done) = (s.status == Status::Done).then_some(s.done.as_ref()).flatten() else { return false };
     let decl = &run.manifest.steps[i];
     let mut used: BTreeSet<String> = decl.needs.iter().cloned().collect();
+    used.extend(decl.checks.iter().flat_map(|c| c.reads.iter().cloned()));
     if decl.reach.project != ProjectAccess::None {
         for j in run.manifest.path(run.risk) {
             if j < i && run.manifest.steps[j].reach.project == ProjectAccess::Write {
@@ -427,7 +433,7 @@ fn rests_on_unconfirmed(run: &Run, i: usize) -> bool {
     let mut stack = vec![i];
     while let Some(k) = stack.pop() {
         let decl = &run.manifest.steps[k];
-        let mut used: Vec<usize> = decl.needs.iter().filter_map(|n| run.manifest.index(n)).collect();
+        let mut used: Vec<usize> = decl.needs.iter().chain(decl.checks.iter().flat_map(|c| c.reads.iter())).filter_map(|n| run.manifest.index(n)).collect();
         if decl.reach.project != ProjectAccess::None {
             used.extend(run.manifest.path(run.risk).into_iter().filter(|&j| j < k && run.manifest.steps[j].reach.project == ProjectAccess::Write));
         }
@@ -955,7 +961,7 @@ fn g4_a_box_that_refuses_spends_no_attempt() {
 #[test]
 fn a_failed_shape_check_is_fixed_in_the_same_session() {
     let mut build = step("build", Executor::Agent);
-    build.checks = vec![CheckDecl { name: "short".to_string(), kind: CheckKind::Open, about: "at most 80 characters".to_string() }];
+    build.checks = vec![CheckDecl { name: "short".to_string(), kind: CheckKind::Open, about: "at most 80 characters".to_string(), reads: Vec::new() }];
     let (mut run, cmds) = start(vec![build]);
     probe_ok(&mut run, cmds);
     deliver(&mut run, "build", 1, "long", Vec::new());
