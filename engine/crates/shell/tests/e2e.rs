@@ -271,7 +271,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
     let port = 18750 + (std::process::id() % 1000) as u16;
-    let mut page = Command::new(BIN)
+    let _page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -279,6 +279,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
         .env("JAYNES_PAGE_KEY", "k3y")
         .stderr(std::process::Stdio::null())
         .spawn()
+        .map(Page)
         .expect("page");
     std::thread::sleep(std::time::Duration::from_millis(500));
     // another address is refused, the key sets a cookie, and the question is on the page
@@ -309,7 +310,6 @@ fn the_page_answers_as_the_person_only_with_its_key() {
             break;
         }
     }
-    let _killed = page.kill();
     assert!(finished, "{:?}", types(&events(&s, "page")));
     let answered = events(&s, "page").into_iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
     assert_eq!(answered["answer"]["by"]["by"], "person");
@@ -427,7 +427,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "acts", &agent);
     let port = 19750 + (std::process::id() % 1000) as u16;
-    let mut page = Command::new(BIN)
+    let _page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -435,11 +435,12 @@ fn the_page_halts_resumes_and_records_a_correction() {
         .env("JAYNES_PAGE_KEY", "k3y")
         .stderr(std::process::Stdio::null())
         .spawn()
+        .map(Page)
         .expect("page");
     std::thread::sleep(std::time::Duration::from_millis(500));
     let me = "jaynes_key=k3y";
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
-    assert!(view.contains("Attempts spent") && view.contains("data-act=\"halt\""), "{view}");
+    assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you") && view.contains("data-act=\"halt\""), "{view}");
     // an agent may halt, only the person resumes
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"halt"}"#, "")["ok"], true);
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -451,7 +452,6 @@ fn the_page_halts_resumes_and_records_a_correction() {
     assert_eq!(r["ok"], true, "{r}");
     std::thread::sleep(std::time::Duration::from_millis(500));
     let version = http(port, &format!("GET /api/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
-    let _killed = page.kill();
     assert!(version.contains("\"seq\""), "{version}");
     let t = types(&events(&s, "acts"));
     for want in ["Halted", "Resumed", "DeliveryCorrected"] {
@@ -605,16 +605,16 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
                                  "--request", "make looks", "--agent", &format!("command:{agent}")]);
     assert!(ok && out.contains("Which looks go on?"), "{out}");
     let port = 20750 + (std::process::id() % 1000) as u16;
-    let mut page = Command::new(BIN)
+    let _page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PAGE_KEY", "k3y")
         .stderr(std::process::Stdio::null())
         .spawn()
+        .map(Page)
         .expect("page");
     std::thread::sleep(std::time::Duration::from_millis(500));
     let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
-    let _killed = page.kill();
     assert!(html.contains("ink on newsprint"), "the item's sentence is shown");
     assert!(html.contains("<img src=\"data:image/svg+xml;base64,"), "the item's picture is shown");
     // the picture was kept by its fingerprint, apart from the run's copy
@@ -729,4 +729,14 @@ fn abandoning_a_run_stops_its_agent_at_once() {
     let _done = run.wait();
     assert!(!mark.join("finished").exists());
     assert!(types(&events(&s, "abandon")).contains(&"RunFinished".to_string()));
+}
+
+/// A page process that dies with its test, even when the test panics, so it never holds the test's output open.
+struct Page(std::process::Child);
+
+impl Drop for Page {
+    fn drop(&mut self) {
+        let _killed = self.0.kill();
+        let _reaped = self.0.wait();
+    }
 }

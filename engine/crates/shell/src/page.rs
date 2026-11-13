@@ -340,6 +340,78 @@ fn strip(r: &Run) -> String {
     format!("<div class=\"strip\">{marks}</div>")
 }
 
+/// Who does a step and whether it asks the person, in a few words, as the earlier page said it.
+fn who(d: &jaynes_core::manifest::StepDecl, r: &Run) -> String {
+    use jaynes_core::manifest::Executor;
+    let by = match d.executor {
+        Executor::Agent => "agent",
+        Executor::Role => "Jaynes",
+        Executor::Person => "",
+    };
+    let asks = match &d.stop {
+        Some(s) if s.from_risk > r.risk => "",
+        Some(s) if s.release => "you or an agent",
+        Some(s) if s.budget.is_some() => "sometimes you",
+        Some(_) => "you",
+        None => "",
+    };
+    [by, asks].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join(", then ")
+}
+
+/// The run's steps top to bottom: who does each, what the role says it does, and where it is, as the earlier
+/// page showed them.
+fn stage_list(r: &Run) -> String {
+    use jaynes_core::manifest::Executor;
+    use jaynes_core::question::By;
+    use jaynes_core::run::Status;
+    let path = r.path();
+    let blocked = match &r.phase {
+        Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
+        _ => None,
+    };
+    let rows: String = r
+        .manifest
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let s = &r.steps[i];
+            let tries = format!("{} attempt{}", s.attempt, if s.attempt == 1 { "" } else { "s" });
+            let round = if s.round > 0 { format!(", round {}", s.round + 1) } else { String::new() };
+            let answer = s.question.as_ref().and_then(|q| r.questions.get(q)).and_then(|q| q.answer.clone());
+            let (class, detail) = if !path.contains(&i) {
+                ("todo", "left out at this risk".to_string())
+            } else if blocked == Some(d.name.as_str()) {
+                ("blocked", format!("blocked, {tries}"))
+            } else {
+                match &s.status {
+                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running, attempt {attempt}{round}")),
+                    Status::Probing if !r.finished() => ("running", "testing what it reaches".to_string()),
+                    Status::AwaitingInput { .. } => ("waiting", format!("waiting for you{round}")),
+                    Status::Done if r.fresh(i) && r.open_question(i).is_some() => ("waiting", format!("waiting for you{round}")),
+                    Status::Done if r.fresh(i) && s.skipped == Some(s.round) => ("sampled", "not asked, sampled".to_string()),
+                    Status::Done if r.fresh(i) => match (&answer, d.executor) {
+                        (Some(a), _) if matches!(a.by, By::Agent { .. }) => ("checked", "an agent let it go on".to_string()),
+                        (Some(_), Executor::Person) => ("accepted", "you answered".to_string()),
+                        (Some(_), _) => ("accepted", format!("you kept it, {tries}")),
+                        (None, Executor::Role) => ("jaynes", "by jaynes".to_string()),
+                        (None, _) => ("checked", format!("checked, {tries}{round}")),
+                    },
+                    _ if matches!(&r.phase, Phase::Waiting { step: Some(w), .. } if *w == d.name) => ("waiting", "waiting for you".to_string()),
+                    _ if s.done.is_some() => ("todo", format!("to run again{round}")),
+                    _ => ("todo", String::new()),
+                }
+            };
+            let mark = who(d, r);
+            let mark = if mark.is_empty() { String::new() } else { format!("<span class=\"who\">{}</span>", esc(&mark)) };
+            let about = if d.about.is_empty() { String::new() } else { format!("<p class=\"about\">{}</p>", esc(&d.about)) };
+            let detail = if detail.is_empty() { String::new() } else { format!("<small>{}</small>", esc(&detail)) };
+            format!("<li class=\"{class}\"><span class=\"dot\"></span><div><div class=\"r\"><b>{}{mark}</b></div>{about}{detail}</div></li>", esc(&d.name))
+        })
+        .collect();
+    format!("<ul class=\"stages told\">{rows}</ul>")
+}
+
 /// Where a run is, in words: the step it is on, of how many.
 fn where_in(r: &Run) -> String {
     let path = r.path();
@@ -373,44 +445,8 @@ fn phase_word(r: &Run) -> String {
 
 /// A run: where it is, what it cost, its steps, and what the person may do to it.
 fn run_html(r: &Run) -> String {
-    use jaynes_core::run::Status;
     let path = r.path();
-    let steps: String = r
-        .manifest
-        .steps
-        .iter()
-        .enumerate()
-        .map(|(i, d)| {
-            let s = &r.steps[i];
-            let busy = matches!(s.status, Status::Running { .. } | Status::Checking { .. } | Status::Probing);
-            let state = if !path.contains(&i) {
-                "left out at this risk".to_string()
-            } else if r.finished() && busy {
-                "stopped when the run finished".to_string()
-            } else if s.skipped == Some(s.round) && s.status == Status::Done {
-                "done · sampled, not asked".to_string()
-            } else {
-                match &s.status {
-                    Status::Done if r.fresh(i) => "done".into(),
-                    Status::Done => "to run again".into(),
-                    Status::Running { attempt, fix } => format!("running · attempt {attempt}{}", if *fix > 0 { format!(", fix {fix}") } else { String::new() }),
-                    Status::Checking { .. } => "checking".into(),
-                    Status::Probing => "testing what it reaches".into(),
-                    Status::AwaitingInput { .. } => "asks you".into(),
-                    Status::Idle if s.done.is_some() => "to run again".into(),
-                    Status::Idle => "not yet".into(),
-                }
-            };
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                esc(&d.name),
-                format!("{:?}", d.executor).to_lowercase(),
-                s.round,
-                s.spent,
-                esc(&state)
-            )
-        })
-        .collect();
+    let steps = stage_list(r);
     let phase = match &r.phase {
         Phase::Blocked { reason, fault, .. } => format!("<div class=\"notice bad\">Blocked ({}): {}</div>", format!("{fault:?}").to_lowercase(), esc(reason)),
         Phase::Waiting { why, .. } => format!("<div class=\"notice\">{}</div>", esc(why)),
@@ -452,7 +488,7 @@ fn run_html(r: &Run) -> String {
     format!(
         "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
-         <table class=\"steps\"><tr><th>Step</th><th>By</th><th>Round</th><th>Attempts spent</th><th>State</th></tr>{steps}</table>\
+         {steps}\
          <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div><script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
         version = esc(&r.manifest.version),
@@ -568,7 +604,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     format!(
         "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
-         {rows}<script id=\"data\" type=\"application/json\">{data}</script>",
+         {rows}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
@@ -576,6 +612,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         n = path.len(),
         title = esc(&title(q)),
         strip = strip(run),
+        stages = stage_list(run),
         data = data.replace('<', "\\u003c"),
     )
 }
@@ -651,6 +688,27 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min-width:3px; }
 .strip i.waiting { background:var(--amber); } .strip i.blocked { background:var(--red); } .strip i.running { background:var(--blue); }
 .strip i.todo { background:var(--line-2); } .strip i.sampled { background:none; box-shadow:inset 0 0 0 1px var(--green); }
+.stages { list-style:none; margin:8px 0 18px; padding:0; }
+.stages li { display:grid; grid-template-columns:14px 1fr; gap:10px; padding:5px 0; position:relative; }
+.stages li::before { content:""; position:absolute; left:6px; top:18px; bottom:-6px; width:1px; background:var(--line-2); }
+.stages li:last-child::before { display:none; }
+.stages .dot { width:9px; height:9px; border-radius:50%; margin:6px 0 0 2px; background:var(--green); position:relative; z-index:1; }
+.stages .waiting .dot { background:var(--amber); box-shadow:0 0 0 4px var(--amber-soft); }
+.stages .blocked .dot { background:var(--red); box-shadow:0 0 0 4px var(--red-soft); }
+.stages .running .dot { background:var(--blue); box-shadow:0 0 0 4px var(--blue-soft); }
+.stages .todo .dot { background:var(--bg); box-shadow:inset 0 0 0 1px var(--line-2); }
+.stages .sampled .dot { background:var(--bg); box-shadow:inset 0 0 0 1.5px var(--green); }
+.stages .accepted .dot { box-shadow:0 0 0 3px var(--green-soft); }
+.stages .r { display:flex; justify-content:space-between; gap:8px; }
+.stages b { font-family:var(--mono); font-size:12px; font-weight:500; }
+.stages small { font-family:var(--mono); font-size:11px; color:var(--dim); display:block; }
+.stages .todo b { color:var(--faint); font-weight:400; }
+.stages .waiting b, .stages .waiting small { color:var(--amber); }
+.stages .blocked b, .stages .blocked small { color:var(--red); }
+.stages.told li { padding:6px 0; }
+.stages .who { font-family:var(--mono); font-weight:400; color:var(--faint); margin-left:10px; font-size:11px; }
+.stages .about { margin:1px 0 0; font-size:13px; line-height:1.45; color:var(--dim); max-width:64ch; }
+details.way { margin-top:18px; border-top:1px solid var(--line); padding-top:10px; } details.way summary { cursor:pointer; color:var(--dim); font-size:13px; }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
