@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 
 /// The library for writing a role in Python, in the program itself, so an installed Jaynes needs no source folder.
 const LIBRARY: &str = include_str!("../../../python/jaynes_role.py");
+/// The box and the test runners roles use for a project's own commands.
+const BOX: &str = include_str!("../../../python/jaynes_box.py");
 
 /// Where Jaynes is published, for `jaynes update` and for the roles that come with it.
 pub const SOURCE: &str = "https://github.com/alk0x1/jaynes";
@@ -19,10 +21,12 @@ pub fn library(home: &Path) -> PathBuf {
         return PathBuf::from(dir);
     }
     let dir = home.join("library");
-    let file = dir.join("jaynes_role.py");
-    if std::fs::read_to_string(&file).ok().as_deref() != Some(LIBRARY) {
-        let _made = std::fs::create_dir_all(&dir);
-        let _written = std::fs::write(&file, LIBRARY);
+    for (name, text) in [("jaynes_role.py", LIBRARY), ("jaynes_box.py", BOX)] {
+        let file = dir.join(name);
+        if std::fs::read_to_string(&file).ok().as_deref() != Some(text) {
+            let _made = std::fs::create_dir_all(&dir);
+            let _written = std::fs::write(&file, text);
+        }
     }
     dir
 }
@@ -118,11 +122,10 @@ pub fn list(home: &Path) -> Vec<(String, String, String, String)> {
 /// The page's key, kept under the home so the page's address stays the same across its restarts.
 pub fn page_key(home: &Path) -> String {
     let file = home.join("page.key");
-    if let Ok(k) = std::fs::read_to_string(&file) {
-        if k.trim().len() >= 16 {
+    if let Ok(k) = std::fs::read_to_string(&file)
+        && k.trim().len() >= 16 {
             return k.trim().to_string();
         }
-    }
     let k = crate::page::key();
     let _made = std::fs::create_dir_all(home);
     let _written = std::fs::write(&file, &k);

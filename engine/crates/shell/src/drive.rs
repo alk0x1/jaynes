@@ -70,12 +70,11 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
 pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'static str, String> {
     jaynes_core::decide(Some(run), &input).map_err(|r| r.0)?;
     let mut store = Store::open(&home.join("record.sqlite3"))?;
-    if let Input::Answer { answer } = &input {
-        if run.questions.get(&answer.question).is_some_and(|q| q.question.kind == jaynes_core::question::QuestionKind::Permission) {
+    if let Input::Answer { answer } = &input
+        && run.questions.get(&answer.question).is_some_and(|q| q.question.kind == jaynes_core::question::QuestionKind::Permission) {
             store.decide(&run.id, &input)?;
             return Ok("now");
         }
-    }
     let dir = home.join("runs").join(&run.id);
     let lock = File::create(dir.join("lock")).map_err(|e| e.to_string())?;
     if lock.try_lock().is_ok() {

@@ -126,9 +126,10 @@ impl RoleProgram {
     pub fn fingerprint(&self) -> Result<Digest, String> {
         let mut files: Vec<(String, Digest)> = Vec::new();
         collect(&self.dir, &self.dir, &mut files)?;
-        let lib = self.library.join("jaynes_role.py");
-        if let Ok(bytes) = std::fs::read(&lib) {
-            files.push(("<library>/jaynes_role.py".to_string(), Digest::of_bytes(&bytes)));
+        for name in ["jaynes_role.py", "jaynes_box.py"] {
+            if let Ok(bytes) = std::fs::read(self.library.join(name)) {
+                files.push((format!("<library>/{name}"), Digest::of_bytes(&bytes)));
+            }
         }
         files.sort();
         Ok(Digest::of_json(&files))
@@ -141,9 +142,11 @@ impl RoleProgram {
         if !dir.exists() {
             copy_dir(&self.dir, &dir)?;
             std::fs::create_dir_all(&lib).map_err(|e| e.to_string())?;
-            let from = self.library.join("jaynes_role.py");
-            if from.is_file() {
-                std::fs::copy(&from, lib.join("jaynes_role.py")).map_err(|e| e.to_string())?;
+            for name in ["jaynes_role.py", "jaynes_box.py"] {
+                let from = self.library.join(name);
+                if from.is_file() {
+                    std::fs::copy(&from, lib.join(name)).map_err(|e| e.to_string())?;
+                }
             }
         }
         Ok(RoleProgram { dir, library: lib, timeout: self.timeout, pidfile: None })

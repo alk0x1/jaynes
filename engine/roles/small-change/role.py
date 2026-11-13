@@ -2,16 +2,15 @@
 suite, with no stop. When the rules in code find the change is not small (more lines or files than a small one, or
 a file that runs later outside any box), the run's risk goes up and the person sees the change.
 
-The suite runs in the Python engine's box (``jaynes.suite``), on a copy of the run's project: this role is on the
-other side of the protocol, so it may use any library.
+The suite runs in the box of ``jaynes_box``, which comes with the role library, on a copy of the run's project.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import jaynes_box as box
 from jaynes_role import Blocked, Fail, Pass, Refused, Role, Stop
 
 role = Role("small-change", version="2.0.0")
@@ -22,11 +21,7 @@ def find_suite(call: dict[str, Any]) -> Any:
     project = call.get("project")
     if not project:
         return Refused("small-change needs a project")
-    try:
-        from jaynes import runners
-    except ImportError:
-        return {"command": ""}
-    found = runners.detect(Path(project), "")
+    found = box.detect(Path(project), "")
     return {"command": found.suite if found else ""}
 
 
@@ -60,13 +55,6 @@ def has_summary(call: dict[str, Any]) -> Any:
     return Pass()
 
 
-@dataclass
-class _Needs:
-    project: Path
-    source: Path | None
-    hidden: tuple[Path, ...] = ()
-
-
 @role.check("change", "suite", kind="open", about="the project's whole suite passes, run by Jaynes without internet")
 def suite(call: dict[str, Any]) -> Any:
     given = {g["step"]: g["output"] for g in call.get("given") or []}
@@ -76,17 +64,12 @@ def suite(call: dict[str, Any]) -> Any:
     if not call.get("project"):
         return Blocked("the check has no copy of the project to run the suite on")
     try:
-        from jaynes import sandbox
-        from jaynes import suite as boxed
-    except ImportError as e:
-        return Blocked(f"the box that runs the suite is not installed: {e}")
-    needs = _Needs(Path(call["project"]), Path(call["source"]) if call.get("source") else None)
-    try:
-        ran = boxed.run(needs, command)  # type: ignore[arg-type]
-    except sandbox.Unavailable as e:
+        ran = box.run(Path(call["project"]), command, source=Path(call["source"]) if call.get("source") else None)
+    except box.Unavailable as e:
         return Blocked(f"there is no box to run the suite in: {e}")
-    if "Operation not permitted" in ran.printed and ran.code != 0 and "sandbox" in ran.printed.lower():
-        return Blocked(f"the box refused something the suite needs: {ran.output[-600:]}")
+    if box.refused(ran):
+        return Blocked("the box refused what the suite tried, so its failure says nothing about the project: "
+                       + "; ".join(box.refused(ran)[:3]))
     if ran.code != 0:
         return Fail(f"the suite fails: {command} exited with {ran.code}. The end of what it printed:\n{ran.output}")
     return Pass()

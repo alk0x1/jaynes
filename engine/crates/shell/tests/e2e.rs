@@ -11,9 +11,9 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// The system's Python: roles need nothing of the Python engine, only the library inside the program.
 fn python() -> String {
-    let venv = root().join("../.venv/bin/python");
-    if venv.is_file() { venv.display().to_string() } else { "python3".to_string() }
+    "python3".to_string()
 }
 
 struct Scratch {
@@ -40,7 +40,7 @@ fn engine(s: &Scratch, args: &[&str]) -> (bool, String) {
         .args(args)
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
-        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PYTHONPATH", "")
         .output()
         .expect("engine");
     (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
@@ -179,7 +179,7 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
-        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PYTHONPATH", "")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -218,7 +218,7 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
                "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
-        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PYTHONPATH", "")
         .env("PROMPTS", &prompts)
         .output()
         .expect("start");
@@ -275,7 +275,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
-        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PYTHONPATH", "")
         .env("JAYNES_PAGE_KEY", "k3y")
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -321,7 +321,7 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let role = root().join("roles/fix-bug");
     let env = |c: &mut Command| {
-        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts);
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
     };
     let mut c = Command::new(BIN);
     c.args(["start", "--run", "redo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
@@ -369,7 +369,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
-        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PYTHONPATH", "")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -428,7 +428,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
-        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("PYTHONPATH", "")
         .env("JAYNES_PAGE_KEY", "k3y")
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -491,7 +491,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let run = Command::new(BIN)
         .args(["start", "--run", "leave", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
-        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src"))
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().expect("start");
     for _ in 0..100 {
@@ -553,7 +553,7 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
     let out = Command::new(BIN)
         .args(["start", "--run", run, "--role", root().join("roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
-        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
         .output().expect("start");
     format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
 }

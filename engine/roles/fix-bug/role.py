@@ -11,16 +11,17 @@ Ported from the Python engine's package (``packages/software/fix_bug.py``). What
   so the person sees it, instead of two agents settling it first.
 - The fix is merged by Jaynes into the branch the run started from, never pushed; Undo on the run's page reverts it.
 
-The suite runs in the Python engine's box (``jaynes.suite``), on a copy of the run's project.
+The suite and the cases run in the box of ``jaynes_box``, which comes with the role library, on a copy of the
+run's project.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import jaynes_box as box
 from jaynes_role import Blocked, Fail, Pass, Refused, Role, Stop
 
 role = Role("fix-bug", version="2.0.0", delivery="merge")
@@ -49,36 +50,27 @@ WRITE_CASES = (
     "in a sentence each, what the task asks that no command can check from outside. Change no file.")
 
 
-@dataclass
-class _Needs:
-    project: Path
-    source: Path | None
-    hidden: tuple[Path, ...] = ()
-
-
 def _given(call: dict[str, Any]) -> dict[str, Any]:
     return {g["step"]: g["output"] for g in call.get("given") or []}
 
 
 def _box(call: dict[str, Any], command: str, timeout: float = 600.0) -> Any:
-    """Run ``command`` on a copy of the run's project in the box: a ``jaynes.suite.Ran``, or ``Blocked``."""
+    """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``."""
     if not call.get("project"):
         return Blocked("the check has no copy of the project")
     try:
-        from jaynes import sandbox
-        from jaynes import suite
-    except ImportError as e:
-        return Blocked(f"the box that runs the project's commands is not installed: {e}")
-    needs = _Needs(Path(call["project"]), Path(call["source"]) if call.get("source") else None)
-    try:
-        return suite.run(needs, command, timeout=timeout)  # type: ignore[arg-type]
-    except sandbox.Unavailable as e:
+        ran = box.run(Path(call["project"]), command, source=Path(call["source"]) if call.get("source") else None,
+                      timeout=timeout)
+    except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
+    if box.refused(ran):
+        return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
+                       + "; ".join(box.refused(ran)[:3]))
+    return ran
 
 
 def _for_files(runner: dict[str, Any], tests: list[str]) -> str:
-    from jaynes import runners
-    return runners.for_files(runners.Runner(**runner), tests)
+    return box.for_files(box.Runner.from_dict(runner), tests)
 
 
 def _allowed(path: str, globs: list[str]) -> bool:
@@ -89,11 +81,10 @@ def _allowed(path: str, globs: list[str]) -> bool:
 # --- the steps ------------------------------------------------------------------------------------------------
 
 def find_runner(call: dict[str, Any]) -> Any:
-    from jaynes import runners
-    found = runners.detect(Path(call["project"]), "") if call.get("project") else None
+    found = box.detect(Path(call["project"]), "") if call.get("project") else None
     if found is None:
         return Refused(NO_RUNNER)
-    return found.model_dump()
+    return found.to_dict()
 
 
 role.step("runner", executor="role", reach={"project": "read"}, attempts=1, run=find_runner,
