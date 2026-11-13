@@ -251,6 +251,16 @@ impl Run {
                     s.status = Status::Idle;
                 }
             }
+            Event::AttemptImpossible { step, usage, session, .. } => {
+                self.spent.add(*usage);
+                if let Some(s) = self.step_mut(step) {
+                    s.pending = None;
+                    s.status = Status::Idle;
+                    if session.is_some() {
+                        s.session = session.clone();
+                    }
+                }
+            }
             Event::AttemptInterrupted { step, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.pending = None;
@@ -344,6 +354,10 @@ impl Run {
                 if let Status::AwaitingInput { question: waiting } = &s.status {
                     if *waiting == question.id {
                         s.status = Status::Idle;
+                        // an agent goes on from the person's words; a role step reads its answers itself
+                        if executor == Executor::Agent {
+                            s.notes.extend(crate::decide::notes(&question, answer));
+                        }
                     }
                     return;
                 }

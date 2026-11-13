@@ -838,3 +838,41 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
     installed(&"b".repeat(40));
     assert!(get("/home").contains("Restart the page"));
 }
+
+#[test]
+fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_their_words() {
+    let s = scratch("impossible");
+    let prompts = s.home.parent().expect("base").join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    // first turn: it cannot be done as asked; second turn, in the same session: it does what the person said
+    let agent = format!(
+        "cat > {p}/turn-${{JAYNES_SESSION:-1}}; if [ -n \"$JAYNES_SESSION\" ]; then sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}; else echo 'the request asks for hi and for hello at once' > .jaynes/impossible.txt; echo '{{\"session\":\"s1\"}}'; fi",
+        p = prompts.display()
+    );
+    let out = start(&s, "impossible", &agent);
+    assert!(out.contains("cannot be done as asked"), "{out}");
+    let first = std::fs::read_to_string(prompts.join("turn-1")).expect("prompt");
+    assert!(first.contains(".jaynes/impossible.txt"), "the agent is told the way out: {first}");
+    let e = events(&s, "impossible");
+    assert!(e.iter().any(|e| e["type"] == "AttemptImpossible"), "{:?}", types(&e));
+    let q = e.iter().rfind(|e| e["type"] == "InputNeeded").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let answered = Command::new("script")
+        .args(["-q", "/dev/null", BIN, "answer", "impossible", &q, "impossible=change:only hi", "--send"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .output().expect("answer");
+    assert!(answered.status.success(), "{}", String::from_utf8_lossy(&answered.stdout));
+    let mut finished = false;
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if events(&s, "impossible").iter().any(|e| e["type"] == "RunFinished") {
+            finished = true;
+            break;
+        }
+    }
+    let e = events(&s, "impossible");
+    assert!(finished, "{:?}", types(&e));
+    let second = std::fs::read_to_string(prompts.join("turn-s1")).expect("the second turn resumed the session");
+    assert!(second.contains("only hi"), "{second}");
+    let spent: u64 = e.iter().filter(|e| e["type"] == "AttemptFailed" && e["spent"] == true).count() as u64;
+    assert_eq!(spent, 0, "saying so spent no attempt");
+}

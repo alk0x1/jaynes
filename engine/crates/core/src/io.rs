@@ -123,6 +123,14 @@ pub enum AttemptOutcome {
     },
     /// A role step cannot be done, for a reason of the role's.
     Refused { reason: String },
+    /// An agent says the step cannot be done as asked, and why: the person answers how to go on. It is not a
+    /// failure, so it spends no attempt.
+    Impossible {
+        reason: String,
+        usage: Usage,
+        #[serde(default)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

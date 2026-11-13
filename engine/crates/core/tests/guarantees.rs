@@ -444,7 +444,7 @@ impl World {
         }
         // G5: every accepted report's time and tokens are counted.
         if !events.iter().any(|e| matches!(e, Event::StaleReport { .. }))
-            && let Input::AttemptEnded { outcome: AttemptOutcome::Delivered { usage, .. } | AttemptOutcome::Failed { usage, .. }, .. } = input {
+            && let Input::AttemptEnded { outcome: AttemptOutcome::Delivered { usage, .. } | AttemptOutcome::Failed { usage, .. } | AttemptOutcome::Impossible { usage, .. }, .. } = input {
                 self.usage.add(*usage);
             }
         assert_eq!(post.spent, self.usage, "seed {seed}: G5 the run's spending differs from what was reported");
@@ -585,7 +585,8 @@ impl World {
                         usage: usage(&mut self.rng),
                         session: Some(format!("session-{}", turn.step)),
                     },
-                    72..=88 => AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: usage(&mut self.rng) },
+                    72..=85 => AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: usage(&mut self.rng) },
+                    86..=88 => AttemptOutcome::Impossible { reason: "the request contradicts itself".to_string(), usage: usage(&mut self.rng), session: Some(format!("session-{}", turn.step)) },
                     89..=94 => AttemptOutcome::Fault { reason: "claude did not start".to_string() },
                     _ => AttemptOutcome::Interrupted { reason: "quota".to_string() },
                 };
@@ -1143,6 +1144,42 @@ fn g9_a_routine_leave_is_granted_by_a_rule_and_recorded() {
     assert_eq!(routine(&reads, &Ask { kind: AskKind::Command, target: "make test".to_string() }), None, "a step that runs no commands");
     let runs = Reach { commands: true, ..reads };
     assert_eq!(routine(&runs, &Ask { kind: AskKind::Command, target: "make test".to_string() }), Some(jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN));
+}
+
+#[test]
+fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_attempt() {
+    let (mut run, cmds) = start(vec![step("build", Executor::Agent)]);
+    probe_ok(&mut run, cmds);
+    let c = feed(&mut run, Input::AttemptEnded {
+        step: "build".to_string(),
+        attempt: 1,
+        fix: 0,
+        outcome: AttemptOutcome::Impossible {
+            reason: "the tests ask for two answers that contradict each other".to_string(),
+            usage: Usage { seconds: 30, tokens: 900, cached: 0 },
+            session: Some("s1".to_string()),
+        },
+    });
+    let q = c.iter().find_map(|c| match c { Command::Ask { question } => Some(question.clone()), _ => None }).expect("the person is asked");
+    assert!(q.items[0].label.contains("contradict"), "{q:?}");
+    assert!(matches!(run.phase, Phase::Waiting { .. }));
+    assert_eq!((run.steps[0].spent, run.spent.tokens), (0, 900), "no attempt spent, the tokens counted");
+    // an agent may not answer it
+    let agent = Answer { question: q.id.clone(), shown: q.shown(), verdicts: [("impossible".to_string(), Verdict::Keep)].into_iter().collect(), by: By::Agent { who: "a".into() }, context: String::new() };
+    assert!(decide(Some(&run), &Input::Answer { answer: agent }).is_err());
+    // the person says how; the step tries again in the same session, with their words
+    let c = feed(&mut run, Input::Answer {
+        answer: Answer {
+            question: q.id.clone(),
+            shown: q.shown(),
+            verdicts: [("impossible".to_string(), Verdict::Change { text: "keep the first answer".to_string() })].into_iter().collect(),
+            by: By::Person,
+            context: String::new(),
+        },
+    });
+    let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("tried again");
+    assert_eq!((turn.attempt, turn.session.as_deref()), (2, Some("s1")));
+    assert!(turn.notes.iter().any(|n| n.contains("keep the first answer")), "{:?}", turn.notes);
 }
 
 #[test]

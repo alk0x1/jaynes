@@ -169,6 +169,14 @@ pub enum Event {
         attempt: u32,
         question: Question,
     },
+    /// The agent said the step cannot be done as asked; the question for the person follows.
+    AttemptImpossible {
+        step: String,
+        attempt: u32,
+        reason: String,
+        usage: Usage,
+        session: Option<String>,
+    },
     StepDone {
         step: String,
         round: u32,
@@ -261,6 +269,7 @@ impl Event {
             Event::StaleReport { .. } => "StaleReport",
             Event::FixAsked { .. } => "FixAsked",
             Event::InputNeeded { .. } => "InputNeeded",
+            Event::AttemptImpossible { .. } => "AttemptImpossible",
             Event::StepDone { .. } => "StepDone",
             Event::StepInvalidated { .. } => "StepInvalidated",
             Event::QuestionOpened { .. } => "QuestionOpened",

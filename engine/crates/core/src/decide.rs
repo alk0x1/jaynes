@@ -403,7 +403,10 @@ impl Ctx {
         }
         let attempt = s.attempt + 1;
         let key = decl.effect.irreversible().then(|| Digest::of_json(&(&self.run.id, &name, s.round)).0);
+        // after the person answered the agent's "it cannot be done", it goes on in that session
+        let answered = decl.executor == Executor::Agent && !s.inputs.is_empty() && s.session.is_some();
         let session = match decl.session {
+            _ if answered => s.session.clone(),
             SessionKind::Continue => self.run.manifest.steps[..i]
                 .iter()
                 .rposition(|b| b.executor == Executor::Agent)
@@ -634,6 +637,26 @@ impl Ctx {
                 self.emit(Event::InputNeeded { step: step.to_string(), attempt, question: question.clone() });
                 self.command(Command::Ask { question });
                 self.wait(Some(step.to_string()), on, "the role asks you something before it goes on".to_string());
+            }
+            AttemptOutcome::Impossible { reason, usage, session } => {
+                if role {
+                    return refuse("only an agent says a step cannot be done; a role step refuses");
+                }
+                self.emit(Event::AttemptImpossible { step: step.to_string(), attempt, reason: reason.clone(), usage: *usage, session: session.clone() });
+                let question = Question {
+                    id: self.question_id(step),
+                    step: step.to_string(),
+                    round: self.run.steps[i].round,
+                    kind: QuestionKind::Decision,
+                    items: vec![Item { id: "impossible".to_string(), label: reason.clone(), digest: Digest::of_json(reason) }],
+                    offered: vec![VerdictKind::Change, VerdictKind::Redo],
+                    holds: true,
+                    about: format!("{step} says it cannot be done as asked"),
+                };
+                let on = vec![question.id.clone()];
+                self.emit(Event::InputNeeded { step: step.to_string(), attempt, question: question.clone() });
+                self.command(Command::Ask { question });
+                self.wait(Some(step.to_string()), on, format!("{step} says it cannot be done as asked, and waits for you"));
             }
             AttemptOutcome::Refused { reason } => {
                 self.emit(Event::AttemptFailed {
@@ -1023,7 +1046,7 @@ fn note(item: &Item, v: &Verdict) -> String {
     }
 }
 
-fn notes(q: &Question, answer: &Answer) -> Vec<String> {
+pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
     q.items
         .iter()
         .map(|item| (item, answer.verdict(&item.id)))

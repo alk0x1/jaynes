@@ -240,6 +240,9 @@ pub fn act_here(home: &Path, exe: &Path, run_id: &str, act: &Value) -> Value {
     attempt().unwrap_or_else(|e| json!({"ok": false, "refused": e}))
 }
 
+/// Where an agent writes why a step cannot be done as asked, in its exchange folder.
+const IMPOSSIBLE: &str = "impossible.txt";
+
 /// What a person sees as the process goes: one line each.
 pub fn say(line: &str) {
     eprintln!("{line}");
@@ -417,7 +420,7 @@ impl<'a> Driver<'a> {
         for e in events {
             let (step, keep) = match e {
                 Event::StepDone { step, .. } => (step, true),
-                Event::AttemptFailed { step, .. } | Event::AttemptInterrupted { step, .. } => (step, false),
+                Event::AttemptFailed { step, .. } | Event::AttemptInterrupted { step, .. } | Event::AttemptImpossible { step, .. } => (step, false),
                 _ => continue,
             };
             let Some(i) = run.manifest.index(step) else { continue };
@@ -574,6 +577,7 @@ impl<'a> Driver<'a> {
             compose(&run.request, &text, &schema, &turn, &given)
         } else {
             let _gone = std::fs::remove_file(exchange.join("output.json"));
+            let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
             fix_prompt(&turn)
         };
         say(&format!("· {} attempt {}{}", turn.step, turn.attempt, if turn.fix > 0 { format!(", fix {}", turn.fix) } else { String::new() }));
@@ -625,6 +629,14 @@ impl<'a> Driver<'a> {
 
     fn delivered(&self, run: &Run, i: usize, turn: &AgentTurn, exchange: &Path, usage: jaynes_core::event::Usage, session: Option<String>) -> AttemptOutcome {
         let failed = |why: String| AttemptOutcome::Failed { reasons: vec![why], usage };
+        // the agent's way out: it says the step cannot be done as asked, and the person answers
+        if let Ok(why) = std::fs::read_to_string(exchange.join(IMPOSSIBLE))
+            && !why.trim().is_empty()
+        {
+            let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
+            let reason: String = why.trim().chars().take(2000).collect();
+            return AttemptOutcome::Impossible { reason, usage, session };
+        }
         let text = match std::fs::read_to_string(exchange.join("output.json")) {
             Ok(t) => t,
             Err(_) => return failed(format!("there is no output: write it as JSON to {EXCHANGE}/output.json")),
@@ -813,6 +825,7 @@ impl<'a> Driver<'a> {
 fn write_exchange(exchange: &Path, given: &[Given], previous: Option<&Value>) -> Result<(), String> {
     let _gone = std::fs::remove_dir_all(exchange.join("inputs"));
     let _gone = std::fs::remove_file(exchange.join("output.json"));
+    let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
     let _gone = std::fs::remove_file(exchange.join("previous.json"));
     std::fs::create_dir_all(exchange.join("inputs")).map_err(|e| format!("Jaynes cannot write {}: {e}", exchange.display()))?;
     for g in given {
@@ -878,6 +891,12 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         }
         p.push('\n');
     }
+    p.push_str(
+        "# If it cannot be done as asked\n\nIf the request contradicts itself, needs something you cannot reach, or could pass \
+         the checks only by gaming them, do not write an output. Write why, in a few plain sentences, to \
+         .jaynes/impossible.txt. The person reads it and tells you how to go on; it costs you no attempt. Never write \
+         an output you know is wrong to get past the checks.\n\n",
+    );
     p.push_str(&format!(
         "# Your output\n\nWhen you are done, write your output as JSON to .jaynes/output.json, following this schema:\n\n{}\n",
         serde_json::to_string_pretty(schema).unwrap_or_default()
