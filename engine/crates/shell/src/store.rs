@@ -44,11 +44,53 @@ impl Store {
     }
 
     /// Append a run's events, all or none, each chained to the last entry of the record.
+    #[cfg(test)]
     pub fn append(&mut self, run: &str, events: &[Event]) -> Result<(), String> {
         if events.is_empty() {
             return Ok(());
         }
         let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        Self::append_in(&tx, run, events)?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Read the run's state, decide, and record what was decided, all in one transaction: no other process can
+    /// record between the reading and the writing.
+    pub fn decide(&mut self, run: &str, input: &jaynes_core::Input) -> Result<(Run, Vec<Event>, Vec<jaynes_core::Command>), String> {
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        let events = Self::events_in(&tx, run)?;
+        let state = Run::fold(&events);
+        let out = jaynes_core::decide(state.as_ref(), input).map_err(|r| r.0)?;
+        Self::append_in(&tx, run, &out.events)?;
+        let mut after = state;
+        for e in &out.events {
+            after = match after {
+                None => Run::started(e),
+                Some(mut r) => {
+                    r.apply(e);
+                    Some(r)
+                }
+            };
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok((after.ok_or("the run has no state")?, out.events, out.commands))
+    }
+
+    fn events_in(db: &Connection, run: &str) -> Result<Vec<Event>, String> {
+        let mut q = db.prepare("select body from events where run = ?1 order by seq").map_err(|e| e.to_string())?;
+        let rows = q.query_map([run], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for body in rows {
+            let body = body.map_err(|e| e.to_string())?;
+            out.push(serde_json::from_str(&body).map_err(|e| format!("an entry of {run} does not read: {e}"))?);
+        }
+        Ok(out)
+    }
+
+    fn append_in(tx: &Connection, run: &str, events: &[Event]) -> Result<(), String> {
+        if events.is_empty() {
+            return Ok(());
+        }
         let last: Option<String> = tx
             .query_row("select hash from events order by seq desc limit 1", [], |r| r.get(0))
             .optional()
@@ -63,7 +105,7 @@ impl Store {
                 .map_err(|e| e.to_string())?;
             previous = hash;
         }
-        tx.commit().map_err(|e| e.to_string())
+        Ok(())
     }
 
     pub fn events(&self, run: &str) -> Result<Vec<Event>, String> {

@@ -331,7 +331,8 @@ impl Run {
                 if answer.by.person() && !answer.context.trim().is_empty() {
                     self.context.push((question.step.clone(), answer.context.trim().to_string()));
                 }
-                if answer.sends_back() && first {
+                // A leave refused is not work sent back: only a decision about an output counts as rework.
+                if answer.sends_back() && first && question.kind == QuestionKind::Decision {
                     self.counts.sent_back += 1;
                 }
                 let Some(i) = self.manifest.index(&question.step) else { return };

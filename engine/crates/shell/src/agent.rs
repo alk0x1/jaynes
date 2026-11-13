@@ -26,6 +26,9 @@ pub struct Spec<'a> {
     /// Where to note the agent program's process group while it runs, so a process that takes the run after a
     /// crash can stop what was left running.
     pub pidfile: Option<PathBuf>,
+    /// How to start Jaynes's leave server for this turn, so what the agent asks beyond its settings comes to
+    /// Jaynes instead of being refused.
+    pub permit: Option<(Vec<String>, Vec<(String, String)>)>,
 }
 
 #[derive(Debug)]
@@ -214,7 +217,7 @@ fn binary(name: &str) -> Option<PathBuf> {
 
 impl Claude {
     /// The settings for one step, generated from what it may reach. Ported from the Python engine's runtime.
-    pub fn settings(&self, cwd: &Path, reach: &Reach, reads: &[PathBuf]) -> Value {
+    pub fn settings(&self, cwd: &Path, reach: &Reach, reads: &[PathBuf], asks: bool) -> Value {
         let web = reach.network == Network::Web;
         let mut allow: Vec<String> = vec!["Read(./**)".into()];
         if reach.project == ProjectAccess::Write || reach.project == ProjectAccess::None {
@@ -238,7 +241,7 @@ impl Claude {
         let mut read: Vec<String> = vec![cwd.display().to_string()];
         read.extend(reads.iter().map(|p| p.display().to_string()));
         json!({
-            "permissions": {"defaultMode": "dontAsk", "allow": allow, "deny": deny,
+            "permissions": {"defaultMode": if asks { "default" } else { "dontAsk" }, "allow": allow, "deny": deny,
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
             "sandbox": {"enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
                         "autoAllowBashIfSandboxed": true,
@@ -270,20 +273,31 @@ impl Agent for Claude {
     }
 
     fn turn(&self, spec: Spec<'_>) -> Turn {
-        let settings = self.settings(spec.cwd, spec.reach, spec.reads);
+        let settings = self.settings(spec.cwd, spec.reach, spec.reads, spec.permit.is_some());
         let Some(claude) = binary("claude") else {
             return Turn { ended: Ended::Fault { reason: "Claude Code is not installed".to_string() }, applied: settings };
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
+        // What the agent asks beyond its settings goes to Jaynes's leave server; without one, it is refused.
+        let (servers, mode) = match &spec.permit {
+            Some((argv, env)) => {
+                let env: serde_json::Map<String, Value> = env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+                (json!({"mcpServers": {"jaynes": {"type": "stdio", "command": argv[0], "args": argv[1..], "env": env}}}), "default")
+            }
+            None => (json!({"mcpServers": {}}), "dontAsk"),
+        };
         let mut cmd = Command::new(claude);
         cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--setting-sources", ""])
             .arg("--settings")
             .arg(settings.to_string())
-            .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--permission-mode", "dontAsk"])
+            .args(["--strict-mcp-config", "--mcp-config", &servers.to_string(), "--permission-mode", mode])
             .args(["--max-turns", &self.max_messages.to_string(), "--model", &self.model, "--effort", &self.effort]);
         if let Some(s) = spec.session {
             cmd.args(["--resume", s]);
+        }
+        if spec.permit.is_some() {
+            cmd.args(["--permission-prompt-tool", "mcp__jaynes__permit"]);
         }
         cmd.current_dir(spec.cwd).env("TMPDIR", &tmp).env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         for (k, v) in &spec.env {
@@ -403,7 +417,7 @@ mod tests {
     #[test]
     fn a_read_only_step_writes_only_its_exchange_folder() {
         let reach = Reach { project: ProjectAccess::Read, write: vec![], network: Network::None, commands: false };
-        let s = Claude::default().settings(Path::new("/w"), &reach, &[]);
+        let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         assert!(allow.contains(&"Edit(./.jaynes/**)"));
         assert!(!allow.contains(&"Edit(./**)"));

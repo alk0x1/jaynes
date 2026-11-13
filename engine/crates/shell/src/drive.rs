@@ -10,7 +10,7 @@ use crate::store::Store;
 use jaynes_core::event::{Event, Read};
 use jaynes_core::manifest::ProjectAccess;
 use jaynes_core::question::{Answer, Question};
-use jaynes_core::{decide, AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
+use jaynes_core::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::File;
@@ -54,11 +54,7 @@ pub fn say(line: &str) {
 
 /// Decide on the run's latest state and record the events, in one transaction of the record.
 pub fn decide_and_record(store: &mut Store, run: &str, input: &Input) -> Result<(Run, Vec<Event>, Vec<Command>), String> {
-    let state = store.state(run)?;
-    let out = decide(state.as_ref(), input).map_err(|r| r.0)?;
-    store.append(run, &out.events)?;
-    let after = store.state(run)?.ok_or("the run has no state")?;
-    Ok((after, out.events, out.commands))
+    store.decide(run, input)
 }
 
 pub struct Driver<'a> {
@@ -343,6 +339,15 @@ impl<'a> Driver<'a> {
             env,
             transcript: Some(self.setup.dir.join("steps").join(&turn.step).join(format!("turn-{}-{}.jsonl", turn.attempt, turn.fix))),
             pidfile: Some(self.setup.dir.join("agent.pid")),
+            permit: std::env::current_exe().ok().map(|exe| {
+                let home = self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
+                let argv = vec![
+                    exe.display().to_string(), "permit".into(), "--run".into(), self.setup.run.clone(), "--step".into(),
+                    turn.step.clone(), "--attempt".into(), turn.attempt.to_string(), "--cwd".into(), cwd.display().to_string(),
+                    "--wait".into(), turn.deadline_seconds.to_string(),
+                ];
+                (argv, vec![("JAYNES_ENGINE_HOME".to_string(), home.display().to_string())])
+            }),
         };
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));

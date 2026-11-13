@@ -128,8 +128,7 @@ version, the protocol and the record's format.
 
 ## Not in this slice
 
-- Plans of runs; merging alone and Undo; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
-  Code runs in `dontAsk`, so none arise yet).
+- Plans of runs; merging alone and Undo; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (
 - Replaying the Python engine's 53 recorded runs as an oracle; proving the Rust code itself (step 6 of the ladder).
 
 ## The model with proofs (owner's choice, 2026-11-13)
@@ -141,6 +140,16 @@ moves (the wait before what cannot be undone, the hold, freshness ignoring what 
 comparison, the third only once the states inside one decision were compared too; three in answers and the gate,
 caught by the comparison and by the proofs themselves. What stays open: the model takes as given which steps a
 step reads; the comparison covers the states the random runs reach.
+
+## Leaves in the middle of a turn (2026-11-13)
+
+Claude Code runs in its default permission mode with `--permission-prompt-tool mcp__jaynes__permit`: what a step's
+settings did not allow comes to `jaynes-engine permit`, an MCP server started for the turn. It records a
+`PermissionAsked` in the core, in one transaction with reading the state. The core's rule grants reading inside the
+project; anything else is a question on the page, which the agent waits for. The answer is recorded at once even
+while the run's process is blocked on the turn, and the server reads it from the record. A leave refused is not
+counted as work sent back. Checked with a real Claude Code turn: it asked to write outside its folder, the person
+refused with a reason, the agent went on, and the run was delivered in 20 s.
 
 ## How it was checked
 

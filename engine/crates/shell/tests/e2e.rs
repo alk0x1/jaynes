@@ -455,3 +455,93 @@ fn the_page_halts_resumes_and_records_a_correction() {
         assert!(t.contains(&want.to_string()), "{want} missing: {t:?}");
     }
 }
+
+struct Mcp {
+    child: std::process::Child,
+    out: std::io::BufReader<std::process::ChildStdout>,
+    n: u64,
+}
+
+impl Mcp {
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        use std::io::{BufRead, Write};
+        self.n += 1;
+        let msg = serde_json::json!({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params});
+        let stdin = self.child.stdin.as_mut().expect("stdin");
+        writeln!(stdin, "{msg}").expect("write");
+        stdin.flush().expect("flush");
+        let mut line = String::new();
+        self.out.read_line(&mut line).expect("read");
+        serde_json::from_str(&line).expect("json")
+    }
+    fn permit(&mut self, tool: &str, input: Value) -> Value {
+        let r = self.call("tools/call", serde_json::json!({"name": "permit", "arguments": {"tool_name": tool, "input": input}}));
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().expect("text")).expect("decision")
+    }
+}
+
+#[test]
+fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
+    let s = scratch("leave");
+    let mark = s.home.join("mark");
+    std::fs::create_dir_all(&mark).expect("dir");
+    // the agent works for a while: the leave server is asked while its turn runs
+    let agent = format!("touch {}/started; sleep 8; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}", mark.display());
+    let role = root().join("roles/small-change");
+    let run = Command::new(BIN)
+        .args(["start", "--run", "leave", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src"))
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn().expect("start");
+    for _ in 0..100 {
+        if mark.join("started").exists() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let attempt = events(&s, "leave").iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == "change").count();
+    let cwd = s.home.join("runs/leave/project");
+    let mut child = Command::new(BIN)
+        .args(["permit", "--run", "leave", "--step", "change", "--attempt", &attempt.to_string(), "--cwd", cwd.to_str().expect("path"), "--wait", "20"])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
+        .spawn().expect("permit");
+    let out = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut mcp = Mcp { child, out, n: 0 };
+    let init = mcp.call("initialize", serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}));
+    assert_eq!(init["result"]["serverInfo"]["name"], "jaynes");
+    assert_eq!(mcp.call("tools/list", serde_json::json!({}))["result"]["tools"][0]["name"], "permit");
+    // reading inside the project is routine: a rule grants it at once
+    let inside = mcp.permit("Read", serde_json::json!({"file_path": cwd.join("greeting.txt").display().to_string()}));
+    assert_eq!(inside["behavior"], "allow", "{inside}");
+    // reading outside is the person's: the server waits, the person refuses on the command line
+    let asking = std::thread::spawn(move || {
+        let d = mcp.permit("Read", serde_json::json!({"file_path": "/etc/hosts"}));
+        let _killed = mcp.child.kill();
+        d
+    });
+    let mut q = String::new();
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(e) = events(&s, "leave").into_iter().filter(|e| e["type"] == "QuestionOpened").next_back()
+            && e["question"]["kind"] == "permission" && e["question"]["about"].as_str().unwrap_or("").contains("/etc/hosts") {
+                q = e["question"]["id"].as_str().expect("id").to_string();
+                break;
+            }
+    }
+    assert!(!q.is_empty(), "the leave was asked of the person");
+    let answered = Command::new("script")
+        .args(["-q", "/dev/null", BIN, "answer", "leave", &q, "leave=drop", "--context", "not outside the project", "--send"])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .output().expect("answer");
+    assert!(String::from_utf8_lossy(&answered.stdout).contains("recorded"), "{}", String::from_utf8_lossy(&answered.stdout));
+    let decided = asking.join().expect("asked");
+    assert_eq!(decided["behavior"], "deny", "{decided}");
+    assert!(decided["message"].as_str().unwrap_or("").contains("not outside the project"), "{decided}");
+    let _done = run.wait_with_output();
+    let e = events(&s, "leave");
+    let rules = e.iter().filter(|e| e["type"] == "AnswerRecorded" && e["answer"]["by"]["by"] == "rule").count();
+    let people = e.iter().filter(|e| e["type"] == "AnswerRecorded" && e["answer"]["by"]["by"] == "person").count();
+    assert_eq!((rules, people), (1, 1));
+    let finished = e.iter().find(|e| e["type"] == "RunFinished").unwrap_or_else(|| panic!("the run went on and finished: {:?}", types(&e)));
+    assert_eq!(finished["cost"]["sent_back"], 0, "a leave refused is not work sent back");
+}

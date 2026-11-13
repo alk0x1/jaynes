@@ -4,6 +4,7 @@ mod agent;
 mod conformance;
 mod drive;
 mod page;
+mod permit;
 mod project;
 mod protocol;
 mod role;
@@ -180,6 +181,18 @@ fn run(args: &[String]) -> Result<(), String> {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             page::Page { home: home(), port, key, exe }.serve()
         }
+        "permit" => {
+            let need = |name: &str| flag(rest, name).ok_or(format!("{name} is needed"));
+            permit::Permit {
+                home: home(),
+                run: need("--run")?,
+                step: need("--step")?,
+                attempt: need("--attempt")?.parse().map_err(|_| "--attempt takes a number")?,
+                cwd: PathBuf::from(need("--cwd")?),
+                wait: std::time::Duration::from_secs(flag(rest, "--wait").and_then(|w| w.parse().ok()).unwrap_or(900)),
+            }
+            .serve()
+        }
         "schema" => {
             println!("{}", serde_json::to_string_pretty(&protocol::schema()).map_err(|e| e.to_string())?);
             Ok(())
@@ -293,6 +306,13 @@ fn send(mut s: Store, id: &str, input: Input) -> Result<(), String> {
     if let Err(r) = decide(Some(&state), &input) {
         return Err(format!("refused: {r}"));
     }
+    // A leave is answered while the agent waits inside a turn: it is recorded at once, for the leave server.
+    if let Input::Answer { answer } = &input
+        && state.questions.get(&answer.question).is_some_and(|q| q.question.kind == jaynes_core::question::QuestionKind::Permission) {
+            s.decide(id, &input)?;
+            say("recorded; the agent waiting for it gets it now");
+            return Ok(());
+        }
     let setup = Setup::load(&s, &home(), id)?;
     match Driver::take(&mut s, setup) {
         Ok(mut d) => {
