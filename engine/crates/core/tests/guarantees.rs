@@ -1715,6 +1715,8 @@ fn lake() -> Option<std::path::PathBuf> {
 #[test]
 fn the_lean_model_decides_as_the_core_does() {
     let Some(lake) = lake() else {
+        // on GitHub the comparison must run: there a missing Lean is a failure, not a skip
+        assert!(std::env::var("JAYNES_REQUIRE_LEAN").is_err(), "Lean is required here and is not installed");
         eprintln!("skipped: Lean is not installed (elan); the model is in engine/model");
         return;
     };

@@ -39,3 +39,5 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+        env:
+          JAYNES_REQUIRE_LEAN: "1"
