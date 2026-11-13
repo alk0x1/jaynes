@@ -282,7 +282,7 @@ impl Page {
         }
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
-                Some(r) => run_html(r),
+                Some(r) => run_html(r, &changes_html(&self.home, r, None)),
                 None => "<div class=\"empty\">There is no such run.</div>".to_string(),
             },
             (_, None) => "<div class=\"empty\">Nothing waits for you.</div>".to_string(),
@@ -299,7 +299,8 @@ impl Page {
                     }
                     html
                 };
-                question_html(run, q, &shown)
+                let i = run.manifest.index(&q.question.step);
+                question_html(run, q, &shown, &changes_html(&self.home, run, i))
             }
         };
         let who = if person { "" } else { "<div class=\"notice\">You opened the page without its key: answers from here count as an agent's. Open the link the page printed.</div>" };
@@ -444,7 +445,7 @@ fn phase_word(r: &Run) -> String {
 }
 
 /// A run: where it is, what it cost, its steps, and what the person may do to it.
-fn run_html(r: &Run) -> String {
+fn run_html(r: &Run, changes: &str) -> String {
     let path = r.path();
     let steps = stage_list(r);
     let phase = match &r.phase {
@@ -489,7 +490,7 @@ fn run_html(r: &Run) -> String {
         "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
          {steps}\
-         <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div><script id=\"rundata\" type=\"application/json\">{data}</script>",
+         <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
         version = esc(&r.manifest.version),
         id = esc(&r.id),
@@ -565,7 +566,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String) -> String {
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str) -> String {
     let question = &q.question;
     let permission = question.kind == QuestionKind::Permission;
     let i = run.manifest.index(&question.step).unwrap_or(0);
@@ -604,7 +605,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     format!(
         "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
-         {rows}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
+         {rows}{changes}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
@@ -615,6 +616,75 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         stages = stage_list(run),
         data = data.replace('<', "\\u003c"),
     )
+}
+
+/// What a step changed in the project, as git shows it between where the step started and the commit its output
+/// became: one step's, or every step's of the run when `only` is None. Nothing when the run has no project.
+fn changes_html(home: &std::path::Path, run: &Run, only: Option<usize>) -> String {
+    let dir = home.join("runs").join(&run.id);
+    let read = |name: &str| -> BTreeMap<String, String> { std::fs::read_to_string(dir.join(name)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default() };
+    let (commits, parents) = (read("project-steps.json"), read("project-parents.json"));
+    let copy = dir.join("project");
+    let base = std::fs::read_to_string(copy.join(".git/jaynes-base")).unwrap_or_default().trim().to_string();
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git").arg("-C").arg(&copy).args(args).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    run.manifest
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| only.is_none_or(|o| o == *i))
+        .filter_map(|(_, d)| {
+            let commit = commits.get(&d.name)?;
+            let parent = parents.get(&d.name).cloned().unwrap_or_else(|| base.clone());
+            let mut text = git(&["diff", "--no-color", &parent, commit])?;
+            if text.trim().is_empty() {
+                return None;
+            }
+            // never cut silently: what is not shown here must still be read
+            if text.len() > 40_000 {
+                let cut = (0..=40_000).rev().find(|&n| text.is_char_boundary(n)).unwrap_or(0);
+                let more = text.len() - cut;
+                text.truncate(cut);
+                text.push_str(&format!("\n[{more} more bytes not shown: read the branch before it lands]"));
+            }
+            let files = git(&["diff", "--name-only", &parent, commit]).unwrap_or_default();
+            let n = files.lines().count();
+            Some(format!(
+                "<div class=\"changes\"><div class=\"qh\">What {} changed · {n} file{}</div><pre class=\"diff\">{}</pre></div>",
+                esc(&d.name),
+                if n == 1 { "" } else { "s" },
+                diff_html(&text)
+            ))
+        })
+        .collect()
+}
+
+/// A unified diff, escaped: each file's header set apart, added lines green, removed lines red.
+fn diff_html(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            let (class, mark, rest) = if l.starts_with("diff --git ") {
+                ("file", "", l.trim_start_matches("diff --git ").split(" b/").last().unwrap_or(l))
+            } else if l.starts_with("@@") {
+                ("hunk", "", l)
+            } else if l.starts_with("+++") || l.starts_with("---") || l.starts_with("index ") || l.starts_with("new file") || l.starts_with("deleted file") || l.starts_with("similarity") || l.starts_with("rename ") || l.starts_with('\\') {
+                ("meta", "", l)
+            } else if let Some(r) = l.strip_prefix('+') {
+                ("add", "+", r)
+            } else if let Some(r) = l.strip_prefix('-') {
+                ("del", "-", r)
+            } else {
+                ("ctx", " ", l.strip_prefix(' ').unwrap_or(l))
+            };
+            if class == "meta" {
+                return String::new();
+            }
+            let mark = if mark.is_empty() { String::new() } else { format!("<i>{mark}</i>") };
+            format!("<span class=\"{class}\">{mark}{}</span>", if rest.is_empty() { " ".to_string() } else { esc(rest) })
+        })
+        .collect()
 }
 
 fn esc(s: &str) -> String {
@@ -709,6 +779,15 @@ aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min
 .stages .who { font-family:var(--mono); font-weight:400; color:var(--faint); margin-left:10px; font-size:11px; }
 .stages .about { margin:1px 0 0; font-size:13px; line-height:1.45; color:var(--dim); max-width:64ch; }
 details.way { margin-top:18px; border-top:1px solid var(--line); padding-top:10px; } details.way summary { cursor:pointer; color:var(--dim); font-size:13px; }
+.changes { margin-top:22px; } .changes .qh { margin-bottom:8px; padding-left:0; }
+pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius:6px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--dim); white-space:pre; }
+.diff > span { display:block; padding:0 14px; min-width:max-content; }
+.diff > span > i { font-style:normal; display:inline-block; width:2ch; color:var(--faint); user-select:none; }
+.diff > .add, .diff > .del { color:var(--ink); }
+.diff > .add { background:var(--green-soft); } .diff > .add > i { color:var(--green); }
+.diff > .del { background:var(--red-soft); } .diff > .del > i { color:var(--red); }
+.diff > .hunk { color:var(--blue); }
+.diff > .file { color:var(--ink); font-weight:600; margin-top:12px; } .diff > .file:first-child { margin-top:0; }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
