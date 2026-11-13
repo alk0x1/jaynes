@@ -481,6 +481,9 @@ details.others[open] > summary span:first-child::before { content: "\\25BE  "; }
 .dec.drop .v.drop { color: var(--red); border-color: var(--red); background: var(--red-soft); }
 .dec.drop > div:first-child, .dec.drop .dpics { opacity: .45; }
 .dec.base .v.base { color: var(--blue); border-color: var(--blue); }
+.dec .pick { margin-right: 6px; }
+.dec.chosen { border-color: var(--green); }
+.dec.chosen .pick { color: var(--bg); background: var(--green); border-color: var(--green); }
 .dec .dpics { grid-column: 1 / -1; }
 .dec .dpics .pics { margin: 0; }
 .whys { display: grid; gap: 10px; }
@@ -656,7 +659,9 @@ if (form) {
   const relabel = () => {
     const n = (m) => document.querySelectorAll(".dec." + m).length;
     const redo = n("no") + n("base"), left = [...document.querySelectorAll(".dec[data-choose]:not(.drop)")];
-    if (redo || (n("drop") && !document.querySelector(".dec[data-choose]")))
+    const one = document.querySelector(".dec.chosen");
+    if (one) accept.firstChild.textContent = "Choose " + one.dataset.choose;
+    else if (redo || (n("drop") && !document.querySelector(".dec[data-choose]")))
       accept.firstChild.textContent = "Send: " + [n("no") && "redo " + n("no"), n("base") && "start from " + n("base"),
         n("drop") && "drop " + n("drop")].filter(Boolean).join(", ");
     else if (n("drop") && left.length)
@@ -682,6 +687,9 @@ if (form) {
     const asks = {no: ["reject:", "What is wrong with "], drop: ["drop:", "Why drop "], base: ["base:", "What to change in "]};
     const label = d.querySelector("small").textContent.toLowerCase();
     d.mark = (m, focus) => {
+      if (m !== "ok" && chosen && document.querySelector(".dec.chosen")) {  // a mark undoes the choice
+        document.querySelectorAll(".dec.chosen").forEach(x => x.classList.remove("chosen")); chosen.value = "";
+      }
       ["no", "drop", "base"].forEach(x => d.classList.toggle(x, x === m));
       line.disabled = m === "ok";
       if (m !== "ok") {
@@ -693,6 +701,15 @@ if (form) {
     };
     d.querySelectorAll("[data-v]").forEach(b => b.addEventListener("click", () =>
       d.mark(d.classList.contains(b.dataset.v) ? "ok" : b.dataset.v, true)));  // a second click undoes the mark
+    const pick = d.querySelector("[data-pick]");
+    if (pick && chosen) pick.addEventListener("click", () => {  // one look, and on: every other mark is undone
+      const was = d.classList.contains("chosen");
+      document.querySelectorAll(".dec").forEach(x => { if (x.mark) { x.mark("ok", false); x.querySelector(".dnote").value = ""; }
+                                                       x.classList.remove("chosen"); });
+      if (!was) d.classList.add("chosen");
+      chosen.value = was ? "" : d.dataset.id;
+      relabel();
+    });
     const unlock = d.querySelector("[data-unlock]");
     if (unlock) unlock.addEventListener("click", () => d.classList.add("open"));
   });
@@ -1606,7 +1623,9 @@ class Review:
                         + (f' data-choose="{esc(d.label)}"' if d.id in choosable else "")
                         + f'><div><small>{esc(d.label)}</small><span>{swatch(d.value)}</span>{new}</div>'
                         f'<div class="da">{lock}'
-                        '<button type="button" class="btn v ok" data-v="ok" title="Keep it">✓</button>'
+                        + ('<button type="button" class="btn pick" data-pick title="Choose this one and go on: the '
+                           'others are neither dropped nor redone">Choose</button>' if d.id in choosable else "")
+                        + '<button type="button" class="btn v ok" data-v="ok" title="Keep it">✓</button>'
                         '<button type="button" class="btn v no" data-v="no" title="Redo it, saying what is wrong">'
                         '✗</button>'
                         '<button type="button" class="btn v drop" data-v="drop" title="Drop it for good: it never '
@@ -1615,7 +1634,8 @@ class Review:
                         'lot">Start from</button></div>'
                         f'<input type="text" class="dnote" name="reject:{esc(d.id)}" form="answer" disabled '
                         f'placeholder="What is wrong with {esc(d.label.lower())}?">{shown}</div>')
-        how = ("drop what you never want, start from the best, the rest is chosen" if choosable else
+        how = ("Choose one to go on; or drop what you never want and start from the best, when none is right"
+               if choosable else
                "✗ redo with a line, drop for good, or start from one; the rest is kept")
         return (f'<div>{self._opinion_part(run_id, target.name)}<div class="label">Decisions <span>{how}</span></div>'
                 f'<div class="decs">{"".join(rows)}</div></div>')
