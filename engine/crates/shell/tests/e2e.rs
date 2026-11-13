@@ -286,6 +286,9 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     assert!(http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).contains("Set-Cookie: jaynes_key=k3y"));
     let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
     assert!(home.contains("The change turned out bigger than a small one"), "{home}");
+    // each run shows its steps as a strip, as the earlier page did
+    assert!(home.contains("<div class=\"strip\"><i class=\"\" title=\"runner\"></i><i class=\"waiting\" title=\"change\"></i></div>"), "{home}");
+    assert!(home.contains("step 2 of 2") || home.contains("step 1 of 2"), "{home}");
     let id = q["id"].as_str().expect("id");
     // without the key it is an agent: it may not send the change back
     let redo = format!(r#"{{"run":"page","question":"{id}","shown":"{shown}","verdicts":{{"change":"redo"}},"notes":{{"change":"smaller"}}}}"#);

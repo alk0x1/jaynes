@@ -252,13 +252,15 @@ impl Page {
                         "<span class=\"goes\">the run goes on</span>".to_string()
                     };
                     format!(
-                        "<a class=\"q{}\" href=\"/q/{}/{}\">{}<small>{} · {}</small></a>",
+                        "<a class=\"q{}\" href=\"/q/{}/{}\">{}<small>{} · {} · {}</small>{}</a>",
                         if on { " on" } else { "" },
                         esc(&run.id),
                         esc(&q.question.id),
                         esc(&title(q)),
                         esc(&run.manifest.role),
-                        status
+                        where_in(run),
+                        status,
+                        strip(run)
                     )
                 })
                 .collect()
@@ -272,7 +274,7 @@ impl Page {
         let shown_run = if let View::Run(id) = &view { Some(id.clone()) } else { None };
         let run_link = |r: &&Run| {
             let on = shown_run.as_deref() == Some(r.id.as_str());
-            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {}</small></a>", if on { " on" } else { "" }, esc(&r.id), esc(&short(&r.request)), esc(&r.manifest.role), phase_word(r))
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), esc(&short(&r.request)), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
         };
         aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Runs · {}</div>{}", open.len(), open.iter().map(run_link).collect::<String>()));
         if !done.is_empty() {
@@ -303,6 +305,46 @@ impl Page {
         let who = if person { "" } else { "<div class=\"notice\">You opened the page without its key: answers from here count as an agent's. Open the link the page printed.</div>" };
         Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", who))
     }
+}
+
+/// The run's steps as a strip, one mark per step of its path, coloured by where each is, as the earlier page drew
+/// it: done, waiting for you, blocked, running, not yet, or asked only a sample and skipped.
+fn strip(r: &Run) -> String {
+    use jaynes_core::run::Status;
+    let blocked = match &r.phase {
+        Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
+        _ => None,
+    };
+    let marks: String = r
+        .path()
+        .into_iter()
+        .map(|i| {
+            let d = &r.manifest.steps[i];
+            let s = &r.steps[i];
+            let state = if blocked == Some(d.name.as_str()) {
+                "blocked"
+            } else {
+                match &s.status {
+                    Status::Running { .. } | Status::Checking { .. } | Status::Probing if !r.finished() => "running",
+                    Status::AwaitingInput { .. } => "waiting",
+                    Status::Done if r.fresh(i) && r.open_question(i).is_some() => "waiting",
+                    Status::Done if r.fresh(i) && s.skipped == Some(s.round) => "sampled",
+                    Status::Done if r.fresh(i) => "",
+                    _ if matches!(&r.phase, Phase::Waiting { step: Some(w), .. } if *w == d.name) => "waiting",
+                    _ => "todo",
+                }
+            };
+            format!("<i class=\"{state}\" title=\"{}\"></i>", esc(&d.name))
+        })
+        .collect();
+    format!("<div class=\"strip\">{marks}</div>")
+}
+
+/// Where a run is, in words: the step it is on, of how many.
+fn where_in(r: &Run) -> String {
+    let path = r.path();
+    let at = path.iter().position(|&i| !r.fresh(i)).map(|n| n + 1).unwrap_or(path.len());
+    format!("step {at} of {}", path.len())
 }
 
 enum View {
@@ -408,7 +450,7 @@ fn run_html(r: &Run) -> String {
     };
     let data = json!({"run": r.id}).to_string();
     format!(
-        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{phase}\
+        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
          <table class=\"steps\"><tr><th>Step</th><th>By</th><th>Round</th><th>Attempts spent</th><th>State</th></tr>{steps}</table>\
          <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div><script id=\"rundata\" type=\"application/json\">{data}</script>",
@@ -417,6 +459,7 @@ fn run_html(r: &Run) -> String {
         id = esc(&r.id),
         risk = r.risk.word(),
         request = esc(&short(&r.request)),
+        strip = strip(r),
         sm = r.spent.seconds / 60,
         cm = r.ceiling.seconds / 60,
         st = r.spent.tokens,
@@ -523,7 +566,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         .collect();
     let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0}).to_string();
     format!(
-        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1><p class=\"sub\">{badge}</p>{phase}\
+        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
          {rows}<script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
@@ -532,6 +575,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         round = question.round,
         n = path.len(),
         title = esc(&title(q)),
+        strip = strip(run),
         data = data.replace('<', "\\u003c"),
     )
 }
@@ -603,6 +647,10 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .detail { margin:2px 0 8px; color:var(--dim); font-size:13.5px; } .pics { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0; }
 .pics img { max-width:min(100%, 420px); max-height:320px; border-radius:8px; border:1px solid var(--line-2); background:#fff; cursor:zoom-in; }
 .pics img.big { max-width:100%; max-height:none; cursor:zoom-out; }
+.strip { display:flex; gap:3px; margin:4px 0 10px; } .strip i { width:14px; height:4px; border-radius:2px; background:var(--green); display:block; }
+aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min-width:3px; }
+.strip i.waiting { background:var(--amber); } .strip i.blocked { background:var(--red); } .strip i.running { background:var(--blue); }
+.strip i.todo { background:var(--line-2); } .strip i.sampled { background:none; box-shadow:inset 0 0 0 1px var(--green); }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
