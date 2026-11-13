@@ -40,9 +40,27 @@ pub fn key() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The commit of Jaynes installed when the page started: what it runs.
+static RUNNING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+/// The newest commit where Jaynes is published, asked once an hour.
+static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Whether an update the page started is still building.
+static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl Page {
     pub fn serve(&self) -> Result<(), String> {
         let listener = TcpListener::bind(("127.0.0.1", self.port)).map_err(|e| format!("cannot listen on {}: {e}", self.port))?;
+        RUNNING.get_or_init(crate::install::installed_commit);
+        if std::env::var("JAYNES_NO_UPDATE_CHECK").is_err() {
+            std::thread::spawn(|| loop {
+                if let Some(c) = crate::install::latest_commit()
+                    && let Ok(mut l) = LATEST.lock()
+                {
+                    *l = Some(c);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            });
+        }
         say(&format!("the page: http://127.0.0.1:{}/?key={}", self.port, self.key));
         for stream in listener.incoming().flatten() {
             let _done = self.handle(stream);
@@ -100,6 +118,7 @@ impl Page {
                 ["run", run] => View::Run(run.to_string()),
                 ["home"] => View::Overview,
                 ["new"] => View::New,
+                ["setup"] => View::Setup,
                 _ => View::Home,
             };
             return match self.render(view, self.person(req)) {
@@ -120,6 +139,7 @@ impl Page {
                 "/api/answer" => self.answer(&body, by),
                 "/api/act" => self.act(&body, by),
                 "/api/start" => self.start(&body, by),
+                "/api/setup" => self.setup(&body, by),
                 _ => Err("no such action".to_string()),
             };
             let reply = match out {
@@ -174,6 +194,63 @@ impl Page {
     }
 
     /// What the person does to a run from its page: halt, resume, continue, raise, abandon, correct.
+    /// Change the guard, update Jaynes, or restart the page; only the person does these.
+    fn setup(&self, body: &Value, by: By) -> Result<Value, String> {
+        use crate::install::{guard, set_guard};
+        if by != By::Person {
+            return Err("only you change the setup: open the link the page printed".into());
+        }
+        let (on, mut owners) = guard();
+        let owner = body["owner"].as_str().unwrap_or("").trim().to_string();
+        match body["action"].as_str().unwrap_or("") {
+            "guard-on" => set_guard(true, &owners)?,
+            "guard-off" => set_guard(false, &owners)?,
+            "owner-add" => {
+                if owner.is_empty() || !owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    return Err("a GitHub owner is letters, digits and dashes".into());
+                }
+                if !owners.iter().any(|o| o.eq_ignore_ascii_case(&owner)) {
+                    owners.push(owner);
+                }
+                set_guard(on, &owners)?
+            }
+            "owner-remove" => {
+                owners.retain(|o| !o.eq_ignore_ascii_case(&owner));
+                set_guard(on, &owners)?
+            }
+            "update" => {
+                if UPDATING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return Err("an update is already building".into());
+                }
+                let log = std::fs::File::create(self.home.join("update.log")).map_err(|e| e.to_string())?;
+                let err = log.try_clone().map_err(|e| e.to_string())?;
+                let mut child = std::process::Command::new(&self.exe)
+                    .arg("update")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(log)
+                    .stderr(err)
+                    .spawn()
+                    .map_err(|e| format!("the update could not start: {e}"))?;
+                std::thread::spawn(move || {
+                    let _done = child.wait();
+                    UPDATING.store(false, std::sync::atomic::Ordering::SeqCst);
+                });
+            }
+            "restart" => {
+                use std::os::unix::process::CommandExt;
+                let (exe, port) = (self.exe.clone(), self.port);
+                // after this answer reaches the page: the new program takes this process's place
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let failed = std::process::Command::new(exe).args(["page", "--port", &port.to_string()]).exec();
+                    say(&format!("the page could not restart: {failed}"));
+                });
+            }
+            other => return Err(format!("no setup action {other}")),
+        }
+        Ok(json!({"ok": true}))
+    }
+
     /// Start a run of a role on a project; only the person does it here. An agent starts one with the start tool.
     fn start(&self, body: &Value, by: By) -> Result<Value, String> {
         if by != By::Person {
@@ -250,7 +327,7 @@ impl Page {
             View::Question(r, q) => Some((r.clone(), q.clone())),
             _ => None,
         };
-        let current = if matches!(view, View::Run(_) | View::Overview | View::New) {
+        let current = if matches!(view, View::Run(_) | View::Overview | View::New | View::Setup) {
             None
         } else {
             chosen
@@ -311,6 +388,7 @@ impl Page {
                 let last = runs.iter().rev().find_map(|r| store.setup(&r.id).ok().and_then(|s| s["project"].as_str().map(|p| (r.manifest.role.clone(), p.to_string()))));
                 new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last)
             }
+            (View::Setup, _) => setup_html(&self.home),
             (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
@@ -330,7 +408,7 @@ impl Page {
             }
         };
         let who = if person { "" } else { "<div class=\"notice\">You opened the page without its key: answers from here count as an agent's. Open the link the page printed.</div>" };
-        Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", who))
+        Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", &format!("{}{who}", banner())))
     }
 }
 
@@ -450,6 +528,7 @@ enum View {
     Home,
     Overview,
     New,
+    Setup,
     Question(String, String),
     Run(String),
 }
@@ -715,6 +794,55 @@ fn diff_html(text: &str) -> String {
         .collect()
 }
 
+/// A newer Jaynes: installed since the page started, so the page should restart; or published, so it can be updated.
+fn banner() -> String {
+    let running = RUNNING.get().cloned().flatten();
+    let installed = crate::install::installed_commit();
+    let latest = LATEST.lock().ok().and_then(|l| l.clone());
+    let (text, act, label) = if UPDATING.load(std::sync::atomic::Ordering::SeqCst) {
+        return "<div class=\"notice new\"><span>Jaynes is updating: cargo builds it, which takes a few minutes.</span></div>".to_string();
+    } else if let (Some(r), Some(i)) = (&running, &installed)
+        && r != i
+    {
+        (format!("Jaynes was updated to {}.", &i[..7]), "restart", "Restart the page")
+    } else if let (Some(l), Some(i)) = (&latest, &installed)
+        && l != i
+    {
+        ("A newer Jaynes is out.".to_string(), "update", "Update")
+    } else {
+        return String::new();
+    };
+    format!("<div class=\"notice new\"><span>{text}</span><button class=\"act\" data-setup=\"{act}\">{label}</button></div>")
+}
+
+/// The guard in Claude Code, and which Jaynes this is.
+fn setup_html(home: &std::path::Path) -> String {
+    let (on, owners) = crate::install::guard();
+    let path = crate::install::guard_path().map(|p| p.display().to_string()).unwrap_or_default();
+    let state = if on {
+        "<span class=\"chip green\">on</span> <button class=\"act\" data-setup=\"guard-off\">Turn off</button>"
+    } else {
+        "<span class=\"chip red\">off</span> <button class=\"act\" data-setup=\"guard-on\">Turn on</button>"
+    };
+    let rows: String = owners.iter().map(|o| format!("<span class=\"owner\"><code>{}</code><button class=\"act\" data-setup=\"owner-remove\" data-owner=\"{0}\">Remove</button></span>", esc(o))).collect();
+    let none = if owners.is_empty() { "<span class=\"none\">none: every held action asks, wherever it lands</span>" } else { "" };
+    let installed = crate::install::installed_commit();
+    let version = match &installed {
+        Some(c) => format!("<code>{}</code> from {}", esc(&c[..7]), crate::install::SOURCE),
+        None => "not installed with cargo from git".to_string(),
+    };
+    let log = std::fs::read_to_string(home.join("update.log")).unwrap_or_default();
+    let log = if log.trim().is_empty() { String::new() } else { format!("<details class=\"way\"><summary>What the last update said</summary><pre class=\"said\">{}</pre></details>", esc(log.trim())) };
+    format!(
+        "<h1>Setup</h1>\
+         <section class=\"part\"><h2>Guard</h2><p class=\"sub\">In every Claude Code session with the Jaynes plugin, it asks before what cannot be undone in git and GitHub: push, reset --hard, clean, deleting branches or tags, merging or closing pull requests, and creating or deleting repositories. Everything else passes. Repositories whose GitHub owner is a free owner pass freely.</p>\
+         <table class=\"kv\"><tr><td>state</td><td>{state}</td></tr><tr><td>free owners</td><td>{rows}{none}<span class=\"owner\"><input id=\"owner\" placeholder=\"GitHub owner\"><button class=\"act\" data-setup=\"owner-add\">Add</button></span></td></tr><tr><td>settings</td><td><code>{}</code></td></tr></table></section>\
+         <section class=\"part\"><h2>Version</h2><table class=\"kv\"><tr><td>installed</td><td>{version}</td></tr></table>{log}</section>\
+         <div class=\"refused\" id=\"setupmsg\"></div>",
+        esc(&path)
+    )
+}
+
 /// The form that starts a run: a role, a project, the request, and how risky the change is.
 fn new_html(roles: &[(String, String)], last: Option<(String, String)>) -> String {
     let (role, project) = last.unwrap_or_default();
@@ -924,6 +1052,10 @@ details.fold { margin-top:12px; } details.fold summary { cursor:pointer; color:v
 .form input:focus, .form textarea:focus { outline:none; border-color:var(--blue); } .form .send { align-self:flex-start; }
 ul.roles { margin:-8px 0 0; padding-left:18px; font-size:13px; color:var(--dim); } ul.roles b { font-family:var(--mono); font-weight:500; font-size:12px; color:var(--ink); margin-right:6px; }
 pre.said { font-family:var(--mono); font-size:12px; color:var(--dim); white-space:pre-wrap; margin:12px 0; }
+table.kv { border-collapse:collapse; margin-top:6px; } table.kv td { padding:8px 14px 8px 0; vertical-align:top; border-top:1px solid var(--line); font-size:13.5px; }
+table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(--dim); width:120px; }
+.owner { display:inline-flex; align-items:center; gap:8px; margin:0 12px 6px 0; } .owner input { background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px 9px; font:inherit; font-size:13px; }
+.notice.new { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--blue-soft); color:var(--ink); }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
@@ -936,7 +1068,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 .effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; }
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
-<div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a></nav></div>
+<div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a><a href="/setup">Setup</a></nav></div>
 <div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}</main></div>
 <div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
 <script>
@@ -994,6 +1126,16 @@ document.addEventListener("click", async e => {
   if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
 });
 // The page follows the record, but never reloads under the person's hands.
+document.querySelectorAll("[data-setup]").forEach(b => b.addEventListener("click", async () => {
+  const act = b.dataset.setup;
+  const owner = b.dataset.owner || (document.getElementById("owner") || {}).value || "";
+  const r = await (await fetch("/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: act, owner }) })).json();
+  const msg = document.getElementById("setupmsg");
+  if (!r.ok) { if (msg) msg.textContent = r.refused; else alertless(r.refused); return; }
+  if (act === "restart") { document.body.style.opacity = .4; setTimeout(function back() { fetch("/api/version").then(() => location.reload(), () => setTimeout(back, 500)); }, 1200); }
+  else location.reload();
+}));
+function alertless(text) { const n = document.createElement("div"); n.className = "notice bad"; n.textContent = text; document.querySelector("main").prepend(n); }
 const sf = document.getElementById("start");
 if (sf) sf.addEventListener("submit", async ev => {
   ev.preventDefault();

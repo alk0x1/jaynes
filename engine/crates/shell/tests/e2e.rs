@@ -786,3 +786,45 @@ fn the_person_starts_a_run_from_the_page() {
     let view = http(port, &format!("GET /run/{run} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("say hi instead of hello") && view.contains("Finished: delivered"), "{view}");
 }
+
+#[test]
+fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
+    let s = scratch("setup");
+    let settings = s.home.parent().expect("base").join("settings");
+    let install = s.home.parent().expect("base").join("install");
+    std::fs::create_dir_all(&install).expect("dir");
+    let installed = |commit: &str| {
+        let line = format!("[v1]\n\"jaynes-shell 0.1.0 (git+https://github.com/alk0x1/jaynes#{commit})\" = [\"jaynes\"]\n");
+        std::fs::write(install.join(".crates.toml"), line).expect("write");
+    };
+    installed(&"a".repeat(40));
+    let port = 16750 + (std::process::id() % 1000) as u16;
+    let _page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_HOME", &settings)
+        .env("JAYNES_INSTALL_ROOT", &install)
+        .env("JAYNES_NO_UPDATE_CHECK", "1")
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(Page)
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let me = "jaynes_key=k3y";
+    let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    let setup = get("/setup");
+    assert!(setup.contains("<h2>Guard</h2>") && setup.contains("chip green\">on") && setup.contains("aaaaaaa"), "{setup}");
+    // only the person changes the guard
+    assert_eq!(post(port, "/api/setup", r#"{"action":"guard-off"}"#, "")["ok"], false);
+    assert_eq!(post(port, "/api/setup", r#"{"action":"guard-off"}"#, me)["ok"], true);
+    assert_eq!(post(port, "/api/setup", r#"{"action":"owner-add","owner":"someone"}"#, me)["ok"], true);
+    let g: Value = serde_json::from_str(&std::fs::read_to_string(settings.join("guard.json")).expect("guard")).expect("json");
+    assert_eq!(g["on"], false);
+    assert_eq!(g["owners"], serde_json::json!(["someone"]));
+    assert_eq!(post(port, "/api/setup", r#"{"action":"owner-remove","owner":"someone"}"#, me)["ok"], true);
+    // a newer Jaynes installed on disk: the page asks to be restarted
+    assert!(!get("/home").contains("Restart the page"));
+    installed(&"b".repeat(40));
+    assert!(get("/home").contains("Restart the page"));
+}

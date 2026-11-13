@@ -187,10 +187,66 @@ from a program counts as the agent's. Everything else is the person's: never sen
 answer a question of taste or direction.
 ";
 
+/// Where cargo installs Jaynes: `~/.local`, or `$JAYNES_INSTALL_ROOT`.
+pub fn install_root() -> Result<PathBuf, String> {
+    if let Ok(root) = std::env::var("JAYNES_INSTALL_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
+    std::env::var("HOME").map(|h| PathBuf::from(h).join(".local")).map_err(|e| e.to_string())
+}
+
+/// The commit of Jaynes that cargo installed from git, as cargo recorded it; None when it was not installed so.
+pub fn installed_commit() -> Option<String> {
+    let text = std::fs::read_to_string(install_root().ok()?.join(".crates.toml")).ok()?;
+    let line = text.lines().find(|l| l.contains("\"jaynes-shell ") && l.contains('#'))?;
+    let after = line.split('#').nth(1)?;
+    let commit: String = after.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+    (commit.len() >= 7).then_some(commit)
+}
+
+/// The newest commit of Jaynes where it is published, asked of git.
+pub fn latest_commit() -> Option<String> {
+    let out = Command::new("git").args(["ls-remote", SOURCE, "refs/heads/main"]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let commit = text.split_whitespace().next()?.to_string();
+    (out.status.success() && commit.len() == 40).then_some(commit)
+}
+
+/// Where the guard in Claude Code keeps whether it is on and the GitHub owners that pass freely.
+pub fn guard_path() -> Result<PathBuf, String> {
+    let home = match std::env::var("JAYNES_HOME") {
+        Ok(h) => PathBuf::from(h),
+        Err(_) => std::env::var("HOME").map(|h| PathBuf::from(h).join(".jaynes")).map_err(|e| e.to_string())?,
+    };
+    Ok(home.join("guard.json"))
+}
+
+/// The guard's settings, as the guard reads them: on unless it says otherwise, and its free owners.
+pub fn guard() -> (bool, Vec<String>) {
+    let v: serde_json::Value = guard_path().ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let on = v["on"].as_bool().unwrap_or(true);
+    let owners = v["owners"].as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    (on, owners)
+}
+
+/// Write the guard's settings whole, through a file renamed into place so the guard never reads half of it.
+pub fn set_guard(on: bool, owners: &[String]) -> Result<(), String> {
+    let path = guard_path()?;
+    let mut v: serde_json::Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| serde_json::json!({}));
+    v["on"] = serde_json::json!(on);
+    v["owners"] = serde_json::json!(owners);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 /// Build and install the newest Jaynes from where it is published, and update the roles that came from git.
 pub fn update(home: &Path) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
-    let root = std::env::var("HOME").map(|h| PathBuf::from(h).join(".local")).map_err(|e| e.to_string())?;
+    let root = install_root()?;
     let status = Command::new("cargo")
         .args(["install", "--locked", "--quiet", "--git", SOURCE, "jaynes-shell", "--root"])
         .arg(&root)
