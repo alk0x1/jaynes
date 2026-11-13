@@ -17,6 +17,10 @@ pub enum Input {
         manifest: crate::manifest::Manifest,
         /// The fingerprint of the role program's content, so the run stays on this version.
         role_fingerprint: Digest,
+        /// The agent program and model the run's agent steps use, fixed for the run: a stop's record of going well
+        /// counts only for the agent that earned it.
+        #[serde(default)]
+        agent: String,
         /// A risk the person raises the run to from the start.
         #[serde(default)]
         raise: Option<Risk>,

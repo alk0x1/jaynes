@@ -40,11 +40,16 @@ impl Setup {
     }
 }
 
+/// The agent a run's setup names: `command:CMD`, or `claude:MODEL` with the model fixed when the run started.
 pub fn agent_named(spec: &str) -> Box<dyn Agent> {
-    match spec.strip_prefix("command:") {
-        Some(cmd) => Box::new(agent::Shell { command: cmd.to_string() }),
-        None => Box::new(agent::Claude::default()),
+    if let Some(cmd) = spec.strip_prefix("command:") {
+        return Box::new(agent::Shell { command: cmd.to_string() });
     }
+    let mut claude = agent::Claude::default();
+    if let Some(model) = spec.strip_prefix("claude:").filter(|m| !m.is_empty()) {
+        claude.model = model.to_string();
+    }
+    Box::new(claude)
 }
 
 pub fn merges(dir: &Path) -> Vec<String> {
@@ -949,7 +954,7 @@ mod tests {
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: String::new(),
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], delivery: Default::default() };
-        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), raise: None, attention: Default::default() };
+        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };
         let out = jaynes_core::decide(None, &start).expect("start");
         let events: Vec<Event> = out
             .events
@@ -966,6 +971,12 @@ mod tests {
         store.append("old", &events).expect("append");
         std::fs::create_dir_all(home.join("runs/old")).expect("dir");
         store.state("old").expect("state").expect("run")
+    }
+
+    #[test]
+    fn a_run_s_agent_keeps_the_model_it_started_with() {
+        assert!(agent_named("claude:claude-sonnet-5-5").name().starts_with("claude claude-sonnet-5-5 "));
+        assert!(agent_named("command:true").name().starts_with("command:"));
     }
 
     #[test]

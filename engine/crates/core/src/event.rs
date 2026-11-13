@@ -91,6 +91,9 @@ pub enum Event {
         request: String,
         manifest: Manifest,
         role_fingerprint: Digest,
+        /// The agent program and model, fixed for the run.
+        #[serde(default)]
+        agent: String,
         engine: String,
         protocol: u32,
         format: u32,

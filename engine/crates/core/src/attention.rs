@@ -166,6 +166,8 @@ enum State {
 #[derive(Clone, Debug)]
 struct Item {
     key: Digest,
+    /// The agent of the run the outcome comes from.
+    agent: String,
     at: u64,
     state: State,
     earns: bool,
@@ -175,6 +177,7 @@ struct Item {
 fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
     let mut out: Vec<Item> = Vec::new();
     let mut runs: BTreeMap<String, (Manifest, Digest)> = BTreeMap::new();
+    let mut agents: BTreeMap<String, String> = BTreeMap::new();
     let mut last: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut questions: BTreeMap<(String, String), (String, QuestionKind)> = BTreeMap::new();
     let mut finished: BTreeMap<String, (u64, Outcome)> = BTreeMap::new();
@@ -185,15 +188,16 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
             runs.get(run).and_then(|(m, f)| m.index(step).map(|i| (stop_key(m, f, i), m.steps[i].executor)))
         };
         match e {
-            Event::RunStarted { manifest, role_fingerprint, .. } => {
+            Event::RunStarted { manifest, role_fingerprint, agent, .. } => {
                 runs.insert(run.clone(), (manifest.clone(), role_fingerprint.clone()));
+                agents.insert(run.clone(), agent.clone());
             }
             Event::QuestionOpened { question } => {
                 questions.insert((run.clone(), question.id.clone()), (question.step.clone(), question.kind));
             }
             Event::StopSkipped { step, .. } => {
                 if let Some((key, _)) = key_of(step, &runs) {
-                    release(&mut out, &mut last, run, step, Item { key, at: *at, state: State::Pending, earns: true });
+                    release(&mut out, &mut last, run, step, Item { key, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Pending, earns: true });
                 }
             }
             Event::AnswerRecorded { answer, .. } => {
@@ -217,9 +221,9 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
                             last.remove(&(run.clone(), step.clone()));
                             continue;
                         }
-                    out.push(Item { key, at: *at, state: State::Error, earns: false });
+                    out.push(Item { key, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Error, earns: false });
                 } else {
-                    release(&mut out, &mut last, run, &step, Item { key, at: *at, state: State::Pending, earns: person });
+                    release(&mut out, &mut last, run, &step, Item { key, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Pending, earns: person });
                 }
             }
             Event::StepInvalidated { step, .. } => {
@@ -284,9 +288,11 @@ fn release(out: &mut Vec<Item>, last: &mut BTreeMap<(String, String), usize>, ru
     last.insert((run.to_string(), step.to_string()), out.len() - 1);
 }
 
-/// The count of the stop `key`, from the record, at time `now`. With its budget and δ, whether it is braked.
-pub fn count(history: &[(u64, String, Event)], key: &Digest, now: u64, budget: Option<f64>, delta: f64) -> Count {
-    let mut mine: Vec<Item> = items(history, now).into_iter().filter(|i| &i.key == key).collect();
+/// The count of the stop `key` for runs whose agent is `agent`, from the record, at time `now`. With its budget and
+/// δ, whether it is braked. An error counts whatever agent made it, and is never forgotten; going well counts only
+/// for the agent that did it, so a new model starts with the stop's errors and none of its rights.
+pub fn count(history: &[(u64, String, Event)], key: &Digest, agent: &str, now: u64, budget: Option<f64>, delta: f64) -> Count {
+    let mut mine: Vec<Item> = items(history, now).into_iter().filter(|i| &i.key == key && (i.agent == agent || i.state == State::Error)).collect();
     mine.sort_by_key(|i| i.at);
     let known: Vec<&Item> = mine.iter().filter(|i| i.state == State::Right || i.state == State::Error).collect();
     let pending = mine.iter().filter(|i| i.state == State::Pending && i.earns).count() as u64;

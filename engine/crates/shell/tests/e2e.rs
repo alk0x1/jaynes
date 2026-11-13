@@ -77,6 +77,7 @@ fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
     let e = events(&s, "small");
     let t = types(&e);
     assert!(!t.contains(&"QuestionOpened".to_string()), "no stop on a small change: {t:?}");
+    assert!(e[0]["agent"].as_str().unwrap_or("").starts_with("command:sed"), "the run records its agent: {}", e[0]);
     // the person's working tree is untouched, and the change is on the run's branch
     assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n");
     let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/small:greeting.txt"]).output().expect("git");

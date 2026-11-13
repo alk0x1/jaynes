@@ -48,7 +48,7 @@ pub const PAUSE_OVER: &str = "pause-over";
 const MAX_MOVES: usize = 10_000;
 
 pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
-    if let Input::Start { run: id, request, manifest, role_fingerprint, raise, attention } = input {
+    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention } = input {
         if run.is_some() {
             return refuse("the run already started");
         }
@@ -67,6 +67,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             request: request.clone(),
             manifest: manifest.clone(),
             role_fingerprint: role_fingerprint.clone(),
+            agent: agent.clone(),
             engine: ENGINE.to_string(),
             protocol: PROTOCOL,
             format: FORMAT,

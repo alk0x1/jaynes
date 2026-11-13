@@ -832,6 +832,7 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         request: "change the button's text".to_string(),
         manifest: manifest.clone(),
         role_fingerprint: fingerprint,
+        agent: "claude:m1".to_string(),
         raise,
         attention,
     });
@@ -850,7 +851,7 @@ fn simulate(seed: u64) {
         request: String::new(),
         manifest,
         role_fingerprint: Digest("other".to_string()),
-        raise: None,
+        agent: "claude:m1".to_string(), raise: None,
         attention: BTreeMap::new()
     })
     .is_err());
@@ -956,7 +957,7 @@ fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
         request: "do it".to_string(),
         manifest,
         role_fingerprint: Digest("f".to_string()),
-        raise: None,
+        agent: "claude:m1".to_string(), raise: None,
         attention: BTreeMap::new(),
     })
     .expect("start");
@@ -1209,7 +1210,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
     let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], delivery: Default::default() };
-    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), raise: None, attention: BTreeMap::new() });
+    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new() });
     assert!(refused.is_err());
 }
 
@@ -1277,7 +1278,7 @@ fn simulate_logged(seed: u64) {
     let manifest = role(&mut w.rng);
     eprintln!("{}", serde_json::to_string_pretty(&manifest).expect("json"));
     let raise = if w.rng.chance(20) { Some(Risk::High) } else { None };
-    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), raise, attention: BTreeMap::new() });
+    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new() });
 
     let mut printed = 0;
     for _ in 0..400 {
@@ -1374,7 +1375,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
     vec![
         (at, r.clone(), Event::RunStarted {
             run: r.clone(), request: String::new(), manifest: manifest.clone(), role_fingerprint: Digest("f".to_string()),
-            engine: String::new(), protocol: 1, format: 1, risk: Risk::Low, reasons: Vec::new(), ceilings: c, ceiling: c.low,
+            agent: "claude:m1".to_string(), engine: String::new(), protocol: 1, format: 1, risk: Risk::Low, reasons: Vec::new(), ceilings: c, ceiling: c.low,
             attention: BTreeMap::new(),
         }),
         (at, r.clone(), Event::QuestionOpened { question }),
@@ -1396,26 +1397,30 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
         h.extend(history_run(&format!("r{n}"), 1000, None, By::Person, &manifest));
     }
     // an accept counts as right only once its delivery held seven days
-    assert_eq!(count(&h, &key, 1000 + day, Some(0.2), 0.05).n, 0);
-    assert_eq!(count(&h, &key, 1000 + day, Some(0.2), 0.05).pending, 25);
-    let c = count(&h, &key, 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!(count(&h, &key, "claude:m1", 1000 + day, Some(0.2), 0.05).n, 0);
+    assert_eq!(count(&h, &key, "claude:m1", 1000 + day, Some(0.2), 0.05).pending, 25);
+    let c = count(&h, &key, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
     assert_eq!((c.n, c.k, c.braked), (25, 0, false));
     assert!(jaynes_core::attention::certified(c.n, c.k, 0.2, 0.05));
     // what an agent let through never earns a right
     let mut agent = h.clone();
     agent.extend(history_run("ra", 1000, None, By::Agent { who: "claude".to_string() }, &manifest));
-    assert_eq!(count(&agent, &key, 1000 + 8 * day, Some(0.2), 0.05).n, 25);
+    assert_eq!(count(&agent, &key, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05).n, 25);
     // a correction after delivery turns a right into an error, and two errors among the last ten brake the stop
     let mut corrected = h.clone();
     for run in ["r23", "r24"] {
         corrected.push((2000, run.to_string(), Event::DeliveryCorrected { note: "wrong".to_string(), by: By::Person, step: Some("change".to_string()) }));
     }
-    let c = count(&corrected, &key, 1000 + 8 * day, Some(0.2), 0.05);
+    let c = count(&corrected, &key, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
     assert_eq!((c.n, c.k, c.braked), (25, 2, true));
+    // another model starts with the stop's errors and none of its rights
+    assert_eq!(count(&h, &key, "claude:m2", 1000 + 8 * day, Some(0.2), 0.05).n, 0, "rights earned by m1 are not m2's");
+    let c = count(&corrected, &key, "claude:m2", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (2, 2, true), "errors made with m1 count for m2 too");
     // a send-back counts at once
     let mut back = h.clone();
     back.extend(history_run("rb", 1000, Some(Verdict::Redo { note: "no".to_string() }), By::Person, &manifest));
-    assert_eq!(count(&back, &key, 1000 + day, Some(0.2), 0.05).k, 1);
+    assert_eq!(count(&back, &key, "claude:m1", 1000 + day, Some(0.2), 0.05).k, 1);
 }
 
 #[test]
@@ -1427,7 +1432,7 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let key = stop_key(&manifest, &f, 0);
     let run_with = |id: &str, braked: bool| {
         let attention = [("change".to_string(), Count { key: key.clone(), n: 40, k: 0, pending: 0, braked })].into_iter().collect();
-        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), raise: None, attention }).expect("start");
+        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention }).expect("start");
         let mut run = Run::fold(&out.events).expect("run");
         let c = probe_ok(&mut run, out.commands);
         let _ = c;

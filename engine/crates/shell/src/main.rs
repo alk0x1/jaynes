@@ -279,6 +279,8 @@ fn start(args: &[String]) -> Result<(), String> {
     let request = flag(args, "--request").ok_or("--request TEXT is needed")?;
     let project = flag(args, "--project").map(|p| std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))).transpose()?;
     let agent = flag(args, "--agent").or_else(|| std::env::var("JAYNES_AGENT").ok()).unwrap_or_else(|| "claude".into());
+    // the model is fixed for the run here, so every process that carries the run on uses the same one
+    let agent = if agent == "claude" { format!("claude:{}", agent::Claude::default().model) } else { agent };
     let raise = match flag(args, "--risk").as_deref() {
         Some("high") => Some(Risk::High),
         Some("low") | None => None,
@@ -321,7 +323,7 @@ fn start(args: &[String]) -> Result<(), String> {
     for (i, step) in manifest.steps.iter().enumerate() {
         let Some(stop) = &step.stop else { continue };
         let key = jaynes_core::attention::stop_key(&manifest, &fingerprint, i);
-        let c = jaynes_core::attention::count(&history, &key, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
+        let c = jaynes_core::attention::count(&history, &key, &agent, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
         attention.insert(step.name.clone(), c);
     }
     s.put_setup(&id, &json!({
@@ -332,7 +334,7 @@ fn start(args: &[String]) -> Result<(), String> {
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
-    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, raise, attention })?;
+    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention })?;
     print_state(&end);
     Ok(())
 }

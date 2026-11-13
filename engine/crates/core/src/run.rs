@@ -15,6 +15,9 @@ pub struct Run {
     pub manifest: Manifest,
     pub role_fingerprint: Digest,
     pub engine: String,
+    /// The agent program and model, fixed for the run.
+    #[serde(default)]
+    pub agent: String,
     pub protocol: u32,
     pub format: u32,
     pub risk: Risk,
@@ -146,7 +149,7 @@ impl Run {
     }
 
     pub fn started(e: &Event) -> Option<Run> {
-        let Event::RunStarted { run, request, manifest, role_fingerprint, engine, protocol, format, risk, ceilings, ceiling, attention, .. } = e else {
+        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, ceilings, ceiling, attention, .. } = e else {
             return None;
         };
         Some(Run {
@@ -156,6 +159,7 @@ impl Run {
             manifest: manifest.clone(),
             role_fingerprint: role_fingerprint.clone(),
             engine: engine.clone(),
+            agent: agent.clone(),
             protocol: *protocol,
             format: *format,
             risk: *risk,
