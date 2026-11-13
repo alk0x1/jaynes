@@ -29,6 +29,9 @@ pub struct Spec<'a> {
     /// How to start Jaynes's leave server for this turn, so what the agent asks beyond its settings comes to
     /// Jaynes instead of being refused.
     pub permit: Option<(Vec<String>, Vec<(String, String)>)>,
+    /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
+    /// it counts neither towards the deadline nor in the turn's time.
+    pub paused: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -55,8 +58,9 @@ pub trait Agent {
     fn turn(&self, spec: Spec<'_>) -> Turn;
 }
 
-/// Run a program with `input` on its standard input, killed with its whole group at the deadline.
-fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>) -> Result<(Option<i32>, String, String, Duration, bool), String> {
+/// Run a program with `input` on its standard input, killed with its whole group at the deadline. The time
+/// `paused` exists is not counted: neither towards the deadline nor in the time returned.
+fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>, paused: Option<&Path>) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     use std::os::unix::process::CommandExt;
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let started = Instant::now();
@@ -65,7 +69,7 @@ fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>
     if let Some(f) = pidfile {
         std::fs::write(f, pid.to_string()).map_err(|e| format!("Jaynes could not note the agent's process: {e}"))?;
     }
-    let result = watch(&mut child, pid, input, deadline, started);
+    let result = watch(&mut child, pid, input, deadline, started, paused);
     if let Some(f) = pidfile {
         let _gone = std::fs::remove_file(f);
     }
@@ -94,7 +98,7 @@ pub fn stop_left(pidfile: &Path) -> bool {
     true
 }
 
-fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, started: Instant) -> Result<(Option<i32>, String, String, Duration, bool), String> {
+fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, started: Instant, paused: Option<&Path>) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     if let Some(mut stdin) = child.stdin.take() {
         let _wrote = stdin.write_all(input.as_bytes());
     }
@@ -111,10 +115,17 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
         s
     });
     let mut timed_out = false;
+    let mut waited = Duration::ZERO;
+    let mut last = Instant::now();
     let code = loop {
+        let now = Instant::now();
+        if paused.is_some_and(Path::exists) {
+            waited += now - last;
+        }
+        last = now;
         match child.try_wait() {
             Ok(Some(status)) => break status.code(),
-            Ok(None) if started.elapsed() > deadline => {
+            Ok(None) if started.elapsed().saturating_sub(waited) > deadline => {
                 timed_out = true;
                 let _term = Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
                 std::thread::sleep(Duration::from_secs(3));
@@ -126,7 +137,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             Err(e) => return Err(format!("the agent program could not be watched: {e}")),
         }
     };
-    Ok((code, out.join().unwrap_or_default(), err.join().unwrap_or_default(), started.elapsed(), timed_out))
+    Ok((code, out.join().unwrap_or_default(), err.join().unwrap_or_default(), started.elapsed().saturating_sub(waited), timed_out))
 }
 
 // --- a command of the person's: for tests and for agent programs without an adapter --------------------------
@@ -157,7 +168,7 @@ impl Agent for Shell {
             cmd.env("JAYNES_SESSION", s);
         }
         let applied = json!({"command": self.command});
-        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref()) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref(), spec.paused.as_deref()) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
                 if let Some(t) = &spec.transcript {
@@ -187,6 +198,9 @@ fn probe_folder(cwd: &Path) -> Result<(), String> {
 }
 
 // --- Claude Code -------------------------------------------------------------------------------------------------
+
+/// How long Claude Code waits on a call to Jaynes's leave server: a week, so a leave waits for the person.
+const LEAVE_PATIENCE_MS: &str = "604800000";
 
 pub struct Claude {
     pub model: String,
@@ -299,13 +313,14 @@ impl Agent for Claude {
         if spec.permit.is_some() {
             cmd.args(["--permission-prompt-tool", "mcp__jaynes__permit"]);
         }
-        cmd.current_dir(spec.cwd).env("TMPDIR", &tmp).env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
+        // a leave waits for the person as long as they take: Claude Code must not give up on the call meanwhile
+        cmd.current_dir(spec.cwd).env("TMPDIR", &tmp).env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1").env("MCP_TOOL_TIMEOUT", LEAVE_PATIENCE_MS);
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
         let applied = json!({"program": "claude", "model": self.model, "effort": self.effort, "settings": settings,
                              "resume": spec.session});
-        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref()) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref(), spec.paused.as_deref()) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
                 if let Some(t) = &spec.transcript {
@@ -413,6 +428,24 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_spent_waiting_for_the_person_is_not_the_agent_s() {
+        let dir = std::env::temp_dir().join(format!("jaynes-pause-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mark = dir.join("leave-waiting");
+        // the program waits 2 s for the person, with a deadline of 1 s: it is not cut off, and the 2 s are not its
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(format!("touch {m}; sleep 2; rm {m}", m = mark.display()));
+        let (code, _, _, took, timed_out) = run(cmd, "", Duration::from_secs(1), None, Some(&mark)).expect("ran");
+        assert_eq!((code, timed_out), (Some(0), false));
+        assert!(took < Duration::from_millis(900), "{took:?}");
+        // without the person, the same deadline cuts it off
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 2");
+        let (_, _, _, _, timed_out) = run(cmd, "", Duration::from_secs(1), None, Some(&mark)).expect("ran");
+        assert!(timed_out);
+    }
 
     #[test]
     fn a_read_only_step_writes_only_its_exchange_folder() {

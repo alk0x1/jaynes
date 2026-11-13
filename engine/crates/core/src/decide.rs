@@ -37,6 +37,8 @@ pub const READ_INSIDE_PROJECT: &str = "read-inside-project";
 /// The rule that lets a step run a command when its role says the step runs commands: the agent program's own box
 /// confines every command it runs.
 pub const COMMAND_THE_STEP_MAY_RUN: &str = "command-the-step-may-run";
+/// The rule that gives a leave asked again in a run the answer the person already gave it: they are not asked twice.
+pub const ANSWERED_BEFORE: &str = "answered-before";
 /// The rule that raises a run's risk from what its change touches.
 pub const WHAT_THE_CHANGE_TOUCHES: &str = "what-the-change-touches";
 /// The rule that continues a run paused from outside once the pause is over.
@@ -222,6 +224,7 @@ impl Ctx {
     }
 
     fn question_id(&self, step: &str) -> String {
+        // `asked_order` reads the number back
         format!("q{}-{step}", self.run.questions.len() + 1)
     }
 
@@ -835,8 +838,29 @@ impl Ctx {
             holds: true,
             about,
         };
+        // the same leave, answered by the person earlier in the run
+        let before = self
+            .run
+            .questions
+            .values()
+            .filter(|q| q.question.kind == QuestionKind::Permission && q.question.items.first().map(|x| &x.digest) == question.items.first().map(|x| &x.digest))
+            .filter(|q| q.answer.as_ref().is_some_and(|a| a.by.person()))
+            .max_by_key(|q| asked_order(&q.question.id))
+            .and_then(|q| q.answer.clone());
         self.emit(Event::QuestionOpened { question: question.clone() });
-        if let Some(rule) = routine(&self.run.manifest.steps[i].reach, ask) {
+        if let Some(earlier) = before {
+            let allow = earlier.verdict("leave") == Verdict::Keep;
+            let answer = Answer {
+                question: question.id.clone(),
+                shown: question.shown(),
+                verdicts: [("leave".to_string(), earlier.verdict("leave"))].into_iter().collect(),
+                by: By::Rule { rule: ANSWERED_BEFORE.to_string() },
+                context: earlier.context.clone(),
+            };
+            let effects = effects(&self.run, &question, &answer);
+            self.emit(Event::AnswerRecorded { answer, effects });
+            self.command(Command::Permit { step: step.to_string(), attempt, allow });
+        } else if let Some(rule) = routine(&self.run.manifest.steps[i].reach, ask) {
             let answer = Answer {
                 question: question.id.clone(),
                 shown: question.shown(),
@@ -973,6 +997,11 @@ fn describe_ask(ask: &Ask) -> String {
 /// The rule that may grant a leave without the person, if any: reading a path inside the step's copy of the project,
 /// for a step that may read it, or running a command, for a step its role lets run commands. Anything else is the
 /// person's.
+/// The order in which a question was asked, from its id.
+pub fn asked_order(id: &str) -> usize {
+    id.strip_prefix('q').and_then(|r| r.split('-').next()).and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str> {
     let t = &ask.target;
     let inside = !t.is_empty() && !t.starts_with('/') && !t.starts_with('~') && !t.split('/').any(|part| part == "..");

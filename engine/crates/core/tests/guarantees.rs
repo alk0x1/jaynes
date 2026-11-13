@@ -348,6 +348,12 @@ impl World {
                     let q = &pre.questions[&answer.question].question;
                     match &answer.by {
                         By::Person => {}
+                        By::Rule { rule } if rule == jaynes_core::decide::ANSWERED_BEFORE => {
+                            // only the person's own answer to the same leave, given again
+                            let digest = &q.items[0].digest;
+                            let earlier = pre.questions.values().filter(|o| o.question.kind == QuestionKind::Permission && &o.question.items[0].digest == digest).filter(|o| o.answer.as_ref().is_some_and(|a| a.by.person())).max_by_key(|o| jaynes_core::decide::asked_order(&o.question.id)).and_then(|o| o.answer.as_ref());
+                            assert!(q.kind == QuestionKind::Permission && earlier.is_some_and(|a| a.verdict("leave") == answer.verdict("leave")), "seed {seed}: G9 a leave answered again without the person's earlier answer");
+                        }
                         By::Rule { rule } => {
                             assert!(rule == READ_INSIDE_PROJECT || rule == jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN, "seed {seed}: G9 unknown rule");
                             assert_eq!(q.kind, QuestionKind::Permission, "seed {seed}: G9 a rule answered a decision");
@@ -1137,6 +1143,27 @@ fn g9_a_routine_leave_is_granted_by_a_rule_and_recorded() {
     assert_eq!(routine(&reads, &Ask { kind: AskKind::Command, target: "make test".to_string() }), None, "a step that runs no commands");
     let runs = Reach { commands: true, ..reads };
     assert_eq!(routine(&runs, &Ask { kind: AskKind::Command, target: "make test".to_string() }), Some(jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN));
+}
+
+#[test]
+fn g9_a_leave_asked_again_gets_the_person_s_earlier_answer_without_asking_them() {
+    let mut build = step("build", Executor::Agent);
+    build.reach = Reach { project: ProjectAccess::Read, ..Reach::default() };
+    let (mut run, cmds) = start(vec![build]);
+    probe_ok(&mut run, cmds);
+    let outside = Input::PermissionAsked { step: "build".to_string(), attempt: 1, ask: Ask { kind: AskKind::Read, target: "/etc/passwd".to_string() } };
+    let c = feed(&mut run, outside.clone());
+    assert!(c.iter().any(|c| matches!(c, Command::Ask { .. })), "the first time, the person is asked");
+    let q = run.questions.values().next().expect("asked").question.clone();
+    feed(&mut run, Input::Answer {
+        answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: [("leave".to_string(), Verdict::Drop)].into_iter().collect(), by: By::Person, context: "not outside".to_string() },
+    });
+    let c = feed(&mut run, outside);
+    assert!(c.iter().any(|c| matches!(c, Command::Permit { allow: false, .. })) && !c.iter().any(|c| matches!(c, Command::Ask { .. })), "{c:?}");
+    let again = run.questions.values().find(|x| x.question.id != q.id).and_then(|x| x.answer.clone()).expect("answered");
+    assert_eq!(again.by, By::Rule { rule: jaynes_core::decide::ANSWERED_BEFORE.to_string() });
+    assert_eq!(again.context, "not outside");
+    assert!(matches!(run.phase, Phase::Running), "nothing waits for the person: {:?}", run.phase);
 }
 
 #[test]

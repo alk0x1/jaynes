@@ -202,7 +202,6 @@ fn run(args: &[String]) -> Result<(), String> {
                 step: need("--step")?,
                 attempt: need("--attempt")?.parse().map_err(|_| "--attempt takes a number")?,
                 cwd: PathBuf::from(need("--cwd")?),
-                wait: std::time::Duration::from_secs(flag(rest, "--wait").and_then(|w| w.parse().ok()).unwrap_or(900)),
             }
             .serve()
         }

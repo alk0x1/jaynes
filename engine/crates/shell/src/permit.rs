@@ -3,7 +3,8 @@
 //! Claude Code starts it as an MCP server (`--permission-prompt-tool mcp__jaynes__permit`). Each request becomes a
 //! `PermissionAsked` for the core, recorded at once: a rule in the core grants a routine leave (reading inside the
 //! project), and anything else opens a question for the person on the page. The server waits for the answer in
-//! the record and replies allow or deny. A question nobody answers before the turn's deadline is a deny.
+//! the record and replies allow or deny. It waits as long as the person takes: while it waits, a file marks the wait,
+//! and the turn's clock does not count that time against the agent.
 
 use crate::drive::say;
 use crate::store::Store;
@@ -13,7 +14,7 @@ use jaynes_core::Input;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct Permit {
     pub home: PathBuf,
@@ -21,7 +22,20 @@ pub struct Permit {
     pub step: String,
     pub attempt: u32,
     pub cwd: PathBuf,
-    pub wait: Duration,
+}
+
+/// The file that exists while a leave of the run waits for the person.
+pub fn waiting_mark(home: &Path, run: &str) -> PathBuf {
+    home.join("runs").join(run).join("leave-waiting")
+}
+
+/// Marks a wait for the person while it lives.
+struct Waiting(PathBuf);
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        let _gone = std::fs::remove_file(&self.0);
+    }
 }
 
 /// What a tool call asks for, as the core reads a leave.
@@ -108,7 +122,8 @@ impl Permit {
             return Self::deny("this attempt is no longer under way");
         };
         say(&format!("? leave asked at {}: {} {}", self.step, tool, ask.target));
-        let started = Instant::now();
+        let mark = waiting_mark(&self.home, &self.run);
+        let _waiting = std::fs::write(&mark, b"").ok().map(|()| Waiting(mark));
         loop {
             if let Ok(Some(run)) = store.state(&self.run)
                 && let Some(q) = run.questions.get(&question) {
@@ -124,9 +139,6 @@ impl Permit {
                         return Self::deny("the question was replaced");
                     }
                 }
-            if started.elapsed() > self.wait {
-                return Self::deny("nobody answered in time. Go on without it.");
-            }
             std::thread::sleep(Duration::from_millis(500));
         }
     }

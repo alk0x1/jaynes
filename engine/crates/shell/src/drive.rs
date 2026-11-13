@@ -486,12 +486,12 @@ impl<'a> Driver<'a> {
             env,
             transcript: Some(self.setup.dir.join("steps").join(&turn.step).join(format!("turn-{}-{}.jsonl", turn.attempt, turn.fix))),
             pidfile: Some(self.setup.dir.join("agent.pid")),
+            paused: Some(crate::permit::waiting_mark(self.setup.dir.parent().and_then(Path::parent).unwrap_or(Path::new("/")), &self.setup.run)),
             permit: std::env::current_exe().ok().map(|exe| {
                 let home = self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
                 let argv = vec![
                     exe.display().to_string(), "permit".into(), "--run".into(), self.setup.run.clone(), "--step".into(),
                     turn.step.clone(), "--attempt".into(), turn.attempt.to_string(), "--cwd".into(), cwd.display().to_string(),
-                    "--wait".into(), turn.deadline_seconds.to_string(),
                 ];
                 (argv, vec![("JAYNES_ENGINE_HOME".to_string(), home.display().to_string())])
             }),

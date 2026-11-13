@@ -510,7 +510,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let attempt = events(&s, "leave").iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == "change").count();
     let cwd = s.home.join("runs/leave/project");
     let mut child = Command::new(BIN)
-        .args(["permit", "--run", "leave", "--step", "change", "--attempt", &attempt.to_string(), "--cwd", cwd.to_str().expect("path"), "--wait", "20"])
+        .args(["permit", "--run", "leave", "--step", "change", "--attempt", &attempt.to_string(), "--cwd", cwd.to_str().expect("path")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
         .spawn().expect("permit");
@@ -525,8 +525,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     // reading outside is the person's: the server waits, the person refuses on the command line
     let asking = std::thread::spawn(move || {
         let d = mcp.permit("Read", serde_json::json!({"file_path": "/etc/hosts"}));
-        let _killed = mcp.child.kill();
-        d
+        (d, mcp)
     });
     let mut q = String::new();
     for _ in 0..50 {
@@ -538,19 +537,30 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
             }
     }
     assert!(!q.is_empty(), "the leave was asked of the person");
+    // while it waits for the person, the turn's clock stands still: the server marks the wait
+    let waiting = s.home.join("runs/leave/leave-waiting");
+    assert!(waiting.exists(), "the wait is marked");
     let answered = Command::new("script")
         .args(["-q", "/dev/null", BIN, "answer", "leave", &q, "leave=drop", "--context", "not outside the project", "--send"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("answer");
     assert!(String::from_utf8_lossy(&answered.stdout).contains("recorded"), "{}", String::from_utf8_lossy(&answered.stdout));
-    let decided = asking.join().expect("asked");
+    let (decided, mut mcp) = asking.join().expect("asked");
     assert_eq!(decided["behavior"], "deny", "{decided}");
     assert!(decided["message"].as_str().unwrap_or("").contains("not outside the project"), "{decided}");
+    assert!(!waiting.exists(), "the wait is over");
+    // the same leave asked again gets the person's answer at once, without asking them again
+    let again = mcp.permit("Read", serde_json::json!({"file_path": "/etc/hosts"}));
+    assert_eq!(again["behavior"], "deny", "{again}");
+    assert!(again["message"].as_str().unwrap_or("").contains("not outside the project"), "{again}");
+    let _killed = mcp.child.kill();
     let _done = run.wait_with_output();
     let e = events(&s, "leave");
     let rules = e.iter().filter(|e| e["type"] == "AnswerRecorded" && e["answer"]["by"]["by"] == "rule").count();
     let people = e.iter().filter(|e| e["type"] == "AnswerRecorded" && e["answer"]["by"]["by"] == "person").count();
-    assert_eq!((rules, people), (1, 1));
+    assert_eq!((rules, people), (2, 1));
+    let repeated = e.iter().filter(|e| e["type"] == "AnswerRecorded" && e["answer"]["by"]["rule"] == "answered-before").count();
+    assert_eq!(repeated, 1, "the repeated leave names the rule that answered it");
     let finished = e.iter().find(|e| e["type"] == "RunFinished").unwrap_or_else(|| panic!("the run went on and finished: {:?}", types(&e)));
     assert_eq!(finished["cost"]["sent_back"], 0, "a leave refused is not work sent back");
 }
