@@ -75,10 +75,10 @@ fn role(rng: &mut Rng) -> Manifest {
             let mut checks = Vec::new();
             if executor != Executor::Person {
                 for k in 0..rng.below(3) {
-                    let kind = if rng.chance(50) { CheckKind::Shape } else { CheckKind::Behaviour };
+                    let kind = if rng.chance(50) { CheckKind::Open } else { CheckKind::Hidden };
                     let name = match kind {
-                        CheckKind::Shape => format!("shapecheck{i}x{k}"),
-                        CheckKind::Behaviour => format!("hiddencheck{i}x{k}"),
+                        CheckKind::Open => format!("shapecheck{i}x{k}"),
+                        CheckKind::Hidden => format!("hiddencheck{i}x{k}"),
                     };
                     checks.push(CheckDecl { name, kind, about: format!("holds {k}") });
                 }
@@ -323,10 +323,10 @@ impl World {
                 Command::RunAgent(turn) => {
                     let i = post.manifest.index(&turn.step).expect("step");
                     // G3: no hidden check, no hidden step's output.
-                    assert!(turn.checks.iter().all(|c| c.kind == CheckKind::Shape), "seed {seed}: G3 a hidden check was given");
+                    assert!(turn.checks.iter().all(|c| c.kind == CheckKind::Open), "seed {seed}: G3 a hidden check was given");
                     let text = serde_json::to_string(turn).expect("json");
                     for d in &post.manifest.steps {
-                        for ch in d.checks.iter().filter(|c| c.kind == CheckKind::Behaviour) {
+                        for ch in d.checks.iter().filter(|c| c.kind == CheckKind::Hidden) {
                             assert!(!text.contains(&ch.name), "seed {seed}: G3 the agent was told of {}", ch.name);
                         }
                         if d.hidden && d.name != turn.step {
@@ -891,7 +891,7 @@ fn g4_a_box_that_refuses_spends_no_attempt() {
 #[test]
 fn a_failed_shape_check_is_fixed_in_the_same_session() {
     let mut build = step("build", Executor::Agent);
-    build.checks = vec![CheckDecl { name: "short".to_string(), kind: CheckKind::Shape, about: "at most 80 characters".to_string() }];
+    build.checks = vec![CheckDecl { name: "short".to_string(), kind: CheckKind::Open, about: "at most 80 characters".to_string() }];
     let (mut run, cmds) = start(vec![build]);
     probe_ok(&mut run, cmds);
     deliver(&mut run, "build", 1, "long", Vec::new());

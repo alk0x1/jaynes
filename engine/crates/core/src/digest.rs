@@ -5,7 +5,7 @@ use sha2::{Digest as _, Sha256};
 use std::fmt;
 
 /// The fingerprint of some content. Two contents have the same digest only if they are equal.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct Digest(pub String);
 

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The closed list of verdicts on an item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VerdictKind {
     /// Keep the item as it is. A later round may not change it.
@@ -21,7 +21,7 @@ pub enum VerdictKind {
     Skip,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "verdict", rename_all = "snake_case")]
 pub enum Verdict {
     Keep,
@@ -49,7 +49,7 @@ impl Verdict {
 }
 
 /// One thing shown to the person, as the role listed it from the step's output.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Item {
     pub id: String,
     pub label: String,
@@ -57,7 +57,7 @@ pub struct Item {
     pub digest: Digest,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuestionKind {
     /// A decision of taste or direction: always the person's.
@@ -66,7 +66,7 @@ pub enum QuestionKind {
     Permission,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Question {
     pub id: String,
     pub step: String,
@@ -88,7 +88,7 @@ impl Question {
 }
 
 /// Who gave an answer, and under which authority.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "by", rename_all = "snake_case")]
 pub enum By {
     /// The person, from the page or a channel only they hold.
@@ -105,7 +105,7 @@ impl By {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Answer {
     pub question: String,
     /// The fingerprint of the question the answerer was shown.
@@ -127,14 +127,14 @@ impl Answer {
 }
 
 /// A leave an agent asks for in the middle of an attempt.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ask {
     pub kind: AskKind,
     /// A path relative to the step's copy of the project, a host, or a command.
     pub target: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AskKind {
     Read,

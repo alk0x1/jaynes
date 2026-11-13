@@ -9,7 +9,7 @@ use crate::risk::{Ceiling, Ceilings, Changed, Risk};
 use serde::{Deserialize, Serialize};
 
 /// Time and tokens one attempt took, from the agent program's own meter as the shell read it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Usage {
     pub seconds: u64,
     /// Tokens sent and received, without those read back from the cache.
@@ -28,14 +28,14 @@ impl Usage {
 }
 
 /// What a step used: the output of an earlier step, by its fingerprint at the time.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Read {
     pub step: String,
     pub output: Digest,
 }
 
 /// Whose fault stopped a run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Fault {
     /// Jaynes or the machine: no attempt was spent.
@@ -53,7 +53,7 @@ pub enum Fault {
 }
 
 /// What an answer will do, written by the engine before the answer is sent.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Effects {
     pub sentences: Vec<String>,
     /// Steps that run again for certain.
@@ -62,7 +62,7 @@ pub struct Effects {
     pub may_rerun: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Delivered,
@@ -70,7 +70,7 @@ pub enum Outcome {
 }
 
 /// What a finished run cost, and how much of it was sent back.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Cost {
     pub risk: Risk,
     pub usage: Usage,
@@ -83,7 +83,7 @@ pub struct Cost {
     pub sent_back: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum Event {
     RunStarted {

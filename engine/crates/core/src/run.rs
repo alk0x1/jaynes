@@ -8,7 +8,7 @@ use crate::risk::{Ceiling, Ceilings, Changed, Risk};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Run {
     pub id: String,
     pub request: String,
@@ -32,7 +32,7 @@ pub struct Run {
     pub seq: u64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Counts {
     pub attempts: u32,
     pub spent: u32,
@@ -43,7 +43,7 @@ pub struct Counts {
     pub corrections: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
     Running,
@@ -52,7 +52,7 @@ pub enum Phase {
     Finished { outcome: Outcome },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StepState {
     pub round: u32,
     /// The last attempt started, so a report for an older one is told apart.
@@ -79,7 +79,7 @@ pub struct StepState {
     pub inputs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Status {
     #[default]
@@ -91,7 +91,7 @@ pub enum Status {
     Done,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Done {
     pub round: u32,
     pub output: Digest,
@@ -100,14 +100,14 @@ pub struct Done {
     pub changed: Vec<Changed>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Pending {
     pub output: Digest,
     pub items: Vec<Item>,
     pub changed: Vec<Changed>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct QuestionState {
     pub question: Question,
     pub answer: Option<Answer>,

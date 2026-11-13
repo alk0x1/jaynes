@@ -406,7 +406,7 @@ impl Ctx {
             previous: (s.round > 0).then(|| s.done.as_ref().map(|d| d.output.clone())).flatten(),
             notes: s.notes.clone(),
             failure: s.failure.clone(),
-            checks: decl.checks.iter().filter(|c| c.kind == CheckKind::Shape).cloned().collect(),
+            checks: decl.checks.iter().filter(|c| c.kind == CheckKind::Open).cloned().collect(),
             locked: s.locks.values().map(|(item, _)| item.clone()).collect(),
             dropped: s.dropped.clone(),
             deadline_seconds: self.run.ceiling.seconds.saturating_sub(self.run.spent.seconds),
@@ -640,8 +640,8 @@ impl Ctx {
                 }
                 Some(CheckVerdict::Pass) => {}
                 Some(CheckVerdict::Fail { reasons, .. }) => match c.kind {
-                    CheckKind::Shape => shape.extend(reasons.iter().cloned()),
-                    CheckKind::Behaviour => behaviour.extend(reasons.iter().cloned()),
+                    CheckKind::Open => shape.extend(reasons.iter().cloned()),
+                    CheckKind::Hidden => behaviour.extend(reasons.iter().cloned()),
                 },
             }
         }

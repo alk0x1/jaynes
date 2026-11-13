@@ -4,7 +4,7 @@ use crate::glob;
 use crate::manifest::Manifest;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
     /// A small change that can be undone: the short path.
@@ -43,7 +43,7 @@ pub const FLOOR: &[&str] = &[
 ];
 
 /// A file a step changed, as Jaynes measured it from the step's copy, never as the agent reported it.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Changed {
     pub path: String,
     /// Lines added and removed.
@@ -92,7 +92,7 @@ pub fn of_change(changed: &[Changed]) -> (Risk, Vec<String>) {
 }
 
 /// A run's ceiling of time and tokens.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ceiling {
     pub seconds: u64,
     /// Tokens sent and received, without those read back from the cache.
@@ -101,7 +101,7 @@ pub struct Ceiling {
 
 /// The ceilings a run starts with, one per risk, said before the run starts. Working values until the owner
 /// sets his own (an open question of the brief).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ceilings {
     pub low: Ceiling,
     pub high: Ceiling,

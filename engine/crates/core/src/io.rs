@@ -8,7 +8,7 @@ use crate::question::{Answer, Ask, By, Item, Question, VerdictKind};
 use crate::risk::{Ceiling, Changed, Risk};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "input", rename_all = "snake_case")]
 pub enum Input {
     Start {
@@ -84,7 +84,7 @@ pub enum Input {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum AttemptOutcome {
     /// An output, with its items as the role listed them and the files changed as Jaynes measured them.
@@ -115,13 +115,13 @@ pub enum AttemptOutcome {
     Refused { reason: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CheckResult {
     pub check: String,
     pub verdict: CheckVerdict,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "verdict", rename_all = "snake_case")]
 pub enum CheckVerdict {
     Pass,
@@ -135,7 +135,7 @@ pub enum CheckVerdict {
     Blocked { reason: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
     /// Test, from inside, what the step will reach, before an attempt is spent on it.
@@ -169,7 +169,7 @@ pub enum Command {
     Notify { text: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentTurn {
     pub step: String,
     pub round: u32,

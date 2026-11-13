@@ -8,7 +8,7 @@ use crate::risk::Risk;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Manifest {
     pub role: String,
     pub version: String,
@@ -17,7 +17,7 @@ pub struct Manifest {
     pub steps: Vec<StepDecl>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StepDecl {
     pub name: String,
     #[serde(default)]
@@ -57,7 +57,7 @@ fn two() -> u32 {
     2
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Executor {
     /// An agent program, such as Claude Code, does the step.
@@ -68,7 +68,7 @@ pub enum Executor {
     Person,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionKind {
     #[default]
@@ -77,7 +77,7 @@ pub enum SessionKind {
 }
 
 /// What a step may reach. Jaynes turns it into the agent program's own settings for the step.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Reach {
     #[serde(default)]
     pub project: ProjectAccess,
@@ -91,7 +91,7 @@ pub struct Reach {
     pub commands: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAccess {
     #[default]
@@ -100,7 +100,7 @@ pub enum ProjectAccess {
     Write,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Network {
     #[default]
@@ -109,7 +109,7 @@ pub enum Network {
 }
 
 /// What the step does to the world, by where its effect lands.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
     /// Nothing outside the step's own output.
@@ -132,26 +132,28 @@ impl Effect {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CheckDecl {
     pub name: String,
     pub kind: CheckKind,
-    /// What the check holds the output to. For a shape check the agent reads it before it delivers.
+    /// What the check holds the output to. For an open check the agent reads it before it delivers.
     #[serde(default)]
     pub about: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckKind {
-    /// On the form of the output (a field, a length, a file that must exist): the agent knows it and fixes it
-    /// in place.
-    Shape,
-    /// On what the work does: kept out of the agent's sight.
-    Behaviour,
+    /// The agent knows it before it delivers, and a failure goes back to the same session to be fixed in place:
+    /// the form of the output (a field, a length, a file that must exist), or the project's own tests, which the
+    /// agent can run itself.
+    Open,
+    /// Proof the maker never sees: not its name, not its inputs. A failure tells the agent only the check's own
+    /// sentence, and spends the attempt.
+    Hidden,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StopDecl {
     /// The verdicts the person may give each item, from the closed list.
     pub verdicts: Vec<VerdictKind>,
