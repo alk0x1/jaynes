@@ -368,7 +368,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     let mark = s.home.join("mark");
     std::fs::create_dir_all(&mark).expect("dir");
     let agent = format!(
-        "if [ ! -e {m}/started ]; then touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
+        "if [ ! -e {m}/started ]; then echo '{{\"type\":\"system\",\"session_id\":\"s9\"}}'; touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; echo \"$JAYNES_SESSION\" > {m}/resumed; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
         m = mark.display()
     );
     let role = root().join("roles/small-change");
@@ -402,6 +402,8 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     assert!(!alive(&pgid), "the agent left running was stopped");
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(!mark.join("orphan-finished").exists(), "the stopped agent never finished its work");
+    // the session was recorded as the turn started, and the next attempt went on in it
+    assert_eq!(std::fs::read_to_string(mark.join("resumed")).expect("resumed").trim(), "s9");
     let e = events(&s, "crash");
     assert!(e.iter().any(|e| e["type"] == "AttemptInterrupted"), "{:?}", types(&e));
     let finished = e.iter().find(|e| e["type"] == "RunFinished").expect("finished");
@@ -876,4 +878,64 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
     assert!(second.contains("only hi"), "{second}");
     let spent: u64 = e.iter().filter(|e| e["type"] == "AttemptFailed" && e["spent"] == true).count() as u64;
     assert_eq!(spent, 0, "saying so spent no attempt");
+}
+
+/// The engine killed at many moments of a run that merges: each time the next process recovers, the run delivers,
+/// the fix lands exactly once, nothing is left running and the record holds.
+#[test]
+fn a_run_killed_at_any_moment_recovers_and_lands_once() {
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let role = root().join("roles/fix-bug");
+    let mut outcomes = Vec::new();
+    for trial in 0..10u64 {
+        let s = bug_project(&format!("kill{trial}"));
+        let prompts = s.home.join("prompts");
+        std::fs::create_dir_all(&prompts).expect("dir");
+        let run = format!("kill{trial}");
+        let envs = |c: &mut Command| {
+            c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
+        };
+        let mut first = Command::new(BIN);
+        first.args(["start", "--run", &run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                    "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
+        envs(&mut first);
+        let mut p = first.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().expect("start");
+        // a moment spread over the run's length, different each trial
+        std::thread::sleep(std::time::Duration::from_millis(40 + (trial * 389) % 2600));
+        let _killed = p.kill();
+        let _waited = p.wait();
+        if events(&s, &run).is_empty() {
+            // killed before the run was recorded: it never started, and starting it again works
+            let mut again = Command::new(BIN);
+            again.args(["start", "--run", &run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                        "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
+            envs(&mut again);
+            let out = again.output().expect("start again");
+            assert!(out.status.success(), "trial {trial}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        let mut said = String::new();
+        for _ in 0..6 {
+            if events(&s, &run).iter().any(|e| e["type"] == "Delivered") {
+                break;
+            }
+            let mut c = Command::new("script");
+            c.args(["-q", "/dev/null", BIN, "continue", &run]);
+            envs(&mut c);
+            let out = c.output().expect("continue");
+            said.push_str(&String::from_utf8_lossy(&out.stdout));
+        }
+        let e = events(&s, &run);
+        // the run delivers, and waits only for answers that can still correct it
+        assert!(e.iter().any(|e| e["type"] == "Delivered"), "trial {trial}: {said}\n{:?}", types(&e));
+        let (ok, out) = engine(&s, &["verify"]);
+        assert!(ok, "trial {trial}: {out}");
+        let log = Command::new("git").arg("-C").arg(&s.project).args(["log", "--format=%s", "main"]).output().expect("git");
+        let merges = String::from_utf8_lossy(&log.stdout).lines().filter(|l| l.contains("merged")).count();
+        assert_eq!(merges, 1, "trial {trial}: the fix landed {merges} times");
+        assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hi $1\"\n", "trial {trial}");
+        let pid = s.home.join(format!("runs/{run}/agent.pid"));
+        assert!(!pid.exists(), "trial {trial}: an agent was left noted as running");
+        outcomes.push(e.iter().any(|e| e["type"] == "AttemptInterrupted"));
+    }
+    assert!(outcomes.iter().any(|&x| x), "some kill fell inside a turn: {outcomes:?}");
 }

@@ -172,6 +172,12 @@ pub enum Event {
         attempt: u32,
         question: Question,
     },
+    /// The session an attempt runs in, known as its turn started.
+    SessionStarted {
+        step: String,
+        attempt: u32,
+        session: String,
+    },
     /// The agent said the step cannot be done as asked; the question for the person follows.
     AttemptImpossible {
         step: String,
@@ -273,6 +279,7 @@ impl Event {
             Event::FixAsked { .. } => "FixAsked",
             Event::InputNeeded { .. } => "InputNeeded",
             Event::AttemptImpossible { .. } => "AttemptImpossible",
+            Event::SessionStarted { .. } => "SessionStarted",
             Event::StepDone { .. } => "StepDone",
             Event::StepInvalidated { .. } => "StepInvalidated",
             Event::QuestionOpened { .. } => "QuestionOpened",

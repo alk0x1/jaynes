@@ -292,7 +292,11 @@ fn start(args: &[String]) -> Result<(), String> {
     });
     let dir = home().join("runs").join(&id);
     if dir.exists() {
-        return Err(format!("run {id} exists"));
+        // a start that died before the run was recorded left only its folder: it never started
+        if !store()?.events(&id)?.is_empty() {
+            return Err(format!("run {id} exists"));
+        }
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("Jaynes could not clear what a start that died left in {}: {e}", dir.display()))?;
     }
     let given = RoleProgram::new(Path::new(&role_dir), &library());
     let fingerprint = given.fingerprint()?;

@@ -88,6 +88,10 @@ pub struct StepState {
     pub inputs: Vec<String>,
     /// The round a certified stop skipped asking.
     pub skipped: Option<u32>,
+    /// The session of the attempt under way or last cut off from outside: the next attempt goes on in it. An attempt
+    /// that ended by itself clears it.
+    #[serde(default)]
+    pub resume: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -232,6 +236,7 @@ impl Run {
             Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session } => {
                 self.spent.add(*usage);
                 if let Some(s) = self.step_mut(step) {
+                    s.resume = None;
                     s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone() });
                     s.status = Status::Checking { attempt: *attempt, fix: *fix };
                     if session.is_some() {
@@ -245,6 +250,7 @@ impl Run {
                     self.counts.spent += 1;
                 }
                 if let Some(s) = self.step_mut(step) {
+                    s.resume = None;
                     if *spent {
                         s.spent += 1;
                         // Only the agent's own failure is told to its next attempt: a fault of Jaynes may name
@@ -255,9 +261,15 @@ impl Run {
                     s.status = Status::Idle;
                 }
             }
+            Event::SessionStarted { step, session, .. } => {
+                if let Some(s) = self.step_mut(step) {
+                    s.resume = Some(session.clone());
+                }
+            }
             Event::AttemptImpossible { step, usage, session, .. } => {
                 self.spent.add(*usage);
                 if let Some(s) = self.step_mut(step) {
+                    s.resume = None;
                     s.pending = None;
                     s.status = Status::Idle;
                     if session.is_some() {

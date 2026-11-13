@@ -577,6 +577,9 @@ impl World {
                     let kind = match self.rng.below(10) { 0..=6 => AskKind::Read, 7 => AskKind::Command, _ => AskKind::Network };
                     self.send(Input::PermissionAsked { step: turn.step.clone(), attempt: turn.attempt, ask: Ask { kind, target } });
                 }
+                if self.rng.chance(50) {
+                    self.send(Input::SessionStarted { step: turn.step.clone(), attempt: turn.attempt, session: format!("session-{}", turn.step) });
+                }
                 let outcome = match self.rng.below(100) {
                     0..=71 => AttemptOutcome::Delivered {
                         output: digest_pool(&mut self.rng),
@@ -1181,6 +1184,28 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
     let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("tried again");
     assert_eq!((turn.attempt, turn.session.as_deref()), (2, Some("s1")));
     assert!(turn.notes.iter().any(|n| n.contains("keep the first answer")), "{:?}", turn.notes);
+}
+
+#[test]
+fn an_attempt_cut_off_from_outside_goes_on_in_its_session_and_a_failed_one_starts_afresh() {
+    let (mut run, cmds) = start(vec![step("build", Executor::Agent)]);
+    probe_ok(&mut run, cmds);
+    // the session is known as soon as the turn starts
+    feed(&mut run, Input::SessionStarted { step: "build".to_string(), attempt: 1, session: "s1".to_string() });
+    assert_eq!(run.steps[0].resume.as_deref(), Some("s1"));
+    // a session of an attempt no longer under way changes nothing
+    let late = decide(Some(&run), &Input::SessionStarted { step: "build".to_string(), attempt: 7, session: "old".to_string() }).expect("recorded as late");
+    assert!(late.events.iter().all(|e| matches!(e, Event::StaleReport { .. })));
+    // Jaynes dies mid-turn: the next attempt goes on in that session, and spends nothing
+    let c = feed(&mut run, Input::Recovered);
+    let c = probe_ok(&mut run, c);
+    let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("again");
+    assert_eq!((turn.attempt, turn.session.as_deref(), run.steps[0].spent), (2, Some("s1"), 0));
+    // the agent's own failure: the next attempt starts afresh
+    feed(&mut run, Input::SessionStarted { step: "build".to_string(), attempt: 2, session: "s1".to_string() });
+    let c = feed(&mut run, Input::AttemptEnded { step: "build".to_string(), attempt: 2, fix: 0, outcome: AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: Usage::default() } });
+    let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("again");
+    assert_eq!((turn.attempt, turn.session.as_deref()), (3, None));
 }
 
 #[test]

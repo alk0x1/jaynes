@@ -53,6 +53,13 @@ pub enum Input {
         attempt: u32,
         ask: Ask,
     },
+    /// The agent program said which session the attempt runs in, as the turn started: an attempt cut off from
+    /// outside goes on in it.
+    SessionStarted {
+        step: String,
+        attempt: u32,
+        session: String,
+    },
     Answer {
         answer: Answer,
     },

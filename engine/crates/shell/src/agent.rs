@@ -32,6 +32,14 @@ pub struct Spec<'a> {
     /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
     /// it counts neither towards the deadline nor in the turn's time.
     pub paused: Option<PathBuf>,
+    /// Told the session as soon as the agent program names it, so a turn cut off from outside can go on in it.
+    pub on_session: Option<Box<dyn FnMut(String) + Send>>,
+}
+
+/// The session a line of the agent program's output names as its turn starts: `{"type":"system","session_id":..}`.
+fn session_of(line: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    (v["type"] == "system").then(|| v["session_id"].as_str().map(str::to_string)).flatten()
 }
 
 #[derive(Debug)]
@@ -60,7 +68,9 @@ pub trait Agent {
 
 /// Run a program with `input` on its standard input, killed with its whole group at the deadline. The time
 /// `paused` exists is not counted: neither towards the deadline nor in the time returned.
-fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>, paused: Option<&Path>) -> Result<(Option<i32>, String, String, Duration, bool), String> {
+type OnSession = Option<Box<dyn FnMut(String) + Send>>;
+
+fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     use std::os::unix::process::CommandExt;
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let started = Instant::now();
@@ -69,7 +79,7 @@ fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>
     if let Some(f) = pidfile {
         std::fs::write(f, pid.to_string()).map_err(|e| format!("Jaynes could not note the agent's process: {e}"))?;
     }
-    let result = watch(&mut child, pid, input, deadline, started, paused);
+    let result = watch(&mut child, pid, input, deadline, started, paused, on_session);
     if let Some(f) = pidfile {
         let _gone = std::fs::remove_file(f);
     }
@@ -98,15 +108,27 @@ pub fn stop_left(pidfile: &Path) -> bool {
     true
 }
 
-fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, started: Instant, paused: Option<&Path>) -> Result<(Option<i32>, String, String, Duration, bool), String> {
+fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, started: Instant, paused: Option<&Path>, mut on_session: OnSession) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     if let Some(mut stdin) = child.stdin.take() {
         let _wrote = stdin.write_all(input.as_bytes());
     }
-    let mut stdout = child.stdout.take().ok_or("no output pipe")?;
+    let stdout = child.stdout.take().ok_or("no output pipe")?;
     let mut stderr = child.stderr.take().ok_or("no error pipe")?;
     let out = std::thread::spawn(move || {
+        use std::io::BufRead;
         let mut s = String::new();
-        let _read = stdout.read_to_string(&mut s);
+        let mut lines = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        while lines.read_line(&mut line).is_ok_and(|n| n > 0) {
+            if let Some(f) = on_session.as_mut()
+                && let Some(session) = session_of(&line)
+            {
+                f(session);
+                on_session = None;
+            }
+            s.push_str(&line);
+            line.clear();
+        }
         s
     });
     let err = std::thread::spawn(move || {
@@ -168,7 +190,7 @@ impl Agent for Shell {
             cmd.env("JAYNES_SESSION", s);
         }
         let applied = json!({"command": self.command});
-        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref(), spec.paused.as_deref()) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
                 if let Some(t) = &spec.transcript {
@@ -320,7 +342,7 @@ impl Agent for Claude {
         }
         let applied = json!({"program": "claude", "model": self.model, "effort": self.effort, "settings": settings,
                              "resume": spec.session});
-        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref(), spec.paused.as_deref()) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
                 if let Some(t) = &spec.transcript {
@@ -437,13 +459,13 @@ mod tests {
         // the program waits 2 s for the person, with a deadline of 1 s: it is not cut off, and the 2 s are not its
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(format!("touch {m}; sleep 2; rm {m}", m = mark.display()));
-        let (code, _, _, took, timed_out) = run(cmd, "", Duration::from_secs(1), None, Some(&mark)).expect("ran");
+        let (code, _, _, took, timed_out) = run(cmd, "", Duration::from_secs(1), None, Some(&mark), None).expect("ran");
         assert_eq!((code, timed_out), (Some(0), false));
         assert!(took < Duration::from_millis(900), "{took:?}");
         // without the person, the same deadline cuts it off
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 2");
-        let (_, _, _, _, timed_out) = run(cmd, "", Duration::from_secs(1), None, Some(&mark)).expect("ran");
+        let (_, _, _, _, timed_out) = run(cmd, "", Duration::from_secs(1), None, Some(&mark), None).expect("ran");
         assert!(timed_out);
     }
 

@@ -609,6 +609,16 @@ impl<'a> Driver<'a> {
             transcript: Some(self.setup.dir.join("steps").join(&turn.step).join(format!("turn-{}-{}.jsonl", turn.attempt, turn.fix))),
             pidfile: Some(self.setup.dir.join("agent.pid")),
             paused: Some(crate::permit::waiting_mark(self.setup.dir.parent().and_then(Path::parent).unwrap_or(Path::new("/")), &self.setup.run)),
+            on_session: {
+                let (home, run, step, attempt) = (self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default(), self.setup.run.clone(), turn.step.clone(), turn.attempt);
+                Some(Box::new(move |session: String| {
+                    // recorded at once, so a turn cut off from outside goes on in this session
+                    let recorded = Store::open(&home.join("record.sqlite3")).and_then(|mut s| s.decide(&run, &Input::SessionStarted { step: step.clone(), attempt, session }));
+                    if let Err(e) = recorded {
+                        say(&format!("the agent's session was not recorded: {e}"));
+                    }
+                }))
+            },
             permit: std::env::current_exe().ok().map(|exe| {
                 let home = self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
                 let argv = vec![

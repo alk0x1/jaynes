@@ -99,6 +99,14 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
         Input::AttemptEnded { step, attempt, fix, outcome } => c.attempt_ended(step, *attempt, *fix, outcome)?,
         Input::ChecksEnded { step, attempt, fix, results } => c.checks_ended(step, *attempt, *fix, results)?,
         Input::PermissionAsked { step, attempt, ask } => c.permission(step, *attempt, ask)?,
+        Input::SessionStarted { step, attempt, session } => {
+            let i = c.index(step)?;
+            if matches!(c.run.steps[i].status, Status::Running { attempt: a, .. } if a == *attempt) {
+                c.emit(Event::SessionStarted { step: step.clone(), attempt: *attempt, session: session.clone() });
+            } else {
+                c.stale(step, *attempt, "a session was named by an attempt that is no longer under way");
+            }
+        }
         Input::Answer { answer } => c.answer(answer)?,
         Input::RaiseRisk { to, by } => {
             if !by.person() {
@@ -407,6 +415,8 @@ impl Ctx {
         // after the person answered the agent's "it cannot be done", it goes on in that session
         let answered = decl.executor == Executor::Agent && !s.inputs.is_empty() && s.session.is_some();
         let session = match decl.session {
+            // an attempt cut off from outside goes on where it was
+            _ if decl.executor == Executor::Agent && s.resume.is_some() => s.resume.clone(),
             _ if answered => s.session.clone(),
             SessionKind::Continue => self.run.manifest.steps[..i]
                 .iter()
