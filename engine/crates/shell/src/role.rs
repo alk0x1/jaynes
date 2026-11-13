@@ -19,12 +19,15 @@ pub struct RoleProgram {
     /// The folder of `jaynes_role.py`, put on the role's Python path.
     pub library: PathBuf,
     pub timeout: Duration,
+    /// Where to note a call's process group while it runs (a check may run the project's suite), so a process
+    /// that takes the run after a crash stops it.
+    pub pidfile: Option<PathBuf>,
 }
 
 impl RoleProgram {
     pub fn new(dir: &Path, library: &Path) -> RoleProgram {
         let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        RoleProgram { dir: real(dir), library: real(library), timeout: Duration::from_secs(900) }
+        RoleProgram { dir: real(dir), library: real(library), timeout: Duration::from_secs(900), pidfile: None }
     }
 
     fn command(&self) -> Result<Command, String> {
@@ -53,13 +56,18 @@ impl RoleProgram {
         let id = format!("{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed));
         let request = Request { jaynes: MAJOR, id: id.clone(), call };
         let line = serde_json::to_string(&request).map_err(|e| e.to_string())? + "\n";
+        use std::os::unix::process::CommandExt;
         let mut child = self
             .command()?
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("the role program did not start: {e}"))?;
+        if let Some(f) = &self.pidfile {
+            let _noted = std::fs::write(f, child.id().to_string());
+        }
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(line.as_bytes()).map_err(|e| format!("the role program did not take the request: {e}"))?;
         }
@@ -80,13 +88,20 @@ impl RoleProgram {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if started.elapsed() > self.timeout => {
-                    let _killed = child.kill();
+                    // the whole group: a check's suite runs in the role's children
+                    let _killed = Command::new("kill").args(["-KILL", &format!("-{}", child.id())]).status();
                     let _waited = child.wait();
+                    if let Some(f) = &self.pidfile {
+                        let _gone = std::fs::remove_file(f);
+                    }
                     return Err(format!("the role program did not answer in {} s", self.timeout.as_secs()));
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                 Err(e) => return Err(format!("the role program could not be watched: {e}")),
             }
+        }
+        if let Some(f) = &self.pidfile {
+            let _gone = std::fs::remove_file(f);
         }
         let out = reader.join().unwrap_or_default();
         let err = errors.join().unwrap_or_default();
@@ -131,7 +146,7 @@ impl RoleProgram {
                 std::fs::copy(&from, lib.join("jaynes_role.py")).map_err(|e| e.to_string())?;
             }
         }
-        Ok(RoleProgram { dir, library: lib, timeout: self.timeout })
+        Ok(RoleProgram { dir, library: lib, timeout: self.timeout, pidfile: None })
     }
 }
 

@@ -23,6 +23,9 @@ pub struct Spec<'a> {
     pub env: Vec<(String, String)>,
     /// Where to keep what the agent program printed, for the person and for diagnosis.
     pub transcript: Option<PathBuf>,
+    /// Where to note the agent program's process group while it runs, so a process that takes the run after a
+    /// crash can stop what was left running.
+    pub pidfile: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -50,12 +53,45 @@ pub trait Agent {
 }
 
 /// Run a program with `input` on its standard input, killed with its whole group at the deadline.
-fn run(mut cmd: Command, input: &str, deadline: Duration) -> Result<(Option<i32>, String, String, Duration, bool), String> {
+fn run(mut cmd: Command, input: &str, deadline: Duration, pidfile: Option<&Path>) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     use std::os::unix::process::CommandExt;
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let started = Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("the agent program did not start: {e}"))?;
     let pid = child.id();
+    if let Some(f) = pidfile {
+        std::fs::write(f, pid.to_string()).map_err(|e| format!("Jaynes could not note the agent's process: {e}"))?;
+    }
+    let result = watch(&mut child, pid, input, deadline, started);
+    if let Some(f) = pidfile {
+        let _gone = std::fs::remove_file(f);
+    }
+    result
+}
+
+/// Stop what an agent program left running when the process that started it died: its whole process group, gently
+/// then for good. True when there was something to stop.
+pub fn stop_left(pidfile: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(pidfile) else { return false };
+    let _gone = std::fs::remove_file(pidfile);
+    let Ok(pgid) = text.trim().parse::<u32>() else { return false };
+    let group = format!("-{pgid}");
+    let alive = |sig: &str| Command::new("kill").args([sig, &group]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    if !alive("-0") {
+        return false;
+    }
+    let _term = alive("-TERM");
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(100));
+        if !alive("-0") {
+            return true;
+        }
+    }
+    let _kill = alive("-KILL");
+    true
+}
+
+fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, started: Instant) -> Result<(Option<i32>, String, String, Duration, bool), String> {
     if let Some(mut stdin) = child.stdin.take() {
         let _wrote = stdin.write_all(input.as_bytes());
     }
@@ -118,7 +154,7 @@ impl Agent for Shell {
             cmd.env("JAYNES_SESSION", s);
         }
         let applied = json!({"command": self.command});
-        let ended = match run(cmd, spec.prompt, spec.deadline) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref()) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
                 if let Some(t) = &spec.transcript {
@@ -255,7 +291,7 @@ impl Agent for Claude {
         }
         let applied = json!({"program": "claude", "model": self.model, "effort": self.effort, "settings": settings,
                              "resume": spec.session});
-        let ended = match run(cmd, spec.prompt, spec.deadline) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, spec.pidfile.as_deref()) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
                 if let Some(t) = &spec.transcript {

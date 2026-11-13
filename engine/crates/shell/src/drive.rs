@@ -29,7 +29,8 @@ impl Setup {
     pub fn load(store: &Store, home: &Path, run: &str) -> Result<Setup, String> {
         let s = store.setup(run)?;
         let dir = home.join("runs").join(run);
-        let role = RoleProgram::new(&dir.join("role"), &dir.join("library"));
+        let mut role = RoleProgram::new(&dir.join("role"), &dir.join("library"));
+        role.pidfile = Some(dir.join("role.pid"));
         let copy = match (s["project"].as_str(), s["branch"].as_str()) {
             (Some(p), Some(b)) => Some(Copy { source: PathBuf::from(p), dir: dir.join("project"), branch: b.to_string() }),
             _ => None,
@@ -72,6 +73,23 @@ impl<'a> Driver<'a> {
         std::fs::create_dir_all(&setup.dir).map_err(|e| e.to_string())?;
         let lock = File::create(setup.dir.join("lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| "another process is driving this run".to_string())?;
+        // macOS tells no child that its parent died: an agent the last process started may still be writing.
+        if agent::stop_left(&setup.dir.join("agent.pid")) {
+            say("stopped an agent program that a process which died had left running");
+        }
+        if agent::stop_left(&setup.dir.join("role.pid")) {
+            say("stopped a call to the role that a process which died had left running");
+        }
+        if let Some((seq, _)) = store.verify()? {
+            return Err(format!("the record was changed at entry {seq}: Jaynes drives no run over a record that does not hold"));
+        }
+        if let Some(run) = store.state(&setup.run)?
+            && run.engine != jaynes_core::ENGINE {
+                return Err(format!(
+                    "run {} started on engine {} and this is {}: a run stays on the engine it started with",
+                    run.id, run.engine, jaynes_core::ENGINE
+                ));
+            }
         Ok(Driver { store, setup, _lock: lock })
     }
 
@@ -324,6 +342,7 @@ impl<'a> Driver<'a> {
             reads: &reads,
             env,
             transcript: Some(self.setup.dir.join("steps").join(&turn.step).join(format!("turn-{}-{}.jsonl", turn.attempt, turn.fix))),
+            pidfile: Some(self.setup.dir.join("agent.pid")),
         };
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));

@@ -353,3 +353,67 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
         assert!(shown.status.success(), "{test} is in the delivery");
     }
 }
+
+#[test]
+fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_attempt() {
+    let s = scratch("crash");
+    let mark = s.home.join("mark");
+    std::fs::create_dir_all(&mark).expect("dir");
+    let agent = format!(
+        "if [ ! -e {m}/started ]; then touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
+        m = mark.display()
+    );
+    let role = root().join("roles/small-change");
+    let mut engine_process = Command::new(BIN)
+        .args(["start", "--run", "crash", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", root().join("..").join("src"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start");
+    for _ in 0..100 {
+        if mark.join("started").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(mark.join("started").exists(), "the agent started");
+    // the engine dies at once, as with kill -9: nothing of it runs any more, and its agent goes on
+    let _killed = engine_process.kill();
+    let _waited = engine_process.wait();
+    let pidfile = s.home.join("runs/crash/agent.pid");
+    let pgid = std::fs::read_to_string(&pidfile).expect("the agent's process group is noted");
+    let alive = |g: &str| Command::new("kill").args(["-0", &format!("-{}", g.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    assert!(alive(&pgid), "the agent outlived the engine");
+    // the next process stops what was left, and the run goes on with an attempt that is not counted against the agent
+    let (ok, out) = engine(&s, &["continue", "crash"]);
+    assert!(ok && out.contains("stopped an agent program") && out.contains("finished: delivered"), "{out}");
+    assert!(!alive(&pgid), "the agent left running was stopped");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!mark.join("orphan-finished").exists(), "the stopped agent never finished its work");
+    let e = events(&s, "crash");
+    assert!(e.iter().any(|e| e["type"] == "AttemptInterrupted"), "{:?}", types(&e));
+    let finished = e.iter().find(|e| e["type"] == "RunFinished").expect("finished");
+    assert_eq!(finished["cost"]["spent"], 0);
+}
+
+#[test]
+fn no_run_goes_on_over_a_record_that_was_changed() {
+    let s = scratch("tamper");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    start(&s, "tamper", &agent);
+    let db = s.home.join("record.sqlite3");
+    let ok = Command::new("sqlite3")
+        .arg(&db)
+        .arg("update events set body = replace(body, 'say hi instead of hello', 'push to production') where type = 'RunStarted'")
+        .status()
+        .expect("sqlite3");
+    assert!(ok.success());
+    let (ok, out) = engine(&s, &["verify"]);
+    assert!(!ok && out.contains("changed at entry 1"), "{out}");
+    let (ok, out) = engine(&s, &["continue", "tamper"]);
+    assert!(!ok && out.contains("drives no run over a record that does not hold"), "{out}");
+}
