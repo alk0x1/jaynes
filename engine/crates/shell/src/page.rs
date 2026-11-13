@@ -99,6 +99,7 @@ impl Page {
                 ["q", run, q] => View::Question(run.to_string(), q.to_string()),
                 ["run", run] => View::Run(run.to_string()),
                 ["home"] => View::Overview,
+                ["new"] => View::New,
                 _ => View::Home,
             };
             return match self.render(view, self.person(req)) {
@@ -118,6 +119,7 @@ impl Page {
                 "/api/effects" => self.effects(&body, by),
                 "/api/answer" => self.answer(&body, by),
                 "/api/act" => self.act(&body, by),
+                "/api/start" => self.start(&body, by),
                 _ => Err("no such action".to_string()),
             };
             let reply = match out {
@@ -172,6 +174,21 @@ impl Page {
     }
 
     /// What the person does to a run from its page: halt, resume, continue, raise, abandon, correct.
+    /// Start a run of a role on a project; only the person does it here. An agent starts one with the start tool.
+    fn start(&self, body: &Value, by: By) -> Result<Value, String> {
+        if by != By::Person {
+            return Err("only you start a run from the page: open the link the page printed".into());
+        }
+        let text = |k: &str| body[k].as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("{k} is needed"));
+        let (role, project, request) = (text("role")?, text("project")?, text("request")?);
+        let project = project.strip_prefix("~/").map(|rest| std::env::var("HOME").map(|h| format!("{h}/{rest}")).unwrap_or_else(|_| project.to_string())).unwrap_or_else(|| project.to_string());
+        if !std::path::Path::new(&project).join(".git").exists() {
+            return Err(format!("{project} is not a git repository"));
+        }
+        let run = drive::launch(&self.home, &self.exe, role, &project, request, body["risk"].as_str() == Some("high"))?;
+        Ok(json!({"ok": true, "run": run}))
+    }
+
     fn act(&self, body: &Value, by: By) -> Result<Value, String> {
         let run_id = body["run"].as_str().ok_or("which run?")?;
         let run = self.store()?.state(run_id)?.ok_or("no such run")?;
@@ -233,7 +250,7 @@ impl Page {
             View::Question(r, q) => Some((r.clone(), q.clone())),
             _ => None,
         };
-        let current = if matches!(view, View::Run(_) | View::Overview) {
+        let current = if matches!(view, View::Run(_) | View::Overview | View::New) {
             None
         } else {
             chosen
@@ -284,8 +301,16 @@ impl Page {
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
                 Some(r) => run_html(r, &changes_html(&self.home, r, None)),
-                None => "<div class=\"empty\">There is no such run.</div>".to_string(),
+                None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
+                    Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
+                    Ok(said) => format!("<div class=\"empty\">The run is not recorded yet. What starting it said:</div><pre class=\"said\">{}</pre>", esc(said.trim())),
+                    Err(_) => "<div class=\"empty\">There is no such run.</div>".to_string(),
+                },
             },
+            (View::New, _) => {
+                let last = runs.iter().rev().find_map(|r| store.setup(&r.id).ok().and_then(|s| s["project"].as_str().map(|p| (r.manifest.role.clone(), p.to_string()))));
+                new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last)
+            }
             (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
@@ -424,6 +449,7 @@ fn where_in(r: &Run) -> String {
 enum View {
     Home,
     Overview,
+    New,
     Question(String, String),
     Run(String),
 }
@@ -689,6 +715,27 @@ fn diff_html(text: &str) -> String {
         .collect()
 }
 
+/// The form that starts a run: a role, a project, the request, and how risky the change is.
+fn new_html(roles: &[(String, String)], last: Option<(String, String)>) -> String {
+    let (role, project) = last.unwrap_or_default();
+    let role = if roles.iter().any(|(n, _)| *n == role) { role } else { roles.first().map(|r| r.0.clone()).unwrap_or_default() };
+    let options: String = roles.iter().map(|(n, a)| format!("<option value=\"{}\">{}</option>", esc(n), esc(a))).collect();
+    let about: String = roles.iter().map(|(n, a)| format!("<li><b>{}</b> {}</li>", esc(n), esc(a))).collect();
+    let none = if roles.is_empty() { "<p class=\"sub\">No role is installed: <code>jaynes add</code> installs one, or give a role's folder.</p>" } else { "" };
+    format!(
+        "<h1>New run</h1><p class=\"sub\">The run goes on by itself in a copy of the project; what needs you comes to this page.</p>{none}\
+         <form id=\"start\" class=\"form\">\
+         <label><span class=\"label\">Role</span><input name=\"role\" list=\"roles\" value=\"{role}\" placeholder=\"a role's name, or its folder\" required><datalist id=\"roles\">{options}</datalist></label>\
+         <ul class=\"roles\">{about}</ul>\
+         <label><span class=\"label\">Project</span><input name=\"project\" value=\"{project}\" placeholder=\"/path/to/a/git/repository\" required></label>\
+         <label><span class=\"label\">Request</span><textarea name=\"request\" rows=\"6\" placeholder=\"What to change, as you would tell a colleague\" required></textarea></label>\
+         <label><span class=\"label\">Risk</span><select name=\"risk\"><option value=\"low\">low: a small change</option><option value=\"high\">high: asks you more, and allows more time and tokens</option></select></label>\
+         <button class=\"send\" type=\"submit\">Start the run</button><div class=\"refused\" id=\"startmsg\"></div></form>",
+        role = esc(&role),
+        project = esc(&project),
+    )
+}
+
 /// How long ago, in a word or two.
 fn ago(seconds: u64) -> String {
     match seconds {
@@ -803,7 +850,7 @@ const PAGE: &str = r##"<!doctype html>
   --red:#ff6f6f; --red-soft:rgba(255,111,111,.12); --display:"Instrument Sans","Helvetica Neue",Arial,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; }
 * { box-sizing:border-box; } html,body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--display); font-size:15px; line-height:1.5; }
 button { font:inherit; color:inherit; cursor:pointer; } a { color:inherit; text-decoration:none; }
-.top { display:flex; align-items:center; gap:18px; padding:14px 24px; border-bottom:1px solid var(--line); } .top b { font-weight:600; } .nav { margin-left:auto; } .nav a { color:var(--dim); text-decoration:none; font-size:13px; } .nav a:hover { color:var(--ink); }
+.top { display:flex; align-items:center; gap:18px; padding:14px 24px; border-bottom:1px solid var(--line); } .top b { font-weight:600; } .nav { margin-left:auto; display:flex; gap:18px; } .nav a { color:var(--dim); text-decoration:none; font-size:13px; } .nav a:hover { color:var(--ink); }
 .wrap { display:grid; grid-template-columns:280px 1fr; min-height:calc(100vh - 54px); }
 aside { border-right:1px solid var(--line); padding:16px 0; }
 .qh { padding:0 18px 8px; font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
@@ -872,6 +919,11 @@ pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius
 .chip { font-family:var(--mono); font-size:10.5px; padding:1px 7px; border-radius:10px; border:1px solid var(--line-2); color:var(--dim); }
 .chip.green { color:var(--green); border-color:var(--green-soft); background:var(--green-soft); } .chip.red { color:var(--red); border-color:var(--red-soft); background:var(--red-soft); }
 details.fold { margin-top:12px; } details.fold summary { cursor:pointer; color:var(--dim); font-size:13px; } details.fold summary span { color:var(--faint); font-family:var(--mono); font-size:11px; } details.fold .rows { margin-top:8px; }
+.form { display:flex; flex-direction:column; gap:16px; max-width:640px; margin-top:18px; } .form label { display:flex; flex-direction:column; gap:4px; }
+.form input, .form textarea { background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:9px 12px; font:inherit; font-size:14px; }
+.form input:focus, .form textarea:focus { outline:none; border-color:var(--blue); } .form .send { align-self:flex-start; }
+ul.roles { margin:-8px 0 0; padding-left:18px; font-size:13px; color:var(--dim); } ul.roles b { font-family:var(--mono); font-weight:500; font-size:12px; color:var(--ink); margin-right:6px; }
+pre.said { font-family:var(--mono); font-size:12px; color:var(--dim); white-space:pre-wrap; margin:12px 0; }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
@@ -884,7 +936,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 .effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; }
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
-<div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a></nav></div>
+<div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a></nav></div>
 <div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}</main></div>
 <div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
 <script>
@@ -942,6 +994,13 @@ document.addEventListener("click", async e => {
   if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
 });
 // The page follows the record, but never reloads under the person's hands.
+const sf = document.getElementById("start");
+if (sf) sf.addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const r = await (await fetch("/api/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(sf))) })).json();
+  if (r.ok) location.href = "/run/" + r.run;
+  else document.getElementById("startmsg").textContent = r.refused;
+});
 let seen = null;
 setInterval(async () => {
   try {

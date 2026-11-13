@@ -51,6 +51,30 @@ pub fn merges(dir: &Path) -> Vec<String> {
     std::fs::read_to_string(dir.join("merges.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
+/// Start a run in a process of its own, which goes on by itself; what it says goes to `start-<run>.log` in the
+/// engine's home. The run's id is returned before the run is recorded.
+pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, high: bool) -> Result<String, String> {
+    crate::install::find_role(home, role)?;
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?;
+    let run = format!("r{}-{:03}", t.as_secs(), t.subsec_millis());
+    let mut argv = vec!["start", "--run", &run, "--role", role, "--project", project, "--request", request];
+    if high {
+        argv.extend(["--risk", "high"]);
+    }
+    std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
+    let log = std::fs::File::create(home.join(format!("start-{run}.log"))).map_err(|e| e.to_string())?;
+    let err = log.try_clone().map_err(|e| e.to_string())?;
+    std::process::Command::new(exe)
+        .args(&argv)
+        .env("JAYNES_ENGINE_HOME", home)
+        .stdin(std::process::Stdio::null())
+        .stdout(log)
+        .stderr(err)
+        .spawn()
+        .map_err(|e| format!("the run could not start: {e}"))?;
+    Ok(run)
+}
+
 /// Revert every merge of a run and record it: the core is asked first, so nothing is reverted it would refuse.
 pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_core::question::By) -> Result<String, String> {
     let state = store.state(run)?.ok_or("no such run")?;

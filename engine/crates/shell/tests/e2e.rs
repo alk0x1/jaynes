@@ -746,3 +746,43 @@ impl Drop for Page {
         let _reaped = self.0.wait();
     }
 }
+
+#[test]
+fn the_person_starts_a_run_from_the_page() {
+    let s = scratch("new");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let port = 17750 + (std::process::id() % 1000) as u16;
+    let _page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .env("JAYNES_AGENT", format!("command:{agent}"))
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(Page)
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let me = "jaynes_key=k3y";
+    let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    assert!(form.contains("<form id=\"start\"") && form.contains("name=\"request\""), "{form}");
+    let role = root().join("roles/small-change");
+    let body = serde_json::json!({"role": role, "project": s.project, "request": "say hi instead of hello", "risk": "low"}).to_string();
+    // only the person starts a run from the page
+    assert_eq!(post(port, "/api/start", &body, "")["ok"], false);
+    let r = post(port, "/api/start", &body, me);
+    assert_eq!(r["ok"], true, "{r}");
+    let run = r["run"].as_str().expect("run").to_string();
+    let mut finished = false;
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if s.home.join("record.sqlite3").exists() && events(&s, &run).iter().any(|e| e["type"] == "RunFinished") {
+            finished = true;
+            break;
+        }
+    }
+    assert!(finished, "{}", std::fs::read_to_string(s.home.join(format!("start-{run}.log"))).unwrap_or_default());
+    let view = http(port, &format!("GET /run/{run} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    assert!(view.contains("say hi instead of hello") && view.contains("Finished: delivered"), "{view}");
+}

@@ -86,24 +86,7 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             let role = text(args, "role")?;
             let project = text(args, "project")?;
             let request = text(args, "request")?;
-            install::find_role(home, role)?;
-            let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            let run = format!("r{t}-{}", std::process::id() % 1000);
-            let mut argv = vec!["start", "--run", &run, "--role", role, "--project", project, "--request", request];
-            if args["risk"].as_str() == Some("high") {
-                argv.extend(["--risk", "high"]);
-            }
-            std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
-            let log = std::fs::File::create(home.join(format!("start-{run}.log"))).map_err(|e| e.to_string())?;
-            let err = log.try_clone().map_err(|e| e.to_string())?;
-            std::process::Command::new(&exe)
-                .args(&argv)
-                .env("JAYNES_ENGINE_HOME", home)
-                .stdin(std::process::Stdio::null())
-                .stdout(log)
-                .stderr(err)
-                .spawn()
-                .map_err(|e| format!("the run could not start: {e}"))?;
+            let run = drive::launch(home, &exe, role, project, request, args["risk"].as_str() == Some("high"))?;
             Ok(format!(
                 "Run {run} started; it goes on by itself. What needs the person is on the page, {}. `run` with {run} says where it is.",
                 install::ensure_page(home)
