@@ -140,8 +140,9 @@ class Role:
         return add
 
     def items(self, step: str) -> Callable[[Callable[[Any], list[dict[str, Any]]]], Callable[[Any], list[dict[str, Any]]]]:
-        """What the person is shown of ``step``'s output: ``[{"id", "label", "content"}]``. Without it the whole
-        output is one item."""
+        """What the person is shown of ``step``'s output: ``[{"id", "label", "content", "detail", "pictures"}]``,
+        where ``pictures`` are paths of image files in the step's copy of the project. Without it the whole output
+        is one item."""
         def add(fn: Callable[[Any], list[dict[str, Any]]]) -> Callable[[Any], list[dict[str, Any]]]:
             self.steps[step].items = fn
             return fn

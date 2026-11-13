@@ -434,11 +434,48 @@ impl<'a> Driver<'a> {
             Err(e) => return AttemptOutcome::Fault { reason: e },
         };
         let items = match self.setup.role.call(Call::Items { step: turn.step.clone(), output: object["output"].clone() }) {
-            Ok(Body::Items { items }) => items.iter().map(|x| x.item()).collect(),
+            Ok(Body::Items { items }) => match self.keep_items(&items, exchange.parent().unwrap_or(exchange)) {
+                Ok(i) => i,
+                Err(e) => return AttemptOutcome::Fault { reason: e },
+            },
             Ok(other) => return AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
             Err(e) => return AttemptOutcome::Fault { reason: e },
         };
         AttemptOutcome::Delivered { output: digest, items, changed, usage, session }
+    }
+
+    /// The items as the core knows them, after keeping a copy of each picture by its fingerprint and how each item
+    /// is shown. A picture outside the step's folder, or that does not read, is Jaynes's fault to report.
+    fn keep_items(&self, items: &[crate::protocol::ShownItem], root: &Path) -> Result<Vec<jaynes_core::question::Item>, String> {
+        let home = self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
+        let shelf = home.join("pictures");
+        let mut out = Vec::new();
+        for x in items {
+            let mut kept = Vec::new();
+            for p in &x.pictures {
+                let path = root.join(p);
+                let real = std::fs::canonicalize(&path).map_err(|e| format!("the picture {p} of {} does not read: {e}", x.id))?;
+                let base = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+                if !real.starts_with(&base) {
+                    return Err(format!("the picture {p} of {} is outside the step's folder", x.id));
+                }
+                let ext = real.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                if !["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(&ext.as_str()) {
+                    return Err(format!("the picture {p} of {} is not an image Jaynes shows", x.id));
+                }
+                let bytes = std::fs::read(&real).map_err(|e| e.to_string())?;
+                let name = format!("{}.{ext}", Digest::of_bytes(&bytes).0);
+                std::fs::create_dir_all(&shelf).map_err(|e| e.to_string())?;
+                std::fs::write(shelf.join(&name), &bytes).map_err(|e| e.to_string())?;
+                kept.push(name);
+            }
+            let item = x.item_with(&kept);
+            if !x.detail.is_empty() || !kept.is_empty() {
+                self.store.put_display(&item.digest, &json!({"detail": x.detail, "pictures": kept}))?;
+            }
+            out.push(item);
+        }
+        Ok(out)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -477,7 +514,10 @@ impl<'a> Driver<'a> {
                     Ok(digest) => match self.setup.role.call(Call::Items { step: step.clone(), output: object["output"].clone() }) {
                         Ok(Body::Items { items }) => AttemptOutcome::Delivered {
                             output: digest,
-                            items: items.iter().map(|x| x.item()).collect(),
+                            items: match self.keep_items(&items, &self.cwd(run, i, attempt)) {
+                                Ok(i) => i,
+                                Err(e) => return end(AttemptOutcome::Fault { reason: e }),
+                            },
                             changed: Vec::new(),
                             usage: Default::default(),
                             session: None,
@@ -488,7 +528,10 @@ impl<'a> Driver<'a> {
                 }
             }
             Ok(Body::NeedsInput { items, offered, about }) => {
-                AttemptOutcome::NeedsInput { items: items.iter().map(|x| x.item()).collect(), offered, about }
+                match self.keep_items(&items, &self.cwd(run, i, attempt)) {
+                    Ok(items) => AttemptOutcome::NeedsInput { items, offered, about },
+                    Err(e) => AttemptOutcome::Fault { reason: e },
+                }
             }
             Ok(Body::Refused { reason }) => AttemptOutcome::Refused { reason },
             Ok(other) => AttemptOutcome::Fault { reason: format!("the role answered execute with {other:?}") },

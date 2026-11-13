@@ -19,6 +19,7 @@ create index if not exists events_run on events(run);
 create table if not exists objects (digest text primary key, body text not null);
 create table if not exists runs (run text primary key, setup text not null);
 create table if not exists inbox (id integer primary key, run text not null, input text not null);
+create table if not exists displays (item text primary key, body text not null);
 ";
 
 /// Seconds since 1970, as the record keeps time.
@@ -191,6 +192,23 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let body = body.ok_or_else(|| format!("there is no run {run}"))?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
+    }
+
+    /// How an item is shown beyond its label: its detail and its pictures, by the item's fingerprint.
+    pub fn put_display(&self, item: &Digest, display: &Value) -> Result<(), String> {
+        let body = serde_json::to_string(display).map_err(|e| e.to_string())?;
+        self.db
+            .execute("insert or replace into displays(item, body) values (?1, ?2)", params![item.0, body])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn display(&self, item: &Digest) -> Value {
+        self.db
+            .query_row("select body from displays where item = ?1", [&item.0], |r| r.get::<_, String>(0))
+            .ok()
+            .and_then(|b| serde_json::from_str(&b).ok())
+            .unwrap_or(Value::Null)
     }
 
     /// Leave an input for the process that drives the run.

@@ -589,3 +589,32 @@ fn a_merge_waits_for_a_clean_checkout_and_says_why() {
     let branch = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/dirty:greet.sh"]).output().expect("git");
     assert_eq!(String::from_utf8_lossy(&branch.stdout), "echo \"hi $1\"\n", "the branch is delivered all the same");
 }
+
+#[test]
+fn the_page_shows_each_item_with_its_sentence_and_picture() {
+    let s = scratch("looks");
+    let svg = r#"<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='#2b59c3'/></svg>"#;
+    let agent = format!(
+        "printf \"%s\" \"{svg}\" > .jaynes/blue.svg && printf '{{\"looks\":[{{\"id\":\"blue\",\"name\":\"Blue\",\"why\":\"ink on newsprint\",\"picture\":\".jaynes/blue.svg\"}}]}}' > .jaynes/output.json"
+    );
+    let role = root().join("crates/shell/tests/roles/looks");
+    let (ok, out) = engine(&s, &["start", "--run", "looks", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "make looks", "--agent", &format!("command:{agent}")]);
+    assert!(ok && out.contains("Which looks go on?"), "{out}");
+    let port = 20750 + (std::process::id() % 1000) as u16;
+    let mut page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let _killed = page.kill();
+    assert!(html.contains("ink on newsprint"), "the item's sentence is shown");
+    assert!(html.contains("<img src=\"data:image/svg+xml;base64,"), "the item's picture is shown");
+    // the picture was kept by its fingerprint, apart from the run's copy
+    let kept: Vec<_> = std::fs::read_dir(s.home.join("pictures")).expect("kept").flatten().collect();
+    assert_eq!(kept.len(), 1);
+}

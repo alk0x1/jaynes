@@ -128,7 +128,7 @@ version, the protocol and the record's format.
 
 ## Not in this slice
 
-- Plans of runs; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (
+- Plans of runs; build-feature and the design roles; the Codex adapter; leaves asked in the middle of a turn (
 - Replaying the Python engine's 53 recorded runs as an oracle; proving the Rust code itself (step 6 of the ladder).
 
 ## The model with proofs (owner's choice, 2026-11-13)
@@ -161,6 +161,14 @@ uncommitted changes, or by moving the branch where it is not checked out. It nev
 checkout leaves the branch delivered and says why. A correction merges again on top. Undo, the person's only, reverts
 every merge of the run the same way, and the run merges nothing again; what it let through earns no right in its
 stops' counts.
+
+## What an item shows (2026-11-13)
+
+A role lists, for each item, a sentence (`detail`) and pictures: image files in the step's copy of the project.
+Jaynes keeps a copy of each picture by the fingerprint of its bytes, outside the run's copy, and the item's
+fingerprint covers its pictures, so an answer is bound to the pictures shown and a kept item keeps them. The page
+puts each picture inside itself as data; no address of the page reads a file. A picture outside the step's folder,
+or not an image, is Jaynes's fault.
 
 ## How it was checked
 

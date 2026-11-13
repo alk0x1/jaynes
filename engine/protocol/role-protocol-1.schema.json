@@ -875,11 +875,24 @@
         "content": {
           "default": null
         },
+        "detail": {
+          "default": "",
+          "description": "A few plain sentences shown under the label.",
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },
         "label": {
           "type": "string"
+        },
+        "pictures": {
+          "default": [],
+          "description": "Pictures of the item: files in the step's copy of the project, by path from its root. Jaynes keeps a copy of\neach, by its fingerprint, so what the person sees never changes under them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

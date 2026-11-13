@@ -137,15 +137,25 @@ pub struct ShownItem {
     pub label: String,
     #[serde(default)]
     pub content: Value,
+    /// A few plain sentences shown under the label.
+    #[serde(default)]
+    pub detail: String,
+    /// Pictures of the item: files in the step's copy of the project, by path from its root. Jaynes keeps a copy of
+    /// each, by its fingerprint, so what the person sees never changes under them.
+    #[serde(default)]
+    pub pictures: Vec<String>,
 }
 
 impl ShownItem {
-    pub fn item(&self) -> jaynes_core::question::Item {
-        jaynes_core::question::Item {
-            id: self.id.clone(),
-            label: self.label.clone(),
-            digest: jaynes_core::Digest::of_json(&self.content),
-        }
+    /// The item as the core knows it. Its fingerprint covers its content and its pictures, so an answer is bound to
+    /// what was shown and a kept item keeps its pictures.
+    pub fn item_with(&self, pictures: &[String]) -> jaynes_core::question::Item {
+        let digest = if pictures.is_empty() {
+            jaynes_core::Digest::of_json(&self.content)
+        } else {
+            jaynes_core::Digest::of_json(&serde_json::json!({"content": self.content, "pictures": pictures}))
+        };
+        jaynes_core::question::Item { id: self.id.clone(), label: self.label.clone(), digest }
     }
 }
 

@@ -311,7 +311,21 @@ impl Page {
                 None => "<div class=\"empty\">There is no such run.</div>".to_string(),
             },
             (_, None) => "<div class=\"empty\">Nothing waits for you.</div>".to_string(),
-            (_, Some((run, q))) => question_html(run, q),
+            (_, Some((run, q))) => {
+                let shown = |it: &jaynes_core::question::Item| -> String {
+                    let d = store.display(&it.digest);
+                    let mut html = String::new();
+                    if let Some(t) = d["detail"].as_str().filter(|t| !t.is_empty()) {
+                        html.push_str(&format!("<p class=\"detail\">{}</p>", esc(t)));
+                    }
+                    let pics: Vec<String> = d["pictures"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).filter_map(|name| picture(&self.home, name)).collect();
+                    if !pics.is_empty() {
+                        html.push_str(&format!("<div class=\"pics\">{}</div>", pics.join("")));
+                    }
+                    html
+                };
+                question_html(run, q, &shown)
+            }
         };
         let who = if person { "" } else { "<div class=\"notice\">You opened the page without its key: answers from here count as an agent's. Open the link the page printed.</div>" };
         Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", who))
@@ -463,7 +477,40 @@ fn label(v: VerdictKind, permission: bool) -> &'static str {
     }
 }
 
-fn question_html(run: &Run, q: &QuestionState) -> String {
+/// A picture Jaynes kept, by its fingerprint, as an image inside the page: no address reaches a file.
+fn picture(home: &std::path::Path, name: &str) -> Option<String> {
+    let ok = name.len() > 65
+        && name[..64].chars().all(|c| c.is_ascii_hexdigit())
+        && matches!(&name[64..], ".png" | ".jpg" | ".jpeg" | ".gif" | ".webp" | ".svg");
+    if !ok {
+        return None;
+    }
+    let bytes = std::fs::read(home.join("pictures").join(name)).ok()?;
+    let kind = match &name[65..] {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "image/jpeg",
+    };
+    Some(format!("<img src=\"data:{kind};base64,{}\" alt=\"\">", base64(&bytes)))
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String) -> String {
     let question = &q.question;
     let permission = question.kind == QuestionKind::Permission;
     let i = run.manifest.index(&question.step).unwrap_or(0);
@@ -491,9 +538,10 @@ fn question_html(run: &Run, q: &QuestionState) -> String {
                 })
                 .collect();
             format!(
-                "<div class=\"row\" data-item=\"{id}\"><h3>{label}</h3><div class=\"seg\">{buttons}</div><input class=\"note hide\" data-i=\"{id}\"></div>",
+                "<div class=\"row\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"seg\">{buttons}</div><input class=\"note hide\" data-i=\"{id}\"></div>",
                 id = esc(&it.id),
-                label = esc(&it.label)
+                label = esc(&it.label),
+                more = shown(it)
             )
         })
         .collect();
@@ -576,6 +624,9 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .seg button.on.drop { border-color:var(--red); color:var(--red); background:var(--red-soft); }
 .seg button.on.skip { border-color:var(--line-2); color:var(--ink); background:var(--panel-2); }
 .note { margin-top:8px; width:100%; background:var(--panel); border:1px solid var(--line-2); border-radius:8px; color:var(--ink); padding:8px 10px; font:inherit; font-size:14px; }
+.detail { margin:2px 0 8px; color:var(--dim); font-size:13.5px; } .pics { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0; }
+.pics img { max-width:min(100%, 420px); max-height:320px; border-radius:8px; border:1px solid var(--line-2); background:#fff; cursor:zoom-in; }
+.pics img.big { max-width:100%; max-height:none; cursor:zoom-out; }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
@@ -611,6 +662,7 @@ function refresh() {
     document.getElementById("send").disabled = !r.ok;
   }, 150);
 }
+document.addEventListener("click", e => { if (e.target.matches(".pics img")) e.target.classList.toggle("big"); });
 document.addEventListener("click", async e => {
   const b = e.target.closest("button"); if (!b || !base) return;
   if (b.dataset.v) {
