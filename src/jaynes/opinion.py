@@ -20,7 +20,7 @@ from typing import Any, cast
 from jaynes import why
 from jaynes.role import Decision
 
-MOST = 12  # opinions kept per step
+MOST = 12  # opinions per round of a step
 BUTTONS = {"keep": "ok", "redo": "no", "drop": "drop", "base": "base"}  # a mark, as the page's button names it
 
 PROMPT = """The person judges the decisions below at a stop of a run, and wrote what they think in their own words.
@@ -47,17 +47,24 @@ def folder(home: Path, run_id: str, step: str) -> Path:
     return home / "runs" / run_id / step / "opinion"
 
 
-def latest(home: Path, run_id: str, step: str) -> dict[str, Any] | None:
-    """The last opinion written at this step, with its marks once they are read, or why they could not be."""
+def _asked(home: Path, run_id: str, step: str) -> list[tuple[int, dict[str, Any]]]:
+    """Every opinion written at this step, in order, by its number."""
     root = folder(home, run_id, step)
-    found = sorted((p for p in root.glob("*/asked.json") if p.parent.name.isdigit()),
-                   key=lambda p: int(p.parent.name)) if root.is_dir() else []
-    for f in reversed(found):
+    out: list[tuple[int, dict[str, Any]]] = []
+    for f in sorted((p for p in root.glob("*/asked.json") if p.parent.name.isdigit()),
+                    key=lambda p: int(p.parent.name)) if root.is_dir() else []:
         try:
-            return cast(dict[str, Any], json.loads(f.read_text()))
+            out.append((int(f.parent.name), cast(dict[str, Any], json.loads(f.read_text()))))
         except (OSError, ValueError):
             continue
-    return None
+    return out
+
+
+def latest(home: Path, run_id: str, step: str, round_: int | None = None) -> dict[str, Any] | None:
+    """The last opinion written at this step, in ``round_`` when given, with its marks once they are read, or why
+    they could not be. An opinion of an earlier round judged other lines, and is not shown again."""
+    found = [x for _, x in _asked(home, run_id, step) if round_ is None or x.get("round") == round_]
+    return found[-1] if found else None
 
 
 def marks(raw: str, decisions: list[Decision], locked: Collection[str]) -> tuple[dict[str, dict[str, str]], str]:
@@ -97,8 +104,8 @@ def ask(home: Path, run_id: str, step: str, round_: int, text: str, decisions: l
     root = folder(home, run_id, step)
     root.mkdir(parents=True, exist_ok=True)
     n = 1 + max((int(p.name) for p in root.iterdir() if p.name.isdigit()), default=0)
-    if n > MOST:
-        raise ValueError(f"{MOST} opinions were written at this step already")
+    if sum(1 for _, x in _asked(home, run_id, step) if x.get("round") == round_) >= MOST:
+        raise ValueError(f"{MOST} opinions were written in this round of the step already")
     here = root / str(n)
     (here / "files").mkdir(parents=True)
     shown: dict[str, list[str]] = {}

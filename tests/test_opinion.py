@@ -144,3 +144,40 @@ def test_the_reader_sees_each_decisions_pictures_though_another_step_drew_them(
                      "files/3/board.png": b"\x89PNG board"}
     assert "- ledger: Ledger = a bank statement (pictures: files/1/ledger.png)" in prompt
     assert "- board: Board = a tactics board (pictures: files/3/board.png)" in prompt
+
+
+def test_an_opinion_of_an_earlier_round_is_not_shown_once_the_step_comes_back(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jaynes.conductor import Conductor
+    from tests.decided import Agent
+    from tests.test_decisions import LOOKS
+
+    def reads(here: Path, prompt: str) -> str:
+        return json.dumps({"marks": {"accent": {"mark": "redo", "note": "less orange"}}, "understood": "Accent redone."})
+
+    monkeypatch.setattr(opinion, "reader", reads)
+    cli.main(["run", "--home", str(tmp_path), "--role", "tests.decided:ROLE", "--task", "a look",
+              "--runtime", "fake=tests.decided:Agent"])
+    c = Conductor(tmp_path, {"fake": Agent})
+    [rid] = c.store.runs()
+    for _ in range(opinion.MOST):  # a whole round's worth of opinions
+        opinion.ask(tmp_path, rid, "look", 1, "the orange is too loud", [], set(), {}, wait=True)
+    c.answer(LOOKS, rid, "look", "return", note="try again", by="person")
+    cli.main(["run", "--home", str(tmp_path), "--runtime", "fake=tests.decided:Agent", rid])
+    base, server = serving(tmp_path)
+    try:
+        page = get(f"{base}/stop/{rid}/look")
+        assert "the orange is too loud" not in page and "Accent redone." not in page
+        assert get(f"{base}/opinion/{rid}/look") == ""
+        post(base + "/opinion", {"token": form(page)["token"], "run": rid, "step": "look", "text": "now teal"})
+    finally:
+        server.shutdown()
+    from jaynes.conductor import project
+    now = project(c.store.events(run_id=rid)).step("look").round
+    assert now > 1
+    for _ in range(50):
+        if opinion.latest(tmp_path, rid, "look", now) is not None:
+            break
+        time.sleep(0.1)
+    last = opinion.latest(tmp_path, rid, "look", now)
+    assert last is not None and last["text"] == "now teal"  # a new round has its own room

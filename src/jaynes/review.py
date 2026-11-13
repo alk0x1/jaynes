@@ -1643,7 +1643,7 @@ class Review:
     def opinions(self, run_id: str, step: str) -> str:
         """What came of the last opinion written at this step: being read, the marks with what was understood, or
         why it could not mark."""
-        x = opinion.latest(self.c.home, run_id, step)
+        x = opinion.latest(self.c.home, run_id, step, self._round(run_id, step))
         if x is None:
             return ""
         if x.get("error"):
@@ -1657,8 +1657,12 @@ class Review:
         return (f'<p class="said" data-marks="{esc(json.dumps(marks, ensure_ascii=False))}" '
                 f'data-n="{esc(str(x.get("asked")))}">{esc(told)}</p>')
 
+    def _round(self, run_id: str, step: str) -> int:
+        """The round a step is in: what the person says there is about that round's output."""
+        return project(self.c.store.events(run_id=run_id)).steps.get(step, StepState()).round
+
     def _opinion_part(self, run_id: str, step: str) -> str:
-        last = opinion.latest(self.c.home, run_id, step)
+        last = opinion.latest(self.c.home, run_id, step, self._round(run_id, step))
         text = str(last.get("text") or "") if last else ""
         return ('<div class="opinion" id="opinion"><div class="label">What do you think? <span>in your own words; a '
                 'Claude marks the lines below for you to check</span></div>'
