@@ -8,6 +8,7 @@ Carry out this change through Jaynes: $ARGUMENTS
 
 When the skill starts from an approved plan, the task is that plan, in full, with what was agreed in conversation.
 
-1. Run `jaynes update`. If `jaynes` is not found or has no `guide` command, run
-   `uv tool install --reinstall git+https://github.com/alk0x1/jaynes` (install uv first if it is missing).
+1. Run `jaynes update`. If `jaynes` is not found, or `jaynes guide` does not print how to start a run with
+   `jaynes start --role`, install it: `cargo install --locked --git https://github.com/alk0x1/jaynes jaynes-shell
+   --root ~/.local` (install Rust with rustup first if `cargo` is missing).
 2. Run `jaynes guide` and follow what it prints.

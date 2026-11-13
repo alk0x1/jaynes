@@ -64,6 +64,40 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
     Ok(reference)
 }
 
+/// Give a run an input from outside its process (the page, an agent): recorded now and carried on in a process
+/// of its own when nothing drives the run, or left in its inbox for the process that does. A leave is recorded at
+/// once in any case, since an agent inside a turn waits for it. Says which.
+pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'static str, String> {
+    jaynes_core::decide(Some(run), &input).map_err(|r| r.0)?;
+    let mut store = Store::open(&home.join("record.sqlite3"))?;
+    if let Input::Answer { answer } = &input {
+        if run.questions.get(&answer.question).is_some_and(|q| q.question.kind == jaynes_core::question::QuestionKind::Permission) {
+            store.decide(&run.id, &input)?;
+            return Ok("now");
+        }
+    }
+    let dir = home.join("runs").join(&run.id);
+    let lock = File::create(dir.join("lock")).map_err(|e| e.to_string())?;
+    if lock.try_lock().is_ok() {
+        store.decide(&run.id, &input)?;
+        drop(lock);
+        let log = File::create(dir.join("continue.log")).map_err(|e| e.to_string())?;
+        let err = log.try_clone().map_err(|e| e.to_string())?;
+        std::process::Command::new(exe)
+            .args(["continue", &run.id])
+            .env("JAYNES_ENGINE_HOME", home)
+            .stdin(std::process::Stdio::null())
+            .stdout(log)
+            .stderr(err)
+            .spawn()
+            .map_err(|e| format!("the run could not be carried on: {e}"))?;
+        Ok("now")
+    } else {
+        store.inbox_put(&run.id, &input)?;
+        Ok("inbox")
+    }
+}
+
 /// What a person sees as the process goes: one line each.
 pub fn say(line: &str) {
     eprintln!("{line}");
@@ -583,7 +617,7 @@ impl<'a> Driver<'a> {
             say(&format!("  - {}: {}", item.id, item.label));
         }
         let offered: Vec<String> = q.offered.iter().map(|v| format!("{v:?}").to_lowercase()).collect();
-        say(&format!("  answer: jaynes-engine answer {} {} [item=verdict] ({})", run.id, q.id, offered.join(", ")));
+        say(&format!("  answer: jaynes answer {} {} [item=verdict] ({})", run.id, q.id, offered.join(", ")));
     }
 }
 

@@ -6,7 +6,7 @@ names. The owner's decisions in the brief stand; where this design picked a defa
 ## The shape
 
 ```
-person ── jaynes-engine (CLI today, the page next)
+person ── jaynes (CLI today, the page next)
               │
         shell (Rust): record in SQLite, role process, agent program, project copy
               │  inputs ↓        ↑ events + commands
@@ -18,11 +18,11 @@ person ── jaynes-engine (CLI today, the page next)
 ```
 
 - **Core** (`engine/crates/core`): one pure function, `decide(run, input) -> (events, commands)`. A run's state is only the fold of its events (`Run::fold`). Every guarantee of `docs/guarantees.md` is a property of this function and is tested on thousands of random runs (`tests/guarantees.rs`).
-- **Shell** (`engine/crates/shell`, binary `jaynes-engine`): records the events of each input in one SQLite transaction (`synchronous=full`, each entry chained to the one before), carries out the commands, and turns what happened into the next input. One process drives a run at a time (a file lock); inputs from people while it works wait in an inbox it takes between commands.
+- **Shell** (`engine/crates/shell`, binary `jaynes`): records the events of each input in one SQLite transaction (`synchronous=full`, each entry chained to the one before), carries out the commands, and turns what happened into the next input. One process drives a run at a time (a file lock); inputs from people while it works wait in an inbox it takes between commands.
 - **Protocol 1** (`engine/crates/shell/src/protocol.rs`, schema in `engine/protocol/role-protocol-1.schema.json`):
   the engine starts the role program per call, writes one request line, reads one reply line. Calls: `hello`,
   `describe`, `prompt`, `execute`, `check`, `items`. The role never decides what runs next and never writes what
-  an answer will do. A role is correct when it passes `jaynes-engine conformance DIR`, not when it uses a library.
+  an answer will do. A role is correct when it passes `jaynes conformance DIR`, not when it uses a library.
 - **Roles**: `engine/roles/small-change` and `engine/roles/fix-bug`, in Python, using the Python engine's box for the
   project's commands. fix-bug's docstring says what changed in the port.
 
@@ -65,7 +65,7 @@ outside its sample, recorded as `StopSkipped`. A braked stop holds the run and n
 statistic, the 7 days, the brake at two errors in ten and the labels needed (88 at 5%, 20 at 20%) are the Python
 engine's. Each event's time is now part of what the record's chain fingerprints, since the count reads it.
 
-**The page (owner's choice, 2026-11-12: direction C).** `jaynes-engine page` serves, on 127.0.0.1, the questions
+**The page (owner's choice, 2026-11-12: direction C).** `jaynes page` serves, on 127.0.0.1, the questions
 waiting across runs and the releases an agent made, one question at a time: rows with the offered verdicts, a
 note when a verdict asks for one, and one line of context. The context changes no verdict: the person's words go
 to the agents that work after the answer (`Answer.context`, in every later prompt). What the answer will do comes
@@ -145,7 +145,7 @@ step reads; the comparison covers the states the random runs reach.
 ## Leaves in the middle of a turn (2026-11-13)
 
 Claude Code runs in its default permission mode with `--permission-prompt-tool mcp__jaynes__permit`: what a step's
-settings did not allow comes to `jaynes-engine permit`, an MCP server started for the turn. It records a
+settings did not allow comes to `jaynes permit`, an MCP server started for the turn. It records a
 `PermissionAsked` in the core, in one transaction with reading the state. The core's rule grants reading inside the
 project; anything else is a question on the page, which the agent waits for. The answer is recorded at once even
 while the run's process is blocked on the turn, and the server reads it from the record. A leave refused is not

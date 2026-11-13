@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_jaynes-engine");
+const BIN: &str = env!("CARGO_BIN_EXE_jaynes");
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -38,7 +38,7 @@ fn scratch(name: &str) -> Scratch {
 fn engine(s: &Scratch, args: &[&str]) -> (bool, String) {
     let out = Command::new(BIN)
         .args(args)
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", root().join("..").join("src"))
         .output()
@@ -122,7 +122,7 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
     // the person, at a terminal, keeps it
     let script = Command::new("script")
         .args(["-q", "/dev/null", BIN, "answer", "risky", &q, "--send"])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .output()
         .expect("script");
@@ -159,7 +159,7 @@ fn the_protocol_schema_on_disk_is_the_one_the_engine_speaks() {
     let (ok, out) = engine(&s, &["schema"]);
     assert!(ok);
     let on_disk = std::fs::read_to_string(root().join("protocol/role-protocol-1.schema.json")).expect("schema file");
-    assert_eq!(out.trim(), on_disk.trim(), "regenerate it: jaynes-engine schema > engine/protocol/role-protocol-1.schema.json");
+    assert_eq!(out.trim(), on_disk.trim(), "regenerate it: jaynes schema > engine/protocol/role-protocol-1.schema.json");
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     let child = Command::new(BIN)
         .args(["start", "--run", "inbox", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", root().join("..").join("src"))
         .stdout(std::process::Stdio::piped())
@@ -216,7 +216,7 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     let out = Command::new(BIN)
         .args(["start", "--run", "fixbug", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", root().join("..").join("src"))
         .env("PROMPTS", &prompts)
@@ -273,7 +273,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let port = 18750 + (std::process::id() % 1000) as u16;
     let mut page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", root().join("..").join("src"))
         .env("JAYNES_PAGE_KEY", "k3y")
@@ -321,7 +321,7 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let role = root().join("roles/fix-bug");
     let env = |c: &mut Command| {
-        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts);
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts);
     };
     let mut c = Command::new(BIN);
     c.args(["start", "--run", "redo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
@@ -367,7 +367,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     let mut engine_process = Command::new(BIN)
         .args(["start", "--run", "crash", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", root().join("..").join("src"))
         .stdout(std::process::Stdio::null())
@@ -426,7 +426,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let port = 19750 + (std::process::id() % 1000) as u16;
     let mut page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", root().join("..").join("src"))
         .env("JAYNES_PAGE_KEY", "k3y")
@@ -491,7 +491,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let run = Command::new(BIN)
         .args(["start", "--run", "leave", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
-        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src"))
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src"))
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().expect("start");
     for _ in 0..100 {
@@ -502,7 +502,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let cwd = s.home.join("runs/leave/project");
     let mut child = Command::new(BIN)
         .args(["permit", "--run", "leave", "--step", "change", "--attempt", &attempt.to_string(), "--cwd", cwd.to_str().expect("path"), "--wait", "20"])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
         .spawn().expect("permit");
     let out = std::io::BufReader::new(child.stdout.take().expect("stdout"));
@@ -531,7 +531,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     assert!(!q.is_empty(), "the leave was asked of the person");
     let answered = Command::new("script")
         .args(["-q", "/dev/null", BIN, "answer", "leave", &q, "leave=drop", "--context", "not outside the project", "--send"])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("answer");
     assert!(String::from_utf8_lossy(&answered.stdout).contains("recorded"), "{}", String::from_utf8_lossy(&answered.stdout));
     let decided = asking.join().expect("asked");
@@ -553,7 +553,7 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
     let out = Command::new(BIN)
         .args(["start", "--run", run, "--role", root().join("roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
-        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts)
         .output().expect("start");
     format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
 }
@@ -572,7 +572,7 @@ fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_revert
     assert!(!ok && out.contains("only you undo"), "{out}");
     let undo = Command::new("script")
         .args(["-q", "/dev/null", BIN, "undo", "merge", "--note", "not now"])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("undo");
     assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}", String::from_utf8_lossy(&undo.stdout));
     assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello $1\"\n");
@@ -604,7 +604,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
     let port = 20750 + (std::process::id() % 1000) as u16;
     let mut page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
-        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PAGE_KEY", "k3y")
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -617,4 +617,63 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
     // the picture was kept by its fingerprint, apart from the run's copy
     let kept: Vec<_> = std::fs::read_dir(s.home.join("pictures")).expect("kept").flatten().collect();
     assert_eq!(kept.len(), 1);
+}
+
+#[test]
+fn a_role_is_installed_by_name_and_only_when_it_conforms() {
+    let s = scratch("roles");
+    let (ok, out) = engine(&s, &["add", root().join("roles/small-change").to_str().expect("path")]);
+    assert!(ok && out.contains("role small-change installed"), "{out}");
+    let (ok, out) = engine(&s, &["roles"]);
+    assert!(ok && out.contains("small-change 2.0.0"), "{out}");
+    // a folder that is not a role is refused
+    let bad = s.home.join("bad");
+    std::fs::create_dir_all(&bad).expect("dir");
+    std::fs::write(bad.join("role.py"), "print('not a role')\n").expect("write");
+    let (ok, out) = engine(&s, &["add", bad.to_str().expect("path")]);
+    assert!(!ok && out.contains("does not conform"), "{out}");
+    // a run starts with the installed role by its name
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let (ok, out) = engine(&s, &["start", "--run", "byname", "--role", "small-change", "--project", s.project.to_str().expect("path"),
+                                 "--request", "say hi", "--agent", &format!("command:{agent}")]);
+    assert!(ok && out.contains("finished: delivered"), "{out}");
+    let (ok, out) = engine(&s, &["guide"]);
+    assert!(ok && out.contains("jaynes start --role"), "{out}");
+}
+
+#[test]
+fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
+    let s = scratch("mcp");
+    assert!(engine(&s, &["add", root().join("roles/small-change").to_str().expect("path")]).0);
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    // the agent program of the run is a command; the MCP start uses Claude by default, so start here and read through MCP
+    start(&s, "viamcp", &agent);
+    let child = Command::new(BIN)
+        .arg("mcp")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python())
+        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
+        .spawn().expect("mcp");
+    let mut child = child;
+    let out = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut mcp = Mcp { child, out, n: 0 };
+    mcp.call("initialize", serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
+    let names: Vec<String> = mcp.call("tools/list", serde_json::json!({}))["result"]["tools"].as_array().expect("tools").iter().map(|t| t["name"].as_str().unwrap_or("").to_string()).collect();
+    assert_eq!(names, ["home", "roles", "start", "run", "answer", "halt", "correct"]);
+    let tool = |mcp: &mut Mcp, name: &str, args: Value| -> (bool, String) {
+        let r = mcp.call("tools/call", serde_json::json!({"name": name, "arguments": args}));
+        (r["result"]["isError"] == false, r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string())
+    };
+    let (_, home) = tool(&mut mcp, "home", serde_json::json!({}));
+    assert!(home.contains("run viamcp") && home.contains("bigger than a small one"), "{home}");
+    let (_, roles) = tool(&mut mcp, "roles", serde_json::json!({}));
+    assert!(roles.contains("small-change"), "{roles}");
+    let q = events(&s, "viamcp").into_iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    // small-change's stop is a release: an agent may let it go on
+    let (ok, said) = tool(&mut mcp, "answer", serde_json::json!({"run": "viamcp", "question": q}));
+    assert!(ok && said.contains("counts as the agent's"), "{said}");
+    let (ok, said) = tool(&mut mcp, "run", serde_json::json!({"run": "viamcp"}));
+    assert!(ok && said.contains("run viamcp"), "{said}");
+    let (ok, said) = tool(&mut mcp, "halt", serde_json::json!({"run": "nope"}));
+    assert!(!ok && said.contains("no run nope"), "{said}");
+    let _killed = mcp.child.kill();
 }

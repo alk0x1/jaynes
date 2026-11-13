@@ -1,8 +1,10 @@
-//! `jaynes-engine`: the shell around the core, on the command line.
+//! `jaynes`: the shell around the core, on the command line.
 
 mod agent;
 mod conformance;
 mod drive;
+mod install;
+mod mcp;
 mod page;
 mod permit;
 mod project;
@@ -23,9 +25,9 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use store::Store;
 
-const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
+const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
-  start --role DIR --request TEXT [--project DIR] [--agent claude|command:CMD] [--risk high] [--run ID]
+  start --role NAME --request TEXT [--project DIR] [--agent claude|command:CMD] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
@@ -35,6 +37,10 @@ const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   page [--port N]         the page where you answer, on 127.0.0.1 (default port 8750)
+  add SOURCE | remove NAME | roles   install a role (a folder, or URL#path), remove one, list them
+  guide                   how an agent carries out a change through Jaynes
+  update                  install the newest Jaynes and update roles installed from git
+  mcp                     the server agents in Claude Code use (the plugin starts it)
   conformance DIR         check a role against the protocol
   schema                  print the protocol's schema
 
@@ -55,9 +61,7 @@ fn home() -> PathBuf {
 }
 
 fn library() -> PathBuf {
-    std::env::var("JAYNES_ROLE_LIBRARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python"))
+    install::library(&home())
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -186,7 +190,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "page" => {
             let port = flag(rest, "--port").map(|p| p.parse().map_err(|_| "--port takes a number")).transpose()?.unwrap_or(8750);
-            let key = std::env::var("JAYNES_PAGE_KEY").unwrap_or_else(|_| page::key());
+            let key = std::env::var("JAYNES_PAGE_KEY").unwrap_or_else(|_| install::page_key(&home()));
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             page::Page { home: home(), port, key, exe }.serve()
         }
@@ -202,6 +206,45 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             .serve()
         }
+        "add" => {
+            let source = rest.first().ok_or("which role? a folder, or URL#path/in/the/repository")?;
+            let name = install::add(&home(), source)?;
+            say(&format!("role {name} installed"));
+            Ok(())
+        }
+        "remove" => {
+            let name = rest.first().ok_or("which role?")?;
+            install::remove(&home(), name)?;
+            say(&format!("role {name} removed; runs that started with it keep their own copy"));
+            Ok(())
+        }
+        "roles" => {
+            let roles = install::list(&home());
+            if roles.is_empty() {
+                println!("no role is installed: `jaynes guide` says how to install the ones that come with Jaynes");
+            }
+            for (name, version, about, origin) in roles {
+                println!("{name} {version}  {about}{}", if origin.is_empty() { String::new() } else { format!("  (from {origin})") });
+            }
+            Ok(())
+        }
+        "guide" => {
+            print!("{}", install::GUIDE);
+            Ok(())
+        }
+        "update" => {
+            for line in install::update(&home())? {
+                say(&line);
+            }
+            Ok(())
+        }
+        // The Python engine's plugin recorded answers from Claude Code's question dialog here; this engine asks on
+        // its page, so there is nothing to record.
+        "answered" => {
+            let _drained = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+            Ok(())
+        }
+        "mcp" => mcp::serve(&home()),
         "schema" => {
             println!("{}", serde_json::to_string_pretty(&protocol::schema()).map_err(|e| e.to_string())?);
             Ok(())
@@ -211,7 +254,8 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn start(args: &[String]) -> Result<(), String> {
-    let role_dir = flag(args, "--role").ok_or("--role DIR is needed")?;
+    let role_given = flag(args, "--role").ok_or("--role NAME (or a role's folder) is needed")?;
+    let role_dir = install::find_role(&home(), &role_given)?.display().to_string();
     let request = flag(args, "--request").ok_or("--request TEXT is needed")?;
     let project = flag(args, "--project").map(|p| std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))).transpose()?;
     let agent = flag(args, "--agent").unwrap_or_else(|| "claude".into());
@@ -264,6 +308,7 @@ fn start(args: &[String]) -> Result<(), String> {
     }))?;
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
+    say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
     let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, raise, attention })?;
     print_state(&end);
     Ok(())

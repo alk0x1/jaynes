@@ -202,35 +202,8 @@ impl Page {
     /// Record an input now and carry the run on in a process of its own, or leave it in the inbox of the process
     /// that drives the run.
     fn submit(&self, run: &Run, input: Input) -> Result<Value, String> {
-        decide(Some(run), &input).map_err(|r| r.0)?;
-        let mut store = self.store()?;
-        // A leave is answered while the agent waits for it, inside a turn the run's process is blocked on: it is
-        // recorded at once, and the agent's leave server reads it from the record.
-        if let Input::Answer { answer } = &input
-            && run.questions.get(&answer.question).is_some_and(|q| q.question.kind == QuestionKind::Permission) {
-                store.decide(&run.id, &input)?;
-                return Ok(json!({"ok": true, "recorded": "now"}));
-            }
-        let lock = std::fs::File::create(self.home.join("runs").join(&run.id).join("lock")).map_err(|e| e.to_string())?;
-        if lock.try_lock().is_ok() {
-            drive::decide_and_record(&mut store, &run.id, &input)?;
-            drop(lock);
-            // The process that carries the run on, so the page never waits on an agent.
-            let log = std::fs::File::create(self.home.join("runs").join(&run.id).join("continue.log")).map_err(|e| e.to_string())?;
-            let err = log.try_clone().map_err(|e| e.to_string())?;
-            std::process::Command::new(&self.exe)
-                .args(["continue", &run.id])
-                .env("JAYNES_ENGINE_HOME", &self.home)
-                .stdin(std::process::Stdio::null())
-                .stdout(log)
-                .stderr(err)
-                .spawn()
-                .map_err(|e| format!("the run could not be carried on: {e}"))?;
-            Ok(json!({"ok": true, "recorded": "now"}))
-        } else {
-            store.inbox_put(&run.id, &input)?;
-            Ok(json!({"ok": true, "recorded": "inbox"}))
-        }
+        let recorded = drive::submit(&self.home, &self.exe, run, input)?;
+        Ok(json!({"ok": true, "recorded": recorded}))
     }
 
     fn render(&self, view: View, person: bool) -> Result<String, String> {
