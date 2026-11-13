@@ -1,0 +1,41 @@
+name: engine
+
+on:
+  push:
+    branches: [main]
+    paths: ["engine/**", ".github/workflows/engine.yml"]
+  pull_request:
+    paths: ["engine/**", ".github/workflows/engine.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # the engine runs on macOS first: its tests use the macOS sandbox, sed -i '' and script
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.elan
+            engine/target
+            engine/model/.lake
+          key: engine-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'engine/model/lean-toolchain', 'engine/model/lake-manifest.json') }}
+      # Lean, so the test that compares the core with the proved model runs instead of being skipped
+      - name: Lean
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked

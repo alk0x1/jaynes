@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// How to start a server: its command line and its environment.
+pub type Server = (Vec<String>, Vec<(String, String)>);
+
 pub struct Spec<'a> {
     pub cwd: &'a Path,
     pub prompt: &'a str,
@@ -28,7 +31,7 @@ pub struct Spec<'a> {
     pub pidfile: Option<PathBuf>,
     /// How to start Jaynes's leave server for this turn, so what the agent asks beyond its settings comes to
     /// Jaynes instead of being refused.
-    pub permit: Option<(Vec<String>, Vec<(String, String)>)>,
+    pub permit: Option<Server>,
     /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
     /// it counts neither towards the deadline nor in the turn's time.
     pub paused: Option<PathBuf>,
