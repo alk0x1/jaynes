@@ -31,6 +31,7 @@ const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
   halt RUN | resume RUN | abandon RUN
+  undo RUN [--note TEXT]   revert what a run merged
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   page [--port N]         the page where you answer, on 127.0.0.1 (default port 8750)
@@ -129,6 +130,14 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             };
             send(s, id, input)
+        }
+        "undo" => {
+            let id = rest.first().ok_or("which run?")?;
+            let note = flag(rest, "--note").unwrap_or_default();
+            let mut s = store()?;
+            let reverted = drive::undo(&mut s, &home(), id, note, who())?;
+            say(&format!("undone: {reverted}"));
+            Ok(())
         }
         "correct" => {
             let id = rest.first().ok_or("which run?")?;

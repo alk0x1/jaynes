@@ -47,6 +47,23 @@ pub fn agent_named(spec: &str) -> Box<dyn Agent> {
     }
 }
 
+pub fn merges(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("merges.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Revert every merge of a run and record it: the core is asked first, so nothing is reverted it would refuse.
+pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_core::question::By) -> Result<String, String> {
+    let state = store.state(run)?.ok_or("no such run")?;
+    let input = Input::Undo { note, by };
+    jaynes_core::decide(Some(&state), &input).map_err(|r| r.0)?;
+    let setup = Setup::load(store, home, run)?;
+    let copy = setup.copy.as_ref().ok_or("the run has no project")?;
+    let merges = merges(&setup.dir);
+    let reference = if merges.is_empty() { "nothing had been merged".to_string() } else { copy.undo(&merges, run)? };
+    store.decide(run, &input)?;
+    Ok(reference)
+}
+
 /// What a person sees as the process goes: one line each.
 pub fn say(line: &str) {
     eprintln!("{line}");
@@ -172,6 +189,11 @@ impl<'a> Driver<'a> {
         Ok(())
     }
 
+    /// The merges the run made, oldest first.
+    pub fn merges(&self) -> Vec<String> {
+        merges(&self.setup.dir)
+    }
+
     fn parents(&self) -> std::collections::BTreeMap<String, String> {
         std::fs::read_to_string(self.setup.dir.join("project-parents.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
     }
@@ -227,7 +249,7 @@ impl<'a> Driver<'a> {
                 None
             }
             Command::Permit { .. } => None,
-            Command::Deliver { digest, .. } => {
+            Command::Deliver { digest, merge, .. } => {
                 let writers: Vec<String> = run
                     .path()
                     .into_iter()
@@ -241,6 +263,21 @@ impl<'a> Driver<'a> {
                     },
                     None => (true, "no project; the outputs are the delivery".to_string()),
                 };
+                let mut reference = reference;
+                if ok && merge
+                    && let Some(copy) = &self.setup.copy {
+                        let head = copy.head().unwrap_or_default();
+                        match copy.merge(&head, &self.setup.run) {
+                            Ok(Some(m)) => {
+                                let mut merges = self.merges();
+                                merges.push(m.clone());
+                                let _kept = std::fs::write(self.setup.dir.join("merges.json"), serde_json::to_string(&merges).unwrap_or_default());
+                                reference.push_str(&format!("; merged as {}", &m[..m.len().min(12)]));
+                            }
+                            Ok(None) => reference.push_str("; nothing new to merge"),
+                            Err(why) => reference.push_str(&format!("; not merged: {why}")),
+                        }
+                    }
                 if ok {
                     say(&format!("delivered: {reference}"));
                 }

@@ -15,6 +15,18 @@ pub struct Manifest {
     /// The major version of the protocol the role speaks.
     pub protocol: u32,
     pub steps: Vec<StepDecl>,
+    /// How the run delivers: a branch, or a merge into the branch the project had checked out when the run started.
+    #[serde(default)]
+    pub delivery: DeliveryKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryKind {
+    #[default]
+    Branch,
+    /// Merged by Jaynes, never pushed, and undone by the person with Undo.
+    Merge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

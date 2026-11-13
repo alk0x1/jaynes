@@ -110,9 +110,10 @@ class _Step:
 
 
 class Role:
-    def __init__(self, name: str, version: str) -> None:
+    def __init__(self, name: str, version: str, delivery: str = "branch") -> None:
         self.name = name
         self.version = version
+        self.delivery = delivery  # "branch", or "merge": Jaynes merges into the branch the run started from
         self.steps: dict[str, _Step] = {}
 
     def step(self, name: str, *, executor: str = "agent", needs: list[str] | None = None,
@@ -158,7 +159,7 @@ class Role:
                              "release": s.stop.release, "budget": s.stop.budget,
                              "audit_rate": s.stop.audit_rate, "about": s.stop.about}
             steps.append(d)
-        return {"role": self.name, "version": self.version, "protocol": PROTOCOL, "steps": steps}
+        return {"role": self.name, "version": self.version, "protocol": PROTOCOL, "steps": steps, "delivery": self.delivery}
 
     # --- the calls ----------------------------------------------------------------------------------------------
 

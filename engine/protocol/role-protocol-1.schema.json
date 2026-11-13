@@ -184,6 +184,21 @@
         }
       ]
     },
+    "DeliveryKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "branch"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "merge",
+          "description": "Merged by Jaynes, never pushed, and undone by the person with Undo.",
+          "type": "string"
+        }
+      ]
+    },
     "Digest": {
       "description": "The fingerprint of some content. Two contents have the same digest only if they are equal.",
       "type": "string"
@@ -288,6 +303,11 @@
     },
     "Manifest": {
       "properties": {
+        "delivery": {
+          "$ref": "#/$defs/DeliveryKind",
+          "default": "branch",
+          "description": "How the run delivers: a branch, or a merge into the branch the project had checked out when the run started."
+        },
         "protocol": {
           "description": "The major version of the protocol the role speaks.",
           "format": "uint32",

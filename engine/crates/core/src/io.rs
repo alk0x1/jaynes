@@ -81,6 +81,11 @@ pub enum Input {
     Abandon {
         by: By,
     },
+    /// The person reverted what the run merged.
+    Undo {
+        note: String,
+        by: By,
+    },
     Correct {
         note: String,
         by: By,
@@ -169,7 +174,12 @@ pub enum Command {
     /// Tell an agent under way whether it may have what it asked.
     Permit { step: String, attempt: u32, allow: bool },
     /// Make the run's delivery (a branch) from the outputs it is the fingerprint of.
-    Deliver { digest: Digest, given: Vec<Read> },
+    Deliver {
+        digest: Digest,
+        given: Vec<Read>,
+        /// Also merge it into the branch the run started from: the role delivers by merge and nobody undid it.
+        merge: bool,
+    },
     /// Tell the person something holds the run.
     Notify { text: String },
 }

@@ -28,6 +28,8 @@ pub struct Run {
     pub delivering: Option<Digest>,
     pub delivered: Option<Digest>,
     pub counts: Counts,
+    /// The person reverted what the run merged.
+    pub undone: bool,
     /// The person's context, by the step whose question it was answered at, oldest first.
     pub context: Vec<(String, String)>,
     /// Each stop's count as it stood at the start.
@@ -168,6 +170,7 @@ impl Run {
             counts: Counts::default(),
             attention: attention.clone(),
             context: Vec::new(),
+            undone: false,
             seq: 1,
         })
     }
@@ -405,6 +408,7 @@ impl Run {
             }
             Event::RunFinished { outcome, .. } => self.phase = Phase::Finished { outcome: *outcome },
             Event::DeliveryCorrected { .. } => self.counts.corrections += 1,
+            Event::MergeUndone { .. } => self.undone = true,
             Event::StopSkipped { step, round, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.skipped = Some(*round);

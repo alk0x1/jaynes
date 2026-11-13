@@ -83,7 +83,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
     }
     let Some(run) = run else { return refuse("there is no such run") };
     let mut c = Ctx { run: run.clone(), out: Decided::default() };
-    if c.run.finished() && !matches!(input, Input::Correct { .. }) {
+    if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. }) {
         return refuse("the run is finished");
     }
     match input {
@@ -162,6 +162,18 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             let cost = c.run.cost();
             c.emit(Event::RunFinished { outcome: Outcome::Abandoned, cost });
+        }
+        Input::Undo { note, by } => {
+            if !by.person() {
+                return refuse("only you undo what a run merged");
+            }
+            if c.run.manifest.delivery != crate::manifest::DeliveryKind::Merge || c.run.delivered.is_none() {
+                return refuse("this run merged nothing");
+            }
+            if c.run.undone {
+                return refuse("this run's merges were already undone");
+            }
+            c.emit(Event::MergeUndone { note: note.clone(), by: by.clone() });
         }
         Input::Correct { note, by, step } => {
             if c.run.delivered.is_none() {
@@ -500,7 +512,8 @@ impl Ctx {
         let (digest, given) = self.run.delivery();
         if self.run.delivered.as_ref() != Some(&digest) {
             self.emit(Event::DeliveryAsked { digest: digest.clone() });
-            self.command(Command::Deliver { digest, given });
+            let merge = self.run.manifest.delivery == crate::manifest::DeliveryKind::Merge && !self.run.undone;
+            self.command(Command::Deliver { digest, given, merge });
             return false;
         }
         let open: Vec<String> = self.run.open_questions().iter().map(|q| q.question.id.clone()).collect();
@@ -790,7 +803,8 @@ impl Ctx {
         }
         if let Some(digest) = self.run.delivering.clone() {
             let (_, given) = self.run.delivery();
-            self.command(Command::Deliver { digest, given });
+            let merge = self.run.manifest.delivery == crate::manifest::DeliveryKind::Merge && !self.run.undone;
+            self.command(Command::Deliver { digest, given, merge });
         }
         let open: Vec<Question> = self.run.open_questions().iter().map(|q| q.question.clone()).collect();
         for question in open {

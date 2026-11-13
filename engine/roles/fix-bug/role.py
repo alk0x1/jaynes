@@ -9,7 +9,7 @@ Ported from the Python engine's package (``packages/software/fix_bug.py``). What
   send ``reproduce`` back with a hint, or abandon the run. No attempt is spent looking again.
 - A test the fix may not change and that stands in its way is said in ``wrong_test``: the open check fails with it,
   so the person sees it, instead of two agents settling it first.
-- The fix comes back as a branch; merging it alone is not ported yet.
+- The fix is merged by Jaynes into the branch the run started from, never pushed; Undo on the run's page reverts it.
 
 The suite runs in the Python engine's box (``jaynes.suite``), on a copy of the run's project.
 """
@@ -23,7 +23,7 @@ from typing import Any
 
 from jaynes_role import Blocked, Fail, Pass, Refused, Role, Stop
 
-role = Role("fix-bug", version="2.0.0")
+role = Role("fix-bug", version="2.0.0", delivery="merge")
 
 TESTS = ["**/tests/**", "**/test/**", "**/__tests__/**", "**/spec/**", "**/test_*.py", "**/*_test.py",
          "**/*.test.*", "**/*.spec.*", "**/*_test.go", "**/*_spec.rb", "**/*Test.java", "**/*Tests.cs"]

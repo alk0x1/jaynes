@@ -184,6 +184,11 @@ impl Page {
                 let c = run.ceiling;
                 Input::RaiseCeiling { ceiling: jaynes_core::risk::Ceiling { seconds: c.seconds + 1800, tokens: c.tokens + 2_000_000 }, by }
             }
+            "undo" => {
+                let mut store = self.store()?;
+                let reverted = drive::undo(&mut store, &self.home, run_id, body["note"].as_str().unwrap_or("").to_string(), by)?;
+                return Ok(json!({"ok": true, "recorded": reverted}));
+            }
             "correct" => Input::Correct {
                 note: body["note"].as_str().unwrap_or("").to_string(),
                 by,
@@ -397,6 +402,9 @@ fn run_html(r: &Run) -> String {
         }
         button("raise-ceiling", "Raise the ceiling by 30 min", "");
         button("abandon", "Abandon", "danger");
+    }
+    if r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge && r.delivered.is_some() && !r.undone {
+        button("undo", "Undo the merge", "danger");
     }
     let correct = if r.delivered.is_some() {
         let options: String = std::iter::once("<option value=\"\">the step that erred, if you know it</option>".to_string())
@@ -630,7 +638,7 @@ if (base) refresh();
 const rd = document.getElementById("rundata");
 document.addEventListener("click", async e => {
   const b = e.target.closest("button.act"); if (!b || !rd) return;
-  if (b.dataset.act === "abandon" && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "Abandon: press again"; return; }
+  if ((b.dataset.act === "abandon" || b.dataset.act === "undo") && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent += ": press again"; return; }
   const run = JSON.parse(rd.textContent).run;
   const extra = b.dataset.act === "correct" ? { note: document.getElementById("cnote").value, step: document.getElementById("cstep").value } : {};
   const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run, action: b.dataset.act, ...extra }) })).json();

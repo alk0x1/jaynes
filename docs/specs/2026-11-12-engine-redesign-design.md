@@ -128,7 +128,7 @@ version, the protocol and the record's format.
 
 ## Not in this slice
 
-- Plans of runs; merging alone and Undo; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (
+- Plans of runs; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (
 - Replaying the Python engine's 53 recorded runs as an oracle; proving the Rust code itself (step 6 of the ladder).
 
 ## The model with proofs (owner's choice, 2026-11-13)
@@ -151,6 +151,16 @@ project; anything else is a question on the page, which the agent waits for. The
 while the run's process is blocked on the turn, and the server reads it from the record. A leave refused is not
 counted as work sent back. Checked with a real Claude Code turn: it asked to write outside its folder, the person
 refused with a reason, the agent went on, and the run was delivered in 20 s.
+
+## Merging alone (2026-11-13)
+
+A role declares `delivery = "merge"` (fix-bug does). After each delivery, Jaynes makes a merge commit of the run's
+branch over the tip of the branch the project had checked out when the run started, in the run's own copy, and
+lands it in the person's repository: by fast-forward where that branch is checked out, only over a checkout with no
+uncommitted changes, or by moving the branch where it is not checked out. It never pushes. A conflict or a dirty
+checkout leaves the branch delivered and says why. A correction merges again on top. Undo, the person's only, reverts
+every merge of the run the same way, and the run merges nothing again; what it let through earns no right in its
+stops' counts.
 
 ## How it was checked
 

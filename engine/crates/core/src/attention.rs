@@ -179,6 +179,7 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
     let mut questions: BTreeMap<(String, String), (String, QuestionKind)> = BTreeMap::new();
     let mut finished: BTreeMap<String, (u64, Outcome)> = BTreeMap::new();
     let mut corrected: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
+    let mut undone: std::collections::BTreeSet<String> = Default::default();
     for (at, run, e) in history {
         let key_of = |step: &str, runs: &BTreeMap<String, (Manifest, Digest)>| {
             runs.get(run).and_then(|(m, f)| m.index(step).map(|i| (stop_key(m, f, i), m.steps[i].executor)))
@@ -232,6 +233,10 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
                 finished.insert(run.clone(), (*at, *outcome));
             }
             Event::DeliveryCorrected { step, .. } => corrected.entry(run.clone()).or_default().push(step.clone()),
+            // A delivery the person undid earns no right.
+            Event::MergeUndone { .. } => {
+                undone.insert(run.clone());
+            }
             _ => {}
         }
     }
@@ -256,6 +261,10 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
             continue;
         }
         let Some(run) = owner.get(&j) else { continue };
+        if undone.contains(run) {
+            item.state = State::Nothing;
+            continue;
+        }
         match finished.get(run) {
             Some((_, Outcome::Abandoned)) => item.state = State::Nothing,
             // Nobody looked at what an agent let through: it never earns a right, and a correction still counts.

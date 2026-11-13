@@ -52,6 +52,9 @@ impl Copy {
             git(dir, &["checkout", "-q", "-b", branch])?;
             let base = git(dir, &["rev-parse", "HEAD"])?;
             std::fs::write(dir.join(".git/jaynes-base"), base).map_err(|e| e.to_string())?;
+            // The branch the person had checked out: where a run that delivers by merge merges.
+            let start = git(source, &["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default();
+            std::fs::write(dir.join(".git/jaynes-start"), start).map_err(|e| e.to_string())?;
             // Claude Code leaves its own scratch in every folder it works in; it is never part of the change.
             let mut exclude = format!("{EXCHANGE}/\n/.claude/.cc-writes\n");
             for d in DEPENDENCIES {
@@ -137,6 +140,65 @@ impl Copy {
         let refspec = format!("+{head}:refs/heads/{}", self.branch);
         git(&self.source, &["fetch", "-q", &self.dir.display().to_string(), &refspec])?;
         Ok(format!("{} at {}", self.branch, &head[..head.len().min(12)]))
+    }
+
+    fn start_branch(&self) -> Result<String, String> {
+        let b = std::fs::read_to_string(self.dir.join(".git/jaynes-start")).unwrap_or_default().trim().to_string();
+        if b.is_empty() { Err("the project was on no branch when the run started".to_string()) } else { Ok(b) }
+    }
+
+    /// Land `commit`, made in the copy over the branch's tip `tip`, on the person's branch: by fast-forward where it
+    /// is checked out, and only over a clean checkout; moved directly where it is not. Never pushed.
+    fn land(&self, branch: &str, tip: &str, commit: &str) -> Result<(), String> {
+        git(&self.dir, &["update-ref", "refs/jaynes/landing", commit])?;
+        git(&self.source, &["fetch", "-q", &self.dir.display().to_string(), "+refs/jaynes/landing:refs/jaynes/landing"])?;
+        let checked_out = git(&self.source, &["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default() == branch;
+        if checked_out {
+            let dirty = git(&self.source, &["status", "--porcelain", "--untracked-files=no"])?;
+            if !dirty.is_empty() {
+                return Err(format!("your checkout of {branch} has uncommitted changes"));
+            }
+            git(&self.source, &["merge", "-q", "--ff-only", "refs/jaynes/landing"])?;
+        } else {
+            git(&self.source, &["update-ref", &format!("refs/heads/{branch}"), commit, tip])?;
+        }
+        Ok(())
+    }
+
+    /// Merge the run's delivery into the branch it started from. The merge commit, or why there is none.
+    pub fn merge(&self, head: &str, run: &str) -> Result<Option<String>, String> {
+        let branch = self.start_branch()?;
+        let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
+        git(&self.dir, &["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
+        if git(&self.dir, &["merge-base", "--is-ancestor", head, &tip]).is_ok() {
+            return Ok(None);
+        }
+        git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
+        if let Err(e) = git(&self.dir, &["merge", "-q", "--no-ff", "--no-edit", "-m", &format!("Jaynes: run {run}, merged"), head]) {
+            let _abort = git(&self.dir, &["merge", "--abort"]);
+            return Err(format!("it conflicts with what {branch} has now: {e}"));
+        }
+        let merged = self.head()?;
+        self.land(&branch, &tip, &merged)?;
+        Ok(Some(merged))
+    }
+
+    /// Revert the run's merges, the latest first, on the branch they landed on.
+    pub fn undo(&self, merges: &[String], run: &str) -> Result<String, String> {
+        let branch = self.start_branch()?;
+        let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
+        git(&self.dir, &["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
+        git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
+        for m in merges.iter().rev() {
+            if let Err(e) = git(&self.dir, &["revert", "--no-edit", "-m", "1", m]) {
+                let _abort = git(&self.dir, &["revert", "--abort"]);
+                return Err(format!("the merge {} does not revert over what {branch} has now: {e}", &m[..m.len().min(12)]));
+            }
+        }
+        let _amend = run;
+        let reverted = self.head()?;
+        self.land(&branch, &tip, &reverted)?;
+        Ok(reverted)
     }
 
     /// The folders the project's own commands must read through its linked dependencies: their real places,

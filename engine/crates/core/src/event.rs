@@ -230,6 +230,11 @@ pub enum Event {
         #[serde(default)]
         step: Option<String>,
     },
+    /// The person reverted every merge of the run. It merges nothing again, and what it let through earns no right.
+    MergeUndone {
+        note: String,
+        by: By,
+    },
     /// A certified stop did not ask this round: the coin fell outside its sample.
     StopSkipped {
         step: String,
@@ -271,6 +276,7 @@ impl Event {
             Event::RunFinished { .. } => "RunFinished",
             Event::DeliveryCorrected { .. } => "DeliveryCorrected",
             Event::StopSkipped { .. } => "StopSkipped",
+            Event::MergeUndone { .. } => "MergeUndone",
         }
     }
 }

@@ -522,7 +522,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let mut q = String::new();
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        if let Some(e) = events(&s, "leave").into_iter().filter(|e| e["type"] == "QuestionOpened").next_back()
+        if let Some(e) = events(&s, "leave").into_iter().rfind(|e| e["type"] == "QuestionOpened")
             && e["question"]["kind"] == "permission" && e["question"]["about"].as_str().unwrap_or("").contains("/etc/hosts") {
                 q = e["question"]["id"].as_str().expect("id").to_string();
                 break;
@@ -544,4 +544,48 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     assert_eq!((rules, people), (1, 1));
     let finished = e.iter().find(|e| e["type"] == "RunFinished").unwrap_or_else(|| panic!("the run went on and finished: {:?}", types(&e)));
     assert_eq!(finished["cost"]["sent_back"], 0, "a leave refused is not work sent back");
+}
+
+fn fix_bug_run(s: &Scratch, run: &str) -> String {
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let out = Command::new(BIN)
+        .args(["start", "--run", run, "--role", root().join("roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts)
+        .output().expect("start");
+    format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+}
+
+#[test]
+fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_reverts_it() {
+    let s = bug_project("merge");
+    let said = fix_bug_run(&s, "merge");
+    assert!(said.contains("merged as"), "{said}");
+    // the person's checkout moved forward: their working tree has the fix, and nothing was pushed
+    assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hi $1\"\n");
+    let log = Command::new("git").arg("-C").arg(&s.project).args(["log", "--format=%s", "-1", "main"]).output().expect("git");
+    assert!(String::from_utf8_lossy(&log.stdout).contains("Jaynes: run merge, merged"));
+    // an agent may not undo; the person at a terminal does
+    let (ok, out) = engine(&s, &["undo", "merge", "--note", "not now"]);
+    assert!(!ok && out.contains("only you undo"), "{out}");
+    let undo = Command::new("script")
+        .args(["-q", "/dev/null", BIN, "undo", "merge", "--note", "not now"])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .output().expect("undo");
+    assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}", String::from_utf8_lossy(&undo.stdout));
+    assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello $1\"\n");
+    assert!(types(&events(&s, "merge")).contains(&"MergeUndone".to_string()));
+}
+
+#[test]
+fn a_merge_waits_for_a_clean_checkout_and_says_why() {
+    let s = bug_project("dirty");
+    std::fs::write(s.project.join("greet.sh"), "echo \"hello there $1\"\n").expect("write");
+    let said = fix_bug_run(&s, "dirty");
+    assert!(said.contains("not merged: your checkout of main has uncommitted changes"), "{said}");
+    assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello there $1\"\n", "the person's work is untouched");
+    let branch = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/dirty:greet.sh"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&branch.stdout), "echo \"hi $1\"\n", "the branch is delivered all the same");
 }

@@ -124,7 +124,8 @@ fn role(rng: &mut Rng) -> Manifest {
                 about: String::new(),
             });
         }
-        let m = Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps };
+        let delivery = if rng.chance(30) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };
+        let m = Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps, delivery };
         if m.validate().is_ok() {
             return m;
         }
@@ -144,7 +145,7 @@ fn role(rng: &mut Rng) -> Manifest {
         hidden: false,
         about: String::new(),
     };
-    Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one] }
+    Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one], delivery: Default::default() }
 }
 
 // --- the world --------------------------------------------------------------------------------------------------
@@ -942,7 +943,7 @@ fn step(name: &str, executor: Executor) -> StepDecl {
 }
 
 fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
-    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps, delivery: Default::default() };
     let out = decide(None, &Input::Start {
         run: "r".to_string(),
         request: "do it".to_string(),
@@ -1139,7 +1140,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     let mut a = step("a", Executor::Agent);
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
-    let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b] };
+    let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], delivery: Default::default() };
     let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), raise: None, attention: BTreeMap::new() });
     assert!(refused.is_err());
 }
@@ -1319,7 +1320,7 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
     use jaynes_core::attention::count;
     let mut change = step("change", Executor::Agent);
     change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
-    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change] };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], delivery: Default::default() };
     let key = stop_key(&manifest, &Digest("f".to_string()), 0);
     let day = 24 * 3600;
     let mut h = Vec::new();
@@ -1353,7 +1354,7 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
 fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let mut change = step("change", Executor::Agent);
     change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
-    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change] };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], delivery: Default::default() };
     let f = Digest("f".to_string());
     let key = stop_key(&manifest, &f, 0);
     let run_with = |id: &str, braked: bool| {
