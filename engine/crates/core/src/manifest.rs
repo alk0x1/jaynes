@@ -1,0 +1,284 @@
+//! A role as data: its steps, what each needs, who runs it, what it may reach, what it does to the world, its
+//! checks and its stop. The role program sends it in answer to `describe`; the engine owns the order of the steps.
+//!
+//! No expressions live here: a condition is the name of a check the role program runs.
+
+use crate::question::VerdictKind;
+use crate::risk::Risk;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Manifest {
+    pub role: String,
+    pub version: String,
+    /// The major version of the protocol the role speaks.
+    pub protocol: u32,
+    pub steps: Vec<StepDecl>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepDecl {
+    pub name: String,
+    #[serde(default)]
+    pub needs: Vec<String>,
+    pub executor: Executor,
+    /// Whether an agent step goes on in the session of the agent step before it, so one agent holds several steps.
+    #[serde(default)]
+    pub session: SessionKind,
+    #[serde(default)]
+    pub reach: Reach,
+    #[serde(default)]
+    pub effect: Effect,
+    #[serde(default)]
+    pub checks: Vec<CheckDecl>,
+    #[serde(default)]
+    pub stop: Option<StopDecl>,
+    /// The lowest risk at which the step runs: a step from `high` is left out of the short path.
+    #[serde(default)]
+    pub from_risk: Risk,
+    /// Attempts the agent may spend in one round. Only the agent's faults spend one.
+    #[serde(default = "three")]
+    pub attempts: u32,
+    /// Times a failed shape check goes back to the same agent session to be fixed in place, per attempt.
+    #[serde(default = "two")]
+    pub fixes: u32,
+    /// Proof the maker never sees: the step reads only the request, and no agent step reads it.
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub about: String,
+}
+
+fn three() -> u32 {
+    3
+}
+fn two() -> u32 {
+    2
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Executor {
+    /// An agent program, such as Claude Code, does the step.
+    Agent,
+    /// The role program does the step itself, for evidence an agent could fake.
+    Role,
+    /// The person: the step is a question over the steps it needs, and its output is the answer.
+    Person,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    #[default]
+    Fresh,
+    Continue,
+}
+
+/// What a step may reach. Jaynes turns it into the agent program's own settings for the step.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reach {
+    #[serde(default)]
+    pub project: ProjectAccess,
+    /// Project paths a writing step may change; `!` keeps paths out.
+    #[serde(default)]
+    pub write: Vec<String>,
+    #[serde(default)]
+    pub network: Network,
+    /// Whether the step may run shell commands.
+    #[serde(default)]
+    pub commands: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAccess {
+    #[default]
+    None,
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Network {
+    #[default]
+    None,
+    Web,
+}
+
+/// What the step does to the world, by where its effect lands.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Effect {
+    /// Nothing outside the step's own output.
+    #[default]
+    None,
+    /// Changes only Jaynes's copies, which are thrown away or kept by Jaynes.
+    Confined,
+    /// Changes something real that a named operation undoes, such as a local merge.
+    Compensable { undo: String },
+    /// Cannot be undone: a push, a message to a person, a publication.
+    Irreversible {
+        #[serde(default)]
+        idempotent: bool,
+    },
+}
+
+impl Effect {
+    pub fn irreversible(&self) -> bool {
+        matches!(self, Effect::Irreversible { .. })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckDecl {
+    pub name: String,
+    pub kind: CheckKind,
+    /// What the check holds the output to. For a shape check the agent reads it before it delivers.
+    #[serde(default)]
+    pub about: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckKind {
+    /// On the form of the output (a field, a length, a file that must exist): the agent knows it and fixes it
+    /// in place.
+    Shape,
+    /// On what the work does: kept out of the agent's sight.
+    Behaviour,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopDecl {
+    /// The verdicts the person may give each item, from the closed list.
+    pub verdicts: Vec<VerdictKind>,
+    /// Whether the steps after it wait for the answer. Otherwise the run goes on and the answer corrects it later.
+    #[serde(default)]
+    pub holds: bool,
+    /// The lowest risk at which the stop asks.
+    #[serde(default)]
+    pub from_risk: Risk,
+    #[serde(default)]
+    pub about: String,
+}
+
+impl Manifest {
+    pub fn index(&self, name: &str) -> Option<usize> {
+        self.steps.iter().position(|s| s.name == name)
+    }
+
+    /// The steps a run at `risk` takes, in order.
+    pub fn path(&self, risk: Risk) -> Vec<usize> {
+        (0..self.steps.len()).filter(|&i| self.steps[i].from_risk <= risk).collect()
+    }
+
+    /// Every rule a role must keep, each broken one as a sentence naming the step.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.role.trim().is_empty() {
+            errors.push("the role has no name".to_string());
+        }
+        if self.steps.is_empty() {
+            errors.push("the role has no step".to_string());
+        }
+        if self.protocol != crate::PROTOCOL {
+            errors.push(format!("the role speaks protocol {}, and this engine speaks {}", self.protocol, crate::PROTOCOL));
+        }
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let first_writer = self.steps.iter().position(|s| s.reach.project == ProjectAccess::Write);
+        for (i, s) in self.steps.iter().enumerate() {
+            let at = format!("step {}", s.name);
+            if s.name.trim().is_empty() || s.name.contains('/') {
+                errors.push(format!("step {i} has no usable name"));
+            }
+            if !seen.insert(&s.name) {
+                errors.push(format!("{at} is defined twice"));
+            }
+            for n in &s.needs {
+                match self.index(n) {
+                    Some(j) if j < i => {
+                        let need = &self.steps[j];
+                        if need.from_risk > s.from_risk {
+                            errors.push(format!("{at} needs {n}, which a run at its risk does not take"));
+                        }
+                        if need.hidden && s.executor == Executor::Agent {
+                            errors.push(format!("{at} is an agent's and needs {n}, which is hidden from agents"));
+                        }
+                    }
+                    Some(_) => errors.push(format!("{at} needs {n}, which comes after it")),
+                    None => errors.push(format!("{at} needs {n}, which is not a step of the role")),
+                }
+            }
+            let mut names = BTreeSet::new();
+            for c in &s.checks {
+                if !names.insert(&c.name) {
+                    errors.push(format!("{at} has two checks named {}", c.name));
+                }
+            }
+            if s.attempts == 0 {
+                errors.push(format!("{at} allows no attempt"));
+            }
+            match s.executor {
+                Executor::Person => {
+                    if s.stop.is_none() {
+                        errors.push(format!("{at} is the person's and asks nothing"));
+                    }
+                    if s.needs.is_empty() {
+                        errors.push(format!("{at} is the person's and shows nothing"));
+                    }
+                    if !s.checks.is_empty() || s.effect != Effect::None || s.reach != Reach::default() {
+                        errors.push(format!("{at} is the person's and declares checks, an effect or a reach"));
+                    }
+                }
+                Executor::Agent => {
+                    if s.effect.irreversible() {
+                        errors.push(format!("{at} gives an agent an effect that cannot be undone; only the role does that"));
+                    }
+                }
+                Executor::Role => {}
+            }
+            if let Some(stop) = &s.stop {
+                if stop.verdicts.is_empty() {
+                    errors.push(format!("{at} has a stop with no verdict to give"));
+                }
+                if stop.from_risk < s.from_risk {
+                    errors.push(format!("{at} asks at a risk the step does not run at"));
+                }
+            }
+            if s.session == SessionKind::Continue {
+                let before = self.steps[..i].iter().rev().find(|b| b.executor == Executor::Agent);
+                match before {
+                    None => errors.push(format!("{at} goes on in a session, and no agent step comes before it")),
+                    Some(b) if b.hidden || s.hidden => {
+                        errors.push(format!("{at} would share a session with a hidden step"))
+                    }
+                    Some(b) if b.from_risk > s.from_risk => {
+                        errors.push(format!("{at} goes on in the session of {}, which a run at its risk does not take", b.name))
+                    }
+                    Some(_) => {}
+                }
+                if s.executor != Executor::Agent {
+                    errors.push(format!("{at} goes on in a session and is not an agent's"));
+                }
+            }
+            if s.hidden {
+                if s.executor != Executor::Agent {
+                    errors.push(format!("{at} is hidden and is not an agent's"));
+                }
+                if !s.needs.is_empty() || s.reach.project != ProjectAccess::None {
+                    errors.push(format!("{at} is hidden and reads more than the request"));
+                }
+                if first_writer.is_some_and(|w| w < i) {
+                    errors.push(format!("{at} is hidden and comes after a step that changes the project"));
+                }
+            }
+            if s.reach.project == ProjectAccess::Write && s.reach.write.is_empty() {
+                errors.push(format!("{at} writes the project and names no path it may change"));
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
+    }
+}
