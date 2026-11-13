@@ -1,6 +1,6 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -36,7 +36,7 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 ## Your answers
 
 - **G9.** Every answer records who gave it: you, an agent, or a named rule. A rule answers only
-  routine permissions. An agent may only let a result go on as it is, at a stop the role marks
+  routine permissions, or a permission you already answered in the same run, with your same answer. An agent may only let a result go on as it is, at a stop the role marks
   as not a matter of taste or direction: it never sends anything back, never answers one of
   your own steps, and nothing that cannot be undone rests on its answer. You can change what
   an agent let through.
@@ -55,7 +55,7 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   is at most 5%. What counts is what happened after delivery: an accept counts as right only
   after its delivery held 7 days, and a send-back or a correction counts as an error at once. Two
   errors among its last ten outcomes make it ask on every run and hold the run, and then only
-  you answer it. *(Carried over from the Python engine's guarantee; awaits your approval.)*
+  you answer it. A new model of the agent starts with the stop's errors and none of its rights.
 
 ## Going on before you answer
 

@@ -113,7 +113,9 @@ marks `release` (it only asks whether a result may go on, not a matter of taste 
 an agent, only with keep. That answer is recorded as the agent's, locks nothing, and counts as unconfirmed: a step
 that cannot be undone still waits for the person's answer. The person may change it while the run is open, or
 correct the delivery later. small-change's stop is a release. The core alone answers with a rule, only a leave to
-read inside the project (`read-inside-project`), and records the rule's name; an answer that claims to be a rule
+read inside the project (`read-inside-project`), a command a step that runs commands may run
+(`command-the-step-may-run`), or, as the owner amended G9 on 2026-11-13, a leave identical to one the person
+already answered in the same run, with their same answer (`answered-before`), and records the rule's name; an answer that claims to be a rule
 is refused. On the command line, "the person" is whoever answers from a terminal: a weak signal (a program can
 fake a terminal), kept until the page with its key speaks this protocol.
 
