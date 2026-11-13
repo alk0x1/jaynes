@@ -65,6 +65,18 @@ outside its sample, recorded as `StopSkipped`. A braked stop holds the run and n
 statistic, the 7 days, the brake at two errors in ten and the labels needed (88 at 5%, 20 at 20%) are the Python
 engine's. Each event's time is now part of what the record's chain fingerprints, since the count reads it.
 
+**The page (owner's choice, 2026-11-12: direction C).** `jaynes-engine page` serves, on 127.0.0.1, the questions
+waiting across runs and the releases an agent made, one question at a time: rows with the offered verdicts, a
+note when a verdict asks for one, and one line of context. The context changes no verdict: the person's words go
+to the agents that work after the answer (`Answer.context`, in every later prompt). What the answer will do comes
+from the core as the person marks the rows. Whoever opened the link with the page's key answers as the person;
+anyone else as an agent. An answer is recorded at once, and a separate process carries the run on.
+
+**Each step works on its own copy.** The run's copy is put, before each step, at the base with the changes of the
+earlier steps it uses, and, when it runs again, its own previous change on top. Each step's change is kept as one
+commit; the delivery applies them in order. Found on the page's first use: with one copy for the whole run, an
+earlier step sent back saw a later step's change.
+
 **Steps are gates, not agents.** `session = "continue"` lets an agent step go on in the session of the agent step
 before it. A fix in place resumes the same session. A hidden step never shares a session.
 
@@ -110,7 +122,7 @@ version, the protocol and the record's format.
 
 ## Not in this slice
 
-- The page; plans of runs; merging alone and Undo; build-feature and the design roles; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
+- Plans of runs; merging alone and Undo; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
   Code runs in `dontAsk`, so none arise yet).
 - Replaying the Python engine's 53 recorded runs as an oracle; the small model of the core with proofs.
 
