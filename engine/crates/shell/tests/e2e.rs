@@ -417,3 +417,41 @@ fn no_run_goes_on_over_a_record_that_was_changed() {
     let (ok, out) = engine(&s, &["continue", "tamper"]);
     assert!(!ok && out.contains("drives no run over a record that does not hold"), "{out}");
 }
+
+#[test]
+fn the_page_halts_resumes_and_records_a_correction() {
+    let s = scratch("acts");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    start(&s, "acts", &agent);
+    let port = 19750 + (std::process::id() % 1000) as u16;
+    let mut page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let me = "jaynes_key=k3y";
+    let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    assert!(view.contains("Attempts spent") && view.contains("data-act=\"halt\""), "{view}");
+    // an agent may halt, only the person resumes
+    assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"halt"}"#, "")["ok"], true);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"resume"}"#, "")["ok"], false);
+    assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"resume"}"#, me)["ok"], true);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // a correction of the delivery, on the step that erred
+    let r = post(port, "/api/act", r#"{"run":"acts","action":"correct","note":"the Makefile lost its tests","step":"change"}"#, me);
+    assert_eq!(r["ok"], true, "{r}");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let version = http(port, &format!("GET /api/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let _killed = page.kill();
+    assert!(version.contains("\"seq\""), "{version}");
+    let t = types(&events(&s, "acts"));
+    for want in ["Halted", "Resumed", "DeliveryCorrected"] {
+        assert!(t.contains(&want.to_string()), "{want} missing: {t:?}");
+    }
+}

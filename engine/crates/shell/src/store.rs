@@ -93,6 +93,11 @@ impl Store {
         Ok(Run::fold(&self.events(run)?))
     }
 
+    /// The last entry of the record: what the page watches to know something happened.
+    pub fn last_seq(&self) -> Result<i64, String> {
+        self.db.query_row("select coalesce(max(seq), 0) from events", [], |r| r.get(0)).map_err(|e| e.to_string())
+    }
+
     pub fn runs(&self) -> Result<Vec<String>, String> {
         let mut q = self.db.prepare("select run from runs order by rowid").map_err(|e| e.to_string())?;
         let rows = q.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;

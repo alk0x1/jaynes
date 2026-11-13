@@ -90,12 +90,17 @@ impl Page {
                     let cookie = format!("jaynes_key={}; HttpOnly; SameSite=Strict; Path=/", self.key);
                     return ("303 See Other", "text/plain", String::new(), vec![("Set-Cookie".into(), cookie), ("Location".into(), req.path.clone())]);
                 }
+            if req.path == "/api/version" {
+                let seq = self.store().and_then(|s| s.last_seq()).unwrap_or(0);
+                return ("200 OK", "application/json", json!({"seq": seq}).to_string(), vec![]);
+            }
             let parts: Vec<&str> = req.path.trim_matches('/').split('/').collect();
-            let chosen = match parts.as_slice() {
-                ["q", run, q] => Some((run.to_string(), q.to_string())),
-                _ => None,
+            let view = match parts.as_slice() {
+                ["q", run, q] => View::Question(run.to_string(), q.to_string()),
+                ["run", run] => View::Run(run.to_string()),
+                _ => View::Home,
             };
-            return match self.render(chosen, self.person(req)) {
+            return match self.render(view, self.person(req)) {
                 Ok(html) => ("200 OK", "text/html; charset=utf-8", html, vec![]),
                 Err(e) => ("500 Internal Server Error", "text/plain", e, vec![]),
             };
@@ -111,6 +116,7 @@ impl Page {
             let out = match req.path.as_str() {
                 "/api/effects" => self.effects(&body, by),
                 "/api/answer" => self.answer(&body, by),
+                "/api/act" => self.act(&body, by),
                 _ => Err("no such action".to_string()),
             };
             let reply = match out {
@@ -161,8 +167,37 @@ impl Page {
 
     fn answer(&self, body: &Value, by: By) -> Result<Value, String> {
         let (run, _, answer) = self.answer_from(body, by)?;
-        let input = Input::Answer { answer };
-        decide(Some(&run), &input).map_err(|r| r.0)?;
+        self.submit(&run, Input::Answer { answer })
+    }
+
+    /// What the person does to a run from its page: halt, resume, continue, raise, abandon, correct.
+    fn act(&self, body: &Value, by: By) -> Result<Value, String> {
+        let run_id = body["run"].as_str().ok_or("which run?")?;
+        let run = self.store()?.state(run_id)?.ok_or("no such run")?;
+        let input = match body["action"].as_str().unwrap_or("") {
+            "halt" => Input::Halt { by },
+            "resume" => Input::Resume { by },
+            "continue" => Input::Continue { by },
+            "abandon" => Input::Abandon { by },
+            "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
+            "raise-ceiling" => {
+                let c = run.ceiling;
+                Input::RaiseCeiling { ceiling: jaynes_core::risk::Ceiling { seconds: c.seconds + 1800, tokens: c.tokens + 2_000_000 }, by }
+            }
+            "correct" => Input::Correct {
+                note: body["note"].as_str().unwrap_or("").to_string(),
+                by,
+                step: body["step"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+            },
+            other => return Err(format!("no action {other}")),
+        };
+        self.submit(&run, input)
+    }
+
+    /// Record an input now and carry the run on in a process of its own, or leave it in the inbox of the process
+    /// that drives the run.
+    fn submit(&self, run: &Run, input: Input) -> Result<Value, String> {
+        decide(Some(run), &input).map_err(|r| r.0)?;
         let mut store = self.store()?;
         let lock = std::fs::File::create(self.home.join("runs").join(&run.id).join("lock")).map_err(|e| e.to_string())?;
         if lock.try_lock().is_ok() {
@@ -186,12 +221,14 @@ impl Page {
         }
     }
 
-    fn render(&self, chosen: Option<(String, String)>, person: bool) -> Result<String, String> {
+    fn render(&self, view: View, person: bool) -> Result<String, String> {
         let store = self.store()?;
         let mut waiting: Vec<(Run, QuestionState)> = Vec::new();
         let mut released: Vec<(Run, QuestionState)> = Vec::new();
+        let mut runs: Vec<Run> = Vec::new();
         for id in store.runs()? {
             let Some(run) = store.state(&id)? else { continue };
+            runs.push(run.clone());
             if run.finished() {
                 continue;
             }
@@ -206,10 +243,18 @@ impl Page {
                 }
             }
         }
-        let current = chosen
-            .and_then(|(r, q)| waiting.iter().chain(released.iter()).find(|(run, s)| run.id == r && s.question.id == q).cloned())
-            .or_else(|| waiting.first().cloned())
-            .or_else(|| released.first().cloned());
+        let chosen = match &view {
+            View::Question(r, q) => Some((r.clone(), q.clone())),
+            _ => None,
+        };
+        let current = if let View::Run(_) = view {
+            None
+        } else {
+            chosen
+                .and_then(|(r, q)| waiting.iter().chain(released.iter()).find(|(run, s)| run.id == r && s.question.id == q).cloned())
+                .or_else(|| waiting.first().cloned())
+                .or_else(|| released.first().cloned())
+        };
         let side = |list: &[(Run, QuestionState)], released: bool| -> String {
             list.iter()
                 .map(|(run, q)| {
@@ -237,13 +282,148 @@ impl Page {
         if !released.is_empty() {
             aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Let through by an agent · {}</div>{}", released.len(), side(&released, true)));
         }
-        let main = match &current {
-            None => "<div class=\"empty\">Nothing waits for you.</div>".to_string(),
-            Some((run, q)) => question_html(run, q),
+        let open: Vec<&Run> = runs.iter().rev().filter(|r| !r.finished()).collect();
+        let done: Vec<&Run> = runs.iter().rev().filter(|r| r.finished()).take(8).collect();
+        let shown_run = if let View::Run(id) = &view { Some(id.clone()) } else { None };
+        let run_link = |r: &&Run| {
+            let on = shown_run.as_deref() == Some(r.id.as_str());
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {}</small></a>", if on { " on" } else { "" }, esc(&r.id), esc(&short(&r.request)), esc(&r.manifest.role), phase_word(r))
+        };
+        aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Runs · {}</div>{}", open.len(), open.iter().map(run_link).collect::<String>()));
+        if !done.is_empty() {
+            aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Finished</div>{}", done.iter().map(run_link).collect::<String>()));
+        }
+        let main = match (&view, &current) {
+            (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
+                Some(r) => run_html(r),
+                None => "<div class=\"empty\">There is no such run.</div>".to_string(),
+            },
+            (_, None) => "<div class=\"empty\">Nothing waits for you.</div>".to_string(),
+            (_, Some((run, q))) => question_html(run, q),
         };
         let who = if person { "" } else { "<div class=\"notice\">You opened the page without its key: answers from here count as an agent's. Open the link the page printed.</div>" };
         Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", who))
     }
+}
+
+enum View {
+    Home,
+    Question(String, String),
+    Run(String),
+}
+
+fn short(s: &str) -> String {
+    let s = s.trim();
+    if s.chars().count() <= 60 { s.to_string() } else { format!("{}…", s.chars().take(59).collect::<String>()) }
+}
+
+fn phase_word(r: &Run) -> String {
+    if r.halted && !r.finished() {
+        return "<span class=\"holds\">halted</span>".into();
+    }
+    match &r.phase {
+        Phase::Running => "<span class=\"goes\">running</span>".into(),
+        Phase::Waiting { step: None, .. } => "<span class=\"goes\">delivered, answers open</span>".into(),
+        Phase::Waiting { .. } => "<span class=\"holds\">waits for you</span>".into(),
+        Phase::Blocked { .. } => "<span class=\"bad\">blocked</span>".into(),
+        Phase::Finished { outcome } => format!("{outcome:?}").to_lowercase(),
+    }
+}
+
+/// A run: where it is, what it cost, its steps, and what the person may do to it.
+fn run_html(r: &Run) -> String {
+    use jaynes_core::run::Status;
+    let path = r.path();
+    let steps: String = r
+        .manifest
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let s = &r.steps[i];
+            let state = if !path.contains(&i) {
+                "left out at this risk".to_string()
+            } else if s.skipped == Some(s.round) && s.status == Status::Done {
+                "done · sampled, not asked".to_string()
+            } else {
+                match &s.status {
+                    Status::Done if r.fresh(i) => "done".into(),
+                    Status::Done => "to run again".into(),
+                    Status::Running { attempt, fix } => format!("running · attempt {attempt}{}", if *fix > 0 { format!(", fix {fix}") } else { String::new() }),
+                    Status::Checking { .. } => "checking".into(),
+                    Status::Probing => "testing what it reaches".into(),
+                    Status::AwaitingInput { .. } => "asks you".into(),
+                    Status::Idle if s.done.is_some() => "to run again".into(),
+                    Status::Idle => "not yet".into(),
+                }
+            };
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                esc(&d.name),
+                format!("{:?}", d.executor).to_lowercase(),
+                s.round,
+                s.spent,
+                esc(&state)
+            )
+        })
+        .collect();
+    let phase = match &r.phase {
+        Phase::Blocked { reason, fault, .. } => format!("<div class=\"notice bad\">Blocked ({}): {}</div>", format!("{fault:?}").to_lowercase(), esc(reason)),
+        Phase::Waiting { why, .. } => format!("<div class=\"notice\">{}</div>", esc(why)),
+        Phase::Finished { outcome } => format!("<div class=\"notice ok\">Finished: {}</div>", format!("{outcome:?}").to_lowercase()),
+        Phase::Running => String::new(),
+    };
+    let finished = r.finished();
+    let mut buttons = String::new();
+    let mut button = |act: &str, text: &str, cls: &str| buttons.push_str(&format!("<button class=\"act {cls}\" data-act=\"{act}\">{text}</button>"));
+    if !finished {
+        if r.halted {
+            button("resume", "Resume", "");
+        } else {
+            button("halt", "Halt", "");
+        }
+        if r.blocked() {
+            button("continue", "Continue", "");
+        }
+        if r.risk == jaynes_core::risk::Risk::Low {
+            button("raise-risk", "Raise the risk", "");
+        }
+        button("raise-ceiling", "Raise the ceiling by 30 min", "");
+        button("abandon", "Abandon", "danger");
+    }
+    let correct = if r.delivered.is_some() {
+        let options: String = std::iter::once("<option value=\"\">the step that erred, if you know it</option>".to_string())
+            .chain(path.iter().map(|&i| format!("<option>{}</option>", esc(&r.manifest.steps[i].name))))
+            .collect();
+        format!(
+            "<div class=\"say\" style=\"margin-top:18px\"><label>Correct</label><input id=\"cnote\" placeholder=\"What was wrong in the delivery\"><select id=\"cstep\">{options}</select><button class=\"act\" data-act=\"correct\">Record</button></div>"
+        )
+    } else {
+        String::new()
+    };
+    let data = json!({"run": r.id}).to_string();
+    format!(
+        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{phase}\
+         <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
+         <table class=\"steps\"><tr><th>Step</th><th>By</th><th>Round</th><th>Attempts spent</th><th>State</th></tr>{steps}</table>\
+         <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div><script id=\"rundata\" type=\"application/json\">{data}</script>",
+        role = esc(&r.manifest.role),
+        version = esc(&r.manifest.version),
+        id = esc(&r.id),
+        risk = r.risk.word(),
+        request = esc(&short(&r.request)),
+        sm = r.spent.seconds / 60,
+        cm = r.ceiling.seconds / 60,
+        st = r.spent.tokens,
+        ct = r.ceiling.tokens,
+        cached = r.spent.cached,
+        att = r.counts.attempts,
+        spent = r.counts.spent,
+        fixes = r.counts.fixes,
+        back = r.counts.sent_back,
+        corr = if r.counts.corrections > 0 { format!(", {} corrected after delivery", r.counts.corrections) } else { String::new() },
+        data = data.replace('<', "\\u003c"),
+    )
 }
 
 fn title(q: &QuestionState) -> String {
@@ -304,10 +484,11 @@ fn question_html(run: &Run, q: &QuestionState) -> String {
         .collect();
     let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0}).to_string();
     format!(
-        "<div class=\"where\">{role} · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1><p class=\"sub\">{badge}</p>{phase}\
+        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1><p class=\"sub\">{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
          {rows}<script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
+        run_id = esc(&run.id),
         step = esc(&question.step),
         round = question.round,
         n = path.len(),
@@ -380,9 +561,15 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .seg button.on.drop { border-color:var(--red); color:var(--red); background:var(--red-soft); }
 .seg button.on.skip { border-color:var(--line-2); color:var(--ink); background:var(--panel-2); }
 .note { margin-top:8px; width:100%; background:var(--panel); border:1px solid var(--line-2); border-radius:8px; color:var(--ink); padding:8px 10px; font:inherit; font-size:14px; }
-.hide { display:none; } .empty { color:var(--dim); padding:40px 0; }
+.hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
+.notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
+.steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
+.steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
+.acts { display:flex; flex-wrap:wrap; gap:8px; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
+.act:hover { border-color:var(--blue); } .act.danger { color:var(--red); } .act.armed { border-color:var(--red); background:var(--red-soft); }
+select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px; font:inherit; font-size:13px; }
 .effects { position:fixed; left:280px; right:0; bottom:0; background:rgba(14,18,24,.97); border-top:1px solid var(--line-2); padding:14px 32px; display:flex; gap:24px; align-items:flex-start; }
-.effects .what { flex:1; max-width:700px; } .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+.effects.hide { display:none; } .effects .what { flex:1; max-width:700px; } .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
 .effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; }
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
@@ -433,4 +620,23 @@ document.addEventListener("input", e => {
   refresh();
 });
 if (base) refresh();
+const rd = document.getElementById("rundata");
+document.addEventListener("click", async e => {
+  const b = e.target.closest("button.act"); if (!b || !rd) return;
+  if (b.dataset.act === "abandon" && !b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "Abandon: press again"; return; }
+  const run = JSON.parse(rd.textContent).run;
+  const extra = b.dataset.act === "correct" ? { note: document.getElementById("cnote").value, step: document.getElementById("cstep").value } : {};
+  const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run, action: b.dataset.act, ...extra }) })).json();
+  if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
+});
+// The page follows the record, but never reloads under the person's hands.
+let seen = null;
+setInterval(async () => {
+  try {
+    const v = (await (await fetch("/api/version")).json()).seq;
+    const busy = Object.keys(verdicts).length || [...document.querySelectorAll("input")].some(i => i.value) || document.activeElement.tagName === "INPUT";
+    if (seen !== null && v !== seen && !busy) location.reload();
+    seen = v;
+  } catch (_) {}
+}, 3000);
 </script></body></html>"##;

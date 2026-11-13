@@ -70,7 +70,13 @@ waiting across runs and the releases an agent made, one question at a time: rows
 note when a verdict asks for one, and one line of context. The context changes no verdict: the person's words go
 to the agents that work after the answer (`Answer.context`, in every later prompt). What the answer will do comes
 from the core as the person marks the rows. Whoever opened the link with the page's key answers as the person;
-anyone else as an agent. An answer is recorded at once, and a separate process carries the run on.
+anyone else as an agent. An answer is recorded at once, and a separate process carries the run on. Each run has its
+own view (steps, cost, what blocks it) with Halt, Resume, Continue, Raise the risk, Raise the ceiling, Abandon and
+Correct; the page follows the record and never reloads under the person's hands.
+
+**After a crash.** macOS tells no child that its parent died, so the agent program and each role call note their
+process group while they run; the process that takes the run next stops what was left before anything else, and
+refuses to drive over a record whose chain does not hold or a run another engine version started.
 
 **Each step works on its own copy.** The run's copy is put, before each step, at the base with the changes of the
 earlier steps it uses, and, when it runs again, its own previous change on top. Each step's change is kept as one
