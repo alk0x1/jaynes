@@ -180,3 +180,22 @@ def test_a_trusted_step_hears_what_people_said_and_jaynes_sent_back_and_what_eac
                      ("build", "return", "person", "use the brand colour", ())]
     cost = {x.step: x for x in ctx.history.cost}
     assert (cost["build"].turns, cost["build"].tokens_new, cost["build"].tokens_cached) == (3, 330, 0)
+
+
+def test_a_check_sees_the_files_its_own_turn_left_so_it_can_hold_what_the_output_names_to_them(
+        tmp_path: Path) -> None:
+    def shoot(ctx: StepContext) -> Shot:
+        (ctx.workspace / "files").mkdir()
+        (ctx.workspace / "files" / "ref-1.jpg").write_bytes(b"jpg")
+        return Shot(files=2)  # names two pictures, left one
+
+    def all_there(out: Shot, needs: Witnesses) -> Pass | Fail:
+        own = needs.files.get("shots", {})
+        return Pass() if len(own) == out.files else Fail(f"names {out.files} pictures; the turn left {sorted(own)}")
+
+    r = role("own", agent="fake")
+    r.step("shots", output=Shot, run_by=shoot, check=all_there, max_turns=1)
+    c = Conductor(tmp_path, {"fake": lambda: Scripted(default=lambda s: {"summary": "x"})})
+    assert c.run(r, "t").status == "blocked"
+    [rejected] = [e.payload for e in c.store.events("TurnRejected")]
+    assert rejected["reasons"] == ["names 2 pictures; the turn left ['ref-1.jpg']"]

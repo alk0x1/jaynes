@@ -1108,6 +1108,8 @@ class Conductor:
                 "these paths run later, outside any box, and change only at a stop a person answers; "
                 "leave them as they were: " + ", ".join(later[:10])], t0)
             return None
+        if kept:  # a check holds the output to the files its own turn left too
+            needs.files[step.name] = {rel: self.home / "objects" / obj for rel, obj in kept.items()}
         try:
             failures = self._check(step, value, needs)
         except Disputes as err:

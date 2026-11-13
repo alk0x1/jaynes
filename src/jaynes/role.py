@@ -80,7 +80,7 @@ class Witnesses:
     ``source`` is the person's repository, where installed dependencies are linked from when a check runs a
     project command (``jaynes.suite``); ``hidden`` is what such a command may not read, Jaynes's home.
     ``started`` is what the run started with, its inputs among it; ``files`` the files each needed step left,
-    by step and path, private ones included. ``dropped`` is what the person dropped for good in the run, which a
+    by step and path, private ones included, and in a check the files its own turn left, under its own name. ``dropped`` is what the person dropped for good in the run, which a
     check may hold an output to.
     """
 
