@@ -73,6 +73,10 @@ theorem idleMove_cases (r : Run) (i : Nat) :
   repeat' split
   all_goals simp
 
+theorem owedMove_cases (r : Run) (i : Nat) : r.owedMove i = .ask i ∨ r.owedMove i = .skip i := by
+  unfold Run.owedMove
+  split <;> simp
+
 theorem settled_cases (r : Run) :
     r.settled = .deliver ∨ r.settled = .waitAnswers ∨ r.settled = .finish := by
   unfold Run.settled
@@ -112,7 +116,7 @@ theorem idleMove_start {r : Run} {i j : Nat} (h : r.idleMove i = .start j) :
     a question, or the first step not done on what holds now, or the path being settled. -/
 theorem next_cases {r : Run} {m : Move} (h : r.next = m) (hm : m ≠ .none) :
     r.stopped = false ∧ r.busy = false ∧
-      ((∃ i, firstWhere r.owed r.path = some i ∧ m = .ask i) ∨
+      ((∃ i, firstWhere r.owed r.path = some i ∧ m = r.owedMove i) ∨
        (firstWhere r.owed r.path = none ∧
          ((firstWhere (fun j => !r.fresh j) r.path = none ∧ m = r.settled) ∨
           (∃ i, firstWhere (fun j => !r.fresh j) r.path = some i ∧ m = r.moveAt i)))) := by
@@ -139,8 +143,8 @@ theorem next_start {r : Run} {i : Nat} (h : r.next = .start i) :
     r.busy = false ∧ firstWhere (fun j => !r.fresh j) r.path = some i ∧ (r.get i).status = .idle ∧
       r.idleMove i = .start i := by
   obtain ⟨_, hb, hc⟩ := next_cases h (by simp)
-  rcases hc with ⟨_, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
-  · simp at he
+  rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
+  · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
   · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
   · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hm⟩ | ⟨hst, hm⟩ | hm <;> rw [hm] at he
     · simp at he
@@ -189,8 +193,8 @@ theorem g14_irreversible {r : Run} {i : Nat} (h : r.next = .start i) (hirr : (r.
 theorem g13_invalidate {r : Run} {i : Nat} (h : r.next = .invalidate i) :
     r.fresh i = false ∧ (r.get i).status = .done := by
   obtain ⟨_, _, hc⟩ := next_cases h (by simp)
-  rcases hc with ⟨_, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
-  · simp at he
+  rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
+  · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
   · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
   · obtain ⟨hnf, _⟩ := firstWhere_some hk
     rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨hst, hm⟩ | ⟨_, hm⟩ | hm <;> rw [hm] at he
@@ -208,8 +212,8 @@ theorem g13_settled {r : Run} (h : r.next = .deliver ∨ r.next = .finish ∨ r.
   have key : firstWhere (fun i => !r.fresh i) r.path = none := by
     rcases h with h | h | h <;>
     · obtain ⟨_, _, hc⟩ := next_cases h (by simp)
-      rcases hc with ⟨_, _, he⟩ | ⟨_, ⟨hz, _⟩ | ⟨k, _, he⟩⟩
-      · simp at he
+      rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨hz, _⟩ | ⟨k, _, he⟩⟩
+      · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
       · exact hz
       · exfalso
         rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hm⟩ | ⟨_, hm⟩ | hm <;> rw [hm] at he
@@ -283,5 +287,76 @@ theorem g2_g3_gate (g : GateCase) :
     unfold GateCase.outcome at h
     repeat' (split at h <;> try simp at h)
     all_goals simp_all
+
+end Jaynes
+
+namespace Jaynes
+
+/-- **G17**, the rule: a stop owed a question skips asking only when its count is certified within its budget, it is
+    not braked, and the run's coin falls outside its sample. A braked stop always asks. -/
+theorem g17_skip {r : Run} {i : Nat} (h : r.next = .skip i) :
+    (r.get i).certified = true ∧ (r.get i).braked = false ∧ (r.get i).coinOutside = true := by
+  obtain ⟨_, _, hc⟩ := next_cases h (by simp)
+  rcases hc with ⟨k, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, _, he⟩⟩
+  · unfold Run.owedMove at he
+    split at he
+    · rename_i hs
+      simp at he
+      subst he
+      simp at hs
+      exact ⟨hs.1.1, hs.1.2, hs.2⟩
+    · simp at he
+  · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hm⟩ | ⟨_, hm⟩ | hm <;> rw [hm] at he
+    · simp at he
+    · simp at he
+    · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+    · simp at he
+
+/-- **G11.** What an answer says will run again is what runs again: the same steps, when every item at the
+    person's own step stands for a step, as the core makes them. -/
+theorem g11_said_is_done (c : EffectCase)
+    (hs : c.personStep = true → ∀ it ∈ c.items, it.standsFor.isSome = true) :
+    ∀ x, x ∈ c.said ↔ x ∈ c.did := by
+  intro x
+  unfold EffectCase.said EffectCase.did EffectCase.targets
+  by_cases hp : (c.permission || c.input) = true
+  · simp [hp]
+  simp only [hp, Bool.false_eq_true, ↓reduceIte]
+  by_cases hperson : c.personStep = true
+  · have hall := hs hperson
+    simp only [hperson, ↓reduceIte, Bool.true_and]
+    by_cases hb : c.items.any (·.back) = true
+    · obtain ⟨it, hit, hback⟩ := List.any_eq_true.mp hb
+      obtain ⟨s, hsome⟩ := Option.isSome_iff_exists.mp (hall it hit)
+      have hne : (c.items.filterMap fun it => if it.back = true then it.standsFor else none).isEmpty = false := by
+        rw [List.isEmpty_eq_false_iff_exists_mem]
+        exact ⟨s, List.mem_filterMap.mpr ⟨it, hit, by simp [hback, hsome]⟩⟩
+      simp only [hne, Bool.not_false, ↓reduceIte, hb, List.mem_cons, List.mem_append, List.not_mem_nil, or_false]
+      exact Or.comm
+    · have hnone : (c.items.filterMap fun it => if it.back = true then it.standsFor else none) = [] := by
+        rw [List.filterMap_eq_nil_iff]
+        intro it hit
+        have : it.back = false := by
+          simp only [List.any_eq_true, not_exists, not_and, Bool.not_eq_true] at hb
+          exact hb it hit
+        simp [this]
+      simp [hnone, hb]
+  · have hperson' : c.personStep = false := by simpa using hperson
+    simp only [hperson', Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+    by_cases hb : c.items.any (·.back) = true
+    · simp only [hb, ↓reduceIte, List.mem_singleton, List.mem_filterMap]
+      constructor
+      · rintro ⟨it, _, h⟩
+        split at h <;> simp_all
+      · rintro rfl
+        obtain ⟨it, hit, hback⟩ := List.any_eq_true.mp hb
+        exact ⟨it, hit, by simp [hback]⟩
+    · simp only [hb, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil, iff_false, List.mem_filterMap, not_exists, not_and]
+      intro it hit
+      have : it.back = false := by
+        simp only [List.any_eq_true, not_exists, not_and, Bool.not_eq_true] at hb
+        exact hb it hit
+      simp [this]
 
 end Jaynes

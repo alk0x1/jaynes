@@ -19,6 +19,10 @@ def main : IO UInt32 := do
           | "move" => do pure (← j.getObjValAs? Run "run").next.render
           | "answer" => do pure (if (← j.getObjValAs? AnswerCase "case").accepts then "taken" else "refused")
           | "gate" => do pure (← j.getObjValAs? GateCase "case").outcome.render
+          | "effects" => do
+              let c ← j.getObjValAs? EffectCase "case"
+              let fmt := fun (l : List Nat) => ",".intercalate ((l.mergeSort (· ≤ ·)).eraseDups.map toString)
+              pure s!"{fmt c.said}|{fmt c.did}"
           | other => (throw s!"no kind {other}" : Except String String)
         pure (got, expected) with
     | .error e =>

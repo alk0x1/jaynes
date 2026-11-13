@@ -4,8 +4,9 @@
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
-G1, G2, G3, G4, G5, G9, G10, G12, G13 and G14 are also proved, in Lean, for a model of the core's rules that a
-test compares with the core on every state of 800 random runs (`engine/model`).
+G1, G2, G3, G4, G5, G9, G10, G11, G12, G13 and G14, and the rule of G17 (when a stop may skip asking), are also
+proved, in Lean, for a model of the core's rules that a test compares with the core on every state of 800 random
+runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,000 streams checks it.
 
 ## Order and checks
 

@@ -654,6 +654,39 @@ impl World {
         let accepted = self.send(Input::Answer { answer: answer.clone() });
         if let Some(cases) = self.cases.as_mut() {
             cases.push(answer_case(&run, &answer, accepted));
+            if accepted {
+                let i = run.manifest.index(&q.step).expect("step");
+                let person = run.manifest.steps[i].executor == Executor::Person;
+                let items: Vec<serde_json::Value> = q
+                    .items
+                    .iter()
+                    .map(|x| serde_json::json!({"back": answer.verdict(&x.id).sends_back(), "standsFor": if person { run.manifest.index(&x.id) } else { None }}))
+                    .collect();
+                let case = serde_json::json!({
+                    "step": i, "personStep": person, "input": run.steps[i].inputs.contains(&q.id),
+                    "permission": q.kind == QuestionKind::Permission, "items": items,
+                });
+                let show = |mut v: Vec<usize>| {
+                    v.sort_unstable();
+                    v.dedup();
+                    v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",")
+                };
+                let start = self.log.iter().rposition(|e| matches!(e, Event::AnswerRecorded { .. })).expect("recorded");
+                let Event::AnswerRecorded { effects, .. } = &self.log[start] else { unreachable!() };
+                let said: Vec<usize> = effects.reruns.iter().filter_map(|s| run.manifest.index(s)).collect();
+                let did: Vec<usize> = self.log[start..]
+                    .iter()
+                    .filter_map(|e| match e {
+                        Event::StepInvalidated { step, because, .. }
+                            if because.iter().any(|b| b.contains("sent it back") || b.contains("being done again")) => run.manifest.index(step),
+                        _ => None,
+                    })
+                    .collect();
+                let expected = format!("{}|{}", show(said), show(did));
+                if let Some(cases) = self.cases.as_mut() {
+                    cases.push(serde_json::json!({"kind": "effects", "case": case, "expected": expected}).to_string());
+                }
+            }
         }
         // G9 and G10: only for what was shown, only while it stands; an agent only to let a release go on.
         let i = run.manifest.index(&q.step).expect("step");
@@ -1422,6 +1455,11 @@ fn model_case(run: &Run) -> String {
                 "irreversible": d.effect.irreversible(),
                 "probed": s.probed,
                 "attemptsLeft": s.spent < d.attempts,
+                "certified": run.attention.get(&d.name).is_some_and(|c| {
+                    d.stop.as_ref().and_then(|st| st.budget).is_some_and(|b| jaynes_core::attention::certified(c.n, c.k, b.0, jaynes_core::DELTA))
+                }),
+                "braked": run.attention.get(&d.name).is_some_and(|c| c.braked),
+                "coinOutside": d.stop.as_ref().is_some_and(|st| jaynes_core::attention::coin(&run.id, &d.name, s.round) >= st.audit_rate.0),
             })
         })
         .collect();
@@ -1446,7 +1484,7 @@ fn model_case(run: &Run) -> String {
             match first {
                 None => "none".to_string(),
                 Some(Event::QuestionOpened { question }) => format!("ask {}", index(&question.step)),
-                Some(Event::StopSkipped { step, .. }) => format!("ask {}", index(step)),
+                Some(Event::StopSkipped { step, .. }) => format!("skip {}", index(step)),
                 Some(Event::StepInvalidated { step, .. }) => format!("invalidate {}", index(step)),
                 Some(Event::Waiting { step: Some(s), .. }) => format!("wait {}", index(s)),
                 Some(Event::Waiting { step: None, .. }) => "wait answers".to_string(),

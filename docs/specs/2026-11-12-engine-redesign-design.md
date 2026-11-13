@@ -134,8 +134,9 @@ version, the protocol and the record's format.
 ## The model with proofs (owner's choice, 2026-11-13)
 
 `engine/model`: the core's rules for its next move, for taking an answer and for the gate of the checks, in Lean 4,
-with proofs of G1, G2, G3, G4, G5, G9, G10, G12, G13 and G14. A test feeds the model every state, answer and gate
-of 800 random runs of the core (84,157 cases) and requires the same decision. Planted defects: three in the model's
+with proofs of G1, G2, G3, G4, G5, G9, G10, G11, G12, G13, G14 and the rule of G17. A test feeds the model every
+state, answer, gate and answer's effect of 800 random runs of the core (87,735 cases) and requires the same decision.
+The chance in G17 is not proved: that needs probability theory (Mathlib); the simulation checks it. Planted defects: three in the model's
 moves (the wait before what cannot be undone, the hold, freshness ignoring what was read), all caught by the
 comparison, the third only once the states inside one decision were compared too; three in answers and the gate,
 caught by the comparison and by the proofs themselves. What stays open: the model takes as given which steps a

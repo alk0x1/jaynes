@@ -63,6 +63,12 @@ structure Step where
   probed : Bool
   /-- the agent has attempts left this round -/
   attemptsLeft : Bool
+  /-- its stop has a budget and its count is certified within it -/
+  certified : Bool
+  /-- its stop is braked after errors -/
+  braked : Bool
+  /-- the run's coin for it falls outside its sample -/
+  coinOutside : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 structure Run where
@@ -80,6 +86,7 @@ structure Run where
 inductive Move where
   | none
   | ask (i : Nat)
+  | skip (i : Nat)
   | waitAt (i : Nat)
   | waitAnswers
   | invalidate (i : Nat)
@@ -93,6 +100,7 @@ inductive Move where
 def Move.render : Move → String
   | .none => "none"
   | .ask i => s!"ask {i}"
+  | .skip i => s!"skip {i}"
   | .waitAt i => s!"wait {i}"
   | .waitAnswers => "wait answers"
   | .invalidate i => s!"invalidate {i}"
@@ -168,12 +176,17 @@ def moveAt (r : Run) (i : Nat) : Move :=
 def settled (r : Run) : Move :=
   if !r.deliveredCurrent then .deliver else if r.anyOpenQuestion then .waitAnswers else .finish
 
+/-- A stop owed a question skips it only when its count is certified, it is not braked, and the coin falls outside
+    its sample. -/
+def owedMove (r : Run) (i : Nat) : Move :=
+  if (r.get i).certified && !(r.get i).braked && (r.get i).coinOutside then .skip i else .ask i
+
 /-- The core's next move. -/
 def next (r : Run) : Move :=
   if r.stopped then .none
   else if r.busy then .none
   else match firstWhere r.owed r.path with
-    | some i => .ask i
+    | some i => r.owedMove i
     | none =>
       match firstWhere (fun i => !r.fresh i) r.path with
       | none => r.settled
@@ -266,5 +279,42 @@ def GateCase.outcome (g : GateCase) : Gate :=
   else if g.roleStep then .role
   else if !g.hiddenFails && g.fixesLeft && g.session then .fix
   else .spent
+
+end Jaynes
+
+/-! ## What an answer says it will do, and what it does (`effects` and `answer` in `decide.rs`) -/
+
+namespace Jaynes
+
+structure Verdicted where
+  /-- the verdict sends work back -/
+  back : Bool
+  /-- on the person's own step, the step whose output the item stands for -/
+  standsFor : Option Nat
+  deriving Repr, FromJson, ToJson, Inhabited
+
+structure EffectCase where
+  step : Nat
+  personStep : Bool
+  input : Bool
+  permission : Bool
+  items : List Verdicted
+  deriving Repr, FromJson, ToJson, Inhabited
+
+/-- The steps an item's verdict sends back to. -/
+def EffectCase.targets (c : EffectCase) : List Nat :=
+  c.items.filterMap fun it => if it.back then (if c.personStep then it.standsFor else some c.step) else none
+
+/-- The steps the answer says will run again, before it is sent (`Effects::reruns`). -/
+def EffectCase.said (c : EffectCase) : List Nat :=
+  if c.permission || c.input then []
+  else if c.personStep && !c.targets.isEmpty then c.step :: c.targets else c.targets
+
+/-- The steps the answer makes run again once sent. -/
+def EffectCase.did (c : EffectCase) : List Nat :=
+  if c.permission || c.input then []
+  else if c.items.any (·.back) then
+    (if c.personStep then (c.items.filterMap fun it => if it.back then it.standsFor else none) ++ [c.step] else [c.step])
+  else []
 
 end Jaynes
