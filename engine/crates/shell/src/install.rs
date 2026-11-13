@@ -200,6 +200,22 @@ pub fn update(home: &Path) -> Result<Vec<String>, String> {
         return Err("cargo could not build the newest Jaynes".into());
     }
     said.push(format!("Jaynes installed in {}", root.join("bin").display()));
+    // The plugin, through Claude Code's own commands, so the skill, the guard and this server match the program.
+    let plugin = ["marketplace update jaynes", "update jaynes@jaynes"];
+    for args in plugin {
+        let done = Command::new("claude").arg("plugin").args(args.split(' ')).output();
+        match done {
+            Ok(d) if d.status.success() => {}
+            Ok(d) => {
+                said.push(format!("the Jaynes plugin was not updated: {}", String::from_utf8_lossy(&d.stderr).trim()));
+                break;
+            }
+            Err(_) => {
+                said.push("the Jaynes plugin was not updated: Claude Code is not on the PATH; update it with /plugin".into());
+                break;
+            }
+        }
+    }
     for (name, _, _, origin) in list(home) {
         if origin.starts_with("https://") || origin.starts_with("git@") {
             match add(home, &origin) {
