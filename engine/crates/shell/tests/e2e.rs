@@ -154,3 +154,30 @@ fn the_small_change_role_conforms() {
     let (ok, out) = engine(&s, &["conformance", root().join("roles/small-change").to_str().expect("path")]);
     assert!(ok, "{out}");
 }
+
+#[test]
+fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
+    let s = scratch("inbox");
+    let role = root().join("roles/small-change");
+    let agent = format!("sleep 4 && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let child = Command::new(BIN)
+        .args(["start", "--run", "inbox", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", root().join("..").join("src"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let (ok, out) = engine(&s, &["halt", "inbox"]);
+    assert!(ok && out.contains("recorded for the process that drives the run"), "{out}");
+    let done = child.wait_with_output().expect("wait");
+    let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    // the attempt under way finished; the halt was taken before the delivery
+    assert!(said.contains("(halted)"), "{said}");
+    let t = types(&events(&s, "inbox"));
+    assert!(t.contains(&"Halted".to_string()), "{t:?}");
+    assert!(!t.contains(&"Delivered".to_string()), "nothing is delivered while halted: {t:?}");
+}

@@ -29,6 +29,7 @@ const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--send]
   raise RUN high|--seconds N|--tokens N
   halt RUN | resume RUN | abandon RUN
+  correct RUN --note TEXT  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   conformance DIR         check a role against the protocol
   schema                  print the protocol's schema
@@ -125,6 +126,14 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             };
             send(s, id, input)
+        }
+        "correct" => {
+            let id = rest.first().ok_or("which run?")?;
+            let note = flag(rest, "--note").ok_or("--note TEXT says what was wrong")?;
+            let mut s = store()?;
+            let (_, events, _) = drive::decide_and_record(&mut s, id, &Input::Correct { note, by: who() })?;
+            say(&format!("recorded: {} event", events.len()));
+            Ok(())
         }
         "runs" => {
             let s = store()?;
