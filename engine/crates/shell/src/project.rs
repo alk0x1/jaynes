@@ -50,7 +50,8 @@ impl Copy {
                 return Err(format!("the project could not be copied: {}", String::from_utf8_lossy(&out.stderr).trim()));
             }
             git(dir, &["checkout", "-q", "-b", branch])?;
-            let mut exclude = format!("{EXCHANGE}/\n");
+            // Claude Code leaves its own scratch in every folder it works in; it is never part of the change.
+            let mut exclude = format!("{EXCHANGE}/\n/.claude/.cc-writes\n");
             for d in DEPENDENCIES {
                 let from = source.join(d);
                 if from.is_dir() {

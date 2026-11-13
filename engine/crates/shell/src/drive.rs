@@ -262,7 +262,11 @@ impl<'a> Driver<'a> {
             deadline: Duration::from_secs(turn.deadline_seconds.max(1)),
             reads: &reads,
             env,
+            transcript: Some(self.setup.dir.join("steps").join(&turn.step).join(format!("turn-{}-{}.jsonl", turn.attempt, turn.fix))),
         };
+        if let Some(t) = &spec.transcript {
+            let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));
+        }
         let done = self.setup.agent.turn(spec);
         let _kept = std::fs::write(exchange.join(format!("applied-{}-{}.json", turn.attempt, turn.fix)), done.applied.to_string());
         let outcome = match done.ended {

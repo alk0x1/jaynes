@@ -21,6 +21,8 @@ pub struct Spec<'a> {
     /// Folders the step's commands must read outside its folder, such as linked dependencies.
     pub reads: &'a [PathBuf],
     pub env: Vec<(String, String)>,
+    /// Where to keep what the agent program printed, for the person and for diagnosis.
+    pub transcript: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -119,6 +121,9 @@ impl Agent for Shell {
         let ended = match run(cmd, spec.prompt, spec.deadline) {
             Err(reason) => Ended::Fault { reason },
             Ok((code, out, err, took, timed_out)) => {
+                if let Some(t) = &spec.transcript {
+                    let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
+                }
                 let said: Value = out.lines().rev().find_map(|l| serde_json::from_str(l).ok()).unwrap_or(Value::Null);
                 let usage = Usage { seconds: took.as_secs(), tokens: said["tokens"].as_u64().unwrap_or(0), cached: 0 };
                 let session = said["session"].as_str().map(str::to_string);
@@ -219,6 +224,9 @@ impl Agent for Claude {
         if binary("claude").is_none() {
             return Err("Claude Code is not installed".to_string());
         }
+        if cwd.components().any(|c| c.as_os_str() == ".claude") {
+            return Err(format!("Claude Code refuses to write under a .claude folder, and the step's folder is {}", cwd.display()));
+        }
         if cfg!(target_os = "macos") && !Path::new("/usr/bin/sandbox-exec").exists() {
             return Err("the macOS sandbox Claude Code's guards need is not there".to_string());
         }
@@ -249,10 +257,57 @@ impl Agent for Claude {
                              "resume": spec.session});
         let ended = match run(cmd, spec.prompt, spec.deadline) {
             Err(reason) => Ended::Fault { reason },
-            Ok((code, out, err, took, timed_out)) => claude_ended(&self.model, code, &out, &err, took, timed_out),
+            Ok((code, out, err, took, timed_out)) => {
+                if let Some(t) = &spec.transcript {
+                    let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
+                }
+                match refused_writes(&out, spec.cwd, spec.reach) {
+                    Some(paths) => Ended::Fault {
+                        reason: format!(
+                            "Claude Code's guards, as Jaynes set them, refused writes the step may make: {}",
+                            paths.join(", ")
+                        ),
+                    },
+                    None => claude_ended(&self.model, code, &out, &err, took, timed_out),
+                }
+            }
         };
         Turn { ended, applied }
     }
+}
+
+/// The writes Claude Code's own guards refused although the step may make them: a sign the guards Jaynes set are
+/// wrong, which is Jaynes's fault and must not spend the agent's attempt.
+fn refused_writes(out: &str, cwd: &Path, reach: &Reach) -> Option<Vec<String>> {
+    let mut asked: std::collections::BTreeMap<String, String> = Default::default();
+    let mut refused = Vec::new();
+    for line in out.lines() {
+        let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
+        for b in e["message"]["content"].as_array().into_iter().flatten() {
+            if b["type"] == "tool_use" && (b["name"] == "Edit" || b["name"] == "Write") {
+                if let (Some(id), Some(path)) = (b["id"].as_str(), b["input"]["file_path"].as_str()) {
+                    asked.insert(id.to_string(), path.to_string());
+                }
+            }
+            if b["type"] == "tool_result" && b["is_error"].as_bool().unwrap_or(false) {
+                let text = b["content"].as_str().map(str::to_string).unwrap_or_else(|| b["content"].to_string());
+                let Some(path) = b["tool_use_id"].as_str().and_then(|id| asked.get(id)) else { continue };
+                if !text.contains("Permission to use") && !text.contains("not permitted") {
+                    continue;
+                }
+                let rel = Path::new(path).strip_prefix(cwd).map(|p| p.display().to_string()).ok();
+                let allowed = match rel {
+                    Some(r) if r.starts_with(crate::project::EXCHANGE) => true,
+                    Some(r) => reach.project == ProjectAccess::Write && jaynes_core::glob::allowed(&r, &reach.write),
+                    None => false,
+                };
+                if allowed && !refused.contains(path) {
+                    refused.push(path.clone());
+                }
+            }
+        }
+    }
+    (!refused.is_empty()).then_some(refused)
 }
 
 fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Duration, timed_out: bool) -> Ended {
@@ -318,6 +373,16 @@ mod tests {
         assert!(allow.contains(&"Edit(./.jaynes/**)"));
         assert!(!allow.contains(&"Edit(./**)"));
         assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "Bash"));
+    }
+
+    #[test]
+    fn a_write_the_guards_refused_inside_the_reach_is_jaynes_s_fault() {
+        let out = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/w/.jaynes/output.json"}},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/elsewhere/x"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Permission to use Write has been denied"},{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Permission to use Edit has been denied"}]}}"#;
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true };
+        assert_eq!(refused_writes(out, Path::new("/w"), &reach), Some(vec!["/w/.jaynes/output.json".to_string()]));
+        let none = r#"{"type":"user","message":{"content":[]}}"#;
+        assert_eq!(refused_writes(none, Path::new("/w"), &reach), None);
     }
 
     #[test]
