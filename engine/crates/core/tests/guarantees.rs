@@ -1704,6 +1704,31 @@ fn gate_case(pre: &Run, input: &Input, events: &[Event]) -> Option<String> {
     Some(serde_json::json!({"kind": "gate", "case": case, "expected": expected}).to_string())
 }
 
+/// The model's case for every state each run of a record passed through, read with the sqlite3 program.
+fn record_cases(path: &std::path::Path) -> Vec<String> {
+    let out = std::process::Command::new("sqlite3").arg("-json").arg(path).arg("select run, body from events order by seq").output().expect("sqlite3");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    let mut states: BTreeMap<String, Run> = BTreeMap::new();
+    let mut cases = Vec::new();
+    for row in rows {
+        let (Some(run), Some(body)) = (row["run"].as_str(), row["body"].as_str()) else { continue };
+        let Ok(e) = serde_json::from_str::<Event>(body) else { panic!("an entry of {run} does not read: {body}") };
+        let next = match states.remove(run) {
+            None => Run::started(&e),
+            Some(mut r) => {
+                r.apply(&e);
+                Some(r)
+            }
+        };
+        if let Some(r) = next {
+            cases.push(model_case(&r));
+            states.insert(run.to_string(), r);
+        }
+    }
+    cases
+}
+
 fn lake() -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let elan = std::path::Path::new(&home).join(".elan/bin/lake");
@@ -1733,6 +1758,18 @@ fn the_lean_model_decides_as_the_core_does() {
             }
         }
         cases.extend(w.cases.take().unwrap_or_default());
+    }
+    // and every state of real runs: JAYNES_MODEL_RECORD names records (record.sqlite3), separated by ':'
+    let real = std::env::var("JAYNES_MODEL_RECORD").unwrap_or_default();
+    let mut from_records = 0;
+    for path in real.split(':').filter(|p| !p.is_empty()) {
+        let found = record_cases(std::path::Path::new(path));
+        from_records += found.len();
+        cases.extend(found);
+    }
+    if !real.is_empty() {
+        assert!(from_records > 0, "no state was read from {real}");
+        eprintln!("{from_records} states from real records");
     }
     let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../model");
     // The proofs build with the model; JAYNES_MODEL_TARGET=check builds the checker alone, to try a model whose

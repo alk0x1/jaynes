@@ -41,3 +41,10 @@ jobs:
       - run: cargo test --locked
         env:
           JAYNES_REQUIRE_LEAN: "1"
+      # the model against every state of the records the end-to-end tests just made with real roles
+      - name: Lean model against real records
+        env:
+          JAYNES_REQUIRE_LEAN: "1"
+        run: |
+          JAYNES_MODEL_RECORD=$(ls -d "${TMPDIR:-/tmp}"/jaynes-e2e-*/home/record.sqlite3 | tr '\n' ':') \
+            cargo test --locked -p jaynes-core --test guarantees the_lean_model -- --nocapture
