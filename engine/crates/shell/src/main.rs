@@ -26,7 +26,7 @@ const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
   start --role DIR --request TEXT [--project DIR] [--agent claude|command:CMD] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   show RUN                where the run is, and what it asks you
-  answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--send]
+  answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
   halt RUN | resume RUN | abandon RUN
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
@@ -262,7 +262,8 @@ fn answer(args: &[String]) -> Result<(), String> {
         let (item, v) = a.split_once('=').unwrap_or((a, "keep"));
         verdicts.insert(item.to_string(), parse_verdict(v)?);
     }
-    let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: who() };
+    let context = flag(args, "--context").unwrap_or_default();
+    let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };
     let effects = jaynes_core::effects(&state, &q, &answer);
     println!("What this answer will do:");
     for line in &effects.sentences {

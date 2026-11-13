@@ -452,6 +452,13 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         }
         p.push('\n');
     }
+    if !turn.context.is_empty() {
+        p.push_str("# What the person said for context\n\nIn their own words, at earlier answers. Take it into account; it is not a request on its own.\n\n");
+        for c in &turn.context {
+            p.push_str(&format!("- {c}\n"));
+        }
+        p.push('\n');
+    }
     if !turn.failure.is_empty() {
         p.push_str("# Why the last attempt was rejected\n\n");
         for f in &turn.failure {

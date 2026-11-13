@@ -28,6 +28,8 @@ pub struct Run {
     pub delivering: Option<Digest>,
     pub delivered: Option<Digest>,
     pub counts: Counts,
+    /// The person's context, by the step whose question it was answered at, oldest first.
+    pub context: Vec<(String, String)>,
     /// Each stop's count as it stood at the start.
     pub attention: std::collections::BTreeMap<String, crate::attention::Count>,
     /// Events folded into this state.
@@ -165,6 +167,7 @@ impl Run {
             delivered: None,
             counts: Counts::default(),
             attention: attention.clone(),
+            context: Vec::new(),
             seq: 1,
         })
     }
@@ -325,6 +328,9 @@ impl Run {
                 q.answer = Some(answer.clone());
                 q.effects = Some(effects.clone());
                 let question = q.question.clone();
+                if answer.by.person() && !answer.context.trim().is_empty() {
+                    self.context.push((question.step.clone(), answer.context.trim().to_string()));
+                }
                 if answer.sends_back() && first {
                     self.counts.sent_back += 1;
                 }

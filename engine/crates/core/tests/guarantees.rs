@@ -626,7 +626,7 @@ impl World {
         fn answer_keeps_all(a: &Answer) -> bool {
             a.verdicts.values().all(|v| *v == Verdict::Keep)
         }
-        let answer = Answer { question: q.id.clone(), shown, verdicts, by: by.clone() };
+        let answer = Answer { question: q.id.clone(), shown, verdicts, by: by.clone() , context: String::new()};
         let accepted = self.send(Input::Answer { answer: answer.clone() });
         // G9 and G10: only for what was shown, only while it stands; an agent only to let a release go on.
         let i = run.manifest.index(&q.step).expect("step");
@@ -956,7 +956,7 @@ fn g13_a_correction_reruns_only_what_used_it() {
     feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".to_string() });
     assert!(matches!(run.phase, Phase::Waiting { step: None, .. }), "delivered, the question still open: {:?}", run.phase);
     // the person sends look back after the run went on
-    let answer = Answer {
+    let answer = Answer { context: String::new(),
         question: q.id.clone(),
         shown: q.shown(),
         verdicts: [("palette".to_string(), Verdict::Redo { note: "greener".to_string() })].into_iter().collect(),
@@ -986,7 +986,7 @@ fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     let asked = deliver(&mut run, "plan", 1, "p", Vec::new());
     let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
     assert!(matches!(run.phase, Phase::Waiting { .. }), "push waits: {:?}", run.phase);
-    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person } });
+    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person , context: String::new()} });
     let c = probe_ok(&mut run, c);
     assert!(c.iter().any(|c| matches!(c, Command::RunRole { key: Some(_), .. })), "push runs once answered, with a key");
 }
@@ -1181,10 +1181,10 @@ fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() 
     let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
     let agent = By::Agent { who: "claude".to_string() };
     // sending back is the person's
-    let redo = Answer { question: q.id.clone(), shown: q.shown(), verdicts: [("change".to_string(), Verdict::Redo { note: "no".to_string() })].into_iter().collect(), by: agent.clone() };
+    let redo = Answer { context: String::new(), question: q.id.clone(), shown: q.shown(), verdicts: [("change".to_string(), Verdict::Redo { note: "no".to_string() })].into_iter().collect(), by: agent.clone() };
     assert!(decide(Some(&run), &Input::Answer { answer: redo }).is_err());
     // letting it go on is allowed, and the run goes on to tests
-    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: agent } });
+    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: agent , context: String::new()} });
     let c = probe_ok(&mut run, c);
     assert!(c.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "tests")), "{c:?}");
     assert!(run.steps[0].locks.is_empty(), "an agent's release locks nothing");
@@ -1193,7 +1193,7 @@ fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() 
     assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. } | Command::Probe { .. })), "{c:?}");
     assert!(matches!(&run.phase, Phase::Waiting { step: Some(s), .. } if s == "push"), "{:?}", run.phase);
     // the person confirms, and push runs
-    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person } });
+    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person , context: String::new()} });
     let c = probe_ok(&mut run, c);
     assert!(c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "{c:?}");
 }
@@ -1239,7 +1239,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
         about: String::new(),
     };
     let verdicts: BTreeMap<String, Verdict> = verdict.into_iter().map(|v| ("change".to_string(), v)).collect();
-    let answer = Answer { question: question.id.clone(), shown: question.shown(), verdicts, by };
+    let answer = Answer { context: String::new(), question: question.id.clone(), shown: question.shown(), verdicts, by };
     let c = Ceilings::default();
     let r = run.to_string();
     vec![
@@ -1315,6 +1315,29 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let run = run_with("braked", true);
     let q = run.questions.values().next().expect("a braked stop always asks");
     assert!(q.question.holds);
-    let agent = Answer { question: q.question.id.clone(), shown: q.question.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "claude".to_string() } };
+    let agent = Answer { question: q.question.id.clone(), shown: q.question.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "claude".to_string() }, context: String::new() };
     assert!(decide(Some(&run), &Input::Answer { answer: agent }).is_err(), "an agent may not release a braked stop");
+}
+
+#[test]
+fn the_person_s_context_reaches_the_steps_after_the_answer_and_changes_no_verdict() {
+    let mut look = step("look", Executor::Agent);
+    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    let mut copy = step("copy", Executor::Agent);
+    copy.needs = vec!["look".to_string()];
+    let (mut run, cmds) = start(vec![look, copy]);
+    probe_ok(&mut run, cmds);
+    let asked = deliver(&mut run, "look", 1, "blue", vec![item("palette", "blue")]);
+    let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
+    let answer = Answer { context: "it is for accountants".to_string(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person };
+    let effects = jaynes_core::effects(&run, &q, &answer);
+    assert!(effects.sentences.iter().any(|s| s.contains("Your context goes to every step after look") && s.contains("sends nothing back")), "{effects:?}");
+    assert!(effects.reruns.is_empty());
+    let c = feed(&mut run, Input::Answer { answer });
+    let c = probe_ok(&mut run, c);
+    let turn = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.clone()) } else { None }).expect("copy runs");
+    assert_eq!((turn.step.as_str(), turn.context.clone()), ("copy", vec!["it is for accountants".to_string()]));
+    assert_eq!(run.steps[0].round, 0, "context sends nothing back");
+    let agent = Answer { context: "x".to_string(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "claude".to_string() } };
+    assert!(decide(Some(&run), &Input::Answer { answer: agent }).is_err());
 }

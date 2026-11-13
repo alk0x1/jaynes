@@ -5,6 +5,11 @@
         "by": {
           "$ref": "#/$defs/By"
         },
+        "context": {
+          "default": "",
+          "description": "The person's own words for the agents that work after this answer. It changes no verdict.",
+          "type": "string"
+        },
         "question": {
           "type": "string"
         },

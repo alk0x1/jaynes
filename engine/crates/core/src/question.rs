@@ -114,6 +114,9 @@ pub struct Answer {
     #[serde(default)]
     pub verdicts: BTreeMap<String, Verdict>,
     pub by: By,
+    /// The person's own words for the agents that work after this answer. It changes no verdict.
+    #[serde(default)]
+    pub context: String,
 }
 
 impl Answer {

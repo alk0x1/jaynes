@@ -447,6 +447,13 @@ impl Ctx {
             given: self.given(i),
             previous: (s.round > 0).then(|| s.done.as_ref().map(|d| d.output.clone())).flatten(),
             notes: s.notes.clone(),
+            context: self
+                .run
+                .context
+                .iter()
+                .filter(|(at, _)| self.run.manifest.index(at).is_some_and(|j| j <= i))
+                .map(|(_, text)| text.clone())
+                .collect(),
             failure: s.failure.clone(),
             checks: decl.checks.iter().filter(|c| c.kind == CheckKind::Open).cloned().collect(),
             locked: s.locks.values().map(|(item, _)| item.clone()).collect(),
@@ -818,6 +825,7 @@ impl Ctx {
                 shown: question.shown(),
                 verdicts: [("leave".to_string(), Verdict::Keep)].into_iter().collect(),
                 by: By::Rule { rule: READ_INSIDE_PROJECT.to_string() },
+                context: String::new(),
             };
             let effects = effects(&self.run, &question, &answer);
             self.emit(Event::AnswerRecorded { answer, effects });
@@ -858,6 +866,9 @@ impl Ctx {
         let i = self.index(&q.question.step)?;
         let executor = self.run.manifest.steps[i].executor;
         if let By::Agent { .. } = &answer.by {
+            if !answer.context.trim().is_empty() {
+                return refuse("context is the person's words; an agent's answer carries none");
+            }
             let release = self.run.manifest.steps[i].stop.as_ref().is_some_and(|s| s.release);
             let input = self.run.steps[i].inputs.contains(&q.question.id);
             if q.question.kind != QuestionKind::Decision || executor == Executor::Person || input || !release {
@@ -1013,6 +1024,15 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     if input {
         sentences.push(format!("{} goes on with your answer.", q.step));
         return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
+    }
+    let context = answer.context.trim();
+    if !context.is_empty() && !input {
+        let back: Vec<&str> = reruns.iter().map(|&k| run.manifest.steps[k].name.as_str()).collect();
+        sentences.push(if back.is_empty() {
+            format!("Your context goes to every step after {}: “{context}”. It sends nothing back.", q.step)
+        } else {
+            format!("Your context goes with it to {} and to every step after it: “{context}”.", back.join(", "))
+        });
     }
     if let By::Agent { who } = &answer.by {
         sentences.push(format!(

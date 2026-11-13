@@ -189,6 +189,8 @@ pub struct AgentTurn {
     pub previous: Option<Digest>,
     /// The person's words for this round.
     pub notes: Vec<String>,
+    /// What the person said for context in answers at this step or before it, oldest first.
+    pub context: Vec<String>,
     /// Why the last attempt or fix was rejected, in the checks' own sentences.
     pub failure: Vec<String>,
     /// Only the shape checks: the agent knows them before it delivers.
