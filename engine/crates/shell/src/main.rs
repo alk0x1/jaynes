@@ -3,6 +3,7 @@
 mod agent;
 mod conformance;
 mod drive;
+mod page;
 mod project;
 mod protocol;
 mod role;
@@ -31,6 +32,7 @@ const USAGE: &str = "jaynes-engine: the redesigned Jaynes engine
   halt RUN | resume RUN | abandon RUN
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
+  page [--port N]         the page where you answer, on 127.0.0.1 (default port 8750)
   conformance DIR         check a role against the protocol
   schema                  print the protocol's schema
 
@@ -171,6 +173,12 @@ fn run(args: &[String]) -> Result<(), String> {
                 println!("{} {}{}", if f.ok { "ok  " } else { "FAIL" }, f.case, if f.ok || f.detail.is_empty() { String::new() } else { format!(": {}", f.detail) });
             }
             if failed > 0 { Err(format!("{failed} of {} cases failed", findings.len())) } else { Ok(()) }
+        }
+        "page" => {
+            let port = flag(rest, "--port").map(|p| p.parse().map_err(|_| "--port takes a number")).transpose()?.unwrap_or(8750);
+            let key = std::env::var("JAYNES_PAGE_KEY").unwrap_or_else(|_| page::key());
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            page::Page { home: home(), port, key, exe }.serve()
         }
         "schema" => {
             println!("{}", serde_json::to_string_pretty(&protocol::schema()).map_err(|e| e.to_string())?);

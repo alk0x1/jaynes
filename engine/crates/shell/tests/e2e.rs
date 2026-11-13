@@ -243,3 +243,113 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/fixbug:greet.sh"]).output().expect("git");
     assert_eq!(String::from_utf8_lossy(&shown.stdout), "echo \"hi $1\"\n");
 }
+
+fn http(port: u16, raw: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.write_all(raw.as_bytes()).expect("write");
+    let mut out = String::new();
+    let _read = s.read_to_string(&mut out);
+    out
+}
+
+fn post(port: u16, path: &str, body: &str, cookie: &str) -> Value {
+    let raw = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let out = http(port, &raw);
+    serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap_or(Value::Null)
+}
+
+#[test]
+fn the_page_answers_as_the_person_only_with_its_key() {
+    let s = scratch("page");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    start(&s, "page", &agent);
+    let e = events(&s, "page");
+    let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
+    let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
+    let port = 18750 + (std::process::id() % 1000) as u16;
+    let mut page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home)
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", root().join("..").join("src"))
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // another address is refused, the key sets a cookie, and the question is on the page
+    assert!(http(port, &format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n")).starts_with("HTTP/1.1 403"));
+    assert!(http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).contains("Set-Cookie: jaynes_key=k3y"));
+    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    assert!(home.contains("The change turned out bigger than a small one"), "{home}");
+    let id = q["id"].as_str().expect("id");
+    // without the key it is an agent: it may not send the change back
+    let redo = format!(r#"{{"run":"page","question":"{id}","shown":"{shown}","verdicts":{{"change":"redo"}},"notes":{{"change":"smaller"}}}}"#);
+    let r = post(port, "/api/effects", &redo, "");
+    assert_eq!(r["ok"], false, "{r}");
+    // with the key, the core writes what the answer will do, and the answer is the person's
+    let keep = format!(r#"{{"run":"page","question":"{id}","shown":"{shown}","verdicts":{{}},"context":"for accountants"}}"#);
+    let r = post(port, "/api/effects", &keep, "jaynes_key=k3y");
+    assert!(r["ok"] == true && r["sentences"].to_string().contains("Your context goes to every step after change"), "{r}");
+    let r = post(port, "/api/answer", &keep, "jaynes_key=k3y");
+    assert_eq!(r["ok"], true, "{r}");
+    // the run goes on in its own process and finishes
+    let mut finished = false;
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if events(&s, "page").iter().any(|e| e["type"] == "RunFinished") {
+            finished = true;
+            break;
+        }
+    }
+    let _killed = page.kill();
+    assert!(finished, "{:?}", types(&events(&s, "page")));
+    let answered = events(&s, "page").into_iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
+    assert_eq!(answered["answer"]["by"]["by"], "person");
+    assert_eq!(answered["answer"]["context"], "for accountants");
+}
+
+#[test]
+fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
+    let s = bug_project("redo");
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let role = root().join("roles/fix-bug");
+    let env = |c: &mut Command| {
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", root().join("..").join("src")).env("PROMPTS", &prompts);
+    };
+    let mut c = Command::new(BIN);
+    c.args(["start", "--run", "redo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
+    env(&mut c);
+    assert!(c.output().expect("start").status.success());
+    let q = events(&s, "redo").into_iter().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "reproduce").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    // the person, at a terminal, sends reproduce back after the fix was made
+    let mut c = Command::new("script");
+    c.args(["-q", "/dev/null", BIN, "answer", "redo", &q, "example-1=redo:also an empty name", "--send"]);
+    env(&mut c);
+    let said = String::from_utf8_lossy(&c.output().expect("answer").stdout).to_string();
+    let e = events(&s, "redo");
+    let t = types(&e);
+    // reproduce reran over the base, where the bug still is, and passed; fix ran again on top and was delivered
+    let reproduce_failed = e.iter().filter(|e| e["type"] == "AttemptFailed" && e["step"] == "reproduce").count();
+    assert_eq!(reproduce_failed, 0, "{said}\n{t:?}");
+    assert!(e.iter().filter(|e| e["type"] == "StepDone" && e["step"] == "reproduce").count() == 2, "{t:?}");
+    assert!(e.iter().filter(|e| e["type"] == "StepDone" && e["step"] == "fix").count() == 2, "{t:?}");
+    let delivered = e.iter().filter(|e| e["type"] == "Delivered").count();
+    assert_eq!(delivered, 2, "{t:?}");
+    {
+        let (file, want) = ("greet.sh", "echo \"hi $1\"\n");
+        let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", &format!("jaynes/redo:{file}")]).output().expect("git");
+        assert_eq!(String::from_utf8_lossy(&shown.stdout), want);
+    }
+    for test in ["tests/test_hi.sh", "tests/test_empty.sh"] {
+        let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", &format!("jaynes/redo:{test}")]).output().expect("git");
+        assert!(shown.status.success(), "{test} is in the delivery");
+    }
+}

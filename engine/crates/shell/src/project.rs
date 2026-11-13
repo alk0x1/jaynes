@@ -50,6 +50,8 @@ impl Copy {
                 return Err(format!("the project could not be copied: {}", String::from_utf8_lossy(&out.stderr).trim()));
             }
             git(dir, &["checkout", "-q", "-b", branch])?;
+            let base = git(dir, &["rev-parse", "HEAD"])?;
+            std::fs::write(dir.join(".git/jaynes-base"), base).map_err(|e| e.to_string())?;
             // Claude Code leaves its own scratch in every folder it works in; it is never part of the change.
             let mut exclude = format!("{EXCHANGE}/\n/.claude/.cc-writes\n");
             for d in DEPENDENCIES {
@@ -90,13 +92,35 @@ impl Copy {
         Ok((changed, tree))
     }
 
-    /// Commit what is staged, if anything is.
-    pub fn commit(&self, message: &str) -> Result<(), String> {
-        git(&self.dir, &["add", "-A"])?;
-        if git(&self.dir, &["diff", "--cached", "--quiet"]).is_err() {
-            git(&self.dir, &["commit", "-q", "--no-verify", "-m", message])?;
+    /// The commit the run started from.
+    pub fn base(&self) -> Result<String, String> {
+        std::fs::read_to_string(self.dir.join(".git/jaynes-base")).map(|s| s.trim().to_string()).map_err(|e| e.to_string())
+    }
+
+    /// Put the copy at the base with `commits` applied in order, each one step's own change. A change that does
+    /// not apply over the ones before it is an error naming it.
+    pub fn compose(&self, commits: &[(String, String)]) -> Result<String, String> {
+        git(&self.dir, &["reset", "-q", "--hard"])?;
+        git(&self.dir, &["clean", "-fdq", "-e", EXCHANGE])?;
+        git(&self.dir, &["checkout", "-q", "--detach", &self.base()?])?;
+        for (step, c) in commits {
+            if let Err(e) = git(&self.dir, &["cherry-pick", "--allow-empty", "--keep-redundant-commits", c]) {
+                let _abort = git(&self.dir, &["cherry-pick", "--abort"]);
+                return Err(format!("the change of {step} does not apply over the steps before it: {e}"));
+            }
         }
-        Ok(())
+        self.head()
+    }
+
+    /// One commit holding the whole change of a step: the copy's tree now, over `parent`, the copy as the steps
+    /// before it left it. None when the step changed nothing.
+    pub fn result(&self, parent: &str, message: &str) -> Result<Option<String>, String> {
+        git(&self.dir, &["add", "-A"])?;
+        let tree = git(&self.dir, &["write-tree"])?;
+        if tree == git(&self.dir, &["rev-parse", &format!("{parent}^{{tree}}")])? {
+            return Ok(None);
+        }
+        git(&self.dir, &["commit-tree", &tree, "-p", parent, "-m", message]).map(Some)
     }
 
     /// Throw away what is not committed.
@@ -106,9 +130,10 @@ impl Copy {
         Ok(())
     }
 
-    /// Put the run's branch into the person's repository, as it is now. Their working tree is not touched.
-    pub fn deliver(&self) -> Result<String, String> {
-        let head = self.head()?;
+    /// Put the run's branch into the person's repository: every step's change over the base, in order. Their
+    /// working tree is not touched.
+    pub fn deliver(&self, commits: &[(String, String)]) -> Result<String, String> {
+        let head = self.compose(commits)?;
         let refspec = format!("+{head}:refs/heads/{}", self.branch);
         git(&self.source, &["fetch", "-q", &self.dir.display().to_string(), &refspec])?;
         Ok(format!("{} at {}", self.branch, &head[..head.len().min(12)]))

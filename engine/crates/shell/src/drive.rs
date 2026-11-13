@@ -117,6 +117,51 @@ impl<'a> Driver<'a> {
 
     /// Keep the project copy in step with the record: an output that passed becomes a commit; an attempt that
     /// failed leaves nothing behind.
+    fn ledger(&self) -> std::collections::BTreeMap<String, String> {
+        std::fs::read_to_string(self.setup.dir.join("project-steps.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    fn keep_ledger(&self, l: &std::collections::BTreeMap<String, String>) -> Result<(), String> {
+        std::fs::write(self.setup.dir.join("project-steps.json"), serde_json::to_string(l).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    }
+
+    /// Each step's change, by step, for the steps in `names` that changed something, in the order given.
+    fn changes(&self, names: &[String]) -> Vec<(String, String)> {
+        let l = self.ledger();
+        names.iter().filter_map(|n| l.get(n).map(|c| (n.clone(), c.clone()))).collect()
+    }
+
+    /// Put the copy where step `i` works: the base with the changes of the earlier steps it uses, and, when it
+    /// runs again, its own previous change on top.
+    fn prepare(&self, run: &Run, i: usize) -> Result<(), String> {
+        let Some(copy) = &self.setup.copy else { return Ok(()) };
+        if run.manifest.steps[i].reach.project == ProjectAccess::None {
+            return Ok(());
+        }
+        let writers: Vec<String> = run
+            .sources(i)
+            .into_iter()
+            .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
+            .map(|j| run.manifest.steps[j].name.clone())
+            .collect();
+        let parent = copy.compose(&self.changes(&writers))?;
+        let name = run.manifest.steps[i].name.clone();
+        let mut parents = self.parents();
+        parents.insert(name.clone(), parent);
+        std::fs::write(self.setup.dir.join("project-parents.json"), serde_json::to_string(&parents).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if run.manifest.steps[i].reach.project == ProjectAccess::Write && run.steps[i].round > 0 {
+            let own = self.changes(std::slice::from_ref(&name));
+            let mut all = self.changes(&writers);
+            all.extend(own);
+            copy.compose(&all).map(|_| ())?;
+        }
+        Ok(())
+    }
+
+    fn parents(&self) -> std::collections::BTreeMap<String, String> {
+        std::fs::read_to_string(self.setup.dir.join("project-parents.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
     fn follow_project(&self, run: &Run, events: &[Event]) -> Result<(), String> {
         let Some(copy) = &self.setup.copy else { return Ok(()) };
         for e in events {
@@ -130,7 +175,13 @@ impl<'a> Driver<'a> {
                 continue;
             }
             if keep {
-                copy.commit(&format!("{step}, round {}", run.steps[i].round))?;
+                let parent = self.parents().get(step).cloned().unwrap_or(copy.base()?);
+                let mut l = self.ledger();
+                match copy.result(&parent, &format!("{step}, round {}", run.steps[i].round))? {
+                    Some(c) => l.insert(step.clone(), c),
+                    None => l.remove(step),
+                };
+                self.keep_ledger(&l)?;
             } else {
                 copy.discard()?;
             }
@@ -163,8 +214,14 @@ impl<'a> Driver<'a> {
             }
             Command::Permit { .. } => None,
             Command::Deliver { digest, .. } => {
+                let writers: Vec<String> = run
+                    .path()
+                    .into_iter()
+                    .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
+                    .map(|j| run.manifest.steps[j].name.clone())
+                    .collect();
                 let (ok, reference) = match &self.setup.copy {
-                    Some(copy) => match copy.deliver() {
+                    Some(copy) => match copy.deliver(&self.changes(&writers)) {
                         Ok(r) => (true, r),
                         Err(e) => (false, e),
                     },
@@ -216,6 +273,10 @@ impl<'a> Driver<'a> {
             Err(e) => return fault(e),
         };
         let previous = self.output_of(&turn.previous);
+        if turn.fix == 0
+            && let Err(e) = self.prepare(run, i) {
+                return fault(e);
+            }
         let prompt = if turn.fix == 0 {
             let reply = self.setup.role.call(Call::Prompt {
                 step: turn.step.clone(),
@@ -327,6 +388,9 @@ impl<'a> Driver<'a> {
             Err(e) => return end(AttemptOutcome::Fault { reason: e }),
         };
         let i = run.manifest.index(&step).unwrap_or(0);
+        if let Err(e) = self.prepare(run, i) {
+            return end(AttemptOutcome::Fault { reason: e });
+        }
         let reaches = run.manifest.steps[i].reach.project != ProjectAccess::None;
         let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir.display().to_string());
         let source = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.source.display().to_string());
