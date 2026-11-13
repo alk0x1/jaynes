@@ -284,11 +284,10 @@ fn refused_writes(out: &str, cwd: &Path, reach: &Reach) -> Option<Vec<String>> {
     for line in out.lines() {
         let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
         for b in e["message"]["content"].as_array().into_iter().flatten() {
-            if b["type"] == "tool_use" && (b["name"] == "Edit" || b["name"] == "Write") {
-                if let (Some(id), Some(path)) = (b["id"].as_str(), b["input"]["file_path"].as_str()) {
+            if b["type"] == "tool_use" && (b["name"] == "Edit" || b["name"] == "Write")
+                && let (Some(id), Some(path)) = (b["id"].as_str(), b["input"]["file_path"].as_str()) {
                     asked.insert(id.to_string(), path.to_string());
                 }
-            }
             if b["type"] == "tool_result" && b["is_error"].as_bool().unwrap_or(false) {
                 let text = b["content"].as_str().map(str::to_string).unwrap_or_else(|| b["content"].to_string());
                 let Some(path) = b["tool_use_id"].as_str().and_then(|id| asked.get(id)) else { continue };

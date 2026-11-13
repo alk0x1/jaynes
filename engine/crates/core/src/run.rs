@@ -422,11 +422,10 @@ impl Run {
         let mut out: Vec<usize> = decl.needs.iter().filter_map(|n| self.manifest.index(n)).collect();
         for c in &decl.checks {
             for r in &c.reads {
-                if let Some(j) = self.manifest.index(r) {
-                    if !out.contains(&j) {
+                if let Some(j) = self.manifest.index(r)
+                    && !out.contains(&j) {
                         out.push(j);
                     }
-                }
             }
         }
         if decl.reach.project != ProjectAccess::None {

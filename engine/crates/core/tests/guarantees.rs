@@ -598,7 +598,7 @@ impl World {
                 }
                 By::Agent { who: "claude".to_string() }
             }
-            1 => By::Rule { rule: READ_INSIDE_PROJECT.to_string() },
+            3 => By::Rule { rule: READ_INSIDE_PROJECT.to_string() },
             _ => By::Person,
         };
         let state = run.questions[&q.id].clone();
