@@ -175,8 +175,9 @@ to install it for your user:
 ```
 
 Then work as usual: approve a plan ("go ahead", "do it") and your agent hands
-it to Jaynes. Where a run needs you, you answer in Claude Code's question
-dialog or on the page, at http://127.0.0.1:8740 (`jaynes` opens it).
+it to Jaynes, installing it the first time (it is built with Rust's `cargo`).
+Where a run needs you, you answer on the page, at http://127.0.0.1:8750, which
+Jaynes opens in your browser.
 
 The docs are at **[jaynes.dev/docs](https://jaynes.dev/docs/)**:
 
@@ -192,6 +193,16 @@ The docs are at **[jaynes.dev/docs](https://jaynes.dev/docs/)**:
 - [Commands](https://jaynes.dev/docs/commands.html): every `jaynes` command.
 
 ### From a clone
+
+The engine is in `engine/` (Rust): its core, the guarantees it proves
+([docs/guarantees.md](docs/guarantees.md)) and the page.
+
+```sh
+cd engine && cargo test               # the guarantees on random runs, the Lean model, the engine end to end
+cargo install --locked --path crates/shell --root ~/.local
+```
+
+The Python engine it replaces is still in `src/`:
 
 ```sh
 uv sync

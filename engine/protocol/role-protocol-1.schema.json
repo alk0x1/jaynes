@@ -1,0 +1,1161 @@
+{
+  "$defs": {
+    "Answer": {
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/By"
+        },
+        "context": {
+          "default": "",
+          "description": "The person's own words for the agents that work after this answer. It changes no verdict.",
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "shown": {
+          "$ref": "#/$defs/Digest",
+          "description": "The fingerprint of the question the answerer was shown."
+        },
+        "verdicts": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Verdict"
+          },
+          "default": {},
+          "description": "A verdict per item id. An item left out is kept.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "question",
+        "shown",
+        "by"
+      ],
+      "type": "object"
+    },
+    "By": {
+      "description": "Who gave an answer, and under which authority.",
+      "oneOf": [
+        {
+          "description": "The person, from the page or a channel only they hold.",
+          "properties": {
+            "by": {
+              "const": "person",
+              "type": "string"
+            }
+          },
+          "required": [
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A rule in code, by its name.",
+          "properties": {
+            "by": {
+              "const": "rule",
+              "type": "string"
+            },
+            "rule": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "by",
+            "rule"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An agent or any other program.",
+          "properties": {
+            "by": {
+              "const": "agent",
+              "type": "string"
+            },
+            "who": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "by",
+            "who"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CheckDecl": {
+      "properties": {
+        "about": {
+          "default": "",
+          "description": "What the check holds the output to. For an open check the agent reads it before it delivers.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CheckKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reads": {
+          "default": [],
+          "description": "Earlier steps the check reads besides what its step uses, such as the hidden cases a proof runs. Only a\nhidden check may read a hidden step.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "CheckKind": {
+      "oneOf": [
+        {
+          "const": "open",
+          "description": "The agent knows it before it delivers, and a failure goes back to the same session to be fixed in place:\nthe form of the output (a field, a length, a file that must exist), or the project's own tests, which the\nagent can run itself.",
+          "type": "string"
+        },
+        {
+          "const": "hidden",
+          "description": "Proof the maker never sees: not its name, not its inputs. A failure tells the agent only the check's own\nsentence, and spends the attempt.",
+          "type": "string"
+        }
+      ]
+    },
+    "CheckVerdict": {
+      "oneOf": [
+        {
+          "properties": {
+            "verdict": {
+              "const": "pass",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Failed. `reasons` is what the agent is told; `detail` only the person sees.",
+          "properties": {
+            "detail": {
+              "default": "",
+              "type": "string"
+            },
+            "reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "verdict": {
+              "const": "fail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "reasons"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check could not judge at all, such as a tool it runs that did not start: Jaynes's fault.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "verdict": {
+              "const": "blocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DeliveryKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "branch"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "merge",
+          "description": "Merged by Jaynes, never pushed, and undone by the person with Undo.",
+          "type": "string"
+        }
+      ]
+    },
+    "Digest": {
+      "description": "The fingerprint of some content. Two contents have the same digest only if they are equal.",
+      "type": "string"
+    },
+    "Effect": {
+      "description": "What the step does to the world, by where its effect lands.",
+      "oneOf": [
+        {
+          "description": "Nothing outside the step's own output.",
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Changes only Jaynes's copies, which are thrown away or kept by Jaynes.",
+          "properties": {
+            "kind": {
+              "const": "confined",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Changes something real that a named operation undoes, such as a local merge.",
+          "properties": {
+            "kind": {
+              "const": "compensable",
+              "type": "string"
+            },
+            "undo": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "undo"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Cannot be undone: a push, a message to a person, a publication.",
+          "properties": {
+            "idempotent": {
+              "default": false,
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "irreversible",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Executor": {
+      "oneOf": [
+        {
+          "const": "agent",
+          "description": "An agent program, such as Claude Code, does the step.",
+          "type": "string"
+        },
+        {
+          "const": "role",
+          "description": "The role program does the step itself, for evidence an agent could fake.",
+          "type": "string"
+        },
+        {
+          "const": "person",
+          "description": "The person: the step is a question over the steps it needs, and its output is the answer.",
+          "type": "string"
+        }
+      ]
+    },
+    "Given": {
+      "description": "An earlier step's output given to a call.",
+      "properties": {
+        "output": true,
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "output"
+      ],
+      "type": "object"
+    },
+    "Manifest": {
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/DeliveryKind",
+          "default": "branch",
+          "description": "How the run delivers: a branch, or a merge into the branch the project had checked out when the run started."
+        },
+        "protocol": {
+          "description": "The major version of the protocol the role speaks.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "role": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/StepDecl"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "version",
+        "protocol",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "Network": {
+      "enum": [
+        "none",
+        "web"
+      ],
+      "type": "string"
+    },
+    "ProjectAccess": {
+      "enum": [
+        "none",
+        "read",
+        "write"
+      ],
+      "type": "string"
+    },
+    "Rate": {
+      "description": "A rate in (0, 1), compared by its bits so a role stays comparable.",
+      "format": "double",
+      "type": "number"
+    },
+    "Reach": {
+      "description": "What a step may reach. Jaynes turns it into the agent program's own settings for the step.",
+      "properties": {
+        "commands": {
+          "default": false,
+          "description": "Whether the step may run shell commands.",
+          "type": "boolean"
+        },
+        "network": {
+          "$ref": "#/$defs/Network",
+          "default": "none"
+        },
+        "project": {
+          "$ref": "#/$defs/ProjectAccess",
+          "default": "none"
+        },
+        "write": {
+          "default": [],
+          "description": "Project paths a writing step may change; `!` keeps paths out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Reply": {
+      "oneOf": [
+        {
+          "properties": {
+            "extensions": {
+              "additionalProperties": true,
+              "default": {},
+              "type": "object"
+            },
+            "features": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "lifetime": {
+              "type": "string"
+            },
+            "reply": {
+              "const": "hello",
+              "type": "string"
+            },
+            "required": {
+              "default": [],
+              "description": "Features without which the role cannot run.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "role",
+            "lifetime"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/Manifest"
+            },
+            "reply": {
+              "const": "manifest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "manifest"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reply": {
+              "const": "prompt",
+              "type": "string"
+            },
+            "schema": {
+              "description": "The JSON Schema the output must follow, shown to the agent."
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "text",
+            "schema"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The output of a role's own step.",
+          "properties": {
+            "output": true,
+            "reply": {
+              "const": "result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A role's own step asks the person something before it can give its output.",
+          "properties": {
+            "about": {
+              "default": "",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ShownItem"
+              },
+              "type": "array"
+            },
+            "offered": {
+              "items": {
+                "$ref": "#/$defs/VerdictKind"
+              },
+              "type": "array"
+            },
+            "reply": {
+              "const": "needs_input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "items",
+            "offered"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The step cannot be done, for a reason of the role's.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "reply": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reply": {
+              "const": "verdict",
+              "type": "string"
+            },
+            "verdict": {
+              "$ref": "#/$defs/CheckVerdict"
+            }
+          },
+          "required": [
+            "reply",
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ShownItem"
+              },
+              "type": "array"
+            },
+            "reply": {
+              "const": "items",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The role could not answer the call at all: the engine counts it as its own fault, never the agent's.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "reply": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reply",
+            "message"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "jaynes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "jaynes",
+        "id"
+      ],
+      "type": "object"
+    },
+    "Request": {
+      "oneOf": [
+        {
+          "properties": {
+            "call": {
+              "const": "hello",
+              "type": "string"
+            },
+            "engine": {
+              "type": "string"
+            },
+            "extensions": {
+              "additionalProperties": true,
+              "default": {},
+              "description": "Room to grow: anything a later version adds before it has a field of its own.",
+              "type": "object"
+            },
+            "features": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "call",
+            "engine",
+            "features"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call": {
+              "const": "describe",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Write the instructions for an agent's attempt at a step.",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "call": {
+              "const": "prompt",
+              "type": "string"
+            },
+            "checks": {
+              "description": "The step's open checks, which the agent knows.",
+              "items": {
+                "$ref": "#/$defs/CheckDecl"
+              },
+              "type": "array"
+            },
+            "failure": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "given": {
+              "items": {
+                "$ref": "#/$defs/Given"
+              },
+              "type": "array"
+            },
+            "notes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "previous": true,
+            "request": {
+              "type": "string"
+            },
+            "round": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "step": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "step",
+            "request",
+            "round",
+            "attempt",
+            "given",
+            "notes",
+            "failure",
+            "checks"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Do a step of the role's own.",
+          "properties": {
+            "answers": {
+              "items": {
+                "$ref": "#/$defs/Answer"
+              },
+              "type": "array"
+            },
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "call": {
+              "const": "execute",
+              "type": "string"
+            },
+            "given": {
+              "items": {
+                "$ref": "#/$defs/Given"
+              },
+              "type": "array"
+            },
+            "key": {
+              "description": "For a step that cannot be undone: pass it to the service that acts, so a repeat counts once.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": true,
+            "project": {
+              "description": "The run's copy of the project, for a step that reaches it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "type": "string"
+            },
+            "round": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "description": "The person's own folder the run started from, never to be written.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "step": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "step",
+            "request",
+            "round",
+            "attempt",
+            "given",
+            "answers"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call": {
+              "const": "check",
+              "type": "string"
+            },
+            "check": {
+              "type": "string"
+            },
+            "given": {
+              "items": {
+                "$ref": "#/$defs/Given"
+              },
+              "type": "array"
+            },
+            "output": true,
+            "project": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "type": "string"
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "step": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "step",
+            "check",
+            "request",
+            "output",
+            "given"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What the person is shown of an output: one item per thing they may judge.",
+          "properties": {
+            "call": {
+              "const": "items",
+              "type": "string"
+            },
+            "output": true,
+            "step": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "step",
+            "output"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "jaynes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "jaynes",
+        "id"
+      ],
+      "type": "object"
+    },
+    "Risk": {
+      "oneOf": [
+        {
+          "const": "low",
+          "description": "A small change that can be undone: the short path.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Anything else: the full path.",
+          "type": "string"
+        }
+      ]
+    },
+    "SessionKind": {
+      "enum": [
+        "fresh",
+        "continue"
+      ],
+      "type": "string"
+    },
+    "ShownItem": {
+      "description": "An item as the role lists it. The engine computes its fingerprint from `content`.",
+      "properties": {
+        "content": {
+          "default": null
+        },
+        "detail": {
+          "default": "",
+          "description": "A few plain sentences shown under the label.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "pictures": {
+          "default": [],
+          "description": "Pictures of the item: files in the step's copy of the project, by path from its root. Jaynes keeps a copy of\neach, by its fingerprint, so what the person sees never changes under them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "StepDecl": {
+      "properties": {
+        "about": {
+          "default": "",
+          "type": "string"
+        },
+        "attempts": {
+          "default": 3,
+          "description": "Attempts the agent may spend in one round. Only the agent's faults spend one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CheckDecl"
+          },
+          "type": "array"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect",
+          "default": {
+            "kind": "none"
+          }
+        },
+        "executor": {
+          "$ref": "#/$defs/Executor"
+        },
+        "fixes": {
+          "default": 2,
+          "description": "Times a failed shape check goes back to the same agent session to be fixed in place, per attempt.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "from_risk": {
+          "$ref": "#/$defs/Risk",
+          "default": "low",
+          "description": "The lowest risk at which the step runs: a step from `high` is left out of the short path."
+        },
+        "hidden": {
+          "default": false,
+          "description": "Proof the maker never sees: the step reads only the request, and no agent step reads it.",
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "needs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reach": {
+          "$ref": "#/$defs/Reach",
+          "default": {
+            "commands": false,
+            "network": "none",
+            "project": "none",
+            "write": []
+          }
+        },
+        "session": {
+          "$ref": "#/$defs/SessionKind",
+          "default": "fresh",
+          "description": "Whether an agent step goes on in the session of the agent step before it, so one agent holds several steps."
+        },
+        "stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopDecl"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "executor"
+      ],
+      "type": "object"
+    },
+    "StopDecl": {
+      "properties": {
+        "about": {
+          "default": "",
+          "type": "string"
+        },
+        "audit_rate": {
+          "$ref": "#/$defs/Rate",
+          "default": 0.1,
+          "description": "The share of runs a certified stop still asks."
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The error rate the stop may have once it asks only a sample. None: it always asks."
+        },
+        "from_risk": {
+          "$ref": "#/$defs/Risk",
+          "default": "low",
+          "description": "The lowest risk at which the stop asks."
+        },
+        "holds": {
+          "default": false,
+          "description": "Whether the steps after it wait for the answer. Otherwise the run goes on and the answer corrects it later.",
+          "type": "boolean"
+        },
+        "release": {
+          "default": false,
+          "description": "The stop only asks whether a result may go on, not a matter of taste or direction: an agent may let it\ngo on, recorded as the agent's, and the person can still change that.",
+          "type": "boolean"
+        },
+        "verdicts": {
+          "description": "The verdicts the person may give each item, from the closed list.",
+          "items": {
+            "$ref": "#/$defs/VerdictKind"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "verdicts"
+      ],
+      "type": "object"
+    },
+    "Verdict": {
+      "oneOf": [
+        {
+          "properties": {
+            "verdict": {
+              "const": "keep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "verdict": {
+              "const": "change",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "note": {
+              "type": "string"
+            },
+            "verdict": {
+              "const": "redo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict",
+            "note"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "verdict": {
+              "const": "drop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "verdict": {
+              "const": "skip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdict"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VerdictKind": {
+      "description": "The closed list of verdicts on an item.",
+      "oneOf": [
+        {
+          "const": "keep",
+          "description": "Keep the item as it is. A later round may not change it.",
+          "type": "string"
+        },
+        {
+          "const": "change",
+          "description": "Change it as the person writes.",
+          "type": "string"
+        },
+        {
+          "const": "redo",
+          "description": "Have the step do it again, with the person's note.",
+          "type": "string"
+        },
+        {
+          "const": "drop",
+          "description": "Drop it for good: it does not come back in the run.",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "\"I don't know\": leave it as the agent made it, unjudged.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "reply": {
+      "$ref": "#/$defs/Reply"
+    },
+    "request": {
+      "$ref": "#/$defs/Request"
+    }
+  },
+  "required": [
+    "request",
+    "reply"
+  ],
+  "title": "Jaynes role protocol, version 1",
+  "type": "object"
+}
