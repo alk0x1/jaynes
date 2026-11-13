@@ -160,6 +160,8 @@ struct World {
     /// Every attempt that ended, by (step, attempt), and how many times.
     ended: BTreeMap<(String, u32), u32>,
     seed: u64,
+    /// When set, every state the run reaches, as the Lean model reads it, with the move the core makes from it.
+    cases: Option<Vec<String>>,
 }
 
 impl World {
@@ -173,6 +175,7 @@ impl World {
             usage: Usage::default(),
             ended: BTreeMap::new(),
             seed,
+            cases: None,
         }
     }
 
@@ -199,6 +202,27 @@ impl World {
                 };
                 assert_eq!(folded, after, "seed {}: G16 the record folds to another state", self.seed);
                 self.run = folded;
+                // Every state the core passed through on the way, not only where it stopped: it often takes a
+                // move from a state it leaves in the same decision.
+                if let (Some(cases), Some(pre)) = (self.cases.as_mut(), before.as_ref())
+                    && let Some(c) = gate_case(pre, &input, &out.events) {
+                        cases.push(c);
+                    }
+                if let Some(cases) = self.cases.as_mut() {
+                    let mut state = before.clone();
+                    for e in &out.events {
+                        state = match state {
+                            None => Run::started(e),
+                            Some(mut r) => {
+                                r.apply(e);
+                                Some(r)
+                            }
+                        };
+                        if let Some(r) = state.as_ref() {
+                            cases.push(model_case(r));
+                        }
+                    }
+                }
                 for c in out.commands {
                     if let Command::Ask { question } = &c {
                         self.shown.insert(question.id.clone(), question.clone());
@@ -628,6 +652,9 @@ impl World {
         }
         let answer = Answer { question: q.id.clone(), shown, verdicts, by: by.clone() , context: String::new()};
         let accepted = self.send(Input::Answer { answer: answer.clone() });
+        if let Some(cases) = self.cases.as_mut() {
+            cases.push(answer_case(&run, &answer, accepted));
+        }
         // G9 and G10: only for what was shown, only while it stands; an agent only to let a release go on.
         let i = run.manifest.index(&q.step).expect("step");
         let agent_may = q.kind == QuestionKind::Decision
@@ -1340,4 +1367,225 @@ fn the_person_s_context_reaches_the_steps_after_the_answer_and_changes_no_verdic
     assert_eq!(run.steps[0].round, 0, "context sends nothing back");
     let agent = Answer { context: "x".to_string(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "claude".to_string() } };
     assert!(decide(Some(&run), &Input::Answer { answer: agent }).is_err());
+}
+
+// --- the Lean model (engine/model) decides as the core does --------------------------------------------------
+
+/// The run as the model reads it (`JaynesModel/Model.lean`), with the core's next move from it.
+fn model_case(run: &Run) -> String {
+    use jaynes_core::run::Phase;
+    let mut digests: BTreeMap<Digest, u64> = BTreeMap::new();
+    let mut number = |d: &Digest| -> u64 {
+        let n = digests.len() as u64;
+        *digests.entry(d.clone()).or_insert(n)
+    };
+    let steps: Vec<serde_json::Value> = run
+        .manifest
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let s = &run.steps[i];
+            let status = match s.status {
+                Status::Idle => "idle",
+                Status::Probing => "probing",
+                Status::Running { .. } => "running",
+                Status::Checking { .. } => "checking",
+                Status::AwaitingInput { .. } => "awaiting",
+                Status::Done => "done",
+            };
+            let (question, holds) = match s.question.as_ref().and_then(|id| run.questions.get(id)) {
+                None => ("none", false),
+                Some(q) if q.superseded => ("superseded", q.question.holds),
+                Some(q) => match &q.answer {
+                    None => ("waiting", q.question.holds),
+                    Some(a) if a.by.person() => ("person", q.question.holds),
+                    Some(_) => ("agent", q.question.holds),
+                },
+            };
+            let output = s.done.as_ref().map(|x| number(&x.output));
+            let reads: Vec<serde_json::Value> = s
+                .done
+                .as_ref()
+                .map(|x| x.reads.iter().map(|r| serde_json::json!({"step": run.manifest.index(&r.step).unwrap_or(usize::MAX), "output": number(&r.output)})).collect())
+                .unwrap_or_default();
+            serde_json::json!({
+                "exec": format!("{:?}", d.executor).to_lowercase(),
+                "status": status,
+                "sources": run.sources(i),
+                "output": output,
+                "reads": reads,
+                "stopApplies": d.stop.as_ref().is_some_and(|st| st.from_risk <= run.risk),
+                "question": question,
+                "holds": holds,
+                "skipped": s.skipped == Some(s.round),
+                "irreversible": d.effect.irreversible(),
+                "probed": s.probed,
+                "attemptsLeft": s.spent < d.attempts,
+            })
+        })
+        .collect();
+    let model = serde_json::json!({
+        "steps": steps,
+        "path": run.path(),
+        "stopped": run.finished() || run.blocked() || run.halted || run.delivering.is_some(),
+        "ceilingReached": run.spent.seconds >= run.ceiling.seconds || run.spent.tokens >= run.ceiling.tokens,
+        "deliveredCurrent": run.delivered.as_ref() == Some(&run.delivery().0),
+        "anyOpenQuestion": !run.open_questions().is_empty(),
+    });
+    // The core's first move from this state; a run waiting is put back to running, so its wait shows as a move.
+    let mut fresh = run.clone();
+    if matches!(fresh.phase, Phase::Waiting { .. }) {
+        fresh.phase = Phase::Running;
+    }
+    let index = |s: &str| run.manifest.index(s).unwrap_or(usize::MAX);
+    let expected = match decide(Some(&fresh), &Input::Tick) {
+        Err(_) => "none".to_string(),
+        Ok(out) => {
+            let first = out.events.iter().find(|e| !matches!(e, Event::QuestionSuperseded { .. }));
+            match first {
+                None => "none".to_string(),
+                Some(Event::QuestionOpened { question }) => format!("ask {}", index(&question.step)),
+                Some(Event::StopSkipped { step, .. }) => format!("ask {}", index(step)),
+                Some(Event::StepInvalidated { step, .. }) => format!("invalidate {}", index(step)),
+                Some(Event::Waiting { step: Some(s), .. }) => format!("wait {}", index(s)),
+                Some(Event::Waiting { step: None, .. }) => "wait answers".to_string(),
+                Some(Event::Blocked { .. }) => "block".to_string(),
+                Some(Event::ProbeAsked { step }) => format!("probe {}", index(step)),
+                Some(Event::AttemptStarted { step, .. }) => format!("start {}", index(step)),
+                Some(Event::DeliveryAsked { .. }) => "deliver".to_string(),
+                Some(Event::RunFinished { .. }) => "finish".to_string(),
+                Some(other) => format!("unexpected {}", other.name()),
+            }
+        }
+    };
+    serde_json::json!({"kind": "move", "run": model, "expected": expected}).to_string()
+}
+
+/// An answer as the model judges it (`AnswerCase`), with whether the core took it.
+fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
+    let q = &run.questions[&answer.question];
+    let i = run.manifest.index(&q.question.step).expect("step");
+    let d = &run.manifest.steps[i];
+    let s = &run.steps[i];
+    let valid = answer.verdicts.iter().all(|(id, v)| {
+        q.question.items.iter().any(|x| &x.id == id)
+            && q.question.offered.contains(&v.kind())
+            && !matches!(v, Verdict::Change { text } if text.trim().is_empty())
+    });
+    let case = serde_json::json!({
+        "who": match answer.by { By::Person => "person", By::Rule { .. } => "rule", By::Agent { .. } => "agent" },
+        "decision": q.question.kind == QuestionKind::Decision,
+        "personStep": d.executor == Executor::Person,
+        "input": s.inputs.contains(&q.question.id),
+        "release": d.stop.as_ref().is_some_and(|st| st.release),
+        "braked": run.attention.get(&d.name).is_some_and(|c| c.braked),
+        "superseded": q.superseded,
+        "shownMatches": answer.shown == q.question.shown(),
+        "verdictsValid": valid,
+        "allKeep": answer.verdicts.values().all(|v| *v == Verdict::Keep),
+        "hasContext": !answer.context.trim().is_empty(),
+        "answered": q.answer.is_some(),
+        "revisable": q.question.kind == QuestionKind::Decision && d.executor != Executor::Person
+            && s.question.as_deref() == Some(q.question.id.as_str()) && s.status == Status::Done,
+    });
+    serde_json::json!({"kind": "answer", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
+}
+
+/// A pass through the gate of the checks (`GateCase`), with what the core made of it.
+fn gate_case(pre: &Run, input: &Input, events: &[Event]) -> Option<String> {
+    let Input::ChecksEnded { step, attempt, fix, results } = input else { return None };
+    let i = pre.manifest.index(step)?;
+    let (d, s) = (&pre.manifest.steps[i], &pre.steps[i]);
+    if s.status != (Status::Checking { attempt: *attempt, fix: *fix }) {
+        return None;
+    }
+    let mut ids: BTreeMap<String, u64> = BTreeMap::new();
+    let mut digests: BTreeMap<Digest, u64> = BTreeMap::new();
+    let mut item = |x: &Item| {
+        let n = ids.len() as u64;
+        let id = *ids.entry(x.id.clone()).or_insert(n);
+        let n = digests.len() as u64;
+        let digest = *digests.entry(x.digest.clone()).or_insert(n);
+        serde_json::json!({"id": id, "digest": digest})
+    };
+    let locks: Vec<_> = s.locks.values().map(|(x, _)| item(x)).collect();
+    let dropped: Vec<_> = s.dropped.iter().map(&mut item).collect();
+    let items: Vec<_> = s.pending.as_ref().map(|p| p.items.iter().map(&mut item).collect()).unwrap_or_default();
+    let verdict = |name: &str| results.iter().find(|r| r.check == name).map(|r| &r.verdict);
+    let fails = |kind: CheckKind| d.checks.iter().filter(|c| c.kind == kind).any(|c| matches!(verdict(&c.name), Some(CheckVerdict::Fail { .. })));
+    let blocked = d.checks.iter().any(|c| matches!(verdict(&c.name), None | Some(CheckVerdict::Blocked { .. })));
+    let case = serde_json::json!({
+        "locks": locks, "dropped": dropped, "items": items,
+        "openFails": fails(CheckKind::Open), "hiddenFails": fails(CheckKind::Hidden), "blocked": blocked,
+        "roleStep": d.executor == Executor::Role, "fixesLeft": *fix < d.fixes, "session": s.session.is_some(),
+    });
+    let expected = if events.iter().any(|e| matches!(e, Event::StepDone { .. })) {
+        "done"
+    } else if events.iter().any(|e| matches!(e, Event::FixAsked { .. })) {
+        "fix"
+    } else if events.iter().any(|e| matches!(e, Event::Blocked { fault: Fault::Jaynes, .. })) {
+        "jaynes"
+    } else if events.iter().any(|e| matches!(e, Event::Blocked { fault: Fault::Role, .. })) {
+        "role"
+    } else {
+        "spent"
+    };
+    Some(serde_json::json!({"kind": "gate", "case": case, "expected": expected}).to_string())
+}
+
+fn lake() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let elan = std::path::Path::new(&home).join(".elan/bin/lake");
+    if elan.is_file() { Some(elan) } else { None }
+}
+
+/// The Lean model chooses the same move as the core from every state thousands of random runs reach, so what is
+/// proved of the model (Proofs.lean) holds of the core on those states too.
+#[test]
+fn the_lean_model_decides_as_the_core_does() {
+    let Some(lake) = lake() else {
+        eprintln!("skipped: Lean is not installed (elan); the model is in engine/model");
+        return;
+    };
+    let mut cases = Vec::new();
+    for seed in 1..=800u64 {
+        let seed = seed.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        let mut w = World::new(seed);
+        w.cases = Some(Vec::new());
+        start_random(&mut w, seed);
+        for _ in 0..300 {
+            w.act();
+            if w.run().finished() {
+                break;
+            }
+        }
+        cases.extend(w.cases.take().unwrap_or_default());
+    }
+    let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../model");
+    // The proofs build with the model; JAYNES_MODEL_TARGET=check builds the checker alone, to try a model whose
+    // proofs no longer hold against the core.
+    let target = std::env::var("JAYNES_MODEL_TARGET").unwrap_or_default();
+    let mut build = std::process::Command::new(&lake);
+    build.arg("build").current_dir(&model);
+    if !target.is_empty() {
+        build.arg(&target);
+    }
+    let built = build.output().expect("lake");
+    assert!(built.status.success(), "the model does not build: {}", String::from_utf8_lossy(&built.stdout));
+    use std::io::Write;
+    let mut check = std::process::Command::new(model.join(".lake/build/bin/check"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("check");
+    let mut stdin = check.stdin.take().expect("stdin");
+    let all = cases.join("\n") + "\n";
+    let writer = std::thread::spawn(move || stdin.write_all(all.as_bytes()));
+    let out = check.wait_with_output().expect("check");
+    let _wrote = writer.join();
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    eprintln!("{} states: {}", cases.len(), said.lines().find(|l| l.contains("agreed")).unwrap_or(""));
+    assert!(out.status.success(), "{said}");
 }

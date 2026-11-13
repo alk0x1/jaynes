@@ -130,7 +130,17 @@ version, the protocol and the record's format.
 
 - Plans of runs; merging alone and Undo; build-feature and the design roles; pictures and other content of an item on the page; the Codex adapter; leaves asked in the middle of a turn (the core handles them; Claude
   Code runs in `dontAsk`, so none arise yet).
-- Replaying the Python engine's 53 recorded runs as an oracle; the small model of the core with proofs.
+- Replaying the Python engine's 53 recorded runs as an oracle; proving the Rust code itself (step 6 of the ladder).
+
+## The model with proofs (owner's choice, 2026-11-13)
+
+`engine/model`: the core's rules for its next move, for taking an answer and for the gate of the checks, in Lean 4,
+with proofs of G1, G2, G3, G4, G5, G9, G10, G12, G13 and G14. A test feeds the model every state, answer and gate
+of 800 random runs of the core (84,157 cases) and requires the same decision. Planted defects: three in the model's
+moves (the wait before what cannot be undone, the hold, freshness ignoring what was read), all caught by the
+comparison, the third only once the states inside one decision were compared too; three in answers and the gate,
+caught by the comparison and by the proofs themselves. What stays open: the model takes as given which steps a
+step reads; the comparison covers the states the random runs reach.
 
 ## How it was checked
 

@@ -4,6 +4,9 @@
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
+G1, G2, G3, G4, G5, G9, G10, G12, G13 and G14 are also proved, in Lean, for a model of the core's rules that a
+test compares with the core on every state of 800 random runs (`engine/model`).
+
 ## Order and checks
 
 - **G1.** A run takes the steps of its role in the role's order, one at a time, and a step

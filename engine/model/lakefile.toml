@@ -1,0 +1,10 @@
+name = "jaynes-model"
+version = "0.1.0"
+defaultTargets = ["JaynesModel", "check"]
+
+[[lean_lib]]
+name = "JaynesModel"
+
+[[lean_exe]]
+name = "check"
+root = "Main"
