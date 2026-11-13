@@ -24,6 +24,26 @@ pub struct RoleProgram {
     pub pidfile: Option<PathBuf>,
 }
 
+type Shared = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+
+/// Read a pipe on a thread into a buffer the caller keeps, so it can take what came without waiting for the end.
+fn pump(mut from: impl Read + Send + 'static) -> (std::thread::JoinHandle<()>, Shared) {
+    let into: Shared = Default::default();
+    let kept = into.clone();
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = from.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            if let Ok(mut t) = kept.lock() {
+                t.extend_from_slice(&buf[..n]);
+            }
+        }
+    });
+    (reader, into)
+}
+
 impl RoleProgram {
     pub fn new(dir: &Path, library: &Path) -> RoleProgram {
         let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
@@ -71,18 +91,11 @@ impl RoleProgram {
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(line.as_bytes()).map_err(|e| format!("the role program did not take the request: {e}"))?;
         }
-        let mut stdout = child.stdout.take().ok_or("no output pipe")?;
-        let mut stderr = child.stderr.take().ok_or("no error pipe")?;
-        let reader = std::thread::spawn(move || {
-            let mut s = String::new();
-            let _read = stdout.read_to_string(&mut s);
-            s
-        });
-        let errors = std::thread::spawn(move || {
-            let mut s = String::new();
-            let _read = stderr.read_to_string(&mut s);
-            s
-        });
+        let stdout = child.stdout.take().ok_or("no output pipe")?;
+        let stderr = child.stderr.take().ok_or("no error pipe")?;
+        // read into buffers kept outside the readers: what a check leaves running may hold the pipes open
+        let (reader, out_text) = pump(stdout);
+        let (errors, err_text) = pump(stderr);
         let started = Instant::now();
         loop {
             match child.try_wait() {
@@ -103,8 +116,19 @@ impl RoleProgram {
         if let Some(f) = &self.pidfile {
             let _gone = std::fs::remove_file(f);
         }
-        let out = reader.join().unwrap_or_default();
-        let err = errors.join().unwrap_or_default();
+        // what the call left running in its group ends with it; then read for a moment more, at most
+        let group = |sig: &str| Command::new("kill").args([sig, &format!("-{}", child.id())]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        if group("-0") {
+            let _term = group("-TERM");
+            std::thread::sleep(Duration::from_millis(300));
+            let _kill = group("-KILL");
+        }
+        let until = Instant::now() + Duration::from_secs(3);
+        while !(reader.is_finished() && errors.is_finished()) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let text = |t: &Shared| t.lock().map(|t| String::from_utf8_lossy(&t).into_owned()).unwrap_or_default();
+        let (out, err) = (text(&out_text), text(&err_text));
         let last = out.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
         let reply: Reply = serde_json::from_str(last).map_err(|e| {
             let tail: String = err.chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect();
@@ -190,4 +214,22 @@ pub fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_call_ends_even_when_what_the_role_left_running_holds_its_output() {
+        let dir = std::env::temp_dir().join(format!("jaynes-role-left-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("role"), "#!/bin/sh\nsleep 30 &\npython3 -c 'import os,time; os.setsid(); time.sleep(30)' &\nread line\necho '{}'\n").expect("write");
+        std::fs::set_permissions(dir.join("role"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let started = Instant::now();
+        let said = RoleProgram::new(&dir, &dir).call(Call::Describe {});
+        assert!(said.is_err(), "{said:?}");
+        assert!(started.elapsed() < Duration::from_secs(15), "the call waited {:?}", started.elapsed());
+    }
 }
