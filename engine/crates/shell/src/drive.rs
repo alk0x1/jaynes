@@ -76,6 +76,9 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
             return Ok("now");
         }
     let dir = home.join("runs").join(&run.id);
+    // Abandoning a run stops its agent at once: nothing it would do from here is wanted, and it costs tokens. The
+    // abandon is recorded or left for the run's process first, so that process starts no other turn.
+    let abandon = matches!(input, Input::Abandon { .. });
     let lock = File::create(dir.join("lock")).map_err(|e| e.to_string())?;
     if lock.try_lock().is_ok() {
         store.decide(&run.id, &input)?;
@@ -93,6 +96,9 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         Ok("now")
     } else {
         store.inbox_put(&run.id, &input)?;
+        if abandon {
+            agent::stop_left(&dir.join("agent.pid"));
+        }
         Ok("inbox")
     }
 }
@@ -144,8 +150,13 @@ impl<'a> Driver<'a> {
         let mut queue: VecDeque<Input> = VecDeque::from([first]);
         let mut last = self.store.state(&self.setup.run)?;
         loop {
+            // What came from outside (an answer, a halt, an abandon) goes before what the last turn left to do.
+            let mut came = Vec::new();
             while let Some(input) = self.store.inbox_take(&self.setup.run)? {
-                queue.push_back(input);
+                came.push(input);
+            }
+            for input in came.into_iter().rev() {
+                queue.push_front(input);
             }
             let Some(input) = queue.pop_front() else { break };
             let (state, events, commands) = match decide_and_record(self.store, &self.setup.run, &input) {
@@ -169,7 +180,40 @@ impl<'a> Driver<'a> {
                     }
                 }
             }
+            let mut state = state;
             for c in commands {
+                // What came from outside goes first before an agent's or a role's turn starts: a run abandoned or
+                // halted meanwhile starts no turn, and the turn it had begun counts as interrupted.
+                if matches!(c, Command::RunAgent(_) | Command::RunRole { .. }) {
+                    let mut came = Vec::new();
+                    while let Some(input) = self.store.inbox_take(&self.setup.run)? {
+                        came.push(input);
+                    }
+                    for input in came {
+                        match decide_and_record(self.store, &self.setup.run, &input) {
+                            Ok((now, events, more)) => {
+                                for e in &events {
+                                    narrate(e);
+                                }
+                                state = now;
+                                queue.extend(more.into_iter().filter_map(|m| self.carry_out_quietly(&state, m)));
+                            }
+                            Err(why) => say(&format!("refused: {why}")),
+                        }
+                    }
+                    if state.finished() {
+                        continue;
+                    }
+                    if state.halted {
+                        if let Ok((now, events, _)) = decide_and_record(self.store, &self.setup.run, &Input::Recovered) {
+                            for e in &events {
+                                narrate(e);
+                            }
+                            state = now;
+                        }
+                        continue;
+                    }
+                }
                 if let Some(next) = self.carry_out(&state, c) {
                     queue.push_back(next);
                 }
@@ -256,6 +300,15 @@ impl<'a> Driver<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Commands that came with an input from outside, other than a turn: shown, asked, delivered. A turn waits for
+    /// the loop.
+    fn carry_out_quietly(&mut self, run: &Run, c: Command) -> Option<Input> {
+        match c {
+            Command::RunAgent(_) | Command::RunRole { .. } => None,
+            other => self.carry_out(run, other),
+        }
     }
 
     fn carry_out(&mut self, run: &Run, c: Command) -> Option<Input> {

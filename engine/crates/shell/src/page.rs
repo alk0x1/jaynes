@@ -340,8 +340,11 @@ fn run_html(r: &Run) -> String {
         .enumerate()
         .map(|(i, d)| {
             let s = &r.steps[i];
+            let busy = matches!(s.status, Status::Running { .. } | Status::Checking { .. } | Status::Probing);
             let state = if !path.contains(&i) {
                 "left out at this risk".to_string()
+            } else if r.finished() && busy {
+                "stopped when the run finished".to_string()
             } else if s.skipped == Some(s.round) && s.status == Status::Done {
                 "done · sampled, not asked".to_string()
             } else {

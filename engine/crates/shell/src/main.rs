@@ -375,6 +375,10 @@ fn send(mut s: Store, id: &str, input: Input) -> Result<(), String> {
         }
         Err(_) => {
             s.inbox_put(id, &input)?;
+            // Abandoning stops the agent at once, after the abandon is left for the run's process.
+            if matches!(input, Input::Abandon { .. }) {
+                agent::stop_left(&home().join("runs").join(id).join("agent.pid"));
+            }
             say("recorded for the process that drives the run; it takes it after the work under way");
         }
     }

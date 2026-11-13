@@ -697,3 +697,33 @@ fn a_machine_that_cannot_run_the_tests_stops_the_run_before_any_agent_works() {
     assert_eq!(t.iter().filter(|x| *x == "AttemptStarted").count(), 1, "only the role's own step started: {t:?}");
     assert!(!s.home.join("runs/nopytest/project/agent-ran").exists(), "no agent worked");
 }
+
+#[test]
+fn abandoning_a_run_stops_its_agent_at_once() {
+    let s = scratch("abandon");
+    let mark = s.home.join("mark");
+    std::fs::create_dir_all(&mark).expect("dir");
+    let agent = format!("touch {m}/started; sleep 30; touch {m}/finished", m = mark.display());
+    let role = root().join("roles/small-change");
+    let mut run = Command::new(BIN)
+        .args(["start", "--run", "abandon", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn().expect("start");
+    for _ in 0..100 {
+        if mark.join("started").exists() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let pgid = std::fs::read_to_string(s.home.join("runs/abandon/agent.pid")).expect("noted");
+    let abandoned = Command::new("script")
+        .args(["-q", "/dev/null", BIN, "abandon", "abandon"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .output().expect("abandon");
+    let said = String::from_utf8_lossy(&abandoned.stdout).to_string();
+    let alive = Command::new("kill").args(["-0", &format!("-{}", pgid.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    assert!(!alive, "the agent was stopped at once: {said}");
+    let _done = run.wait();
+    assert!(!mark.join("finished").exists());
+    assert!(types(&events(&s, "abandon")).contains(&"RunFinished".to_string()));
+}
