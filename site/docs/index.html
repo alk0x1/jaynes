@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Get started · Jaynes docs</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">
-<meta name="description" content="Jaynes runs your agents through a method one step at a time, checks each step by code, and calls you only where your judgment is still needed. You install it once. After that you work in Claude Code as usual, and answer in a page on your computer.">
+<meta name="description" content="Jaynes runs your agent through a method one step at a time, checks each step by code, and asks you only where your judgment is still needed. You install it once; after that you work in Claude Code as usual and answer on a page on your computer.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -17,85 +17,41 @@
 <nav aria-label="Site"><a href="../index.html">Home</a><a href="../learn.html">Learn</a><a href="index.html">Docs</a><a href="https://github.com/alk0x1/jaynes">GitHub</a></nav>
 </div></header>
 <div class="wrap docs">
-<aside><nav aria-label="Docs"><a href="index.html" aria-current="page">Get started</a><a href="runs.html">Runs and stops</a><a href="roles.html">Roles that come with Jaynes</a><a href="packages.html">Packages</a><a href="write-a-role.html">Write a role</a><a href="commands.html">Commands</a></nav></aside>
+<aside><nav aria-label="Docs"><a href="index.html" aria-current="page">Get started</a><a href="runs.html">Runs and stops</a><a href="roles.html">Roles</a><a href="write-a-role.html">Write a role</a><a href="commands.html">Commands</a></nav></aside>
 <main><article>
 <h1>Get started</h1>
-<p class="lede">Jaynes runs your agents through a method one step at a time, checks each step by code, and calls you only where your judgment is still needed. You install it once. After that you work in Claude Code as usual, and answer in a page on your computer.</p>
+<p class="lede">Jaynes runs your agent through a method one step at a time, checks each step by code, and asks you only where your judgment is still needed. You install it once; after that you work in Claude Code as usual and answer on a page on your computer.</p>
 <h2 id="install">Install</h2>
 <p>Type this in Claude Code, answer <code>y</code> to add the marketplace, and press Enter to install it for your user:</p>
 <pre><code class="language-text">/plugin install jaynes --marketplace alk0x1/jaynes
 </code></pre>
-<p>The first time your agent uses it, the agent installs the <code>jaynes</code> command with <a href="https://docs.astral.sh/uv/">uv</a>. It needs Python 3.12 or later. Jaynes runs on macOS; on Linux, previews and test runs need <code>JAYNES_UNBOXED=1</code> (see <a href="runs.html#the-box">Runs and stops</a>).</p>
-<p>Without the plugin, from a terminal:</p>
-<pre><code class="language-sh">uv tool install git+https://github.com/alk0x1/jaynes
-jaynes skill    # adds /jaynes to Claude Code
-jaynes          # opens the page
+<p>The first time your agent uses it, the agent installs the <code>jaynes</code> command, built with Rust's <code>cargo</code> (install Rust with <a href="https://rustup.rs">rustup</a> if you have none). Roles written in Python need <code>python3</code>. Jaynes runs on macOS; Linux is next.</p>
+<p>From a terminal, without the plugin:</p>
+<pre><code class="language-sh">cargo install --locked --git https://github.com/alk0x1/jaynes jaynes-shell --root ~/.local
+jaynes add https://github.com/alk0x1/jaynes#engine/roles/small-change
+jaynes add https://github.com/alk0x1/jaynes#engine/roles/fix-bug
+jaynes guide
 </code></pre>
 <h2 id="work-as-usual">Work as usual</h2>
-<p>Talk the change through with your agent and approve the plan: &quot;go ahead&quot;, &quot;do it&quot;. The agent hands it to Jaynes by itself:</p>
-<ul>
-<li>It picks a <strong>role</strong>, the method for that kind of work, such as fix-bug or build-feature, and starts a <strong>run</strong>.</li>
-<li>A small change goes through with your test suite and no question.</li>
-<li>When the run needs you, the agent tells you the question in one line, with a link to it.</li>
-</ul>
-<p>Say &quot;with Jaynes&quot; to send any task through it, or &quot;without Jaynes&quot; for one the agent should make itself. To turn Jaynes off in one project, run this there:</p>
-<pre><code class="language-sh">claude plugin disable jaynes@jaynes --scope local
-</code></pre>
-<h2 id="answer-where-the-run-needs-you">Answer where the run needs you</h2>
-<p>A <strong>stop</strong> is a point in the method where your judgment matters, such as a screen's final look. Most stops do not hold the run: it goes on with the agent's choice and delivers, and your answer, given later, corrects on top. What cannot be undone waits for you.</p>
-<p>You answer in Claude Code's question dialog, when the agent shows you a stop, or on the page, which shows the stop in full. <a href="runs.html">Runs and stops</a> has the answers you can give and what each one does.</p>
-<h2 id="the-page">The page</h2>
-<p>The page lives at <a href="http://127.0.0.1:8740">http://127.0.0.1:8740</a> on your computer. Bookmark it, or type <code>jaynes</code> in a terminal: it starts the page if needed and opens it. Any run starts it too.</p>
+<p>Talk the change through with your agent and approve the plan: &quot;go ahead&quot;, &quot;do it&quot;. The agent hands it to Jaynes by itself: it picks a <strong>role</strong>, the method for that kind of work, and starts a <strong>run</strong> with the whole plan as its request. The run goes on by itself.</p>
+<p>Say &quot;with Jaynes&quot; to send any task through it, or &quot;without Jaynes&quot; for one the agent should make itself.</p>
+<h2 id="answer">Answer where the run needs you</h2>
+<p>A <strong>stop</strong> is a point in the method where your judgment matters. Most stops do not hold the run: it goes on and delivers, and your answer, given later, corrects it. What cannot be undone waits for you. You answer on the page, which Jaynes opens in your browser at <a href="http://127.0.0.1:8750">http://127.0.0.1:8750</a>.</p>
 <table>
-<thead>
-<tr>
-<th>Part</th>
-<th>What it shows</th>
-</tr>
-</thead>
+<thead><tr><th>Part of the page</th><th>What it shows</th></tr></thead>
 <tbody>
-<tr>
-<td>Home</td>
-<td>What holds a run until you answer, the samples the runs went past, what was delivered since your last visit, and what runs now</td>
-</tr>
-<tr>
-<td>New run</td>
-<td>A form to start a run yourself: a role, a task, a project</td>
-</tr>
-<tr>
-<td>Roles</td>
-<td>The packages of roles you have, which projects use which, and how each role's stops are doing</td>
-</tr>
-<tr>
-<td>History</td>
-<td>How many of your agents' tool calls a person approved, read from Claude Code's transcripts</td>
-</tr>
-<tr>
-<td>Log</td>
-<td>Every event, as Jaynes recorded it</td>
-</tr>
-<tr>
-<td>Setup</td>
-<td>The guard, the optional action gate, <code>/jaynes</code>, and the version running</td>
-</tr>
+<tr><td>Waiting for you</td><td>Every open question across your runs, and whether its run waits for it or goes on</td></tr>
+<tr><td>A question</td><td>Its items, each with a sentence and pictures when the role gives them, a verdict per item, one line of context, and what your answer will do, written by Jaynes before you send it</td></tr>
+<tr><td>Let through by an agent</td><td>Results an agent let go on at a stop the role marks as a release; you can still change them</td></tr>
+<tr><td>Runs</td><td>Each run's steps, what it spent and what blocks it, with Halt, Resume, Continue, Raise, Abandon, Undo and Correct</td></tr>
 </tbody>
 </table>
-<p>When a newer Jaynes is out, the page offers to update and restarts itself.</p>
-<h2 id="the-guard">The guard</h2>
-<p>The plugin brings a guard to every Claude Code session where it is on, not only to runs. Before an agent does something in git or GitHub that cannot be undone, Claude Code asks you and says why: <code>git push</code>, <code>git reset --hard</code>, <code>git clean</code>, <code>git branch -D</code>, <code>git tag -d</code>, creating, merging or closing a pull request, and creating, deleting or archiving a repository. It asks instead of blocking, so you approve with one key.</p>
-<p>Repositories whose owner is one of your free owners pass freely: at first your own GitHub user. Change the owners, or turn the guard off, on Setup.</p>
-<h2 id="next">Next</h2>
-<ul>
-<li><a href="runs.html">Runs and stops</a>: what a run does with your project, and what each answer does.</li>
-<li><a href="roles.html">Roles that come with Jaynes</a>: what each one does, step by step.</li>
-<li><a href="packages.html">Packages</a>: add roles of your own or of your team, for one project or for all.</li>
-<li><a href="write-a-role.html">Write a role</a>: your own method, in Python or TOML.</li>
-<li><a href="commands.html">Commands</a>: every <code>jaynes</code> command.</li>
-</ul>
-
-</article>
-<footer class="pager"><span></span><a href="runs.html">Runs and stops &rarr;</a></footer>
-</main>
+<p>Only a browser that opened the page's link with its key answers as you. Anything else, such as an agent calling the page, counts as an agent.</p>
+<h2 id="guard">The guard</h2>
+<p>The plugin also brings a guard to every Claude Code session: before a git or GitHub action that cannot be undone, such as a push, a hard reset or a deleted branch, it asks you.</p>
+<h2 id="guarantees">What Jaynes promises</h2>
+<p>Seventeen sentences, such as &quot;something you kept stays as it is unless you change it&quot;, each tested on thousands of random runs; twelve are proved in Lean for a model of the core that a test compares with the code. <a href="https://github.com/alk0x1/jaynes/blob/main/docs/guarantees.md">Read them</a>.</p>
+</article></main>
 </div>
 </body>
 </html>

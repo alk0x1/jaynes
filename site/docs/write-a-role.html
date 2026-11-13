@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Write a role · Jaynes docs</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">
-<meta name="description" content="A role is your method for one kind of work, written as steps in order. Each step has a required output and, usually, a check: code that must pass before the next step starts. A step can stop for you, and a step can be run by Jaynes instead of the agent, for evidence the agent could invent.">
+<meta name="description" content="A role is a program of its own, in any language, that speaks a fixed protocol with the engine. The engine owns the order of the steps and what each answer does; the role says what its steps are, writes the agent's instructions, does its own steps and judges outputs.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -17,142 +17,49 @@
 <nav aria-label="Site"><a href="../index.html">Home</a><a href="../learn.html">Learn</a><a href="index.html">Docs</a><a href="https://github.com/alk0x1/jaynes">GitHub</a></nav>
 </div></header>
 <div class="wrap docs">
-<aside><nav aria-label="Docs"><a href="index.html">Get started</a><a href="runs.html">Runs and stops</a><a href="roles.html">Roles that come with Jaynes</a><a href="packages.html">Packages</a><a href="write-a-role.html" aria-current="page">Write a role</a><a href="commands.html">Commands</a></nav></aside>
+<aside><nav aria-label="Docs"><a href="index.html">Get started</a><a href="runs.html">Runs and stops</a><a href="roles.html">Roles</a><a href="write-a-role.html" aria-current="page">Write a role</a><a href="commands.html">Commands</a></nav></aside>
 <main><article>
 <h1>Write a role</h1>
-<p class="lede">A role is your method for one kind of work, written as steps in order. Each step has a required output and, usually, a check: code that must pass before the next step starts. A step can stop for you, and a step can be run by Jaynes instead of the agent, for evidence the agent could invent.</p>
-<h2 id="a-role-in-python">A role in Python</h2>
-<p>Save this as <code>count_words.py</code>:</p>
-<pre><code class="language-python">from pydantic import BaseModel
+<p class="lede">A role is a program of its own, in any language, that speaks a fixed protocol with the engine. The engine owns the order of the steps and what each answer does; the role says what its steps are, writes the agent's instructions, does its own steps and judges outputs.</p>
+<h2 id="python">In Python</h2>
+<p>A role is a folder with a <code>role.py</code>. The library comes with Jaynes, written next to its record, and so does <code>jaynes_box</code>, which finds how a project's tests run and runs a project's commands in a box.</p>
+<pre><code class="language-python">from jaynes_role import Fail, Pass, Role, Stop
 
-from jaynes.role import Fail, Pass, StepContext, Witnesses, role
+role = Role("tidy", version="1.0.0")
+role.step("tidy", executor="agent", reach={"project": "write", "write": ["**"], "commands": True},
+          stop=Stop(verdicts=["keep", "redo"]), instructions="Tidy the module the request names.",
+          schema={"type": "object", "required": ["summary"]})
 
+@role.check("tidy", "summary", about="the output says what changed")
+def summary(call):
+    return Pass() if call["output"].get("summary") else Fail("say what changed")
 
-class Topic(BaseModel):
-    topic: str
-    words: int
-
-
-class Sentence(BaseModel):
-    sentence: str
-
-
-def read_topic(ctx: StepContext) -&gt; Topic:
-    return Topic(topic=ctx.task, words=len(ctx.task.split()) + 5)
-
-
-def matches(out: Sentence, needs: Witnesses) -&gt; Pass | Fail:
-    want = needs[TOPIC].value.words
-    got = len(out.sentence.split())
-    return Pass() if got == want else Fail(f&quot;the sentence has {got} words; it must have exactly {want}&quot;)
-
-
-ROLE = role(&quot;count-words&quot;, agent=&quot;claude&quot;, about=&quot;Writes one sentence with an exact number of words.&quot;)
-TOPIC = ROLE.step(&quot;topic&quot;, output=Topic, run_by=read_topic)
-SENTENCE = ROLE.step(&quot;sentence&quot;, output=Sentence, needs=[TOPIC], check=matches,
-                     instructions=&quot;Write one sentence about the topic in inputs/topic.json with exactly &quot;
-                                  &quot;the number of words given there.&quot;)
+if __name__ == "__main__":
+    role.serve()
 </code></pre>
-<p>Jaynes runs the first step itself. Claude Code, with your login, writes the sentence, and the check sends it back until the count is right. <code>about</code> says what the role is for; your agent reads it to pick a role for a request. Use <code>agent=&quot;codex&quot;</code> for Codex.</p>
-<p>Run it from the folder that holds the file:</p>
-<pre><code class="language-sh">jaynes run --role count_words:ROLE --task &quot;lighthouses in fog&quot;
-</code></pre>
-<p>Or start <code>jaynes</code> from that folder and type <code>count_words:ROLE</code> under New run. To run it by its name in a project, put it in a <a href="packages.html#make-a-package">package</a>.</p>
-<h2 id="a-role-in-toml">A role in TOML</h2>
-<p>The steps can live in a TOML file, with the models and checks staying in Python. Save the classes and functions above, without the last three lines, as <code>count_checks.py</code>, and change the check to read its need by name, <code>needs[&quot;topic&quot;]</code>. Then save this as <code>count_words.toml</code>:</p>
-<pre><code class="language-toml">name = &quot;count-words&quot;
-agent = &quot;claude&quot;
-about = &quot;Writes one sentence with an exact number of words.&quot;
-
-[[step]]
-name = &quot;topic&quot;
-output = &quot;count_checks:Topic&quot;
-run_by = &quot;count_checks:read_topic&quot;
-
-[[step]]
-name = &quot;sentence&quot;
-output = &quot;count_checks:Sentence&quot;
-needs = [&quot;topic&quot;]
-check = [&quot;count_checks:matches&quot;]
-stop = { budget = 0.2 }
-question = &quot;Is this sentence right: {out.sentence}?&quot;
-instructions = &quot;Write one sentence about the topic in inputs/topic.json with exactly the number of words given there.&quot;
-</code></pre>
-<pre><code class="language-sh">jaynes run --role count_words.toml --task &quot;lighthouses in fog&quot;
-</code></pre>
-<p>A key Jaynes does not know, a reference that does not import, or a question that names a field the output lacks is refused, with the step it is in.</p>
-<h2 id="stops">Stops</h2>
-<p><code>stop=stop(budget=0.2)</code> makes a step stop for you. The budget is the share of answers you would change that the stop may have once it asks less: with 0.2 it asks one time in ten after 20 clean deliveries in a row. <code>stop(budget=0.05, sampled=False)</code> always asks. Most stops show the output and the run goes on; <code>stop(0.2, waits=True)</code> holds the run until you answer, for a choice that is yours to make, such as a look among three. It always asks, and only you answer it. <a href="runs.html#a-stop-asks-less-as-it-proves-right">Runs and stops</a> has how a stop earns that.</p>
-<h2 id="show-the-output-as-decisions">Show the output as decisions</h2>
-<p><code>decides</code> turns the stop into a list of decisions instead of a block of output. You reject the line that is wrong, with a sentence, and keep the rest: only what you rejected is redone, and what you kept is locked, so the agent cannot change it in the next round. Give each decision an id that stays the same across rounds.</p>
-<pre><code class="language-python">def decisions(o: Look) -&gt; list[Decision]:
-    return [Decision(&quot;theme&quot;, &quot;Theme&quot;, o.theme),
-            Decision(&quot;accent&quot;, &quot;Accent colour&quot;, o.accent, after=(&quot;theme&quot;,)),
-            Decision(&quot;text&quot;, &quot;Text face&quot;, o.text)]
-
-LOOK = ROLE.step(&quot;look&quot;, output=Look, stop=stop(0.2, waits=True), decides=decisions)
-</code></pre>
-<p>Change on a locked line opens it again. <code>after</code> says what a decision follows from: rejecting the theme unlocks the accent too, so the agent may change it to fit.</p>
-<p>A line has two more answers. Drop removes it for good: it never comes back in the run, and every later step is told so. Start from keeps it as the base to change a lot. Where the stop also lets you choose, dropping what you never want chooses what is left. Give a decision <code>pictures=</code> to show it, such as the screen a look was drawn on.</p>
-<h2 id="ask-a-few-questions-before-the-work">Ask a few questions before the work</h2>
-<p><code>ROLE.interview(questions)</code> makes the run's first step an interview. An agent reads the request and the project, marks the answer it would bet on for each question and says why, and may add a question only you can answer. You answer them all on one screen, by picking an option or writing your own, and the run goes on without you; every later step is told your answers.</p>
-<pre><code class="language-python">ROLE = role(&quot;visual-identity&quot;)
-ASK = ROLE.interview([
-    Question(&quot;theme&quot;, &quot;Which theme for the work screen?&quot;, (&quot;Dark&quot;, &quot;Light&quot;, &quot;Both&quot;)),
-    Question(&quot;work&quot;, &quot;Should it look like a work tool?&quot;, (&quot;Either way&quot;, &quot;I want it to&quot;, &quot;I want it not to&quot;)),
-])
-</code></pre>
-<p>Word each question for someone who does not know the role's vocabulary, and give two to five options, or none for an open question.</p>
-<h2 id="tell-the-person-what-each-step-does">Tell the person what each step does</h2>
-<p><code>about</code> on a step is one sentence for the person: what the step does and, at a stop, what they decide there and what it changes. A stop shows it under its question, and the run's steps in one line that opens into what each does; the role's page lists the steps with who does each. Keep it short: who does the step is shown beside it.</p>
-<pre><code class="language-python">PICK = ROLE.step(&quot;pick&quot;, output=Looks, needs=[LOOKS], stop=stop(0.2, waits=True),
-                 about=&quot;Only the colours and fonts are kept; the screen is just a sample.&quot;)
-</code></pre>
-<p>Without it, the person sees only the step's name. It is not shown to the agent and changes no fingerprint, so you can write it or change it at any time.</p>
-<p><code>by</code> names who of your team does an agent's step, such as <code>by=&quot;design director&quot;</code>; the page shows it in place of &quot;agent&quot;. A role can be a conversation between several specialists, each step by one of them: one makes, the next reviews and sends the work back with what it found (<code>back=Back(to=MAKE, when=...)</code>), and you answer at the stops. Say who each one is in its instructions; <code>by</code> is only what the page shows.</p>
-<h2 id="steps-that-act-on-the-world">Steps that act on the world</h2>
-<p>A step Jaynes runs that acts on the world declares it, with <code>effect</code>. A step with <code>effect=&quot;irreversible&quot;</code>, such as booking, paying or sending, may only follow steps with floor stops, so you approve its whole payload. It runs once, with <code>ctx.idempotency_key</code> for the service it calls, and a run that stopped while it was running is blocked instead of running it again.</p>
-<h2 id="tools-the-agent-can-call">Tools the agent can call</h2>
-<p>The agent of a step works in a closed box: no internet and no tools but its own files. <code>web=True</code> lets it read pages as text. When it needs more, the role gives it tools: plain functions that Jaynes runs outside the box while the agent works, recording every call.</p>
-<pre><code class="language-python">from pathlib import Path
-from jaynes.browser import photograph
-from jaynes.role import ToolContext, role
-
-def capture(ctx: ToolContext, url: str) -&gt; list[object]:
-    &quot;&quot;&quot;A picture of the web page at url. Only pages on the public internet.&quot;&quot;&quot;
-    out = ctx.folder / &quot;ref-1.jpg&quot;
-    return [photograph(url, out), out]
-
-ROLE = role(&quot;look-alike&quot;)
-ROLE.step(&quot;direction&quot;, output=Direction, tools=[capture],
-          instructions=&quot;Look at every link the task names with capture first.&quot;)
-</code></pre>
-<p>A tool's first argument is the <code>ToolContext</code>: the run, the step, the task, what the person said in the run so far, and <code>folder</code>, where it leaves files. Its other arguments are a <code>str</code>, <code>int</code>, <code>float</code> or <code>bool</code>, and its docstring is what the agent is told it does. It returns text, a <code>Path</code> to a picture in <code>folder</code>, which the agent sees, or a list of both. The pictures stay among the step's files, so the stop shows you what the agent saw. <code>jaynes.browser.photograph</code> takes a picture of a page on the public internet, and refuses this computer and its network.</p>
-<p>A picture a stop shows can link the page it was drawn from: <code>Picture(step, &quot;direction-1.png&quot;, page=&quot;direction-1.html&quot;)</code>. The page opens in a new tab, where it runs no script and reaches nothing.</p>
-<h2 id="a-role-that-plans">A role that plans</h2>
-<p>A role whose step outputs <code>jaynes.plan.Plan</code> plans a request: its runs, each with a role, a task, the runs it builds on (<code>after</code>) and, when a team planned it, the <code>specialist</code> who does it; and why. The step sees the roles the project can use. When its run delivers, Jaynes checks the plan and starts it by itself.</p>
-<pre><code class="language-python">from jaynes.plan import Plan
-from jaynes.role import role, stop
-
-ROLE = role(&quot;direction&quot;, about=&quot;Plans a request: which roles, in what order, and why.&quot;)
-PLAN = ROLE.step(&quot;plan&quot;, output=Plan, project=&quot;read&quot;, stop=stop(0.2),
-                 instructions=&quot;Plan the request with the roles you were given.&quot;)
-</code></pre>
-<h2 id="check-a-role-before-it-runs">Check a role before it runs</h2>
-<p>Before any agent works, Jaynes checks the role and refuses it with a list of what to fix:</p>
-<ul>
-<li>a check, question or executor that reads a step its step does not need, or a step of another role;</li>
-<li>a check whose first argument is annotated with another step's output type;</li>
-<li>a step, other than the last, whose output no later step needs and no stop shows, unless it changes the project or acts.</li>
-</ul>
-<p><code>jaynes check count_words:ROLE</code> runs the same check alone.</p>
-<h2 id="what-a-role-may-import">What a role may import</h2>
-<p>A role may import these parts of Jaynes, the role API, version 1: <code>jaynes.role</code>, <code>jaynes.plan</code>, <code>jaynes.proof</code>, <code>jaynes.project</code>, <code>jaynes.runners</code>, <code>jaynes.suite</code>, <code>jaynes.sandbox</code>, <code>jaynes.screens</code>, <code>jaynes.browser</code> and <code>jaynes.inputs</code>. A package says which version it is written for, and Jaynes refuses one written for another.</p>
-<p>The roles that come with Jaynes are the longest examples: they are in <a href="https://github.com/alk0x1/jaynes/tree/main/packages">packages/</a> on GitHub.</p>
-
-</article>
-<footer class="pager"><a href="packages.html">&larr; Packages</a><a href="commands.html">Commands &rarr;</a></footer>
-</main>
+<p><code>jaynes conformance ./tidy</code> checks it; <code>jaynes add ./tidy</code> installs it.</p>
+<h2 id="steps">Steps</h2>
+<table>
+<thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>executor</code></td><td><code>agent</code> (Claude Code does it), <code>role</code> (the role's own function, <code>run=</code>, for evidence an agent could fake) or <code>person</code> (a question over the steps it needs)</td></tr>
+<tr><td><code>needs</code></td><td>Earlier steps whose outputs it reads</td></tr>
+<tr><td><code>reach</code></td><td><code>project</code>: <code>none</code>, <code>read</code> or <code>write</code>; <code>write</code>: the paths it may change (<code>!</code> keeps some out); <code>network</code>: <code>web</code>; <code>commands</code></td></tr>
+<tr><td><code>effect</code></td><td><code>none</code>, <code>confined</code>, <code>compensable</code> or <code>irreversible</code>; a step that cannot be undone waits for every answer it rests on and gets a key that makes a repeat count once</td></tr>
+<tr><td><code>stop</code></td><td><code>Stop(verdicts, holds, from_risk, release, budget, audit_rate)</code>: what the person may answer, whether the run waits, from which risk it asks, whether an agent may let it go on, and the error budget that lets it ask a sample</td></tr>
+<tr><td><code>from_risk</code></td><td><code>high</code> leaves the step out of the short path</td></tr>
+<tr><td><code>session</code></td><td><code>continue</code> goes on in the session of the agent step before it</td></tr>
+<tr><td><code>hidden</code></td><td>Proof the maker never sees: the step reads only the request and the project as it was</td></tr>
+<tr><td><code>attempts</code>, <code>fixes</code></td><td>Attempts the agent may spend in a round, and fixes in place per attempt</td></tr>
+</tbody>
+</table>
+<h2 id="checks">Checks and items</h2>
+<p><code>@role.check(step, name, kind="open"|"hidden", about=..., reads=[...])</code> judges a step's output and returns <code>Pass()</code>, <code>Fail(*reasons, detail=...)</code> or <code>Blocked(reason)</code> when it cannot judge. The reasons go to the agent; the detail only to you. A hidden check may read a hidden step, such as the cases a proof runs.</p>
+<p><code>@role.items(step)</code> lists what you are shown of an output: <code>{"id", "label", "content", "detail", "pictures"}</code>, pictures being image files in the step's copy of the project. Without it the whole output is one item.</p>
+<p><code>Role(name, version, delivery="merge")</code> makes the run merge its delivery into your branch.</p>
+<h2 id="protocol">The protocol</h2>
+<p>For each call, the engine starts the role's program, writes one request as a line of JSON and reads one reply: <code>hello</code>, <code>describe</code>, <code>prompt</code>, <code>execute</code>, <code>check</code> and <code>items</code>. Any language that does that is a role; the schema is <a href="https://github.com/alk0x1/jaynes/blob/main/engine/protocol/role-protocol-1.schema.json">role-protocol-1.schema.json</a>, and the conformance suite says whether a role answers it as it should.</p>
+</article></main>
 </div>
 </body>
 </html>

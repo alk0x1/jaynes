@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Runs and stops · Jaynes docs</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">
-<meta name="description" content="A run is one task carried out by one role. Jaynes gives Claude Code one step of the role at a time, checks what the step made by code, and starts the next step only when the check passes. The agent can write that step&#x27;s output and nothing else.">
+<meta name="description" content="What a run does with your project, what it costs, where it asks you, and what each answer does.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -17,96 +17,43 @@
 <nav aria-label="Site"><a href="../index.html">Home</a><a href="../learn.html">Learn</a><a href="index.html">Docs</a><a href="https://github.com/alk0x1/jaynes">GitHub</a></nav>
 </div></header>
 <div class="wrap docs">
-<aside><nav aria-label="Docs"><a href="index.html">Get started</a><a href="runs.html" aria-current="page">Runs and stops</a><a href="roles.html">Roles that come with Jaynes</a><a href="packages.html">Packages</a><a href="write-a-role.html">Write a role</a><a href="commands.html">Commands</a></nav></aside>
+<aside><nav aria-label="Docs"><a href="index.html">Get started</a><a href="runs.html" aria-current="page">Runs and stops</a><a href="roles.html">Roles</a><a href="write-a-role.html">Write a role</a><a href="commands.html">Commands</a></nav></aside>
 <main><article>
 <h1>Runs and stops</h1>
-<p class="lede">A run is one task carried out by one role. Jaynes gives Claude Code one step of the role at a time, checks what the step made by code, and starts the next step only when the check passes. The agent can write that step's output and nothing else.</p>
-<h2 id="a-run-works-on-copies">A run works on copies</h2>
-<p>Each step works on a copy of your project's last commit, so uncommitted changes are not in the run, and your checkout is untouched while it works. When the run delivers, the accepted changes are a branch, <code>jaynes/&lt;run&gt;</code>.</p>
-<p>Jaynes always runs the agent on the same model: Claude Opus at high effort, unless you set <code>JAYNES_CLAUDE_MODEL</code> or <code>JAYNES_CLAUDE_EFFORT</code>. A turn another model answers does not count. A role can run Codex instead, with <code>agent=&quot;codex&quot;</code>.</p>
-<h2 id="stops">Stops</h2>
-<p>A stop shows a question and the evidence behind it: the step's output, the checks it passed, pictures of the screen when there is a preview, and what the agent spent.</p>
-<p>Most stops do not hold the run. It goes on with the agent's choice and delivers its branch, and your answer, given later, corrects on top: only the steps that used what changed run again. These wait for your answer instead:</p>
+<p class="lede">What a run does with your project, what it costs, where it asks you, and what each answer does.</p>
+<h2 id="a-run">A run</h2>
+<p>A run takes the steps of its role in order, one at a time. Each step that works on the project gets its own copy: your repository at the commit it had, with the changes of the earlier steps it uses. Your working tree is never touched. At the end the run's changes are the branch <code>jaynes/&lt;run&gt;</code> in your repository; a role that delivers by merge also merges it into the branch you had checked out, only over a clean checkout and never pushing, and Undo reverts it.</p>
+<p>An agent's step runs Claude Code with settings Jaynes writes from what the step may reach: which files it may change, whether it may run commands or read the web. Jaynes does not claim more than those settings give: Claude Code's sandbox covers its shell commands. What the agent asks beyond them comes to Jaynes: reading inside the project is granted by a rule, anything else is a question for you, which the agent waits for.</p>
+<h2 id="checks">Checks</h2>
+<p>A step's output reaches the next step only after its checks pass.</p>
 <ul>
-<li>a step that does something that cannot be undone, such as sending or paying, waits for every stop before it;</li>
-<li>a change to a file that runs outside the box (see <a href="#files-that-run-later">Files that run later</a>);</li>
-<li>an output that would end the run early, such as fix-bug finding no bug a test can show;</li>
-<li>a stop the role marks as one that waits for your choice, such as a look among three;</li>
-<li>a stop that was wrong too often lately (see <a href="#a-stop-asks-less-as-it-proves-right">A stop asks less as it proves right</a>).</li>
+<li>An <strong>open</strong> check, such as the project's suite or the form of the output, is listed for the agent; when it fails, the reasons go back to the same session to be fixed in place, and no attempt is spent.</li>
+<li>A <strong>hidden</strong> check, such as cases written from your request alone, is never shown to the agent; when it fails, the agent gets only its sentence, and the attempt is spent.</li>
+<li>A fault of Jaynes or of the machine (a box that refuses, a program that does not start, a check that cannot judge) never spends an attempt: the run stops and says so.</li>
 </ul>
-<p>A stop the role marks as a floor asks on every run and only you answer it, but the run goes on meanwhile, unless it is one of the above.</p>
-<h2 id="your-answers">Your answers</h2>
+<h2 id="risk">Risk and cost</h2>
+<p>A run starts at low risk unless its role has a step that cannot be undone, or you raise it. Rules in code raise it when the change grows past 30 lines or 5 files, or touches a file that runs later outside any box (CI, hooks, package scripts, agents' settings); then the steps of the full path run too. Nothing lowers it. Every run has a ceiling, said when it starts: 20 minutes and 2 million tokens at low risk, 2 hours and 10 million at high. No attempt starts past it; you can raise it on the run's page.</p>
+<h2 id="answers">Your answers</h2>
+<p>A question shows items, and you give each a verdict; an item you leave unmarked is kept.</p>
 <table>
-<thead>
-<tr>
-<th>Answer</th>
-<th>What happens</th>
-<th>How it counts</th>
-</tr>
-</thead>
+<thead><tr><th>Verdict</th><th>What it does</th></tr></thead>
 <tbody>
-<tr>
-<td>Accept</td>
-<td>The run goes on with the output as it is</td>
-<td>Right, once the delivery holds</td>
-</tr>
-<tr>
-<td>Change</td>
-<td>Your edited output takes the agent's place, and is checked again</td>
-<td>An error</td>
-</tr>
-<tr>
-<td>Return, with a note</td>
-<td>The step runs again with your note, on top of its output; or an earlier step you pick does, with every step after it</td>
-<td>An error</td>
-</tr>
-<tr>
-<td>Context, with a note</td>
-<td>The step runs again with what the agent could not have known</td>
-<td>Not counted</td>
-</tr>
-<tr>
-<td>Choose</td>
-<td>The items you picked, in your order, take the place of the output</td>
-<td>Right, once the delivery holds</td>
-</tr>
+<tr><td>Keep</td><td>The item stays as it is: no later round of the step may change it</td></tr>
+<tr><td>Change</td><td>The step runs again to change it as you wrote</td></tr>
+<tr><td>Redo</td><td>The step does it again, with your note</td></tr>
+<tr><td>Drop</td><td>The item does not come back in the run</td></tr>
+<tr><td>I don't know</td><td>It stays as it was made, and is not judged</td></tr>
 </tbody>
 </table>
-<p>A return at a step Jaynes runs itself, such as one that only lays out the agent's work for you to choose, goes to the agent's step before it, since only an agent reads your note. When that step reviews another one, such as a director's critique of a designer's work, the return goes to the work it reviews, and the review runs again after it. What you say at one step reaches every later step of the run too: ask for dark mode once, and the steps after it know.</p>
-<p>Where a step shows its output as decisions, you reject only the line that is wrong, with a sentence; Accept becomes Send, only that line is redone, and the rest stays locked against the agent. Change on a locked line opens it again.</p>
-<p>Under any stop, Why? asks a Claude that reads the step, what it was told, what it delivered, what was said in the run, and answers in a few sentences. It cannot edit, run commands or read the web, and it changes nothing in the run.</p>
-<p>In Claude Code's dialog you Accept or Return with a note. The page has all five. At a floor, the A key accepts only when you press it twice within two seconds, so a stray key does not let it through.</p>
-<p>Only you answer as a person. The page takes answers only from the browser it opened with its link. An agent's answer, through <code>jaynes answer</code> or the API, lets a stop that holds its run go on, but it never counts as right, so an agent cannot make a stop ask less by accepting its own work.</p>
-<h2 id="a-stop-asks-less-as-it-proves-right">A stop asks less as it proves right</h2>
-<p>An accept counts as right once its delivery went 7 days with nobody correcting it. A change or a return counts as an error at once, and so does a correction found later.</p>
-<p>A stop that keeps proving right becomes sampled: it asks one time in ten, at random. With a budget of 20%, the error rate the stop may have, that takes 20 clean deliveries in a row; with 10%, 43; with 5%, 88. If the true rate at which you would change the stop's output is at or above its budget, the chance it ever becomes sampled is at most 5%.</p>
-<p>Two errors among a stop's last ten outcomes brake it: it asks on every run, and the run waits for you there, until the deliveries after the brake prove it right again.</p>
-<h2 id="merging-by-itself">Merging by itself</h2>
-<p>build-feature and fix-bug prove their work with checks written from your request alone, before the work, which the agent that makes the change never sees. Jaynes runs them against the changed project. When every one passes, Jaynes merges the run's branch into the branch you started from, only over a clean checkout, and never pushes. A return merges its correction on top. Undo, on the run's page, reverts the merge.</p>
-<p><strong>Dismiss</strong>, at the bottom of any run's page, ends a run that has not finished: what it has not delivered is dropped and its open questions close. If the run is working, it ends when the step under way ends, and nothing after it runs. What it already merged stays; Undo reverts that. In a plan, the runs after it do not start.</p>
-<p><strong>Halt all</strong>, in the page's sidebar, stops every run before its next step, and every merge, until you press Resume. A turn already under way finishes first.</p>
-<h2 id="corrections-after-delivery">Corrections after delivery</h2>
-<p>When you ask your agent to fix something a run delivered, the agent first records it with <code>jaynes correct</code>: the run, the step whose output was wrong, and the kind of wrong.</p>
-<ul>
-<li><strong>error</strong>: wrong by what was already known: the task, the code, or a preference already written down.</li>
-<li><strong>preference</strong>: a new preference nobody had written.</li>
-<li><strong>info</strong>: the world changed, or a new fact appeared.</li>
-</ul>
-<p>Only an error counts against the stop that let it through. You can change the kind on the run's page.</p>
-<h2 id="plans">Plans</h2>
-<p>A request that needs more than one role, such as a new look and then a screen in it, becomes a plan of runs. Each run starts once the runs it builds on delivered, from where their delivery landed, and the page shows the whole plan. A role can plan a request too: Jaynes checks the plan it delivers, and starts it by itself. On the request's page, <strong>Drop</strong> takes a run out of the plan before it starts, when no other run builds on it; the request then delivers without it. See <a href="write-a-role.html#a-role-that-plans">Write a role</a>.</p>
-<h2 id="previews">Previews</h2>
-<p>With a preview command, such as <code>npm run dev -- --port {port}</code>, each stop shows the project before and after the change. The agent tells Jaynes the command when your project has a dev server; on New run it is a field.</p>
-<p>The preview runs the agent's changes, so on macOS it runs in a box: it writes only to its copy, cannot read where secrets live, and reaches no network but the local ports you list, such as a backend it needs.</p>
-<h2 id="the-box">The box</h2>
-<p>Your test suite also runs in the box. It reaches no internet, only local ports, so tests that start servers or use a local database work. The suite must pass at your last commit with its dependencies already installed (<code>node_modules</code>, <code>.venv</code>).</p>
-<p>The box needs macOS. Elsewhere, previews and test runs refuse to start, unless you accept running them unboxed with <code>JAYNES_UNBOXED=1</code>.</p>
-<h2 id="files-that-run-later">Files that run later</h2>
-<p>Some files run later, outside any box: agent and editor settings (<code>.claude</code>, <code>.vscode</code>, <code>CLAUDE.md</code>), git attributes and hooks, <code>.envrc</code>, <code>package.json</code>, <code>pyproject.toml</code> and CI workflows. A step that changes the project lists what it may change (<code>may_change</code> in the role). Even then, a change to one of these files is refused in a step without a stop, and turns a step's stop into a floor that shows you the file's diff.</p>
-
-</article>
-<footer class="pager"><a href="index.html">&larr; Get started</a><a href="roles.html">Roles that come with Jaynes &rarr;</a></footer>
-</main>
+<p>The line of context changes no verdict: your words go to the agents that work after the answer. When an answer sends a step back, that step runs again on top of what it made, and the steps that used it run again only if it comes out different. Before you send, the page says what the answer will do; Jaynes does what it said.</p>
+<p>A run does not wait at a stop unless the role says so; it goes on and delivers, and the run finishes once you have answered. A step that cannot be undone waits for every answer it rests on.</p>
+<h2 id="agents">What an agent may answer</h2>
+<p>Only you answer questions of taste or direction. At a stop the role marks as a release, such as small-change's &quot;this turned out bigger than a small change&quot;, an agent may let the result go on as it is; that counts as the agent's, locks nothing, and nothing that cannot be undone rests on it.</p>
+<h2 id="sampled">Stops that ask less</h2>
+<p>A stop with an error budget asks only one run in ten once its record proves, by a test that holds however often it is checked, that its error rate is below the budget. What counts is what happened after delivery: an accept counts as right only after its delivery held 7 days, and a send-back or a correction counts as an error at once. Two errors among its last ten outcomes make it ask on every run and hold the run again.</p>
+<h2 id="record">The record</h2>
+<p>Everything a run does is an entry in a record in <code>~/.jaynes/engine</code>, each chained to the one before by its fingerprint, so a change to any past entry shows (<code>jaynes verify</code>), and no run goes on over a record that does not hold. After a crash, the next process stops what the dead one left running and goes on; an attempt cut short is not counted against the agent. A run stays on the version of its role and of the engine it started with.</p>
+</article></main>
 </div>
 </body>
 </html>

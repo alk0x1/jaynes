@@ -363,7 +363,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
       <div class="head">
         <span class="label">1 · Method</span>
         <h3>The agent cannot skip a step.</h3>
-        <p>A role is a sequence of steps, each with a required output and a check. Jaynes runs Claude Code for <b>one step at a time</b>, with write access to that step's output and nothing else. Evidence the agent could invent, like the references captured from the web, is produced by Jaynes.</p>
+        <p>A role is a sequence of steps, each with a required output and its checks. Jaynes runs Claude Code for <b>one step at a time</b>, in a copy of your project made for that step, with settings Jaynes writes from what the step may reach. A step's output reaches the next only after its checks pass, and a check the role marks hidden is proof the agent never sees.</p>
       </div>
       <div class="card stage">
         <div class="stage-top"><span>role <b>screen-design</b> · task <b>People screen</b> · agent <b>claude</b></span><button class="btn solid" type="button" id="m-run">Run the method</button></div>
@@ -431,16 +431,16 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
     <article class="layer" data-layer="3" id="safety">
       <div class="head">
         <span class="label">4 · Safety · works today</span>
-        <h3>Every action goes through a gate.</h3>
-        <p>Each tool call is classified before it runs. Reading runs. Pushing to a remote, deleting history or sending a message <b>never runs without you</b>. Everything else is audited by sample, with the same guarantee. This layer works today with Claude Code.</p>
+        <h3>Nothing that cannot be undone runs without you.</h3>
+        <p>What the agent asks beyond its step's settings comes to Jaynes: reading inside the project is granted by a rule, anything else is yours, on the page. A step that cannot be undone <b>waits for every answer it rests on</b>, and the guard in every Claude Code session asks before a push or a deleted branch.</p>
       </div>
       <div class="card stage">
-        <div class="stage-top"><span><b>jaynes</b> · action gate</span><span class="chip green">running</span></div>
+        <div class="stage-top"><span><b>jaynes</b> · leaves and guard</span><span class="chip green">running</span></div>
         <div class="log" style="font-size:13px">
-          <div><time>11:02:14</time><span><code>Read work/object-map.json</code> <span class="chip green">runs · read</span></span></div>
-          <div><time>11:02:31</time><span><code>Edit src/screens/People.tsx</code> <span class="chip blue">audit · asks you</span></span></div>
-          <div><time>11:03:05</time><span><code>uv run pytest -q</code> <span class="chip plain">runs · run_code</span></span></div>
-          <div><time>11:04:48</time><span><code>git push origin main</code> <span class="chip red">denied · floor</span></span></div>
+          <div><time>11:02:14</time><span><code>Read src/screens/People.tsx</code> <span class="chip green">granted · a rule</span></span></div>
+          <div><time>11:02:31</time><span><code>Write ../notes/plan.md</code> <span class="chip blue">outside the project · asks you</span></span></div>
+          <div><time>11:03:05</time><span><code>push the release tag</code> <span class="chip amber">waits for your answer</span></span></div>
+          <div><time>11:04:48</time><span><code>git push origin main</code> <span class="chip red">guard · asks you</span></span></div>
         </div>
       </div>
     </article>
@@ -454,7 +454,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
     <p>Three items are waiting. Each stop keeps its own evidence, computed with the same test Jaynes uses. "Moments of use" is three accepts away from being sampled.</p>
   </div>
   <div class="card" style="overflow:hidden">
-    <div class="app-top"><span><b>jaynes review</b> · 127.0.0.1:8740</span><span id="q-count">3 waiting</span><span class="live">● 4 agents running</span></div>
+    <div class="app-top"><span><b>jaynes page</b> · 127.0.0.1:8750</span><span id="q-count">3 waiting</span><span class="live">● 4 agents running</span></div>
     <div class="cols"><div class="qlist" id="q-list"></div><div class="qdetail" id="q-detail" aria-live="polite"></div><div class="qmeta" id="q-meta"></div></div>
     <div class="toast" id="q-toast">Accept or change an answer and watch the stop earn, or lose, its autonomy.</div>
   </div>
@@ -468,6 +468,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
       <h2 id="g-h" style="font-size:clamp(32px,4.2vw,50px);line-height:1.06">A stop is sampled only when the evidence says so.</h2>
       <p>If the real rate at which you would change a stop's answer is at or above its budget, the chance Jaynes ever makes that stop sampled is <b>at most 5%</b>, no matter how often it checks.</p>
       <p>The usual shortcut, recomputing a confidence bound after every answer and switching the first time it fits, quietly breaks that promise. Run both and see.</p>
+      <p>It is one of seventeen sentences the engine promises, each tested on thousands of random runs; twelve are proved in Lean for a model of the engine's core that a test compares with the code. <a href="https://github.com/alk0x1/jaynes/blob/main/docs/guarantees.md">Read them</a>.</p>
     </div>
     <div class="card simu">
       <div class="stage-top"><span>true change rate <b>5%</b> · budget <b>5%</b> · up to <b>2,000</b> answers</span><button class="btn solid" type="button" id="s-run">Run 1,000 simulations</button></div>
@@ -476,7 +477,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
         <div class="barrow"><div class="r"><span>Jaynes, anytime-valid test</span><b id="s-any">0.0%</b></div><div class="btrack"><div class="bf any" id="s-ab" style="width:0%"></div><div class="promise" style="left:calc(16.67% - 1px)"></div></div></div>
       </div>
       <div class="foot"><span>share of runs where a stop that should keep asking was wrongly sampled · scale to 30%</span><span>white line: the 5% promise</span></div>
-      <div class="foot"><span id="s-status">In 4,000 runs offline: 27.4% against 3.7%. Run it here, or with <code>jaynes simulate</code>.</span></div>
+      <div class="foot"><span id="s-status">In 4,000 runs offline: 27.4% against 3.7%. Run it here; the engine's tests run it on every change.</span></div>
     </div>
   </div>
 </section>
@@ -508,9 +509,9 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
 <pre class="code"><span class="c"># in Claude Code, once</span>
 /plugin install jaynes --marketplace alk0x1/jaynes
 
-<span class="c"># or from a terminal, Python 3.12 or later, then open the page</span>
-uv tool install git+https://github.com/alk0x1/jaynes
-jaynes</pre>
+<span class="c"># or from a terminal, with Rust's cargo</span>
+cargo install --locked --git https://github.com/alk0x1/jaynes jaynes-shell --root ~/.local
+jaynes guide</pre>
       <ol class="steps">
         <li>
           <h3>Work as usual</h3>
@@ -518,11 +519,11 @@ jaynes</pre>
         </li>
         <li>
           <h3>Bring your team's roles</h3>
-          <p>Roles come in packages, as libraries do for npm. Software and design come with Jaynes; add a folder or a git repository of yours on the page, under Roles, or ask your agent. <a href="docs/packages.html">Packages</a></p>
+          <p>A role is a program of its own that speaks a fixed protocol with the engine, in any language. small-change and fix-bug come with Jaynes; <code>jaynes add</code> installs yours from a folder or git, once it passes the conformance suite. <a href="docs/write-a-role.html">Write a role</a></p>
         </li>
         <li>
-          <h3>Watch the method hold</h3>
-          <p>Start the demo from New run. A scripted agent works through a screen-design role, a check sends one step back, and the run stops for your answer. No API key, no quota.</p>
+          <h3>Answer on the page</h3>
+          <p>Where a run needs you, the page opens at 127.0.0.1:8750: a verdict per item, with its pictures, and a line of context in your words. The run goes on while you look. <a href="docs/runs.html">Runs and stops</a></p>
         </li>
       </ol>
     </div>
@@ -530,17 +531,15 @@ jaynes</pre>
       <table>
         <thead><tr><th>Part</th><th>State</th></tr></thead>
         <tbody>
-          <tr><td>Step conductor for Claude Code (Codex also runs): checks, retries, resume after a crash</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Real projects: steps on copies, previews before and after, a branch at the end</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Runs that go on past a stop: you answer later, and a return corrects on top</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>Core and its seventeen guarantees; twelve proved in Lean and compared with the code</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>Claude Code, one step at a time: per-step settings, leaves asked mid-turn, fixes in place</td><td><span class="chip green">checked with real turns</span></td></tr>
+          <tr><td>Runs that go on past a stop: you answer later, and only what used it runs again</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>The page: questions across runs, verdicts per item with pictures, context, each run's view</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>Guard in every Claude Code session: asks before what cannot be undone in git and GitHub</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Packages of roles, from a folder or git, per project or for all</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Package software: build-feature, fix-bug, small-change</td><td><span class="chip green">delivered real branches</span></td></tr>
-          <tr><td>Package design: visual-identity, redesign, screen-design</td><td><span class="chip blue">examples, first real runs</span></td></tr>
+          <tr><td>Roles small-change and fix-bug, behind protocol 1</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>Merging by itself after checks the agent never sees; Undo</td><td><span class="chip blue">works in tests</span></td></tr>
-          <tr><td>Plans of runs, and roles that plan a request</td><td><span class="chip blue">first real plan</span></td></tr>
-          <tr><td>Action gate, history report and guarantee simulation</td><td><span class="chip green">works today</span></td></tr>
-          <tr><td>Judges calibrated on your answers</td><td><span class="chip plain">next</span></td></tr>
+          <tr><td>Stops that ask a sample once proven, and the brake</td><td><span class="chip blue">works in tests</span></td></tr>
+          <tr><td>Plans of several runs, Codex, roles for design work, Linux</td><td><span class="chip plain">next</span></td></tr>
         </tbody>
       </table>
       <div class="links"><a href="docs/">Docs</a><a href="docs/write-a-role.html">Write your own role</a><a href="docs/commands.html">Commands</a><a href="https://github.com/alk0x1/jaynes">GitHub</a></div>

@@ -558,7 +558,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
   <figure class="demo4" id="demo4">
     <div class="term4" id="term4" aria-live="off"><span class="label">Claude Code</span><div id="tl4"></div></div>
     <div class="win4" id="win4">
-      <div class="wbar"><i></i><i></i><i></i><span>127.0.0.1:8740</span><b id="w-count">1 waiting</b></div>
+      <div class="wbar"><i></i><i></i><i></i><span>127.0.0.1:8750</span><b id="w-count">1 waiting</b></div>
       <div class="shot4"><img src="img/review-page.png" width="1440" height="900" loading="lazy" alt="The Jaynes review page in a browser: the run Make the team page dark and calm waits at its direction step, asking Apply the Night Desk direction?, with the proposed palette and fonts, and Context, Return, Change and Accept buttons at the bottom."><span class="hl" aria-hidden="true"></span></div>
     </div>
     <figcaption class="cap4" id="cap4">Your browser opens. <span class="w amber">You</span> answer here.</figcaption>
@@ -1130,10 +1130,10 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
     ['<span class="me">› /plugin install jaynes --marketplace alk0x1/jaynes</span>', 600],
     ['  <span class="ok">✓</span> Installed jaynes. Plugin is now active.', 800],
     ['<span class="me">› make the team page dark and calm, with Jaynes</span>', 600],
-    ['<span class="p">$</span> uv tool install --reinstall git+https://github.com/alk0x1/jaynes', 1100],
-    ['<span class="p">$</span> jaynes run --role visual-identity --task "Make the team page dark and calm" --project .', 1200],
-    ['  <span class="ok">✓</span> current   <span class="ok">✓</span> direction checked', 1400],
-    ['  <span class="wt">●</span> waiting for you: direction', 900]
+    ['<span class="p">$</span> cargo install --locked --git https://github.com/alk0x1/jaynes jaynes-shell --root ~/.local', 1100],
+    ['<span class="p">$</span> jaynes start --role small-change --project . --request "Make the team page dark and calm"', 1200],
+    ['  <span class="ok">✓</span> runner   <span class="ok">✓</span> change checked', 1400],
+    ['  <span class="wt">●</span> waiting for you: the change turned out bigger than a small one', 900]
   ];
   let run4 = 0;
   function reset4() {

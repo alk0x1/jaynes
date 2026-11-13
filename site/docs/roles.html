@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Roles that come with Jaynes · Jaynes docs</title>
+<title>Roles · Jaynes docs</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%2307090d%22/%3E%3Cpath d=%22M11.5 14.6 20 9.6M11.5 17.4 20 22.4%22 stroke=%22%236fb4ff%22 stroke-width=%222%22/%3E%3Ccircle cx=%229%22 cy=%2216%22 r=%224.2%22 fill=%22%236fb4ff%22/%3E%3Ccircle cx=%2222.5%22 cy=%228.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3Ccircle cx=%2222.5%22 cy=%2223.5%22 r=%223.2%22 fill=%22%23eef2f7%22/%3E%3C/svg%3E">
-<meta name="description" content="Jaynes comes with two packages of roles, used by every project until you say otherwise: software, for code, and design, for the look and the screens. Your agent picks the role from your request; on the page, New run lists them. To see what a project can start, run jaynes roles in it.">
+<meta name="description" content="A role is the method for a kind of work. Two come with Jaynes; you install the ones you write or your team shares.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -17,56 +17,28 @@
 <nav aria-label="Site"><a href="../index.html">Home</a><a href="../learn.html">Learn</a><a href="index.html">Docs</a><a href="https://github.com/alk0x1/jaynes">GitHub</a></nav>
 </div></header>
 <div class="wrap docs">
-<aside><nav aria-label="Docs"><a href="index.html">Get started</a><a href="runs.html">Runs and stops</a><a href="roles.html" aria-current="page">Roles that come with Jaynes</a><a href="packages.html">Packages</a><a href="write-a-role.html">Write a role</a><a href="commands.html">Commands</a></nav></aside>
+<aside><nav aria-label="Docs"><a href="index.html">Get started</a><a href="runs.html">Runs and stops</a><a href="roles.html" aria-current="page">Roles</a><a href="write-a-role.html">Write a role</a><a href="commands.html">Commands</a></nav></aside>
 <main><article>
-<h1>Roles that come with Jaynes</h1>
-<p class="lede">Jaynes comes with two packages of roles, used by every project until you say otherwise: <code>software</code>, for code, and <code>design</code>, for the look and the screens. Your agent picks the role from your request; on the page, New run lists them. To see what a project can start, run <code>jaynes roles</code> in it.</p>
-<h2 id="software">software</h2>
-<h3 id="small-change">small-change</h3>
-<p>The light path, for a few lines in one or two files, such as a typo, a rename, a value or a message. The agent makes the change and Jaynes runs your test suite, with no stop, unless the change has more than 30 changed lines or touches a file that runs later. Then you see it.</p>
-<h3 id="fix-bug">fix-bug</h3>
+<h1>Roles</h1>
+<p class="lede">A role is the method for a kind of work. Two come with Jaynes; you install the ones you write or your team shares.</p>
+<h2 id="small-change">small-change</h2>
+<p>A change of a few lines. The agent makes it in a copy of the project; Jaynes runs the project's whole suite in a box without internet, and the change must pass. Past 30 changed lines, or a file that runs outside any box, the run becomes high risk and asks you whether the change goes on; an agent may answer that for you, as a release.</p>
+<h2 id="fix-bug">fix-bug</h2>
 <ol>
-<li>Jaynes finds how the project runs its tests: pytest, a <code>test</code> script in <code>package.json</code>, <code>go test</code>, <code>cargo test</code> or a Makefile <code>test</code> target. The agent never chooses what counts as the suite. When Jaynes finds none, the run stops and asks you to start it again with <code>--suite &quot;&lt;command&gt;&quot;</code> (Test suite, on New run).</li>
-<li>The agent writes a test that fails because of the bug, changing test files only. Jaynes runs it in the box and requires it to fail with the message the agent quotes. You see the test.</li>
-<li>The agent fixes the code, never the tests, until Jaynes sees those tests and the whole suite pass.</li>
+<li>Jaynes finds how the project's tests run.</li>
+<li>A separate agent, which reads only your request and the project as it was, writes the cases the fix will be judged by. The fixer never sees them.</li>
+<li>An agent writes the smallest test that fails because of the bug, and Jaynes requires that it fail, printing the line quoted. You see the bug as plain examples. If no test shows it, the run stops with what the agent tried.</li>
+<li>An agent fixes the code, never the tests, until the bug's tests and the whole suite pass, and then the hidden cases. A case that fails sends the fix back with its sentence alone.</li>
+<li>The fix is merged into the branch you started from, never pushed; Undo on the run's page reverts it.</li>
 </ol>
-<p>If the agent finds no bug a test can show, it says why and you decide: accepting ends the run with nothing changed. Checks written from your request alone, which the agent never sees, prove the fix, and Jaynes merges it by itself when they pass (see <a href="runs.html#merging-by-itself">Merging by itself</a>).</p>
-<h3 id="build-feature">build-feature</h3>
-<p>The same way as fix-bug, from the plan you approved:</p>
-<ol>
-<li>Tests that fail because the feature does not exist yet.</li>
-<li>A stop where you see one to five examples of what they check, each with a sketch of its screen, drawn by Jaynes's Chrome from the agent's page.</li>
-<li>The code, until the tests and the suite pass.</li>
-<li>A stop before the merge, with each page photographed on the real screen when the run has a preview. That photo shows what the product reads on your computer, your data included, and stays on it.</li>
-</ol>
-<p>The code keeps the project's look: Jaynes reads the colors and fonts the project's files already set, and refuses a sketch or a screen that brings others. Changing them is visual-identity's work.</p>
-<h2 id="design">design</h2>
-<p>The design roles are examples: they show how far a role can go, and your own design method will fit you better. See <a href="packages.html">Packages</a> to use yours in their place.</p>
-<h3 id="visual-identity">visual-identity</h3>
-<p>The agent reads the project's current colors and fonts, proposes a direction, and applies it to the style files. Jaynes checks the direction's contrast.</p>
-<h3 id="redesign">redesign</h3>
-<p>Goes further than visual-identity: it also changes motion and the markup of the screens (HTML, JSX, TSX, Vue, Svelte), keeping what each screen does. It starts from references: put one or more links or image paths of interfaces you like in the task. Jaynes captures each link with headless Chrome and gives the pictures to the agent, and the direction must say what it takes from each one.</p>
-<p>Agents run without the web unless a step allows it. The direction step does, so the agent can read the references' sites and look up fonts, and the stop lists every address it read. Shell commands stay offline.</p>
-<h3 id="screen-design">screen-design</h3>
-<p>Carries out your own design method on one screen. You give the method and your finishing heuristics as files:</p>
-<pre><code class="language-sh">jaynes run --role screen-design --task &quot;The People screen&quot; --project . \
-  --input method=method.md --input heuristics=heuristics.md \
-  --preview &quot;npm run dev -- --port {port}&quot; --preview-path /people
+<h2 id="install">Installing roles</h2>
+<pre><code class="language-sh">jaynes add https://github.com/alk0x1/jaynes#engine/roles/small-change
+jaynes add ./my-roles/tidy      # a folder of yours
+jaynes roles                    # what is installed
+jaynes remove tidy
 </code></pre>
-<ul>
-<li>Jaynes opens the screen itself, in headless Chrome, in the theme you judge in (<code>--input theme=dark</code>), with a copy of the data the product reads, frozen at the start (<code>--input data=~/app/data:data</code>), so it never touches live data.</li>
-<li>You choose and order the moments where you get stuck, from cases quoted from the screen.</li>
-<li>The agent maps the objects you think in, and writes each moment's path in a closed vocabulary: open, click a text, open a row, press a button, scroll, type, back. Jaynes walks each path, refusing every request but the product's own GETs, minus those you list as having effects (<code>--input blocked_gets=api/logo</code>).</li>
-<li>You approve one requirement per break, and the first slice, with where its moment must end. The slice's test is a path that must fail on the screen as it is and pass once it is built.</li>
-<li>Your own measuring tools check it (<code>--input measure=...</code>, <code>--input compare=...</code>, each printing <code>{&quot;failures&quot;: [...]}</code>), against the version you last approved (<code>--input approved=&lt;commit&gt;</code>).</li>
-<li>A reviewer looks at captures in both themes, on desktop and phone, and at each transition, and sends what fails back to the implementer.</li>
-<li>The final stop shows the tokens each step spent against the budget (<code>--input budget=150000</code>). After it, every note you gave becomes a heuristic for your file.</li>
-</ul>
-<p>Agents read a summary of each API response, and a number they write must name a query that Jaynes computes.</p>
-
-</article>
-<footer class="pager"><a href="runs.html">&larr; Runs and stops</a><a href="packages.html">Packages &rarr;</a></footer>
-</main>
+<p><code>jaynes add</code> takes a folder or a git address, with <code>#path</code> for a folder inside the repository. It installs a role only when it passes the conformance suite. <code>jaynes update</code> brings roles installed from git to their newest version. A run keeps its own copy of the role it started with, so changing a role never changes a run under way.</p>
+</article></main>
 </div>
 </body>
 </html>
