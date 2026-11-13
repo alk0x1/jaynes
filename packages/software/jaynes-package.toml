@@ -1,4 +1,0 @@
-name = "software"
-version = "1.0.0"
-about = "Roles that build software: build-feature, fix-bug and small-change."
-api = 1

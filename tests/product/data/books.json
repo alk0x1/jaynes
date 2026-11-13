@@ -1,5 +1,0 @@
-{"books": [
-  {"id": "b1", "title": "The Salt Road", "picked_by": "Ines", "status": "reading"},
-  {"id": "b2", "title": "Paper Lanterns", "picked_by": "Tomas", "status": "done"},
-  {"id": "b3", "title": "A Winter Orchard", "picked_by": "Ines", "status": "next"}
-]}
