@@ -1183,6 +1183,7 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
     });
     let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("tried again");
     assert_eq!((turn.attempt, turn.session.as_deref()), (2, Some("s1")));
+    assert_eq!(run.counts.sent_back, 0, "answering the agent's question is not work sent back");
     assert!(turn.notes.iter().any(|n| n.contains("keep the first answer")), "{:?}", turn.notes);
 }
 
