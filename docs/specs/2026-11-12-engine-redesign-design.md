@@ -40,7 +40,7 @@ later outside any box (the Python engine's floor list, plus `Cargo.toml` and `bu
 and the person raise it; nothing lowers it. When it rises, the steps that come into the path run, earlier ones
 first, and a step that would now read their change runs again.
 
-**Ceilings: working values until the owner sets his own.** Low: 20 minutes and 2 million tokens; high: 2 hours
+**Ceilings: the owner accepted these values on 2026-11-12.** Low: 20 minutes and 2 million tokens; high: 2 hours
 and 10 million. Tokens are those sent and received; tokens read back from the cache are recorded apart. Said in
 `RunStarted`; raised only by the person; an attempt's deadline is what is left.
 
