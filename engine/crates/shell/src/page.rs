@@ -728,27 +728,17 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
 /// What a step changed in the project, as git shows it between where the step started and the commit its output
 /// became: one step's, or every step's of the run when `only` is None. Nothing when the run has no project.
 fn changes_html(home: &std::path::Path, run: &Run, only: Option<usize>) -> String {
-    let dir = home.join("runs").join(&run.id);
-    let read = |name: &str| -> BTreeMap<String, String> { std::fs::read_to_string(dir.join(name)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default() };
-    let (commits, parents) = (read("project-steps.json"), read("project-parents.json"));
-    let copy = dir.join("project");
-    let base = std::fs::read_to_string(copy.join(".git/jaynes-base")).unwrap_or_default().trim().to_string();
-    let git = |args: &[&str]| -> Option<String> {
-        let out = std::process::Command::new("git").arg("-C").arg(&copy).args(args).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    };
     run.manifest
         .steps
         .iter()
         .enumerate()
         .filter(|(i, _)| only.is_none_or(|o| o == *i))
         .filter_map(|(_, d)| {
-            let commit = commits.get(&d.name)?;
-            let parent = parents.get(&d.name).cloned().unwrap_or_else(|| base.clone());
-            let mut text = git(&["diff", "--no-color", &parent, commit])?;
+            let mut text = drive::step_diff(home, &run.id, &d.name)?;
             if text.trim().is_empty() {
                 return None;
             }
+            let n = text.lines().filter(|l| l.starts_with("diff --git ")).count();
             // never cut silently: what is not shown here must still be read
             if text.len() > 40_000 {
                 let cut = (0..=40_000).rev().find(|&n| text.is_char_boundary(n)).unwrap_or(0);
@@ -756,8 +746,6 @@ fn changes_html(home: &std::path::Path, run: &Run, only: Option<usize>) -> Strin
                 text.truncate(cut);
                 text.push_str(&format!("\n[{more} more bytes not shown: read the branch before it lands]"));
             }
-            let files = git(&["diff", "--name-only", &parent, commit]).unwrap_or_default();
-            let n = files.lines().count();
             Some(format!(
                 "<div class=\"changes\"><div class=\"qh\">What {} changed · {n} file{}</div><pre class=\"diff\">{}</pre></div>",
                 esc(&d.name),

@@ -335,6 +335,7 @@ fn start(args: &[String]) -> Result<(), String> {
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
     }))?;
     drive::sweep_engines(&home(), &s)?;
+    drive::sweep_copies(&home(), &s)?;
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));

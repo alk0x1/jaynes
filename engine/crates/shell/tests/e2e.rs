@@ -939,3 +939,34 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
     }
     assert!(outcomes.iter().any(|&x| x), "some kill fell inside a turn: {outcomes:?}");
 }
+
+#[test]
+fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
+    let s = scratch("sweep");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    start(&s, "old", &agent);
+    assert!(s.home.join("runs/old/project/.git").exists());
+    // the next start clears the copies of runs finished longer ago than the time kept (none kept here)
+    let role = root().join("roles/small-change");
+    let out = Command::new(BIN)
+        .args(["start", "--run", "new", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("JAYNES_KEEP_COPIES_SECONDS", "0")
+        .output().expect("start");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!s.home.join("runs/old/project").exists(), "the finished run's copy is cleared");
+    assert!(s.home.join("runs/new/project/.git").exists(), "the run just started keeps its copy");
+    // the page still shows what the old run changed
+    let port = 15750 + (std::process::id() % 1000) as u16;
+    let _page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k3y").env("JAYNES_NO_UPDATE_CHECK", "1")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(Page)
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
+}

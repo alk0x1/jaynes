@@ -91,6 +91,13 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
     jaynes_core::decide(Some(&state), &input).map_err(|r| r.0)?;
     let setup = Setup::load(store, home, run)?;
     let copy = setup.copy.as_ref().ok_or("the run has no project")?;
+    if !copy.dir.join(".git").exists() {
+        let merges = merges(&setup.dir);
+        return Err(format!(
+            "the run's copy of the project was cleared a week after it finished; revert its merge in your repository with git revert -m 1 {}",
+            merges.last().map(String::as_str).unwrap_or("<the merge>")
+        ));
+    }
     let merges = merges(&setup.dir);
     let reference = if merges.is_empty() { "nothing had been merged".to_string() } else { copy.undo(&merges, run)? };
     store.decide(run, &input)?;
@@ -243,6 +250,60 @@ pub fn act_here(home: &Path, exe: &Path, run_id: &str, act: &Value) -> Value {
         Err("no such act".into())
     };
     attempt().unwrap_or_else(|e| json!({"ok": false, "refused": e}))
+}
+
+// --- what a run changed, and clearing its copy ----------------------------------------------------------------
+
+/// What step `step` of a run changed in the project, as git shows it: from the run's copy while it is kept, or from
+/// what was saved of it when the copy was cleared. None when the step changed nothing.
+pub fn step_diff(home: &Path, run: &str, step: &str) -> Option<String> {
+    let dir = home.join("runs").join(run);
+    if let Ok(saved) = std::fs::read_to_string(dir.join("changes").join(format!("{step}.diff"))) {
+        return Some(saved);
+    }
+    let read = |name: &str| -> std::collections::BTreeMap<String, String> {
+        std::fs::read_to_string(dir.join(name)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    };
+    let commit = read("project-steps.json").get(step)?.clone();
+    let copy = dir.join("project");
+    let parent = read("project-parents.json")
+        .get(step)
+        .cloned()
+        .unwrap_or_else(|| std::fs::read_to_string(copy.join(".git/jaynes-base")).unwrap_or_default().trim().to_string());
+    let out = std::process::Command::new("git").arg("-C").arg(&copy).args(["diff", "--no-color", &parent, &commit]).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// How long a finished run keeps its copy of the project: a week, or `$JAYNES_KEEP_COPIES_SECONDS`.
+fn keep_copies() -> u64 {
+    std::env::var("JAYNES_KEEP_COPIES_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(jaynes_core::attention::SETTLE)
+}
+
+/// Clear the copies of runs finished longer ago than they are kept, saving first what each step changed, so the
+/// page still shows it. Only finished runs: a run under way, or waiting, keeps its copy.
+pub fn sweep_copies(home: &Path, store: &Store) -> Result<(), String> {
+    let now = crate::store::now();
+    let times = store.times()?;
+    for id in store.runs()? {
+        let copy = home.join("runs").join(&id).join("project");
+        if !copy.exists() {
+            continue;
+        }
+        let Ok(Some(run)) = store.state(&id) else { continue };
+        let last = times.get(&id).map(|t| t.1).unwrap_or(now);
+        if !run.finished() || last.saturating_add(keep_copies()) > now {
+            continue;
+        }
+        let saved = home.join("runs").join(&id).join("changes");
+        std::fs::create_dir_all(&saved).map_err(|e| e.to_string())?;
+        for d in &run.manifest.steps {
+            if let Some(text) = step_diff(home, &id, &d.name) {
+                std::fs::write(saved.join(format!("{}.diff", d.name)), text).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::remove_dir_all(&copy).map_err(|e| format!("Jaynes could not clear the copy of run {id}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Where an agent writes why a step cannot be done as asked, in its exchange folder.
