@@ -17,13 +17,8 @@ person ── jaynes-engine (CLI today, the page next)
         role (any language; Python through engine/python/jaynes_role.py)
 ```
 
-- **Core** (`engine/crates/core`): one pure function, `decide(run, input) -> (events, commands)`. A run's state
-  is only the fold of its events (`Run::fold`). Every guarantee of `docs/guarantees.md` is a property of this
-  function and is tested on thousands of random runs (`tests/guarantees.rs`).
-- **Shell** (`engine/crates/shell`, binary `jaynes-engine`): records the events of each input in one SQLite
-  transaction (`synchronous=full`, each entry chained to the one before), carries out the commands, and turns what
-  happened into the next input. One process drives a run at a time (a file lock); inputs from people while it
-  works wait in an inbox it takes between commands.
+- **Core** (`engine/crates/core`): one pure function, `decide(run, input) -> (events, commands)`. A run's state is only the fold of its events (`Run::fold`). Every guarantee of `docs/guarantees.md` is a property of this function and is tested on thousands of random runs (`tests/guarantees.rs`).
+- **Shell** (`engine/crates/shell`, binary `jaynes-engine`): records the events of each input in one SQLite transaction (`synchronous=full`, each entry chained to the one before), carries out the commands, and turns what happened into the next input. One process drives a run at a time (a file lock); inputs from people while it works wait in an inbox it takes between commands.
 - **Protocol 1** (`engine/crates/shell/src/protocol.rs`, schema in `engine/protocol/role-protocol-1.schema.json`):
   the engine starts the role program per call, writes one request line, reads one reply line. Calls: `hello`,
   `describe`, `prompt`, `execute`, `check`, `items`. The role never decides what runs next and never writes what
@@ -80,8 +75,12 @@ locked; a dropped one may not come back; both are enforced as open checks on lat
 person's own step holds the run; any other question holds only when its stop says `holds`, and a step that cannot
 be undone waits for every answer it rests on.
 
-**Who answers.** Only the person. The core alone answers with a rule, only a leave to read inside the project
-(`read-inside-project`), and records the rule's name. An answer that claims to be a rule, or comes from an agent,
+**Who answers.** The person, and, in one case, an agent. The owner loosened G9 on 2026-11-12: a stop the role
+marks `release` (it only asks whether a result may go on, not a matter of taste or direction) may be answered by
+an agent, only with keep. That answer is recorded as the agent's, locks nothing, and counts as unconfirmed: a step
+that cannot be undone still waits for the person's answer. The person may change it while the run is open, or
+correct the delivery later. small-change's stop is a release. The core alone answers with a rule, only a leave to
+read inside the project (`read-inside-project`), and records the rule's name; an answer that claims to be a rule
 is refused. On the command line, "the person" is whoever answers from a terminal: a weak signal (a program can
 fake a terminal), kept until the page with its key speaks this protocol.
 
@@ -117,9 +116,7 @@ version, the protocol and the record's format.
 
 ## Acceptance: the change of 678acbc
 
-The change the Python engine's build-feature failed to deliver three times (1 h 35 min, nothing delivered) and
-that took about 20 minutes made directly. Same request, on a throwaway clone at `ccff401`, through this engine
-with Claude Code (Opus 5.5, high effort), role small-change, the risk raised to high at the start:
+The change the Python engine's build-feature failed to deliver three times (1 h 35 min, nothing delivered) and that took about 20 minutes made directly. Same request, on a throwaway clone at `ccff401`, through this engine with Claude Code (Opus 5.5, high effort), role small-change, the risk raised to high at the start:
 
 - 9 min 51 s from start to the delivered branch; one attempt, none spent, no fix needed.
 - 114,383 tokens sent and received, 2,599,358 read back from the cache.

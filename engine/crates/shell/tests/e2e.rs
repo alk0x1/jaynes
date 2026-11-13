@@ -114,11 +114,11 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
     let out = start(&s, "risky", &agent);
     assert!(out.contains("risk raised to high"), "{out}");
     assert!(out.contains("waiting: delivered; your answers can still correct it"), "{out}");
-    // a program without a terminal is not the person
+    // a program without a terminal is an agent: it may not send the change back
     let state: Vec<Value> = events(&s, "risky");
     let q = state.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
-    let (ok, out) = engine(&s, &["answer", "risky", &q, "--send"]);
-    assert!(!ok && out.contains("an agent never answers"), "{out}");
+    let (ok, out) = engine(&s, &["answer", "risky", &q, "change=redo:smaller", "--send"]);
+    assert!(!ok && out.contains("sending it back is yours"), "{out}");
     // the person, at a terminal, keeps it
     let script = Command::new("script")
         .args(["-q", "/dev/null", BIN, "answer", "risky", &q, "--send"])
@@ -128,6 +128,20 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
         .expect("script");
     let said = String::from_utf8_lossy(&script.stdout);
     assert!(said.contains("is kept") && said.contains("finished: delivered"), "{said}");
+}
+
+#[test]
+fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s() {
+    let s = scratch("release");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    start(&s, "release", &agent);
+    let e = events(&s, "release");
+    let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let (ok, out) = engine(&s, &["answer", "release", &q, "--send"]);
+    assert!(ok && out.contains("counts as the agent's") && out.contains("finished: delivered"), "{out}");
+    let e = events(&s, "release");
+    let answered = e.iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
+    assert_eq!(answered["answer"]["by"]["by"], "agent");
 }
 
 #[test]

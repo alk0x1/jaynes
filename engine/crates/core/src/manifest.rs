@@ -163,6 +163,10 @@ pub struct StopDecl {
     /// The lowest risk at which the stop asks.
     #[serde(default)]
     pub from_risk: Risk,
+    /// The stop only asks whether a result may go on, not a matter of taste or direction: an agent may let it
+    /// go on, recorded as the agent's, and the person can still change that.
+    #[serde(default)]
+    pub release: bool,
     #[serde(default)]
     pub about: String,
 }
@@ -245,6 +249,12 @@ impl Manifest {
             if let Some(stop) = &s.stop {
                 if stop.verdicts.is_empty() {
                     errors.push(format!("{at} has a stop with no verdict to give"));
+                }
+                if stop.release && s.executor == Executor::Person {
+                    errors.push(format!("{at} is the person's, so an agent may not release it"));
+                }
+                if stop.release && !stop.verdicts.contains(&VerdictKind::Keep) {
+                    errors.push(format!("{at} can be released and offers no keep"));
                 }
                 if stop.from_risk < s.from_risk {
                     errors.push(format!("{at} asks at a risk the step does not run at"));

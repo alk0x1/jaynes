@@ -332,7 +332,8 @@ impl Run {
                     }
                     return;
                 }
-                if question.kind != QuestionKind::Decision || executor == Executor::Person {
+                if question.kind != QuestionKind::Decision || executor == Executor::Person || !answer.by.person() {
+                    // An agent's release locks nothing: only what the person kept is theirs to keep.
                     return;
                 }
                 s.locks.retain(|_, (_, by)| *by != question.id);
@@ -451,7 +452,15 @@ impl Run {
         self.questions.get(id).filter(|q| q.open())
     }
 
-    /// The open questions step `i`'s work rests on: those of the steps it uses, directly or through them.
+    /// Whether the current output of step `i` waits for the person: its question is open, or only an agent
+    /// answered it.
+    pub fn awaits_person(&self, i: usize) -> Option<&QuestionState> {
+        let id = self.steps[i].question.as_ref()?;
+        self.questions.get(id).filter(|q| !q.superseded && q.answer.as_ref().is_none_or(|a| !a.by.person()))
+    }
+
+    /// The questions step `i`'s work rests on that the person has not answered: those of the steps it uses,
+    /// directly or through them, open or answered only by an agent.
     pub fn unconfirmed(&self, i: usize) -> Vec<String> {
         let mut out = Vec::new();
         let mut seen = vec![false; self.steps.len()];
@@ -460,7 +469,7 @@ impl Run {
             if std::mem::replace(&mut seen[j], true) {
                 continue;
             }
-            if let Some(q) = self.open_question(j) {
+            if let Some(q) = self.awaits_person(j) {
                 out.push(q.question.id.clone());
             }
             stack.extend(self.sources(j));

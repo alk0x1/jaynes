@@ -792,10 +792,8 @@ impl Ctx {
         let Some(q) = self.run.questions.get(&answer.question).cloned() else {
             return refuse(format!("there is no question {}", answer.question));
         };
-        match &answer.by {
-            By::Person => {}
-            By::Agent { .. } => return refuse("only you answer; an agent never answers in your place"),
-            By::Rule { .. } => return refuse("a rule answers only inside the engine, and only routine leaves"),
+        if let By::Rule { .. } = &answer.by {
+            return refuse("a rule answers only inside the engine, and only routine leaves");
         }
         if q.superseded {
             return refuse("this question was replaced by a newer one, since the step ran again; answer that one");
@@ -817,6 +815,19 @@ impl Ctx {
         }
         let i = self.index(&q.question.step)?;
         let executor = self.run.manifest.steps[i].executor;
+        if let By::Agent { .. } = &answer.by {
+            let release = self.run.manifest.steps[i].stop.as_ref().is_some_and(|s| s.release);
+            let input = self.run.steps[i].inputs.contains(&q.question.id);
+            if q.question.kind != QuestionKind::Decision || executor == Executor::Person || input || !release {
+                return refuse("only you answer this: an agent may only let a result go on, at a stop the role marks as a release");
+            }
+            if answer.verdicts.values().any(|v| *v != Verdict::Keep) {
+                return refuse("an agent may only let the result go on as it is; sending it back is yours");
+            }
+            if q.answer.is_some() {
+                return refuse("this question was already answered");
+            }
+        }
         if q.answer.is_some() {
             let revisable = q.question.kind == QuestionKind::Decision
                 && executor != Executor::Person
@@ -938,7 +949,8 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         let v = answer.verdict(&item.id);
         let label = &item.label;
         sentences.push(match (&v, person) {
-            (Verdict::Keep, false) => format!("“{label}” is kept: no later round of {} may change it.", q.step),
+            (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),
+            (Verdict::Keep, false) => format!("“{label}” goes on as it was made."),
             (Verdict::Keep, true) => format!("“{label}” is accepted."),
             (Verdict::Skip, _) => format!("“{label}” stays as it was made, and is not judged."),
             (Verdict::Drop, _) => format!("“{label}” is dropped: it does not come back in this run."),
@@ -956,6 +968,11 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     if input {
         sentences.push(format!("{} goes on with your answer.", q.step));
         return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
+    }
+    if let By::Agent { who } = &answer.by {
+        sentences.push(format!(
+            "{who} lets the result go on as it is. It counts as the agent's, not yours, and nothing that cannot be undone rests on it. You can still change it while the run is open, or correct the delivery later."
+        ));
     }
     let mut may: Vec<usize> = Vec::new();
     for &r in &reruns {

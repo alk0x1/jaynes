@@ -37,7 +37,7 @@ role.step("runner", executor="role", reach={"project": "read"}, attempts=1, run=
 role.step(
     "change", executor="agent", needs=["runner"],
     reach={"project": "write", "write": ["**"], "commands": True},
-    stop=Stop(verdicts=["keep", "redo"], from_risk="high",
+    stop=Stop(verdicts=["keep", "redo"], from_risk="high", release=True,
               about="The change turned out bigger than a small one. Keep it, or have it done again?"),
     about="Makes the change.",
     instructions=(

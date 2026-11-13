@@ -80,6 +80,8 @@ class Stop:
     verdicts: list[str] = field(default_factory=lambda: ["keep", "redo"])
     holds: bool = False
     from_risk: str = "low"
+    # The stop only asks whether a result may go on, not a matter of taste or direction: an agent may let it go on.
+    release: bool = False
     about: str = ""
 
 
@@ -148,7 +150,7 @@ class Role:
                                  "checks": [{"name": n, "kind": k, "about": a} for n, (k, a, _) in s.checks.items()]}
             if s.stop is not None:
                 d["stop"] = {"verdicts": s.stop.verdicts, "holds": s.stop.holds, "from_risk": s.stop.from_risk,
-                             "about": s.stop.about}
+                             "release": s.stop.release, "about": s.stop.about}
             steps.append(d)
         return {"role": self.name, "version": self.version, "protocol": PROTOCOL, "steps": steps}
 

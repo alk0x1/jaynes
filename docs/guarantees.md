@@ -1,9 +1,6 @@
 # What the engine guarantees
 
-**Status: draft for the owner to read and approve.** Each sentence is a promise of the
-engine's core, whatever role runs on it. Each has a number, and the test that proves it carries
-the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's
-code may not change this page: a change here is the owner's.
+**Status**: draft for the owner to read and approve. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -34,8 +31,11 @@ What the page does not promise is said at the end, so nobody reads more into it.
 
 ## Your answers
 
-- **G9.** Every answer records who gave it: you, or a named rule. A rule answers only routine
-  permissions. An agent or a model never answers in your place.
+- **G9.** Every answer records who gave it: you, an agent, or a named rule. A rule answers only
+  routine permissions. An agent may only let a result go on as it is, at a stop the role marks
+  as not a matter of taste or direction: it never sends anything back, never answers one of
+  your own steps, and nothing that cannot be undone rests on its answer. You can change what
+  an agent let through.
 - **G10.** An answer counts only for what you were shown: if the question changed after you
   saw it, the answer is refused.
 - **G11.** What each answer will do is written by Jaynes, not by the role, before you send it,

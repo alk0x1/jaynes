@@ -954,6 +954,11 @@
           "description": "Whether the steps after it wait for the answer. Otherwise the run goes on and the answer corrects it later.",
           "type": "boolean"
         },
+        "release": {
+          "default": false,
+          "description": "The stop only asks whether a result may go on, not a matter of taste or direction: an agent may let it\ngo on, recorded as the agent's, and the person can still change that.",
+          "type": "boolean"
+        },
         "verdicts": {
           "description": "The verdicts the person may give each item, from the closed list.",
           "items": {

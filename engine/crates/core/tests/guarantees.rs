@@ -89,7 +89,8 @@ fn role(rng: &mut Rng) -> Manifest {
                     verdicts.insert(0, VerdictKind::Keep);
                 }
                 let stop_risk = if from_risk == Risk::High || rng.chance(20) { Risk::High } else { Risk::Low };
-                Some(StopDecl { verdicts, holds: rng.chance(30), from_risk: stop_risk, about: String::new() })
+                let release = executor != Executor::Person && rng.chance(40);
+                Some(StopDecl { verdicts, holds: rng.chance(30), from_risk: stop_risk, release, about: String::new() })
             } else {
                 None
             };
@@ -244,7 +245,7 @@ impl World {
                     );
                     // G14: nothing that cannot be undone rests on an answer not given.
                     if pre.manifest.steps[i].effect.irreversible() {
-                        assert!(pre.unconfirmed(i).is_empty(), "seed {seed}: G14 {step} started on unconfirmed answers");
+                        assert!(!rests_on_unconfirmed(&pre, i), "seed {seed}: G14 {step} started on answers you did not give");
                     }
                 }
                 Event::StepDone { step, items, .. } => {
@@ -301,7 +302,18 @@ impl World {
                             assert_eq!(rule, READ_INSIDE_PROJECT, "seed {seed}: G9 unknown rule");
                             assert_eq!(q.kind, QuestionKind::Permission, "seed {seed}: G9 a rule answered a decision");
                         }
-                        By::Agent { .. } => panic!("seed {seed}: G9 an agent answered"),
+                        By::Agent { .. } => {
+                            let i = pre.manifest.index(&q.step).expect("step");
+                            let d = &pre.manifest.steps[i];
+                            assert!(
+                                q.kind == QuestionKind::Decision
+                                    && d.executor != Executor::Person
+                                    && d.stop.as_ref().is_some_and(|s| s.release)
+                                    && !pre.steps[i].inputs.contains(&q.id)
+                                    && answer.verdicts.values().all(|v| *v == Verdict::Keep),
+                                "seed {seed}: G9 an agent answered what is yours: {answer:?}"
+                            );
+                        }
                     }
                 }
                 _ => {}
@@ -406,6 +418,38 @@ fn really_fresh(run: &Run, i: usize) -> bool {
         let now = run.steps[j].done.as_ref().map(|d| &d.output);
         now.is_some() && done.reads.iter().any(|r| &r.step == n && Some(&r.output) == now)
     })
+}
+
+/// Whether step `i` rests, through what it uses, on a question of the current round that the person has not
+/// answered: open, or answered only by an agent. Worked out here, apart from the core.
+fn rests_on_unconfirmed(run: &Run, i: usize) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![i];
+    while let Some(k) = stack.pop() {
+        let decl = &run.manifest.steps[k];
+        let mut used: Vec<usize> = decl.needs.iter().filter_map(|n| run.manifest.index(n)).collect();
+        if decl.reach.project != ProjectAccess::None {
+            used.extend(run.manifest.path(run.risk).into_iter().filter(|&j| j < k && run.manifest.steps[j].reach.project == ProjectAccess::Write));
+        }
+        for j in used {
+            if !seen.insert(j) {
+                continue;
+            }
+            let s = &run.steps[j];
+            let pending = run.questions.values().any(|q| {
+                q.question.step == run.manifest.steps[j].name
+                    && q.question.kind == QuestionKind::Decision
+                    && !q.superseded
+                    && s.question.as_deref() == Some(q.question.id.as_str())
+                    && q.answer.as_ref().is_none_or(|a| !a.by.person())
+            });
+            if pending {
+                return true;
+            }
+            stack.push(j);
+        }
+    }
+    false
 }
 
 fn digest_pool(rng: &mut Rng) -> Digest {
@@ -542,15 +586,35 @@ impl World {
         let wrong = self.rng.chance(5);
         let shown = if wrong { Digest("stale".to_string()) } else { q.shown() };
         let by = match self.rng.below(20) {
-            0 => By::Agent { who: "claude".to_string() },
+            0..=2 => {
+                if self.rng.chance(60) {
+                    verdicts.clear();
+                }
+                By::Agent { who: "claude".to_string() }
+            }
             1 => By::Rule { rule: READ_INSIDE_PROJECT.to_string() },
             _ => By::Person,
         };
         let state = run.questions[&q.id].clone();
+        fn answer_keeps_all(a: &Answer) -> bool {
+            a.verdicts.values().all(|v| *v == Verdict::Keep)
+        }
         let answer = Answer { question: q.id.clone(), shown, verdicts, by: by.clone() };
         let accepted = self.send(Input::Answer { answer: answer.clone() });
-        // G9 and G10: only the person, only for what was shown, only while it stands.
-        if wrong || !by.person() || state.superseded {
+        // G9 and G10: only for what was shown, only while it stands; an agent only to let a release go on.
+        let i = run.manifest.index(&q.step).expect("step");
+        let agent_may = q.kind == QuestionKind::Decision
+            && run.manifest.steps[i].executor != Executor::Person
+            && run.manifest.steps[i].stop.as_ref().is_some_and(|s| s.release)
+            && !run.steps[i].inputs.contains(&q.id)
+            && answer_keeps_all(&answer)
+            && state.answer.is_none();
+        let not_allowed = match &by {
+            By::Person => false,
+            By::Agent { .. } => !agent_may,
+            By::Rule { .. } => true,
+        };
+        if wrong || not_allowed || state.superseded {
             assert!(!accepted, "seed {}: G9/G10 an answer was taken: {answer:?}", self.seed);
         }
         if accepted {
@@ -826,7 +890,7 @@ fn item(id: &str, d: &str) -> Item {
 fn g13_a_correction_reruns_only_what_used_it() {
     // look → copy (uses look) and tests (uses nothing): changing look reruns copy, not tests.
     let mut look = step("look", Executor::Agent);
-    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, about: String::new() });
+    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, about: String::new() });
     let mut copy = step("copy", Executor::Agent);
     copy.needs = vec!["look".to_string()];
     let tests = step("tests", Executor::Agent);
@@ -863,7 +927,7 @@ fn g13_a_correction_reruns_only_what_used_it() {
 #[test]
 fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     let mut plan = step("plan", Executor::Agent);
-    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, about: String::new() });
+    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, about: String::new() });
     let mut push = step("push", Executor::Role);
     push.needs = vec!["plan".to_string()];
     push.effect = Effect::Irreversible { idempotent: true };
@@ -979,7 +1043,7 @@ fn unused(_: QuestionKind) {}
 #[test]
 fn the_random_runs_reach_what_the_guarantees_are_about() {
     let mut seen: BTreeMap<&'static str, u32> = BTreeMap::new();
-    for seed in 1..=600u64 {
+    for seed in 1..=1000u64 {
         let mut w = World::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let manifest = role(&mut w.rng);
         w.send(Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), raise: None });
@@ -1003,6 +1067,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::Waiting { why, .. } if why.contains("cannot be undone") => hit("waits before what cannot be undone"),
                 Event::Blocked { fault: Fault::Jaynes, .. } => hit("fault of Jaynes"),
                 Event::AnswerRecorded { answer, .. } if matches!(answer.by, By::Rule { .. }) => hit("leave granted by a rule"),
+                Event::AnswerRecorded { answer, .. } if matches!(answer.by, By::Agent { .. }) => hit("released by an agent"),
                 Event::QuestionSuperseded { .. } => hit("question superseded"),
                 Event::Delivered { .. } => hit("delivered"),
                 _ => {}
@@ -1012,7 +1077,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     eprintln!("{seen:#?}");
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
-        "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "question superseded", "delivered",
+        "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "question superseded", "delivered",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -1050,4 +1115,36 @@ fn simulate_logged(seed: u64) {
             break;
         }
     }
+}
+
+#[test]
+fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() {
+    let mut change = step("change", Executor::Agent);
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, about: String::new() });
+    let mut tests = step("tests", Executor::Agent);
+    tests.needs = vec!["change".to_string()];
+    let mut push = step("push", Executor::Role);
+    push.needs = vec!["tests".to_string()];
+    push.effect = Effect::Irreversible { idempotent: true };
+    let (mut run, cmds) = start(vec![change, tests, push]);
+    probe_ok(&mut run, cmds);
+    let asked = deliver(&mut run, "change", 1, "c", Vec::new());
+    let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
+    let agent = By::Agent { who: "claude".to_string() };
+    // sending back is the person's
+    let redo = Answer { question: q.id.clone(), shown: q.shown(), verdicts: [("change".to_string(), Verdict::Redo { note: "no".to_string() })].into_iter().collect(), by: agent.clone() };
+    assert!(decide(Some(&run), &Input::Answer { answer: redo }).is_err());
+    // letting it go on is allowed, and the run goes on to tests
+    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: agent } });
+    let c = probe_ok(&mut run, c);
+    assert!(c.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "tests")), "{c:?}");
+    assert!(run.steps[0].locks.is_empty(), "an agent's release locks nothing");
+    let c = deliver(&mut run, "tests", 1, "t", Vec::new());
+    // push cannot be undone, and rests on an answer only an agent gave: it waits for the person
+    assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. } | Command::Probe { .. })), "{c:?}");
+    assert!(matches!(&run.phase, Phase::Waiting { step: Some(s), .. } if s == "push"), "{:?}", run.phase);
+    // the person confirms, and push runs
+    let c = feed(&mut run, Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person } });
+    let c = probe_ok(&mut run, c);
+    assert!(c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "{c:?}");
 }
