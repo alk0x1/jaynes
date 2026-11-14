@@ -344,7 +344,7 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let q = events(&s, "redo").into_iter().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "reproduce").expect("asked")["question"]["id"].as_str().expect("id").to_string();
     // the person, at a terminal, sends reproduce back after the fix was made
     let mut c = Command::new("script");
-    c.args(["-q", "/dev/null", BIN, "answer", "redo", &q, "example-1=redo:also an empty name", "--send"]);
+    c.args(["-q", "/dev/null", BIN, "answer", "redo", &q, "examples-1=redo:also an empty name", "--send"]);
     env(&mut c);
     let said = String::from_utf8_lossy(&c.output().expect("answer").stdout).to_string();
     let e = events(&s, "redo");
@@ -980,4 +980,54 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
     assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
+}
+
+#[test]
+fn a_role_s_own_check_is_a_script_run_in_the_box_judging_by_its_exit() {
+    let s = scratch("script");
+    let role = s.home.parent().expect("base").join("odd");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "odd"
+version = "1.0.0"
+
+[[step]]
+name = "say"
+reach = { project = "read" }
+instructions = "Say something about {{request}}."
+checks = [{ script = "checks/odd.sh", about = "the output says nothing bad" }]
+"#).expect("write");
+    // reads the call on standard input; tries to write outside the box, which must fail
+    std::fs::write(role.join("checks/odd.sh"), r#"
+input=$(cat)
+if touch "$HOME/.jaynes-escaped-the-box" 2>/dev/null; then echo "wrote outside the box"; exit 1; fi
+[ -f greeting.txt ] || { echo "not run on the project"; exit 1; }
+case "$input" in
+  *'"bad"'*) echo "it says bad"; echo "and that is all"; exit 1 ;;
+  *'"unsure"'*) echo "cannot tell"; exit 3 ;;
+esac
+exit 0
+"#).expect("write");
+    let (ok, out) = engine(&s, &["check", role.to_str().expect("path")]);
+    assert!(ok, "{out}");
+    let verdict = |said: &str| -> Value {
+        let call = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "say", "check": "odd", "request": "r",
+            "output": {"word": said}, "given": [], "project": s.project, "source": s.project});
+        let mut child = Command::new(BIN)
+            .args(["role-serve", role.to_str().expect("path")])
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
+            .spawn().expect("serve");
+        use std::io::Write;
+        child.stdin.take().expect("stdin").write_all(format!("{call}\n").as_bytes()).expect("write");
+        let out = child.wait_with_output().expect("out");
+        serde_json::from_slice::<Value>(&out.stdout).expect("reply")["verdict"].clone()
+    };
+    assert_eq!(verdict("good")["verdict"], "pass", "{}", verdict("good"));
+    let bad = verdict("bad");
+    assert_eq!(bad["verdict"], "fail");
+    assert_eq!(bad["reasons"], serde_json::json!(["it says bad", "and that is all"]));
+    let unsure = verdict("unsure");
+    assert_eq!((unsure["verdict"].as_str(), unsure["reason"].as_str()), (Some("blocked"), Some("cannot tell")));
+    assert!(!Path::new(&std::env::var("HOME").expect("home")).join(".jaynes-escaped-the-box").exists());
 }

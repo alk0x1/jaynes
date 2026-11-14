@@ -139,6 +139,23 @@ enum Param {
     Text,
     Number,
     YesNo,
+    /// A step among those the step needs.
+    Step,
+    /// `step.field`, of a step among those the step needs.
+    StepField,
+}
+
+/// What the engine gives a menu check besides its parameters, from the role itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Auto {
+    /// `suite_step`: the step among the needs that uses find-suite.
+    Suite,
+    /// `cases_step`: the hidden step named first in the check's reads.
+    Cases,
+    /// `schema`: the step's output, as JSON Schema.
+    Schema,
+    /// `write`: the paths the step may write.
+    Write,
 }
 
 struct MenuStep {
@@ -154,10 +171,7 @@ struct MenuCheck {
     name: &'static str,
     kind: CheckKind,
     params: &'static [(&'static str, Param, bool)],
-    /// Whether it needs the project's suite, from a step that uses find-suite among its step's needs.
-    suite: bool,
-    /// Whether it reads a hidden step's cases, named in `reads`.
-    cases: bool,
+    auto: &'static [Auto],
     about: fn(&toml::Table) -> String,
 }
 
@@ -165,13 +179,22 @@ fn read_project() -> Reach {
     Reach { project: ProjectAccess::Read, ..Reach::default() }
 }
 
-const MENU_STEPS: &[MenuStep] = &[MenuStep {
-    name: "find-suite",
-    about: "Finds the command that runs the project's suite.",
-    reach: read_project,
-    params: &[("required", Param::YesNo, false)],
-    fields: &["kind", "suite", "each", "found"],
-}];
+const MENU_STEPS: &[MenuStep] = &[
+    MenuStep {
+        name: "find-suite",
+        about: "Finds the command that runs the project's suite.",
+        reach: read_project,
+        params: &[("required", Param::YesNo, false)],
+        fields: &["kind", "suite", "each", "found"],
+    },
+    MenuStep {
+        name: "refuse-when-false",
+        about: "Stops the run when an earlier step says it could not, so the person decides.",
+        reach: Reach::default,
+        params: &[("field", Param::StepField, true), ("says", Param::Text, true)],
+        fields: &[],
+    },
+];
 
 fn text(t: &toml::Table, k: &str) -> String {
     match t.get(k) {
@@ -186,25 +209,71 @@ const MENU_CHECKS: &[MenuCheck] = &[
         name: "suite-passes",
         kind: CheckKind::Open,
         params: &[],
-        suite: true,
-        cases: false,
+        auto: &[Auto::Suite],
         about: |_| "the project's whole suite passes, run by Jaynes without internet".into(),
+    },
+    MenuCheck {
+        name: "tests-fail-for-the-bug",
+        kind: CheckKind::Open,
+        params: &[],
+        auto: &[Auto::Suite, Auto::Write],
+        about: |_| {
+            "the tests named in tests are test files the step may write, and fail because of the bug, printing the \
+             line quoted in failure"
+                .into()
+        },
+    },
+    MenuCheck {
+        name: "tests-pass",
+        kind: CheckKind::Open,
+        params: &[("tests_from", Param::Step, true)],
+        auto: &[Auto::Suite],
+        about: |t| format!("the tests {} named pass, and then the whole suite", text(t, "tests_from")),
+    },
+    MenuCheck {
+        name: "hidden-cases-pass",
+        kind: CheckKind::Hidden,
+        params: &[],
+        auto: &[Auto::Cases],
+        about: |_| "the cases written from the request alone hold on the changed project".into(),
+    },
+    MenuCheck {
+        name: "output-follows-schema",
+        kind: CheckKind::Open,
+        params: &[],
+        auto: &[Auto::Schema],
+        about: |_| "the output has every field the schema requires, none blank, each of its type and within its limits".into(),
     },
     MenuCheck {
         name: "field-required",
         kind: CheckKind::Open,
         params: &[("field", Param::Text, true)],
-        suite: false,
-        cases: false,
+        auto: &[],
         about: |t| format!("the output has {}, not empty", text(t, "field")),
+    },
+    MenuCheck {
+        name: "field-empty",
+        kind: CheckKind::Open,
+        params: &[("field", Param::Text, true), ("says", Param::Text, true)],
+        auto: &[],
+        about: |t| format!("{} is empty; when it is not, the person decides", text(t, "field")),
     },
     MenuCheck {
         name: "field-max-length",
         kind: CheckKind::Open,
         params: &[("field", Param::Text, true), ("max", Param::Number, true)],
-        suite: false,
-        cases: false,
+        auto: &[],
         about: |t| format!("{} has at most {} characters", text(t, "field"), text(t, "max")),
+    },
+    MenuCheck {
+        name: "files-within",
+        kind: CheckKind::Open,
+        params: &[("field", Param::Text, false)],
+        auto: &[Auto::Write],
+        about: |t| {
+            let f = text(t, "field");
+            format!("every file in {} is one the step may write", if f.is_empty() { "files".to_string() } else { f })
+        },
     },
 ];
 
@@ -267,7 +336,7 @@ fn json_of(v: &toml::Value) -> Value {
 }
 
 /// Read the parameters a menu item takes, refusing any other and any of the wrong kind.
-fn params(given: &toml::Table, takes: &[(&str, Param, bool)], what: &str, errors: &mut Vec<String>) -> Map<String, Value> {
+fn params(given: &toml::Table, takes: &[(&str, Param, bool)], needs: &[String], what: &str, errors: &mut Vec<String>) -> Map<String, Value> {
     let mut out = Map::new();
     for (k, v) in given {
         match takes.iter().find(|(n, _, _)| n == k) {
@@ -277,6 +346,8 @@ fn params(given: &toml::Table, takes: &[(&str, Param, bool)], what: &str, errors
                     Param::Text => v.is_str(),
                     Param::Number => v.is_integer(),
                     Param::YesNo => v.is_bool(),
+                    Param::Step => v.as_str().is_some_and(|n| needs.iter().any(|x| x == n)),
+                    Param::StepField => v.as_str().and_then(|n| n.split_once('.')).is_some_and(|(n, f)| !f.is_empty() && needs.iter().any(|x| x == n)),
                 };
                 if ok {
                     out.insert(k.clone(), json_of(v));
@@ -285,6 +356,8 @@ fn params(given: &toml::Table, takes: &[(&str, Param, bool)], what: &str, errors
                         Param::Text => "text",
                         Param::Number => "a whole number",
                         Param::YesNo => "true or false",
+                        Param::Step => "a step this step needs",
+                        Param::StepField => "step.field, of a step this step needs",
                     };
                     errors.push(format!("{what}: {k} is {want}"));
                 }
@@ -301,7 +374,8 @@ fn params(given: &toml::Table, takes: &[(&str, Param, bool)], what: &str, errors
 
 const TYPES: &[&str] = &["string", "number", "integer", "boolean", "array", "object"];
 
-/// The JSON Schema of one field of an output, written `"string"` or `{ type, about, optional, items, fields }`.
+/// The JSON Schema of one field of an output, written `"string"` or `{ type, about, optional, max_length, items,
+/// max_items, fields }`.
 fn field_schema(spec: &toml::Value, at: &str, errors: &mut Vec<String>) -> (Value, bool) {
     let (ty, table) = match spec {
         toml::Value::String(s) => (s.clone(), None),
@@ -332,6 +406,18 @@ fn field_schema(spec: &toml::Value, at: &str, errors: &mut Vec<String>) -> (Valu
                     Some(b) => optional = b,
                     None => errors.push(format!("{at}: optional is true or false")),
                 },
+                "max_items" if ty == "array" => match v.as_integer() {
+                    Some(n) if n >= 0 => {
+                        s.insert("maxItems".into(), json!(n));
+                    }
+                    _ => errors.push(format!("{at}: max_items is a whole number")),
+                },
+                "max_length" if ty == "string" => match v.as_integer() {
+                    Some(n) if n >= 0 => {
+                        s.insert("maxLength".into(), json!(n));
+                    }
+                    _ => errors.push(format!("{at}: max_length is a whole number")),
+                },
                 "items" if ty == "array" => {
                     s.insert("items".into(), field_schema(v, &format!("{at}, its items,"), errors).0);
                 }
@@ -343,7 +429,7 @@ fn field_schema(spec: &toml::Value, at: &str, errors: &mut Vec<String>) -> (Valu
                     }
                     None => errors.push(format!("{at}: fields is a table")),
                 },
-                other => errors.push(format!("{at} takes no {other} (a field takes type, about, optional, and items for an array or fields for an object)")),
+                other => errors.push(format!("{at} takes no {other} (a field takes type, about, optional; max_length for a string; items and max_items for an array; fields for an object)")),
             }
         }
     }
@@ -458,7 +544,7 @@ impl TomlRole {
                             None => errs.push(format!("uses {u}, which is not a step on the menu ({})", MENU_STEPS.iter().map(|m| m.name).collect::<Vec<_>>().join(", "))),
                             Some(m) => {
                                 reach = (m.reach)();
-                                let with = params(s.with.as_ref().unwrap_or(&toml::Table::new()), m.params, u, &mut errs);
+                                let with = params(s.with.as_ref().unwrap_or(&toml::Table::new()), m.params, &s.needs, u, &mut errs);
                                 uses = Some((u.to_string(), with));
                             }
                         },
@@ -546,21 +632,30 @@ impl TomlRole {
                             given.remove(k);
                         }
                         let name = named.unwrap_or_else(|| u.to_string());
-                        let mut with = params(&given, m.params, &format!("the check {name}"), &mut errs);
-                        if m.suite {
-                            match s.needs.iter().find(|n| finds_suite.contains(n)) {
-                                Some(n) => {
-                                    with.insert("suite_step".into(), Value::String(n.clone()));
+                        let mut with = params(&given, m.params, &s.needs, &format!("the check {name}"), &mut errs);
+                        for auto in m.auto {
+                            match auto {
+                                Auto::Suite => match s.needs.iter().find(|n| finds_suite.contains(n)) {
+                                    Some(n) => {
+                                        with.insert("suite_step".into(), Value::String(n.clone()));
+                                    }
+                                    None => errs.push(format!("the check {name} runs the project's tests, so the step needs a step that uses find-suite")),
+                                },
+                                Auto::Cases => match reads.first() {
+                                    Some(r) => {
+                                        with.insert("cases_step".into(), Value::String(r.clone()));
+                                    }
+                                    None => errs.push(format!("the check {name} reads a hidden step's cases: name that step in reads")),
+                                },
+                                Auto::Schema => {
+                                    if s.output.is_none() {
+                                        errs.push(format!("the check {name} holds the output to its schema, and the step declares no output"));
+                                    }
+                                    with.insert("schema".into(), schema.clone());
                                 }
-                                None => errs.push(format!("the check {name} runs the project's suite, so the step needs a step that uses find-suite")),
-                            }
-                        }
-                        if m.cases {
-                            match reads.first() {
-                                Some(r) => {
-                                    with.insert("cases_step".into(), Value::String(r.clone()));
+                                Auto::Write => {
+                                    with.insert("write".into(), json!(reach.write));
                                 }
-                                None => errs.push(format!("the check {name} reads a hidden step's cases: name it in reads")),
                             }
                         }
                         checks.push(CheckDecl { name: name.clone(), kind: m.kind, about: (m.about)(&given), reads });
@@ -926,6 +1021,17 @@ files = { type = "array", items = "string" }
         assert!(e.contains("the check suite-pases is not on the menu"), "{e}");
         let e = errors("param", &GOOD.replace("max = 400", "max = 400, most = 3"));
         assert!(e.contains("takes no most"), "{e}");
+    }
+
+    #[test]
+    fn a_menu_item_s_parameters_and_what_it_reads_are_checked_against_the_role() {
+        let text = GOOD.replace("\"suite-passes\", {", "{ use = \"tests-pass\", tests_from = \"reproduce\" }, \"hidden-cases-pass\", \"output-follows-schema\", {");
+        let e = errors("menu-params", &text.replace("[step.output]\nsummary = { type = \"string\", about = \"what changed\" }\nfiles = { type = \"array\", items = \"string\" }\n", ""));
+        assert!(e.contains("tests_from is a step this step needs"), "{e}");
+        assert!(e.contains("the check hidden-cases-pass reads a hidden step's cases: name that step in reads"), "{e}");
+        assert!(e.contains("the check output-follows-schema holds the output to its schema, and the step declares no output"), "{e}");
+        let e = errors("no-suite", &GOOD.replace("needs = [\"runner\"]\n", "").replace("The suite: {{runner.suite}}", ""));
+        assert!(e.contains("the check suite-passes runs the project's tests, so the step needs a step that uses find-suite"), "{e}");
     }
 
     #[test]

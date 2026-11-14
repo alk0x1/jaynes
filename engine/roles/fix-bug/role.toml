@@ -1,0 +1,86 @@
+# fix-bug: a test that fails because of the bug, then a fix that makes it pass with the whole suite, and proof the
+# maker never sees: cases written from the request alone, by an agent whose work no other agent reads.
+#
+# When no test shows the bug, the step found refuses and the run stops with what the agent tried: send reproduce
+# back with a hint, or abandon the run. A test the fix may not change and that stands in its way is said in
+# wrong_test: a check fails with it, so the person sees it. The fix is merged by Jaynes into the branch the run
+# started from, never pushed; Undo on the run's page reverts it.
+
+role = "fix-bug"
+version = "3.0.0"
+delivery = "merge"
+
+[[step]]
+name = "runner"
+by = "jaynes"
+use = "find-suite"
+with = { required = true }
+about = "Finds how the project's tests run."
+
+[[step]]
+name = "cases"
+hidden = true
+reach = { project = "read", commands = true }
+attempts = 2
+about = "Writes, from the request alone, the checks the fix will be judged by."
+instructions = "cases.md"
+checks = ["output-follows-schema"]
+
+[step.output]
+cases = { type = "array", max_items = 8, items = { type = "object", fields = { says = "string", run = "string" } } }
+untestable = { type = "array", items = "string", optional = true }
+
+[[step]]
+name = "reproduce"
+needs = ["runner"]
+reach = { project = "write", commands = true, write = [
+  "**/tests/**", "**/test/**", "**/__tests__/**", "**/spec/**", "**/test_*.py", "**/*_test.py",
+  "**/*.test.*", "**/*.spec.*", "**/*_test.go", "**/*_spec.rb", "**/*Test.java", "**/*Tests.cs",
+] }
+about = "Writes the smallest test that fails because of the bug."
+instructions = "reproduce.md"
+checks = ["output-follows-schema", "tests-fail-for-the-bug"]
+stop = { ask = "Do these tests show the bug?", verdicts = ["keep", "redo"], budget = 0.2 }
+show = { each = "examples", label = "{{case}}: now {{now}}; after the fix {{after}}" }
+
+[step.output]
+bug = { type = "string", about = "what goes wrong, in one or two sentences" }
+reproduced = { type = "boolean", optional = true, about = "false when no test shows the bug" }
+tests = { type = "array", items = "string", optional = true, about = "test files added or changed" }
+failure = { type = "string", optional = true, about = "a line the tests print because of the bug, copied exactly" }
+examples = { type = "array", optional = true, items = { type = "object", fields = {
+  case = { type = "string", max_length = 50, about = "a situation the person knows" },
+  now = { type = "string", max_length = 70, about = "what they see today" },
+  after = { type = "string", max_length = 70, about = "what they will see once fixed" },
+} } }
+
+[[step]]
+name = "found"
+by = "jaynes"
+needs = ["reproduce"]
+use = "refuse-when-false"
+with = { field = "reproduce.reproduced", says = "no test shows the bug: {{reproduce.bug}} Send reproduce back with a hint to look again, or abandon the run." }
+about = "Stops the run when no test shows the bug, so the person decides."
+
+[[step]]
+name = "fix"
+needs = ["runner", "reproduce", "found"]
+reach = { project = "write", commands = true, write = [
+  "**", "!**/tests/**", "!**/test/**", "!**/__tests__/**", "!**/spec/**", "!**/test_*.py", "!**/*_test.py",
+  "!**/*.test.*", "!**/*.spec.*", "!**/*_test.go", "!**/*_spec.rb", "!**/*Test.java", "!**/*Tests.cs",
+] }
+about = "Fixes the bug so its tests and the whole suite pass, without touching the tests."
+instructions = "fix.md"
+checks = [
+  "output-follows-schema",
+  { use = "field-empty", field = "wrong_test", says = "you say a test stands in the way, and the tests are not yours to change: the person decides, so this stays failed until they send reproduce back" },
+  { use = "tests-pass", tests_from = "reproduce" },
+  { use = "hidden-cases-pass", name = "proof", reads = ["cases"] },
+]
+stop = { ask = "Keep this fix?", verdicts = ["keep", "redo"] }
+show = { label = "{{summary}}" }
+
+[step.output]
+summary = { type = "string", max_length = 400, about = "what was wrong and what the person sees now, in two or three plain sentences, no names from the code" }
+files = { type = "array", items = "string" }
+wrong_test = { type = "string", optional = true, about = "empty, unless a test you may not change expects what the task changes: name it and what it should expect" }
