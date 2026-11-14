@@ -884,7 +884,7 @@ use = "find-suite"
 name = "make"
 by = "agent"                 # "agent", "jaynes" (from the menu) or "person" (a question over the steps it needs)
 needs = ["runner"]           # the steps whose outputs it sees, earlier ones
-reach = {{ project = "write", write = ["**"], commands = true }}   # project: none, read, write; network: none, web
+reach = {{ project = "write", write = ["**"], commands = true }}   # project: none, read, write; network: none, web, packages (only package registries)
 about = "Makes the change."
 # What the agent reads: prose, here or in a .md file of this folder (instructions = "make.md"). {{{{request}}}},
 # {{{{STEP}}}} and {{{{STEP.FIELD}}}} are filled with the data, wrapped in tags; only steps in needs may be named.

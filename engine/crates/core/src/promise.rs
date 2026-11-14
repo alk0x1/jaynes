@@ -412,9 +412,20 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
         // a choice: the first option kept alone, or kept with a note the agent works from
         if q.choose {
             let first = q.items.first().map(|x| x.id.clone()).unwrap_or_default();
-            for (verdict, word) in [(Verdict::Keep, "choose"), (Verdict::Change { text: "adjust it".into() }, "choose and adjust")] {
-                let verdicts: BTreeMap<String, Verdict> = q.items.iter().map(|x| (x.id.clone(), if x.id == first { verdict.clone() } else { Verdict::Drop })).collect();
-                let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: String::new() };
+            let develop = Verdict::Change { text: "develop it".into() };
+            type Way<'a> = (&'a str, &'a dyn Fn(&str) -> Verdict, &'a str);
+            let ways: [Way; 4] = [
+                ("choose", &|id: &str| if id == first { Verdict::Keep } else { Verdict::Drop }, ""),
+                ("choose and adjust", &|id: &str| if id == first { Verdict::Change { text: "adjust it".into() } } else { Verdict::Drop }, ""),
+                ("keep finalists", &|_: &str| develop.clone(), ""),
+                ("choose none", &|_: &str| Verdict::Drop, "something else"),
+            ];
+            for (word, verdict, context) in ways {
+                let verdicts: BTreeMap<String, Verdict> = q.items.iter().map(|x| (x.id.clone(), verdict(&x.id))).collect();
+                let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: context.to_string() };
+                if answer.choice(q).is_none() {
+                    continue;
+                }
                 let back = answer.sends_back();
                 out.push(Move {
                     input: Input::Answer { answer },

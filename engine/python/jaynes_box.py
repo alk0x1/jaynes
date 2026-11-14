@@ -305,6 +305,8 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
         scratch.mkdir()
+        # what a step installed in the run's copy first, then what the person's own folder has
+        link_dependencies(project, work)
         if source is not None:
             link_dependencies(source, work)
         argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True))

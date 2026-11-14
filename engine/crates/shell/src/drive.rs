@@ -710,8 +710,12 @@ impl<'a> Driver<'a> {
         for (k, v) in [("GOCACHE", "go-cache"), ("GOPATH", "go-path"), ("npm_config_cache", "npm-cache")] {
             env.push((k.into(), scratch.join(v).display().to_string()));
         }
-        for (k, v) in [("GOTOOLCHAIN", "local"), ("GOPROXY", "off"), ("GOTELEMETRY", "off"), ("npm_config_offline", "true")] {
-            env.push((k.into(), v.into()));
+        env.push(("GOTOOLCHAIN".into(), "local".into()));
+        env.push(("GOTELEMETRY".into(), "off".into()));
+        // offline, unless the step installs packages from their registries
+        if turn.reach.network != jaynes_core::manifest::Network::Packages {
+            env.push(("GOPROXY".into(), "off".into()));
+            env.push(("npm_config_offline".into(), "true".into()));
         }
         if let Some(copy) = &self.setup.copy {
             let venv = copy.dir.join(".venv");

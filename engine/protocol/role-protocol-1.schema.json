@@ -336,11 +336,24 @@
       "type": "object"
     },
     "Network": {
-      "enum": [
-        "none",
-        "web"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "web",
+          "description": "The agent program's tools that read the web, such as Claude Code's WebFetch and WebSearch.",
+          "type": "string"
+        },
+        {
+          "const": "packages",
+          "description": "Only the registries packages are installed from (npm, Go modules, PyPI, crates), from the step's commands:\nthe step installs what the project needs, and reaches nothing else.",
+          "type": "string"
+        }
+      ]
     },
     "ProjectAccess": {
       "enum": [

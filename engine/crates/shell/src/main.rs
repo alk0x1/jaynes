@@ -460,7 +460,19 @@ fn answer(args: &[String]) -> Result<(), String> {
             })
             .collect();
     }
-    let context = flag(args, "--context").unwrap_or_default();
+    // finalists: --finalists A,B to have the agent develop them and ask again; none: --none WHY
+    if let Some(names) = flag(args, "--finalists") {
+        let names: Vec<&str> = names.split(',').map(str::trim).collect();
+        verdicts = q.items.iter().map(|x| {
+            let v = if names.contains(&x.id.as_str()) { Verdict::Change { text: "A finalist: develop it further, keeping what it is.".into() } } else { Verdict::Drop };
+            (x.id.clone(), v)
+        }).collect();
+    }
+    let why = flag(args, "--none");
+    if why.is_some() {
+        verdicts = q.items.iter().map(|x| (x.id.clone(), Verdict::Drop)).collect();
+    }
+    let context = [why.unwrap_or_default(), flag(args, "--context").unwrap_or_default()].iter().filter(|t| !t.trim().is_empty()).cloned().collect::<Vec<_>>().join(" ");
     let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };
     let effects = drive::effects(&home(), &state, &q, &answer)?;
     println!("What this answer will do:");

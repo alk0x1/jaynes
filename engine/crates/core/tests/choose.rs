@@ -186,8 +186,8 @@ fn a_choice_keeps_or_changes_exactly_one_option_and_drops_the_rest() {
     let (run, q) = asked();
     let two = refused(&run, answer(&q, &[("Sun", Verdict::Keep), ("Ink", Verdict::Keep), ("Moss", Verdict::Drop)]));
     assert!(two.contains("choose one"), "{two}");
-    let none = refused(&run, answer(&q, &[("Sun", Verdict::Drop), ("Ink", Verdict::Drop), ("Moss", Verdict::Drop)]));
-    assert!(none.contains("choose one"), "{none}");
+    let kept_and_changed = refused(&run, answer(&q, &[("Sun", Verdict::Keep), ("Ink", Verdict::Change { text: "warmer".into() }), ("Moss", Verdict::Drop)]));
+    assert!(kept_and_changed.contains("choose one"), "{kept_and_changed}");
 }
 
 #[test]
@@ -198,4 +198,47 @@ fn a_round_that_keeps_more_than_was_chosen_does_not_pass() {
     let (events, _) = deliver(&mut run, &t, "both", vec![item("Sun", "s"), item("Ink", "i")]);
     assert!(!events.iter().any(|e| matches!(e, Event::StepDone { .. })), "{events:?}");
     assert!(matches!(run.phase, Phase::Blocked { .. }), "the role's fault, not the agent's: {:?}", run.phase);
+}
+
+#[test]
+fn finalists_go_back_to_the_agent_to_be_developed_and_the_rest_leave() {
+    let (mut run, q) = asked();
+    let more = || Verdict::Change { text: "develop it further".into() };
+    let (events, cmds) = feed(&mut run, answer(&q, &[("Sun", more()), ("Moss", more()), ("Ink", Verdict::Drop)]));
+    let said = events.iter().find_map(|e| if let Event::AnswerRecorded { effects, .. } = e { Some(effects.sentences.join(" ")) } else { None }).expect("recorded");
+    assert!(said.contains("“Sun” is a finalist") && said.contains("you choose again"), "{said}");
+    let t = turn(&cmds);
+    assert_eq!(t.keep, None, "the agent develops the finalists");
+    let notes = t.notes.join("\n");
+    assert!(notes.contains("“Moss” is a finalist") && notes.contains("“Ink” was not chosen"), "{notes}");
+    let (events, _) = deliver(&mut run, &t, "two", vec![item("Sun", "s2"), item("Moss", "m2")]);
+    let q2 = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked again");
+    assert_eq!(q2.items.len(), 2);
+}
+
+#[test]
+fn finalists_are_developed_never_kept_as_they_are() {
+    let (run, q) = asked();
+    let e = refused(&run, answer(&q, &[("Sun", Verdict::Keep), ("Moss", Verdict::Keep), ("Ink", Verdict::Drop)]));
+    assert!(e.contains("choose one"), "{e}");
+}
+
+#[test]
+fn none_sends_every_option_away_with_the_person_s_words_and_new_ones_are_made() {
+    let (mut run, q) = asked();
+    let mut none = answer(&q, &[("Sun", Verdict::Drop), ("Moss", Verdict::Drop), ("Ink", Verdict::Drop)]);
+    let e = refused(&run, none.clone());
+    assert!(e.contains("say what was missing"), "{e}");
+    if let Input::Answer { answer } = &mut none {
+        answer.context = "too cold, I want something warmer".into();
+    }
+    let (events, cmds) = feed(&mut run, none);
+    let said = events.iter().find_map(|e| if let Event::AnswerRecorded { effects, .. } = e { Some(effects.sentences.join(" ")) } else { None }).expect("recorded");
+    assert!(said.contains("makes new options"), "{said}");
+    let t = turn(&cmds);
+    assert!(t.context.iter().any(|c| c.contains("warmer")), "{:?}", t.context);
+    assert!(t.notes.join("\n").contains("None was chosen"), "{:?}", t.notes);
+    // an option sent away does not come back
+    let (events, _) = deliver(&mut run, &t, "again", vec![item("Ink", "i"), item("Ember", "e")]);
+    assert!(!events.iter().any(|e| matches!(e, Event::QuestionOpened { .. })), "Ink came back: {events:?}");
 }

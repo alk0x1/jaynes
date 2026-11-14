@@ -61,8 +61,9 @@ impl Copy {
                 let from = source.join(d);
                 if from.is_dir() {
                     std::os::unix::fs::symlink(&from, dir.join(d)).map_err(|e| e.to_string())?;
-                    exclude.push_str(&format!("/{d}\n"));
                 }
+                // installed here or linked, dependencies are never part of the change
+                exclude.push_str(&format!("/{d}\n"));
             }
             std::fs::write(dir.join(".git/info/exclude"), exclude).map_err(|e| e.to_string())?;
         }

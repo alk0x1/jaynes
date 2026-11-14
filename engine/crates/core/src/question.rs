@@ -131,11 +131,36 @@ impl Answer {
         self.verdicts.values().any(Verdict::sends_back)
     }
 
+    /// What an answer to a stop that chooses does: one option goes on, two or three finalists are developed and
+    /// asked about again, or none goes on and new options are made. None when it is no valid choice.
+    pub fn choice(&self, q: &Question) -> Option<Choice> {
+        let going: Vec<Verdict> = q.items.iter().map(|x| self.verdict(&x.id)).filter(|v| *v != Verdict::Drop).collect();
+        let judged = q.items.iter().all(|x| matches!(self.verdict(&x.id), Verdict::Keep | Verdict::Change { .. } | Verdict::Drop));
+        match going.len() {
+            _ if !judged => None,
+            0 => Some(Choice::None),
+            1 => Some(Choice::One),
+            _ if going.iter().all(|v| matches!(v, Verdict::Change { .. })) => Some(Choice::Finalists),
+            _ => None,
+        }
+    }
+
     /// The items a choice keeps as they are, when it changes none: Jaynes keeps them alone, without the agent.
     pub fn kept_alone(&self, q: &Question) -> Option<Vec<String>> {
         let changes = q.items.iter().any(|x| matches!(self.verdict(&x.id), Verdict::Change { .. } | Verdict::Redo { .. }));
-        (q.choose && self.sends_back() && !changes).then(|| q.items.iter().filter(|x| self.verdict(&x.id) == Verdict::Keep).map(|x| x.id.clone()).collect())
+        (q.choose && self.choice(q) == Some(Choice::One) && self.sends_back() && !changes).then(|| q.items.iter().filter(|x| self.verdict(&x.id) == Verdict::Keep).map(|x| x.id.clone()).collect())
     }
+}
+
+/// What a choice among options does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    /// One option goes on, as it is or adjusted.
+    One,
+    /// Two or more go on as finalists, each developed by the agent, and the person chooses again.
+    Finalists,
+    /// None goes on: the agent makes new options from the person's words, and these never come back.
+    None,
 }
 
 /// A leave an agent asks for in the middle of an attempt.

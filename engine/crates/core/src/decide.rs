@@ -7,7 +7,7 @@ use crate::digest::Digest;
 use crate::event::{Effects, Event, Fault, Outcome, Read};
 use crate::io::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Input};
 use crate::manifest::{CheckKind, Executor, ProjectAccess, SessionKind};
-use crate::question::{Answer, Ask, AskKind, By, Item, Question, QuestionKind, Verdict, VerdictKind};
+use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Verdict, VerdictKind};
 use crate::risk::{self, Ceiling, Ceilings, Changed};
 use crate::run::{Phase, QuestionState, Run, Status};
 use crate::{ENGINE, FORMAT, PROTOCOL};
@@ -972,10 +972,10 @@ impl Ctx {
             }
         }
         if q.question.choose {
-            let going = q.question.items.iter().filter(|x| answer.verdict(&x.id) != Verdict::Drop).count();
-            let judged = q.question.items.iter().all(|x| matches!(answer.verdict(&x.id), Verdict::Keep | Verdict::Change { .. } | Verdict::Drop));
-            if going != 1 || !judged {
-                return refuse("choose one: keep or change exactly one option, and the others leave");
+            match answer.choice(&q.question) {
+                None => return refuse("choose one: keep or change one option, or name finalists for the agent to develop, or choose none; the others leave"),
+                Some(Choice::None) if answer.context.trim().is_empty() => return refuse("none goes on: say what was missing, for the new options"),
+                Some(_) => {}
             }
         }
         let i = self.index(&q.question.step)?;
@@ -1049,7 +1049,7 @@ impl Ctx {
                 continue;
             }
             if let Some(j) = self.run.manifest.index(&item.id) {
-                let note = note(item, &v, false);
+                let note = note(item, &v, None);
                 self.invalidate(j, vec![format!("you sent it back at {here}")], vec![note]);
             }
         }
@@ -1089,14 +1089,19 @@ pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str
     }
 }
 
-fn note(item: &Item, v: &Verdict, choose: bool) -> String {
+fn note(item: &Item, v: &Verdict, choose: Option<Choice>) -> String {
+    let choose_one = choose.is_some();
     match v {
-        Verdict::Change { text } if choose => format!(
+        Verdict::Change { text } if choose == Some(Choice::Finalists) => format!(
+            "“{}” is a finalist: develop it further as the person writes, keeping its name: {text}",
+            item.label
+        ),
+        Verdict::Change { text } if choose_one => format!(
             "“{}” was chosen. Give it alone, changed as the person writes: {text}. You may take from the other options, in your previous output, what the person names.",
             item.label
         ),
-        Verdict::Drop if choose => format!("“{}” was not chosen: do not give it again as an option.", item.label),
-        Verdict::Keep if choose => format!("“{}” was chosen: keep it as it is.", item.label),
+        Verdict::Drop if choose_one => format!("“{}” was not chosen: do not give it again as an option.", item.label),
+        Verdict::Keep if choose_one => format!("“{}” was chosen: keep it as it is.", item.label),
         Verdict::Change { text } => format!("Change “{}”: {text}", item.label),
         Verdict::Redo { note } if note.trim().is_empty() => format!("Do “{}” again.", item.label),
         Verdict::Redo { note } => format!("Do “{}” again: {note}", item.label),
@@ -1107,12 +1112,18 @@ fn note(item: &Item, v: &Verdict, choose: bool) -> String {
 }
 
 pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
-    q.items
+    let choice = if q.choose { answer.choice(q) } else { None };
+    let mut out: Vec<String> = q
+        .items
         .iter()
         .map(|item| (item, answer.verdict(&item.id)))
         .filter(|(_, v)| *v != Verdict::Skip)
-        .map(|(item, v)| note(item, &v, q.choose))
-        .collect()
+        .map(|(item, v)| note(item, &v, choice))
+        .collect();
+    if choice == Some(Choice::None) {
+        out.push("None was chosen: make new options, truly different from these, from what the person said was missing.".to_string());
+    }
+    out
 }
 
 /// What an answer will do, in Jaynes's words, from the run as it is now. The page shows it before the person
@@ -1136,6 +1147,9 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         let label = &item.label;
         sentences.push(match (&v, person) {
             (Verdict::Keep, _) if q.choose => format!("“{label}” is chosen: no later round of {} may change it.", q.step),
+            (Verdict::Change { text }, _) if q.choose && answer.choice(q) == Some(Choice::Finalists) => {
+                format!("“{label}” is a finalist: the agent develops it as you wrote: “{text}”.")
+            }
             (Verdict::Change { text }, _) if q.choose => format!("“{label}” is chosen, and is adjusted as you wrote: “{text}”."),
             (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option."),
             (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),
@@ -1199,7 +1213,11 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
         }
     } else if q.choose {
-        sentences.push(format!("The agent at {} adjusts what you chose, seeing every option it made, and you see the result.", q.step));
+        sentences.push(match answer.choice(q) {
+            Some(Choice::Finalists) => format!("The agent at {} develops the finalists, and you choose again.", q.step),
+            Some(Choice::None) => format!("The agent at {} makes new options from your words; these do not come back.", q.step),
+            _ => format!("The agent at {} adjusts what you chose, seeing every option it made, and you see the result.", q.step),
+        });
         if !may_rerun.is_empty() {
             sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
         }

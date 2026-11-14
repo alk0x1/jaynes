@@ -665,7 +665,16 @@ impl World {
             }
         }
         // a choice, most of the time: one kept or changed, the rest dropped
-        if q.choose && self.rng.chance(80) && !q.items.is_empty() {
+        let mut context = String::new();
+        if q.choose && self.rng.chance(15) {
+            // none of them: every option leaves, with the person's words
+            verdicts = q.items.iter().map(|x| (x.id.clone(), Verdict::Drop)).collect();
+            context = "something warmer".to_string();
+        } else if q.choose && q.items.len() > 2 && self.rng.chance(20) {
+            // finalists: all but one developed further
+            let out = self.rng.below(q.items.len());
+            verdicts = q.items.iter().enumerate().map(|(n, x)| (x.id.clone(), if n == out { Verdict::Drop } else { Verdict::Change { text: "develop it".to_string() } })).collect();
+        } else if q.choose && self.rng.chance(80) && !q.items.is_empty() {
             let chosen = self.rng.below(q.items.len());
             verdicts = q.items.iter().enumerate().map(|(n, x)| {
                 let v = if n != chosen { Verdict::Drop } else if self.rng.chance(50) { Verdict::Keep } else { Verdict::Change { text: "the font of the other".to_string() } };
@@ -688,7 +697,8 @@ impl World {
         fn answer_keeps_all(a: &Answer) -> bool {
             a.verdicts.values().all(|v| *v == Verdict::Keep)
         }
-        let answer = Answer { question: q.id.clone(), shown, verdicts, by: by.clone() , context: String::new()};
+        let context = if by.person() { context } else { String::new() };
+        let answer = Answer { question: q.id.clone(), shown, verdicts, by: by.clone() , context };
         let accepted = self.send(Input::Answer { answer: answer.clone() });
         if let Some(cases) = self.cases.as_mut() {
             cases.push(answer_case(&run, &answer, accepted));
@@ -1682,10 +1692,7 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
         "braked": run.attention.get(&d.name).is_some_and(|c| c.braked),
         "superseded": q.superseded,
         "shownMatches": answer.shown == q.question.shown(),
-        "verdictsValid": valid && (!q.question.choose || {
-            let going = q.question.items.iter().filter(|x| answer.verdict(&x.id) != Verdict::Drop).count();
-            going == 1 && q.question.items.iter().all(|x| matches!(answer.verdict(&x.id), Verdict::Keep | Verdict::Change { .. } | Verdict::Drop))
-        }),
+        "verdictsValid": valid && (!q.question.choose || answer.choice(&q.question).is_some_and(|c| c != jaynes_core::question::Choice::None || !answer.context.trim().is_empty())),
         "allKeep": answer.verdicts.values().all(|v| *v == Verdict::Keep),
         "hasContext": !answer.context.trim().is_empty(),
         "answered": q.answer.is_some(),

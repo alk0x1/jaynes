@@ -283,6 +283,12 @@ impl Default for Claude {
 
 const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 
+/// The hosts a step that installs packages may reach from its commands, and nothing else.
+pub const PACKAGE_HOSTS: &[&str] = &[
+    "registry.npmjs.org", "registry.yarnpkg.com", "proxy.golang.org", "sum.golang.org", "pypi.org",
+    "files.pythonhosted.org", "crates.io", "index.crates.io", "static.crates.io",
+];
+
 fn binary(name: &str) -> Option<PathBuf> {
     let path = std::env::var("PATH").unwrap_or_default();
     let mut dirs: Vec<PathBuf> = path.split(':').map(PathBuf::from).collect();
@@ -322,7 +328,7 @@ impl Claude {
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
             "sandbox": {"enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
                         "autoAllowBashIfSandboxed": true,
-                        "network": {"allowedDomains": [], "strictAllowlist": true, "allowLocalBinding": true},
+                        "network": {"allowedDomains": if reach.network == Network::Packages { PACKAGE_HOSTS.to_vec() } else { Vec::new() }, "strictAllowlist": true, "allowLocalBinding": true},
                         "filesystem": {"denyRead": ["~/"], "allowRead": read,
                                        "allowWrite": [cwd.join(crate::project::EXCHANGE).join("tmp").display().to_string()]}},
             "disableAllHooks": true, "autoMemoryEnabled": false, "disableClaudeAiConnectors": true,
@@ -544,6 +550,17 @@ mod tests {
         assert_eq!(refused_writes(out, Path::new("/w"), &reach), Some(vec!["/w/.jaynes/output.json".to_string()]));
         let none = r#"{"type":"user","message":{"content":[]}}"#;
         assert_eq!(refused_writes(none, Path::new("/w"), &reach), None);
+    }
+
+    #[test]
+    fn a_step_that_installs_packages_reaches_only_their_registries() {
+        let c = Claude { model: "m".into(), effort: "high".into(), max_messages: 10 };
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::Packages, commands: true };
+        let s = c.settings(Path::new("/w"), &reach, &[], false);
+        assert_eq!(s["sandbox"]["network"]["allowedDomains"], json!(PACKAGE_HOSTS));
+        assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "WebFetch"), "no web tools");
+        let none = c.settings(Path::new("/w"), &Reach { network: Network::None, ..reach }, &[], false);
+        assert_eq!(none["sandbox"]["network"]["allowedDomains"], json!([]));
     }
 
     #[test]

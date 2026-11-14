@@ -133,7 +133,11 @@ pub enum ProjectAccess {
 pub enum Network {
     #[default]
     None,
+    /// The agent program's tools that read the web, such as Claude Code's WebFetch and WebSearch.
     Web,
+    /// Only the registries packages are installed from (npm, Go modules, PyPI, crates), from the step's commands:
+    /// the step installs what the project needs, and reaches nothing else.
+    Packages,
 }
 
 /// What the step does to the world, by where its effect lands.
