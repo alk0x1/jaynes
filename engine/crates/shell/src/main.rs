@@ -110,7 +110,11 @@ fn run(args: &[String]) -> Result<(), String> {
             match toml_role::TomlRole::load(Path::new(dir)) {
                 Ok(role) => {
                     println!("✔ {} {} reads: {}", role.manifest.role, role.manifest.version, role.manifest.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
-                    Ok(())
+                    let (lines, all) = role.prove();
+                    for l in &lines {
+                        println!("{l}");
+                    }
+                    if all { Ok(()) } else { Err("a promise of the role does not hold".into()) }
                 }
                 Err(errors) => Err(format!("✘ the role does not read:\n{}", errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n"))),
             }

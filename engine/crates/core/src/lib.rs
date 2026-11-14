@@ -15,6 +15,7 @@ pub mod event;
 pub mod glob;
 pub mod io;
 pub mod manifest;
+pub mod promise;
 pub mod question;
 pub mod risk;
 pub mod run;

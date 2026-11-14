@@ -34,3 +34,8 @@ stop = { ask = "The change turned out bigger than a small one. Keep it, or have 
 [step.output]
 summary = { type = "string", about = "what changed, in a sentence or two" }
 files = { type = "array", items = "string" }
+
+[[promise]]
+says = "Nothing is delivered before the project's suite passed on the change"
+never = "deliver"
+unless = "check suite-passes of change passed"

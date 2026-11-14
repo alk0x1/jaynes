@@ -84,3 +84,18 @@ show = { label = "{{summary}}" }
 summary = { type = "string", max_length = 400, about = "what was wrong and what the person sees now, in two or three plain sentences, no names from the code" }
 files = { type = "array", items = "string" }
 wrong_test = { type = "string", optional = true, about = "empty, unless a test you may not change expects what the task changes: name it and what it should expect" }
+
+[[promise]]
+says = "The agent that fixes never sees the cases the fix is judged by"
+agent_of = "fix"
+never_sees = "cases"
+
+[[promise]]
+says = "The fix starts only after tests failed because of the bug"
+event = "step fix starts"
+only_after = "check tests-fail-for-the-bug of reproduce passed"
+
+[[promise]]
+says = "Nothing is merged before the hidden cases passed on the fix"
+never = "merge"
+unless = "check proof of fix passed"

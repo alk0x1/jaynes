@@ -31,6 +31,7 @@ use jaynes_core::manifest::{
     CheckDecl, CheckKind, DeliveryKind, Effect, Executor, Manifest, Network, ProjectAccess, Rate, Reach, SessionKind,
     StepDecl, StopDecl,
 };
+use jaynes_core::promise::{Condition, Form, On, Promise, Proof};
 use jaynes_core::question::VerdictKind;
 use jaynes_core::risk::Risk;
 use serde::Deserialize;
@@ -51,6 +52,21 @@ struct RoleFile {
     delivery: DeliveryKind,
     #[serde(default)]
     step: Vec<toml::Spanned<StepFile>>,
+    #[serde(default)]
+    promise: Vec<toml::Spanned<PromiseFile>>,
+}
+
+/// A promise of the role about its own method, in one of three forms.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PromiseFile {
+    says: String,
+    never: Option<String>,
+    unless: Option<String>,
+    event: Option<String>,
+    only_after: Option<String>,
+    agent_of: Option<String>,
+    never_sees: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +325,8 @@ pub struct TomlRole {
     pub dir: PathBuf,
     pub manifest: Manifest,
     pub extras: BTreeMap<String, StepExtra>,
+    /// The role's promises, each with its line in role.toml.
+    pub promises: Vec<(usize, Promise)>,
 }
 
 /// An error in a role's files, with where it is.
@@ -731,8 +749,63 @@ impl TomlRole {
                 errors.push(at(line, FILE, e));
             }
         }
-        if errors.is_empty() { Ok(TomlRole { dir: dir.to_path_buf(), manifest, extras }) } else { Err(errors) }
+        let mut promises = Vec::new();
+        if errors.is_empty() {
+            for spanned in &file.promise {
+                let line = line_of(&text, spanned.span().start);
+                let p = spanned.get_ref();
+                let m = &manifest;
+                let form = match (&p.never, &p.unless, &p.event, &p.only_after, &p.agent_of, &p.never_sees) {
+                    (Some(e), Some(c), None, None, None, None) => On::parse(e, m).and_then(|on| Ok(Form::Never { on, unless: Condition::parse(c, m)? })),
+                    (None, None, Some(e), Some(c), None, None) => On::parse(e, m).and_then(|on| Ok(Form::OnlyAfter { on, after: Condition::parse(c, m)? })),
+                    (None, None, None, None, Some(a), Some(b)) => Form::never_sees(a, b, m),
+                    _ => Err("a promise is never with unless, event with only_after, or agent_of with never_sees".to_string()),
+                };
+                match form {
+                    Ok(form) if !p.says.trim().is_empty() => promises.push((line, Promise { says: p.says.clone(), form })),
+                    Ok(_) => errors.push(at(Some(line), FILE, "the promise says nothing: write what it promises in says")),
+                    Err(e) => errors.push(at(Some(line), FILE, format!("the promise {:?}: {e}", p.says))),
+                }
+            }
+        }
+        if errors.is_empty() { Ok(TomlRole { dir: dir.to_path_buf(), manifest, extras, promises }) } else { Err(errors) }
     }
+}
+
+impl TomlRole {
+    /// Prove every promise: a line each, ✔ proved or ✘ broken with the path that breaks it, and whether all hold.
+    pub fn prove(&self) -> (Vec<String>, bool) {
+        let promises: Vec<Promise> = self.promises.iter().map(|(_, p)| p.clone()).collect();
+        let proofs = jaynes_core::promise::prove(&self.manifest, &promises);
+        let mut lines = Vec::new();
+        let mut all = true;
+        for ((line, p), proof) in self.promises.iter().zip(proofs) {
+            match proof {
+                Proof::Proved { states } => lines.push(format!("✔ {:?}: proved ({} states)", p.says, thousands(states))),
+                Proof::Broken { path } => {
+                    all = false;
+                    lines.push(format!("✘ {:?} ({FILE}:{line}): fails\n   {}", p.says, path.join(" → ")));
+                }
+                Proof::Unfinished { states } => {
+                    all = false;
+                    lines.push(format!("✘ {:?} ({FILE}:{line}): not proved, the search stopped at {} states", p.says, thousands(states)));
+                }
+            }
+        }
+        (lines, all)
+    }
+}
+
+fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 // --- filling instructions ------------------------------------------------------------------------------------

@@ -75,6 +75,20 @@ fn reach_of(m: &jaynes_core::Manifest) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// What a role in TOML promises, by what it means, with its words: to tell whether a new version drops or changes
+/// a promise.
+fn promises_of(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    crate::toml_role::TomlRole::load(dir)
+        .map(|r| r.promises.iter().map(|(_, p)| (format!("{:?} {:?}", p.says, p.form), p.says.clone())).collect())
+        .unwrap_or_default()
+}
+
+/// The promises of the role in `old` that the version in `new` drops or changes, by their words.
+fn lost_promises(old: &Path, new: &Path) -> Vec<String> {
+    let kept = promises_of(new);
+    promises_of(old).into_iter().filter(|(k, _)| !kept.contains_key(k)).map(|(_, says)| format!("\"{says}\"")).collect()
+}
+
 fn manifest_of(role: &RoleProgram) -> Result<jaynes_core::Manifest, String> {
     match role.call(crate::protocol::Call::Describe {}) {
         Ok(crate::protocol::Body::Manifest { manifest }) => Ok(manifest),
@@ -95,6 +109,13 @@ pub fn update_roles(home: &Path) -> Vec<String> {
             let new = manifest_of(&RoleProgram::new(&folder, &library(home)))?;
             let old = manifest_of(&RoleProgram::new(&roles_dir(home).join(&name), &library(home)))?;
             let more: Vec<String> = reach_of(&new).difference(&reach_of(&old)).cloned().collect();
+            let lost = lost_promises(&roles_dir(home).join(&name), &folder);
+            if !lost.is_empty() {
+                return Ok(format!(
+                    "role {name} not updated: its new version drops or changes promises ({}). Install it with `jaynes add {origin}` once you accept that",
+                    lost.join("; ")
+                ));
+            }
             if !more.is_empty() {
                 return Ok(format!(
                     "role {name} not updated: its new version reaches more ({}). Install it with `jaynes add {origin}` once you accept that",
@@ -122,6 +143,14 @@ fn install(home: &Path, source: &str, folder: &Path, commit: Option<String>) -> 
         Ok(crate::protocol::Body::Manifest { manifest }) => manifest.role,
         other => return Err(format!("the role did not describe itself: {other:?}")),
     };
+    // a role in TOML is installed only when every promise it makes is proved again here
+    if folder.join(crate::toml_role::FILE).is_file() {
+        let toml = crate::toml_role::TomlRole::load(folder).map_err(|e| format!("the role does not read:\n  {}", e.join("\n  ")))?;
+        let (lines, all) = toml.prove();
+        if !all {
+            return Err(format!("a promise of the role does not hold, so it was not installed:\n{}", lines.join("\n")));
+        }
+    }
     let into = roles_dir(home).join(&name);
     if into.exists() {
         std::fs::remove_dir_all(&into).map_err(|e| e.to_string())?;
@@ -359,6 +388,20 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).status().expect("git").success();
         assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn an_update_that_drops_or_changes_a_promise_is_told_by_its_words() {
+        let base = std::env::temp_dir().join(format!("jaynes-promises-{}", std::process::id()));
+        let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/small-change");
+        let (old, new) = (base.join("old"), base.join("new"));
+        let _gone = std::fs::remove_dir_all(&base);
+        copy_dir(&here, &old).expect("copy");
+        copy_dir(&here, &new).expect("copy");
+        assert!(lost_promises(&old, &new).is_empty());
+        let text = std::fs::read_to_string(new.join("role.toml")).expect("read");
+        std::fs::write(new.join("role.toml"), text.replace("never = \"deliver\"\nunless = \"check suite-passes of change passed\"", "never = \"deliver\"\nunless = \"step runner done\"")).expect("write");
+        assert_eq!(lost_promises(&old, &new), ["\"Nothing is delivered before the project's suite passed on the change\""]);
     }
 
     #[test]
