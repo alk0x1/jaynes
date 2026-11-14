@@ -148,7 +148,10 @@ impl Condition {
         match self {
             Condition::PersonAnswered(s) => at(s).is_some_and(|i| {
                 r.steps[i].question.as_ref().and_then(|q| r.questions.get(q)).is_some_and(|q| {
-                    !q.superseded && q.question.round == r.steps[i].round && q.answer.as_ref().is_some_and(|a| a.by.person())
+                    // the question of this round, or the choice whose round kept the chosen option alone
+                    let this_round = q.question.round == r.steps[i].round
+                        || (q.question.choose && q.question.round + 1 == r.steps[i].round && r.steps[i].narrow.is_none() && r.steps[i].status == Status::Done);
+                    !q.superseded && this_round && q.answer.as_ref().is_some_and(|a| a.by.person())
                 })
             }),
             Condition::CheckPassed { check, step } => at(step).is_some_and(|i| {

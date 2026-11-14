@@ -253,3 +253,46 @@ impl Copy {
         out
     }
 }
+
+/// Toolchains the agent may run, by the name of their program: where one is installed under the person's home, as a
+/// version manager such as mise installs it, the agent's box may read that installation and nothing else of home.
+pub const TOOLCHAINS: &[&str] = &["go", "node"];
+
+/// The installation folders of the toolchains on `path` that live under `home`: the folder above a program's `bin`,
+/// at least two folders deep in home, so a whole dotfolder such as ~/.cargo, with its credentials, is never opened.
+pub fn toolchains(path: &str, home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for name in TOOLCHAINS {
+        let Some(found) = path.split(':').map(|d| Path::new(d).join(name)).find(|p| p.is_file()) else { continue };
+        let Ok(real) = std::fs::canonicalize(&found) else { continue };
+        let Some(bin) = real.parent().filter(|b| b.file_name().is_some_and(|n| n == "bin")) else { continue };
+        let Some(root) = bin.parent() else { continue };
+        let deep = root.strip_prefix(home).map(|r| r.components().count() >= 3).unwrap_or(false);
+        if deep && !out.contains(&root.to_path_buf()) {
+            out.push(root.to_path_buf());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod toolchain_tests {
+    use super::*;
+
+    #[test]
+    fn a_toolchain_installed_deep_in_home_is_readable_and_a_dotfolder_is_not() {
+        let base = std::env::temp_dir().join(format!("jaynes-toolchains-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let go = home.join(".local/share/mise/installs/go/1.27.1/bin");
+        let node = home.join(".nodeish/bin");
+        for (dir, name) in [(&go, "go"), (&node, "node")] {
+            std::fs::create_dir_all(dir).expect("dir");
+            std::fs::write(dir.join(name), "").expect("write");
+        }
+        let path = format!("{}:{}", go.display(), node.display());
+        let real = std::fs::canonicalize(&home).expect("home");
+        let found = toolchains(&path, &real);
+        assert_eq!(found, vec![real.join(".local/share/mise/installs/go/1.27.1")]);
+    }
+}

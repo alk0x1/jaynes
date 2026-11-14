@@ -186,3 +186,15 @@ fn a_choosing_stop_that_does_not_hold_lets_the_next_step_start_before_the_choice
     let proofs = prove(&m, &[p]);
     assert!(matches!(proofs[0], Proof::Broken { .. }), "{proofs:?}");
 }
+
+#[test]
+fn a_choice_kept_alone_still_counts_as_your_answer_before_the_merge() {
+    let mut m = choosing();
+    m.delivery = DeliveryKind::Merge;
+    let p = promise("Nothing is merged before you chose a direction", Form::Never {
+        on: On::parse("merge", &m).expect("event"),
+        unless: Condition::parse("person answered at directions", &m).expect("condition"),
+    });
+    let proofs = prove(&m, &[p]);
+    assert!(matches!(proofs[0], Proof::Proved { .. }), "{proofs:?}");
+}

@@ -700,8 +700,19 @@ impl<'a> Driver<'a> {
             fix_prompt(&turn)
         };
         say(&format!("· {} attempt {}{}", turn.step, turn.attempt, if turn.fix > 0 { format!(", fix {}", turn.fix) } else { String::new() }));
-        let reads = self.setup.copy.as_ref().map(Copy::reads).unwrap_or_default();
+        let mut reads = self.setup.copy.as_ref().map(Copy::reads).unwrap_or_default();
+        if let Ok(home) = std::env::var("HOME").map(PathBuf::from).and_then(|h| std::fs::canonicalize(h).map_err(|_| std::env::VarError::NotPresent)) {
+            reads.extend(crate::project::toolchains(&std::env::var("PATH").unwrap_or_default(), &home));
+        }
         let mut env: Vec<(String, String)> = vec![("JAYNES_OUTPUT".into(), exchange.join("output.json").display().to_string())];
+        // the toolchains' caches inside the box's own folder, offline
+        let scratch = exchange.join("tmp");
+        for (k, v) in [("GOCACHE", "go-cache"), ("GOPATH", "go-path"), ("npm_config_cache", "npm-cache")] {
+            env.push((k.into(), scratch.join(v).display().to_string()));
+        }
+        for (k, v) in [("GOTOOLCHAIN", "local"), ("GOPROXY", "off"), ("GOTELEMETRY", "off"), ("npm_config_offline", "true")] {
+            env.push((k.into(), v.into()));
+        }
         if let Some(copy) = &self.setup.copy {
             let venv = copy.dir.join(".venv");
             env.push(("PYTHONPATH".into(), format!("{}:{}", copy.dir.join("src").display(), copy.dir.display())));
