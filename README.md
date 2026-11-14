@@ -69,7 +69,8 @@ undone, such as a push, it asks you.
 
 ## Roles
 
-Two come with Jaynes, installed with `jaynes add`:
+Roles are listed in an index, [jaynes-roles](https://github.com/alk0x1/jaynes-roles), and installed by name with
+`jaynes add`, which checks the role is what the index lists and proves its promises again. Two to start:
 
 | Role | What it does |
 |---|---|
@@ -77,8 +78,8 @@ Two come with Jaynes, installed with `jaynes add`:
 | `fix-bug` | A test that fails because of the bug, then a fix, judged by cases written from your request alone that the fixer never sees; merged into your branch, and undone with one click |
 
 ```sh
-jaynes add https://github.com/alk0x1/jaynes#engine/roles/small-change
-jaynes add https://github.com/alk0x1/jaynes#engine/roles/fix-bug
+jaynes add small-change
+jaynes add fix-bug
 jaynes roles
 ```
 

@@ -3,6 +3,7 @@
 mod agent;
 mod conformance;
 mod drive;
+mod index;
 mod install;
 mod mcp;
 mod page;
@@ -38,7 +39,8 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   page [--port N]         the page where you answer, on 127.0.0.1 (default port 8750)
-  add SOURCE | remove NAME | roles   install a role (a folder, or URL#path), remove one, list them
+  add NAME|SOURCE | remove NAME | roles   install a role (by name from the index, a folder, or URL#path), remove one, list them
+  index check DIR [--write]   check an index: every role's content and promises, proved again
   guide                   how an agent carries out a change through Jaynes
   update                  install the newest Jaynes and update roles installed from git
   mcp                     the server agents in Claude Code use (the plugin starts it)
@@ -264,8 +266,23 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             .serve()
         }
+        "index" => {
+            // what the index's CI runs: every entry's content and promises, checked again
+            if rest.first().map(String::as_str) != Some("check") {
+                return Err("jaynes index check DIR [--write]".into());
+            }
+            let dir = rest.get(1).ok_or("which index's folder?")?;
+            let said = index::check(Path::new(dir), rest.iter().any(|a| a == "--write"));
+            match said {
+                Ok(lines) => {
+                    println!("{}", lines.join("\n"));
+                    Ok(())
+                }
+                Err(lines) => Err(lines),
+            }
+        }
         "add" => {
-            let source = rest.first().ok_or("which role? a folder, or URL#path/in/the/repository")?;
+            let source = rest.first().ok_or("which role? a name from the index, a folder, or URL#path/in/the/repository")?;
             let name = install::add(&home(), source)?;
             say(&format!("role {name} installed"));
             Ok(())

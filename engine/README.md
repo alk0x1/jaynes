@@ -8,12 +8,12 @@ promises: `docs/guarantees.md`.
 cargo test                      # the core's guarantees on random runs, and the engine end to end
 cargo build
 JAYNES_PYTHON=../.venv/bin/python PYTHONPATH=../src \
-  ./target/debug/jaynes start --role roles/small-change --project ~/some/repo --request "say hi"
+  ./target/debug/jaynes start --role crates/shell/tests/roles/small-change --project ~/some/repo --request "say hi"
 ./target/debug/jaynes show RUN
 ./target/debug/jaynes answer RUN QUESTION item=keep --send
 ./target/debug/jaynes verify
-./target/debug/jaynes conformance roles/small-change
-./target/debug/jaynes check roles/fix-bug        # reads the role strictly and proves its promises
+./target/debug/jaynes conformance crates/shell/tests/roles/small-change
+./target/debug/jaynes check crates/shell/tests/roles/fix-bug        # reads the role strictly and proves its promises
 ```
 
 | Folder | What |
@@ -26,6 +26,7 @@ JAYNES_PYTHON=../.venv/bin/python PYTHONPATH=../src \
 | `crates/shell/src/toml_role.rs` | a role written as `role.toml`: read strictly, served over the protocol (`jaynes role-serve`) |
 | `python/jaynes_menu.py` | the menu of steps and checks a TOML role picks by name, run in the box of `jaynes_box.py` |
 | `python/jaynes_role.py` | the small library for writing a role in Python |
-| `roles/small-change`, `roles/fix-bug` | the official roles, in TOML |
+| `crates/shell/tests/roles` | the roles the tests run: copies of the official ones, which live with the index in [jaynes-roles](https://github.com/alk0x1/jaynes-roles) |
+| `crates/shell/src/index.rs` | the index: `jaynes add NAME`, and `jaynes index check` for its CI |
 
 The record lives in `$JAYNES_ENGINE_HOME` (default `~/.jaynes/engine`), apart from the Python engine's.

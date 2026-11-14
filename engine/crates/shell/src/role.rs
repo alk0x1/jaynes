@@ -193,6 +193,16 @@ impl RoleProgram {
     }
 }
 
+/// The fingerprint of a role's folder alone, as an index lists it: every file by path, without the library it runs
+/// with or what Jaynes keeps beside an installed role.
+pub fn content_fingerprint(dir: &Path) -> Result<Digest, String> {
+    let mut files: Vec<(String, Digest)> = Vec::new();
+    collect(dir, dir, &mut files)?;
+    files.retain(|(p, _)| p != ".jaynes-origin");
+    files.sort();
+    Ok(Digest::of_json(&files))
+}
+
 fn skip(name: &str) -> bool {
     name == "__pycache__" || name == ".git" || name.ends_with(".pyc") || name == ".DS_Store"
 }

@@ -47,7 +47,7 @@ fn engine(s: &Scratch, args: &[&str]) -> (bool, String) {
 }
 
 fn start(s: &Scratch, run: &str, agent: &str) -> String {
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let (ok, out) = engine(s, &[
         "start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
         "--request", "say hi instead of hello", "--agent", &format!("command:{agent}"),
@@ -171,14 +171,14 @@ fn the_protocol_schema_on_disk_is_the_one_the_engine_speaks() {
 #[test]
 fn the_small_change_role_conforms() {
     let s = scratch("conform");
-    let (ok, out) = engine(&s, &["conformance", root().join("roles/small-change").to_str().expect("path")]);
+    let (ok, out) = engine(&s, &["conformance", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]);
     assert!(ok, "{out}");
 }
 
 #[test]
 fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     let s = scratch("inbox");
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let agent = format!("sleep 4 && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
     let child = Command::new(BIN)
         .args(["start", "--run", "inbox", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
@@ -218,7 +218,7 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     let prompts = s.home.join("prompts");
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
-    let role = root().join("roles/fix-bug");
+    let role = root().join("crates/shell/tests/roles/fix-bug");
     let out = Command::new(BIN)
         .args(["start", "--run", "fixbug", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
@@ -332,7 +332,7 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let prompts = s.home.join("prompts");
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
-    let role = root().join("roles/fix-bug");
+    let role = root().join("crates/shell/tests/roles/fix-bug");
     let env = |c: &mut Command| {
         c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
     };
@@ -376,7 +376,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
         "if [ ! -e {m}/started ]; then echo '{{\"type\":\"system\",\"session_id\":\"s9\",\"model\":\"m9\",\"permissionMode\":\"default\",\"tools\":[\"Read\",\"Bash\"]}}'; touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; echo \"$JAYNES_SESSION\" > {m}/resumed; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
         m = mark.display()
     );
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let mut engine_process = Command::new(BIN)
         .args(["start", "--run", "crash", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
@@ -509,7 +509,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     std::fs::create_dir_all(&mark).expect("dir");
     // the agent works for a while: the leave server is asked while its turn runs
     let agent = format!("touch {}/started; sleep 8; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}", mark.display());
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let run = Command::new(BIN)
         .args(["start", "--run", "leave", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
@@ -583,7 +583,7 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let out = Command::new(BIN)
-        .args(["start", "--run", run, "--role", root().join("roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        .args(["start", "--run", run, "--role", root().join("crates/shell/tests/roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
         .output().expect("start");
@@ -654,7 +654,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
 #[test]
 fn a_role_is_installed_by_name_and_only_when_it_conforms() {
     let s = scratch("roles");
-    let (ok, out) = engine(&s, &["add", root().join("roles/small-change").to_str().expect("path")]);
+    let (ok, out) = engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]);
     assert!(ok && out.contains("role small-change installed"), "{out}");
     let (ok, out) = engine(&s, &["roles"]);
     assert!(ok && out.contains("small-change 3.0.0"), "{out}");
@@ -676,7 +676,7 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
 #[test]
 fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     let s = scratch("mcp");
-    assert!(engine(&s, &["add", root().join("roles/small-change").to_str().expect("path")]).0);
+    assert!(engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]).0);
     let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     // the agent program of the run is a command; the MCP start uses Claude by default, so start here and read through MCP
     start(&s, "viamcp", &agent);
@@ -736,7 +736,7 @@ fn abandoning_a_run_stops_its_agent_at_once() {
     let mark = s.home.join("mark");
     std::fs::create_dir_all(&mark).expect("dir");
     let agent = format!("touch {m}/started; sleep 30; touch {m}/finished", m = mark.display());
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let mut run = Command::new(BIN)
         .args(["start", "--run", "abandon", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
@@ -790,7 +790,7 @@ fn the_person_starts_a_run_from_the_page() {
     let me = "jaynes_key=k3y";
     let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(form.contains("<form id=\"start\"") && form.contains("name=\"request\""), "{form}");
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let body = serde_json::json!({"role": role, "project": s.project, "request": "say hi instead of hello", "risk": "low"}).to_string();
     // only the person starts a run from the page
     assert_eq!(post(port, "/api/start", &body, "")["ok"], false);
@@ -895,7 +895,7 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
 #[test]
 fn a_run_killed_at_any_moment_recovers_and_lands_once() {
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
-    let role = root().join("roles/fix-bug");
+    let role = root().join("crates/shell/tests/roles/fix-bug");
     let mut outcomes = Vec::new();
     for trial in 0..16u64 {
         let s = bug_project(&format!("kill{trial}"));
@@ -958,7 +958,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     start(&s, "old", &agent);
     assert!(s.home.join("runs/old/project/.git").exists());
     // the next start clears the copies of runs finished longer ago than the time kept (none kept here)
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let out = Command::new(BIN)
         .args(["start", "--run", "new", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
@@ -1037,7 +1037,7 @@ fn a_role_whose_promise_does_not_hold_is_refused_with_the_path_that_breaks_it() 
     let s = scratch("promise");
     let role = s.home.parent().expect("base").join("asks-late");
     std::fs::create_dir_all(&role).expect("dir");
-    let text = std::fs::read_to_string(root().join("roles/small-change/role.toml")).expect("read")
+    let text = std::fs::read_to_string(root().join("crates/shell/tests/roles/small-change/role.toml")).expect("read")
         .replace("role = \"small-change\"", "role = \"asks-late\"")
         + "\n[[promise]]\nsays = \"Nothing is delivered unless you answered at change\"\nnever = \"deliver\"\nunless = \"person answered at change\"\n";
     std::fs::write(role.join("role.toml"), text).expect("write");
@@ -1056,7 +1056,7 @@ fn a_role_whose_promise_does_not_hold_is_refused_with_the_path_that_breaks_it() 
 fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_committing_it() {
     let s = scratch("diedone");
     let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
-    let role = root().join("roles/small-change");
+    let role = root().join("crates/shell/tests/roles/small-change");
     let out = Command::new(BIN)
         .args(["start", "--run", "diedone", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
@@ -1078,7 +1078,7 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let out = Command::new(BIN)
-        .args(["start", "--run", "diemerge", "--role", root().join("roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        .args(["start", "--run", "diemerge", "--role", root().join("crates/shell/tests/roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
         .env("JAYNES_DIE_AFTER_MERGE", "1")
@@ -1100,4 +1100,66 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
         .output().expect("undo");
     assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}", String::from_utf8_lossy(&undo.stdout));
     assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello $1\"\n");
+}
+
+/// An index in a git repository, with small-change in it, its entry written by `jaynes index check --write`.
+fn an_index(s: &Scratch) -> PathBuf {
+    let index = s.home.parent().expect("base").join("index");
+    std::fs::create_dir_all(index.join("roles")).expect("dir");
+    let from = root().join("crates/shell/tests/roles/small-change");
+    let ok = Command::new("cp").arg("-R").arg(&from).arg(index.join("roles/small-change")).status().expect("cp").success();
+    assert!(ok);
+    std::fs::write(index.join("index.toml"), "[[role]]\nname = \"small-change\"\nversion = \"3.0.0\"\nsource = \"roles/small-change\"\nfingerprint = \"\"\n").expect("write");
+    let (ok, out) = engine(s, &["index", "check", index.to_str().expect("path"), "--write"]);
+    assert!(ok, "{out}");
+    let (ok, out) = engine(s, &["index", "check", index.to_str().expect("path")]);
+    assert!(ok && out.contains("✔ small-change 3.0.0") && out.contains("proved"), "{out}");
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "index"]] {
+        assert!(Command::new("git").arg("-C").arg(&index).args(&args).status().expect("git").success());
+    }
+    index
+}
+
+fn engine_with_index(s: &Scratch, index: &str, args: &[&str]) -> (bool, String) {
+    let out = Command::new(BIN)
+        .args(args)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("JAYNES_INDEX", index)
+        .output()
+        .expect("engine");
+    (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+#[test]
+fn a_role_is_installed_by_name_from_the_index_once_its_entry_holds() {
+    let s = scratch("index");
+    let index = an_index(&s);
+    let url = format!("file://{}", index.display());
+    let (ok, out) = engine_with_index(&s, &url, &["add", "small-change"]);
+    assert!(ok && out.contains("role small-change installed"), "{out}");
+    let origin = std::fs::read_to_string(s.home.join("roles/small-change/.jaynes-origin")).expect("origin");
+    assert!(origin.contains("\"index:small-change\""), "{origin}");
+    let (ok, out) = engine_with_index(&s, &url, &["add", "no-such-role"]);
+    assert!(!ok && out.contains("the index has no role no-such-role"), "{out}");
+}
+
+#[test]
+fn an_index_entry_that_does_not_hold_installs_nothing() {
+    let s = scratch("badindex");
+    let index = an_index(&s);
+    let entry = index.join("index.toml");
+    let listed = std::fs::read_to_string(&entry).expect("read");
+    // a promise the index lists and the role does not make
+    std::fs::write(&entry, listed.replace("promises = [", "promises = [\"Nothing is ever delivered\", ")).expect("write");
+    let (ok, out) = engine_with_index(&s, index.to_str().expect("path"), &["add", "small-change"]);
+    assert!(!ok && out.contains("does not hold, so it was not installed") && out.contains("Nothing is ever delivered"), "{out}");
+    // the role's content changed after it was listed
+    std::fs::write(&entry, &listed).expect("write");
+    let role = index.join("roles/small-change/role.toml");
+    std::fs::write(&role, std::fs::read_to_string(&role).expect("read") + "\n# changed\n").expect("write");
+    let (ok, out) = engine_with_index(&s, index.to_str().expect("path"), &["add", "small-change"]);
+    assert!(!ok && out.contains("content is not what the index lists"), "{out}");
+    let (ok, out) = engine(&s, &["index", "check", index.to_str().expect("path")]);
+    assert!(!ok && out.contains("✘ small-change"), "{out}");
+    assert!(!s.home.join("roles/small-change").exists());
 }

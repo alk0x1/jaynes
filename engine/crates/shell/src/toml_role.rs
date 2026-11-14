@@ -776,19 +776,23 @@ impl TomlRole {
     /// Prove every promise: a line each, ✔ proved or ✘ broken with the path that breaks it, and whether all hold.
     pub fn prove(&self) -> (Vec<String>, bool) {
         let promises: Vec<Promise> = self.promises.iter().map(|(_, p)| p.clone()).collect();
-        let proofs = jaynes_core::promise::prove(&self.manifest, &promises);
+        self.prove_lines(&jaynes_core::promise::prove(&self.manifest, &promises))
+    }
+
+    /// The lines of proofs already made, one per promise in order, and whether all hold.
+    pub fn prove_lines(&self, proofs: &[Proof]) -> (Vec<String>, bool) {
         let mut lines = Vec::new();
         let mut all = true;
         for ((line, p), proof) in self.promises.iter().zip(proofs) {
             match proof {
-                Proof::Proved { states } => lines.push(format!("✔ {:?}: proved ({} states)", p.says, thousands(states))),
+                Proof::Proved { states } => lines.push(format!("✔ {:?}: proved ({} states)", p.says, thousands(*states))),
                 Proof::Broken { path } => {
                     all = false;
                     lines.push(format!("✘ {:?} ({FILE}:{line}): fails\n   {}", p.says, path.join(" → ")));
                 }
                 Proof::Unfinished { states } => {
                     all = false;
-                    lines.push(format!("✘ {:?} ({FILE}:{line}): not proved, the search stopped at {} states", p.says, thousands(states)));
+                    lines.push(format!("✘ {:?} ({FILE}:{line}): not proved, the search stopped at {} states", p.says, thousands(*states)));
                 }
             }
         }

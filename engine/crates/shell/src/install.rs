@@ -53,8 +53,26 @@ pub fn find_role(home: &Path, given: &str) -> Result<PathBuf, String> {
 /// Install a role from a folder, or from git as `URL#path/in/the/repository`. Only a role that passes the
 /// conformance suite is installed; its name is the one it gives.
 pub fn add(home: &Path, source: &str) -> Result<String, String> {
+    if let Some(name) = by_name(source) {
+        // from the index: its entry was checked and its promises proved again on the way
+        let (entry, folder, commit, _gone) = crate::index::find(&name)?;
+        return install(home, &format!("index:{}", entry.name), &folder, commit, true);
+    }
     let (folder, commit, _tmp) = fetch(source)?;
-    install(home, source, &folder, commit)
+    install(home, source, &folder, commit, false)
+}
+
+/// The name a source gives for the index: a bare name that is no folder, or `index:NAME`; and the official roles'
+/// old place in the engine's repository, which moved to the index.
+fn by_name(source: &str) -> Option<String> {
+    if let Some(n) = source.strip_prefix("index:") {
+        return Some(n.to_string());
+    }
+    if let Some(n) = source.strip_prefix(&format!("{SOURCE}#engine/roles/")) {
+        return Some(n.trim_end_matches('/').to_string());
+    }
+    let plain = !source.is_empty() && source.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    (plain && !Path::new(source).exists()).then(|| source.to_string())
 }
 
 /// What a role's steps may reach, one line each, to tell whether a new version asks for more.
@@ -101,11 +119,21 @@ fn manifest_of(role: &RoleProgram) -> Result<jaynes_core::Manifest, String> {
 pub fn update_roles(home: &Path) -> Vec<String> {
     let mut said = Vec::new();
     for (name, _, _, origin) in list(home) {
-        if !(origin.starts_with("https://") || origin.starts_with("git@") || origin.starts_with("file://")) {
+        let named = by_name(&origin).filter(|_| origin.starts_with("index:") || origin.starts_with(SOURCE));
+        if named.is_none() && !(origin.starts_with("https://") || origin.starts_with("git@") || origin.starts_with("file://")) {
             continue;
         }
         let attempt = || -> Result<String, String> {
-            let (folder, commit, _tmp) = fetch(&origin)?;
+            let (folder, commit, _tmp, _gone, origin) = match &named {
+                Some(n) => {
+                    let (entry, folder, commit, gone) = crate::index::find(n)?;
+                    (folder, commit, None, gone, format!("index:{}", entry.name))
+                }
+                None => {
+                    let (folder, commit, tmp) = fetch(&origin)?;
+                    (folder, commit, tmp, Vec::new(), origin.clone())
+                }
+            };
             let new = manifest_of(&RoleProgram::new(&folder, &library(home)))?;
             let old = manifest_of(&RoleProgram::new(&roles_dir(home).join(&name), &library(home)))?;
             let more: Vec<String> = reach_of(&new).difference(&reach_of(&old)).cloned().collect();
@@ -122,7 +150,7 @@ pub fn update_roles(home: &Path) -> Vec<String> {
                     more.join("; ")
                 ));
             }
-            install(home, &origin, &folder, commit)?;
+            install(home, &origin, &folder, commit, named.is_some())?;
             Ok(format!("role {name} updated"))
         };
         said.push(attempt().unwrap_or_else(|e| format!("role {name} not updated: {e}")));
@@ -132,7 +160,7 @@ pub fn update_roles(home: &Path) -> Vec<String> {
 
 /// Install the role in `folder`, fetched from `source` at `commit`, once it passes the conformance suite: the
 /// commit and the fingerprint of what was installed are kept with it.
-fn install(home: &Path, source: &str, folder: &Path, commit: Option<String>) -> Result<String, String> {
+fn install(home: &Path, source: &str, folder: &Path, commit: Option<String>, proved: bool) -> Result<String, String> {
     let role = RoleProgram::new(folder, &library(home));
     let findings = conformance::run(&role);
     let failed: Vec<String> = findings.iter().filter(|f| !f.ok).map(|f| format!("{}: {}", f.case, f.detail)).collect();
@@ -144,7 +172,7 @@ fn install(home: &Path, source: &str, folder: &Path, commit: Option<String>) -> 
         other => return Err(format!("the role did not describe itself: {other:?}")),
     };
     // a role in TOML is installed only when every promise it makes is proved again here
-    if folder.join(crate::toml_role::FILE).is_file() {
+    if folder.join(crate::toml_role::FILE).is_file() && !proved {
         let toml = crate::toml_role::TomlRole::load(folder).map_err(|e| format!("the role does not read:\n  {}", e.join("\n  ")))?;
         let (lines, all) = toml.prove();
         if !all {
@@ -276,8 +304,8 @@ pub const GUIDE: &str = "How to carry out an agreed change through Jaynes
 
 1. Choose a role. `jaynes roles` lists the installed ones. small-change is for a few lines; fix-bug proves a bug
    with a failing test, then fixes it. If none is installed, install them:
-     jaynes add https://github.com/alk0x1/jaynes#engine/roles/small-change
-     jaynes add https://github.com/alk0x1/jaynes#engine/roles/fix-bug
+     jaynes add small-change
+     jaynes add fix-bug
 2. Start the run from the project's folder, with the whole agreed plan as the request, and in the background, since it
    runs agents for minutes:
      jaynes start --role <role> --project . --request \"<the plan, in full>\"
@@ -391,9 +419,19 @@ mod tests {
     }
 
     #[test]
+    fn a_name_goes_to_the_index_and_the_official_roles_old_place_moves_there() {
+        assert_eq!(by_name("fix-bug").as_deref(), Some("fix-bug"));
+        assert_eq!(by_name("index:small-change").as_deref(), Some("small-change"));
+        assert_eq!(by_name(&format!("{SOURCE}#engine/roles/fix-bug")).as_deref(), Some("fix-bug"));
+        assert_eq!(by_name("https://example.com/r#roles/x"), None);
+        assert_eq!(by_name("."), None);
+        assert_eq!(by_name("src"), None, "a folder that exists is a folder");
+    }
+
+    #[test]
     fn an_update_that_drops_or_changes_a_promise_is_told_by_its_words() {
         let base = std::env::temp_dir().join(format!("jaynes-promises-{}", std::process::id()));
-        let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/small-change");
+        let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change");
         let (old, new) = (base.join("old"), base.join("new"));
         let _gone = std::fs::remove_dir_all(&base);
         copy_dir(&here, &old).expect("copy");
