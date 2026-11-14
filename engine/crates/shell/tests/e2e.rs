@@ -71,13 +71,18 @@ const OUTPUT: &str = r#"printf '{"summary":"hello becomes hi","files":["greeting
 #[test]
 fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
     let s = scratch("small");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'");
+    let prompt = s.home.parent().expect("base").join("prompt.txt");
+    let agent = format!("cat > {} && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'", prompt.display());
     let out = start(&s, "small", &agent);
+    // the role's instructions, with the data Jaynes filled in wrapped in tags
+    let said = std::fs::read_to_string(&prompt).expect("prompt");
+    assert!(said.contains("<output step=\"runner\" field=\"suite\">make test</output>"), "{said}");
+    assert!(said.contains("field-required: the output has summary, not empty") && said.contains("suite-passes: the project's whole suite passes"), "{said}");
     assert!(out.contains("finished: delivered"), "{out}");
     let e = events(&s, "small");
     let t = types(&e);
     assert!(!t.contains(&"QuestionOpened".to_string()), "no stop on a small change: {t:?}");
-    assert!(e[0]["agent"].as_str().unwrap_or("").starts_with("command:sed"), "the run records its agent: {}", e[0]);
+    assert!(e[0]["agent"].as_str().unwrap_or("").starts_with("command:cat"), "the run records its agent: {}", e[0]);
     // the person's working tree is untouched, and the change is on the run's branch
     assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n");
     let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/small:greeting.txt"]).output().expect("git");
@@ -452,7 +457,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you") && view.contains("data-act=\"halt\""), "{view}");
     // what each check said, and where its answer comes from
-    assert!(view.contains("suite (open, read runner) passed"), "{view}");
+    assert!(view.contains("suite-passes (open, read runner) passed"), "{view}");
     // what the step changed, line by line, as git shows it
     assert!(view.contains("What change changed · 2 files") && view.contains("<span class=\"del\"><i>-</i>hello") && view.contains("<span class=\"file\">greeting.txt</span>"), "{view}");
     // an agent may halt, only the person resumes
@@ -652,7 +657,7 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
     let (ok, out) = engine(&s, &["add", root().join("roles/small-change").to_str().expect("path")]);
     assert!(ok && out.contains("role small-change installed"), "{out}");
     let (ok, out) = engine(&s, &["roles"]);
-    assert!(ok && out.contains("small-change 2.0.0"), "{out}");
+    assert!(ok && out.contains("small-change 3.0.0"), "{out}");
     // a folder that is not a role is refused
     let bad = s.home.join("bad");
     std::fs::create_dir_all(&bad).expect("dir");

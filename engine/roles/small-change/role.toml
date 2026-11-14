@@ -1,0 +1,36 @@
+# small-change: the agent makes a small change and Jaynes runs the project's suite, with no stop. When the rules
+# in code find the change is not small (more lines or files than a small one, or a file that runs later outside
+# any box), the run's risk goes up and the person sees the change.
+
+role = "small-change"
+version = "3.0.0"
+
+[[step]]
+name = "runner"
+by = "jaynes"
+use = "find-suite"
+
+[[step]]
+name = "change"
+needs = ["runner"]
+reach = { project = "write", write = ["**"], commands = true }
+about = "Makes the change."
+instructions = """
+The task is a small change the person agreed on. Make it in this folder, which is a copy of the project, keeping
+it as small as the task needs.
+
+The command that runs the project's whole suite, empty when it has none: {{runner.suite}}
+
+Run it yourself before you answer. Jaynes runs it again without internet and requires it to pass. Do not commit;
+Jaynes does.
+"""
+checks = [
+  { use = "field-required", field = "summary" },
+  { use = "field-max-length", field = "summary", max = 400 },
+  "suite-passes",
+]
+stop = { ask = "The change turned out bigger than a small one. Keep it, or have it done again?", verdicts = ["keep", "redo"], from_risk = "high", release = true }
+
+[step.output]
+summary = { type = "string", about = "what changed, in a sentence or two" }
+files = { type = "array", items = "string" }

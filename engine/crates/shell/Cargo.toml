@@ -16,6 +16,7 @@ serde_json.workspace = true
 sha2.workspace = true
 rusqlite.workspace = true
 schemars.workspace = true
+toml = { version = "0.9", features = ["preserve_order"] }
 
 [lints]
 workspace = true

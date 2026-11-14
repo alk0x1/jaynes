@@ -10,6 +10,8 @@ use std::process::{Command, Stdio};
 const LIBRARY: &str = include_str!("../../../python/jaynes_role.py");
 /// The box and the test runners roles use for a project's own commands.
 const BOX: &str = include_str!("../../../python/jaynes_box.py");
+/// The menu of checks and steps that roles written in TOML pick by name.
+const MENU: &str = include_str!("../../../python/jaynes_menu.py");
 
 /// Where Jaynes is published, for `jaynes update` and for the roles that come with it.
 pub const SOURCE: &str = "https://github.com/alk0x1/jaynes";
@@ -21,7 +23,7 @@ pub fn library(home: &Path) -> PathBuf {
         return PathBuf::from(dir);
     }
     let dir = home.join("library");
-    for (name, text) in [("jaynes_role.py", LIBRARY), ("jaynes_box.py", BOX)] {
+    for (name, text) in [("jaynes_role.py", LIBRARY), ("jaynes_box.py", BOX), ("jaynes_menu.py", MENU)] {
         let file = dir.join(name);
         if std::fs::read_to_string(&file).ok().as_deref() != Some(text) {
             let _made = std::fs::create_dir_all(&dir);
@@ -38,7 +40,7 @@ pub fn roles_dir(home: &Path) -> PathBuf {
 /// A role by name among those installed, or by its folder.
 pub fn find_role(home: &Path, given: &str) -> Result<PathBuf, String> {
     let as_path = Path::new(given);
-    if as_path.join("role.py").is_file() || as_path.join("role").is_file() {
+    if as_path.join(crate::toml_role::FILE).is_file() || as_path.join("role.py").is_file() || as_path.join("role").is_file() {
         return Ok(as_path.to_path_buf());
     }
     let installed = roles_dir(home).join(given);
@@ -364,8 +366,15 @@ mod tests {
         let base = std::env::temp_dir().join(format!("jaynes-install-{}", std::process::id()));
         let _gone = std::fs::remove_dir_all(&base);
         let (repo, home) = (base.join("repo"), base.join("home"));
-        let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/small-change");
-        copy_dir(&here, &repo.join("r")).expect("copy");
+        // a role in Python: one in TOML is served by the jaynes program, which a unit test is not
+        std::fs::create_dir_all(repo.join("r")).expect("dir");
+        std::fs::write(repo.join("r/role.py"), concat!(
+            "from jaynes_role import Role\n",
+            "role = Role(\"small-change\", version=\"1.0.0\")\n",
+            "role.step(\"change\", executor=\"agent\", reach={\"project\": \"write\", \"write\": [\"**\"], \"commands\": True},\n",
+            "          instructions=\"Make the change.\")\n",
+            "if __name__ == \"__main__\":\n    role.serve()\n",
+        )).expect("write");
         git(&repo, &["init", "-q", "-b", "main"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "one"]);

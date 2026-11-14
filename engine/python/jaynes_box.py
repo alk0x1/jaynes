@@ -277,9 +277,9 @@ def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
 
 
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
-        env: dict[str, str] | None = None, hidden: tuple[Path, ...] = ()) -> Ran:
+        env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
-    ``source`` linked. Raises ``Unavailable`` where there is no box."""
+    ``source`` linked, and ``stdin`` on its standard input. Raises ``Unavailable`` where there is no box."""
     with tempfile.TemporaryDirectory(prefix="jaynes-suite-") as tmp:
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
@@ -288,10 +288,10 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
             link_dependencies(source, work)
         argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True))
         proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {})},
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+                                stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            out, _ = proc.communicate(timeout=timeout)
+            out, _ = proc.communicate(None if stdin is None else stdin.encode(), timeout=timeout)
             code = proc.returncode
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)

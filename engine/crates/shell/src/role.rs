@@ -12,7 +12,19 @@ use std::time::{Duration, Instant};
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
 
-/// A role, as a folder with a `role.py` (run with Python) or an executable `role`.
+/// The files of the library a role runs with: the Python library, the box, and the menu of a role in TOML.
+pub const LIBRARY_FILES: [&str; 3] = ["jaynes_role.py", "jaynes_box.py", "jaynes_menu.py"];
+
+/// The program that serves roles written in TOML: `JAYNES_EXE`, or this one.
+fn this_program() -> Result<PathBuf, String> {
+    match std::env::var("JAYNES_EXE") {
+        Ok(p) if !p.is_empty() => Ok(PathBuf::from(p)),
+        _ => std::env::current_exe().map_err(|e| format!("Jaynes cannot find its own program: {e}")),
+    }
+}
+
+/// A role, as a folder with a `role.toml` (served by this program), a `role.py` (run with Python) or an
+/// executable `role`.
 #[derive(Clone, Debug)]
 pub struct RoleProgram {
     pub dir: PathBuf,
@@ -53,7 +65,11 @@ impl RoleProgram {
     fn command(&self) -> Result<Command, String> {
         let exe = self.dir.join("role");
         let py = self.dir.join("role.py");
-        let mut c = if exe.is_file() {
+        let mut c = if self.dir.join(crate::toml_role::FILE).is_file() {
+            let mut c = Command::new(this_program()?);
+            c.arg("role-serve").arg(&self.dir).arg("--library").arg(&self.library);
+            c
+        } else if exe.is_file() {
             Command::new(exe)
         } else if py.is_file() {
             let python = std::env::var("JAYNES_PYTHON").unwrap_or_else(|_| "python3".to_string());
@@ -61,7 +77,7 @@ impl RoleProgram {
             c.arg(py);
             c
         } else {
-            return Err(format!("{} has neither role.py nor an executable role", self.dir.display()));
+            return Err(format!("{} has neither role.toml, role.py nor an executable role", self.dir.display()));
         };
         let path = match std::env::var("PYTHONPATH") {
             Ok(p) if !p.is_empty() => format!("{}:{p}", self.library.display()),
@@ -150,7 +166,7 @@ impl RoleProgram {
     pub fn fingerprint(&self) -> Result<Digest, String> {
         let mut files: Vec<(String, Digest)> = Vec::new();
         collect(&self.dir, &self.dir, &mut files)?;
-        for name in ["jaynes_role.py", "jaynes_box.py"] {
+        for name in LIBRARY_FILES {
             if let Ok(bytes) = std::fs::read(self.library.join(name)) {
                 files.push((format!("<library>/{name}"), Digest::of_bytes(&bytes)));
             }
@@ -166,7 +182,7 @@ impl RoleProgram {
         if !dir.exists() {
             copy_dir(&self.dir, &dir)?;
             std::fs::create_dir_all(&lib).map_err(|e| e.to_string())?;
-            for name in ["jaynes_role.py", "jaynes_box.py"] {
+            for name in LIBRARY_FILES {
                 let from = self.library.join(name);
                 if from.is_file() {
                     std::fs::copy(&from, lib.join(name)).map_err(|e| e.to_string())?;

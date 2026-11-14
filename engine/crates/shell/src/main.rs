@@ -11,6 +11,7 @@ mod project;
 mod protocol;
 mod role;
 mod store;
+mod toml_role;
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -42,6 +43,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   update                  install the newest Jaynes and update roles installed from git
   mcp                     the server agents in Claude Code use (the plugin starts it)
   conformance DIR         check a role against the protocol
+  check DIR               read a role in TOML strictly: every error with its line
   schema                  print the protocol's schema
 
 The record lives in $JAYNES_ENGINE_HOME (default ~/.jaynes/engine).";
@@ -96,6 +98,23 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     match cmd {
         "start" => start(rest),
+        "role-serve" => {
+            // the program of every role written in TOML: one request in, one reply out
+            let dir = rest.first().ok_or("which role?")?;
+            let library = flag(rest, "--library").map(PathBuf::from).unwrap_or_else(library);
+            toml_role::serve(Path::new(dir), &library);
+            Ok(())
+        }
+        "check" => {
+            let dir = rest.first().ok_or("which role's folder?")?;
+            match toml_role::TomlRole::load(Path::new(dir)) {
+                Ok(role) => {
+                    println!("✔ {} {} reads: {}", role.manifest.role, role.manifest.version, role.manifest.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
+                    Ok(())
+                }
+                Err(errors) => Err(format!("✘ the role does not read:\n{}", errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n"))),
+            }
+        }
         "act" => {
             // an act handed over by another engine, on a run of this one: JSON in, JSON out
             let id = rest.first().ok_or("which run?")?;
