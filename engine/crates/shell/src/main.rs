@@ -43,7 +43,8 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   update                  install the newest Jaynes and update roles installed from git
   mcp                     the server agents in Claude Code use (the plugin starts it)
   conformance DIR         check a role against the protocol
-  check DIR               read a role in TOML strictly: every error with its line
+  new NAME [DIR]          write a starting role.toml, with the menu in its comments
+  check DIR               read a role in TOML strictly, every error with its line, and prove its promises
   schema                  print the protocol's schema
 
 The record lives in $JAYNES_ENGINE_HOME (default ~/.jaynes/engine).";
@@ -103,6 +104,20 @@ fn run(args: &[String]) -> Result<(), String> {
             let dir = rest.first().ok_or("which role?")?;
             let library = flag(rest, "--library").map(PathBuf::from).unwrap_or_else(library);
             toml_role::serve(Path::new(dir), &library);
+            Ok(())
+        }
+        "new" => {
+            let name = rest.first().ok_or("jaynes new NAME [DIR]")?;
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return Err(format!("{name} is not a role's name: letters, digits, - and _"));
+            }
+            let dir = PathBuf::from(rest.get(1).cloned().unwrap_or_else(|| name.clone()));
+            if dir.join(toml_role::FILE).exists() {
+                return Err(format!("{} already has a role", dir.display()));
+            }
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join(toml_role::FILE), toml_role::template(name)).map_err(|e| e.to_string())?;
+            println!("wrote {}: write the method in it, then `jaynes check {}` until every line is ✔", dir.join(toml_role::FILE).display(), dir.display());
             Ok(())
         }
         "check" => {

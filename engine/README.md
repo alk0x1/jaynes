@@ -13,6 +13,7 @@ JAYNES_PYTHON=../.venv/bin/python PYTHONPATH=../src \
 ./target/debug/jaynes answer RUN QUESTION item=keep --send
 ./target/debug/jaynes verify
 ./target/debug/jaynes conformance roles/small-change
+./target/debug/jaynes check roles/fix-bug        # reads the role strictly and proves its promises
 ```
 
 | Folder | What |
@@ -21,7 +22,10 @@ JAYNES_PYTHON=../.venv/bin/python PYTHONPATH=../src \
 | `crates/core/tests/guarantees.rs` | one test per guarantee, on thousands of random runs |
 | `crates/shell` | `jaynes`: the record in SQLite, the role's process, the agent program, the project copy |
 | `protocol/role-protocol-1.schema.json` | the protocol's schema, generated (`jaynes schema`) and checked by a test |
+| `crates/core/src/promise.rs` | a role's promises, proved by exploring every way its runs go through `decide` |
+| `crates/shell/src/toml_role.rs` | a role written as `role.toml`: read strictly, served over the protocol (`jaynes role-serve`) |
+| `python/jaynes_menu.py` | the menu of steps and checks a TOML role picks by name, run in the box of `jaynes_box.py` |
 | `python/jaynes_role.py` | the small library for writing a role in Python |
-| `roles/small-change` | the first role on the other side of the protocol |
+| `roles/small-change`, `roles/fix-bug` | the official roles, in TOML |
 
 The record lives in `$JAYNES_ENGINE_HOME` (default `~/.jaynes/engine`), apart from the Python engine's.

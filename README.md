@@ -82,27 +82,24 @@ jaynes add https://github.com/alk0x1/jaynes#engine/roles/fix-bug
 jaynes roles
 ```
 
-A role of your own is a folder with a `role.py` (or any executable named
-`role`). The library for Python comes with Jaynes:
+A role of your own is a folder with a `role.toml`: the steps in order, what each
+may reach, the checks on each from a menu Jaynes ships, where you are asked,
+and what the role promises. Ask your agent for a new role and it writes one
+with `jaynes new NAME`, then runs `jaynes check NAME`, which reads the file
+strictly, says every error with its line, and proves each promise over every
+way a run can go, or shows the run that breaks it:
 
-```python
-from jaynes_role import Fail, Pass, Role, Stop
-
-role = Role("tidy", version="1.0.0")
-role.step("tidy", executor="agent", reach={"project": "write", "write": ["**"], "commands": True},
-          stop=Stop(verdicts=["keep", "redo"]), instructions="Tidy the module the request names.",
-          schema={"type": "object", "required": ["summary"]})
-
-@role.check("tidy", "summary", about="the output says what changed")
-def summary(call):
-    return Pass() if call["output"].get("summary") else Fail("say what changed")
-
-if __name__ == "__main__":
-    role.serve()
+```text
+✔ fix-bug 3.0.0 reads: runner → cases → reproduce → found → fix
+✔ "The agent that fixes never sees the cases the fix is judged by": proved (529,962 states)
+✔ "The fix starts only after tests failed because of the bug": proved (529,962 states)
+✔ "Nothing is merged before the hidden cases passed on the fix": proved (529,962 states)
 ```
 
-`jaynes conformance <folder>` says whether a role answers the protocol as it
-should; `jaynes add` installs only roles that do. The protocol's schema is
+`jaynes add` installs only roles whose promises hold. A role can also be a
+program (`role.py` with the Python library, or any executable named `role`);
+`jaynes conformance <folder>` says whether it answers the protocol as it
+should. The protocol's schema is
 [engine/protocol/role-protocol-1.schema.json](engine/protocol/role-protocol-1.schema.json).
 
 ## Commands
@@ -113,6 +110,7 @@ jaynes show RUN | runs | page | verify
 jaynes answer RUN QUESTION [ITEM=keep|change:TEXT|redo:TEXT|drop|skip] [--context TEXT] --send
 jaynes halt RUN | resume RUN | continue RUN | abandon RUN | undo RUN | correct RUN --note TEXT
 jaynes add SOURCE | remove NAME | roles | update | guide
+jaynes new NAME | check DIR
 ```
 
 The record of every run lives in `~/.jaynes/engine`, each entry chained to the
