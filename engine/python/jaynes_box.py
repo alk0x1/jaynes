@@ -390,7 +390,10 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
         script = " ".join(shlex.quote(a) for a in argv)
         try:
             argv = command_in_box(script, Box((Path(tmp),), ports=ports))
-            done = subprocess.run(argv, capture_output=True, text=True, timeout=90, env={**os.environ, "TMPDIR": tmp},
+            # Chrome keeps its default folders under the home macOS reports; the box lets it write none there, so
+            # it is given one of its own, inside the temporary folder
+            env = {**os.environ, "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=90, env=env,
                                   start_new_session=True)
         except Unavailable as e:
             return str(e)
