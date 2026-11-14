@@ -98,6 +98,12 @@ pub struct StepState {
     /// The question whose choice this round keeps alone: once done, its output is what that question was about.
     #[serde(default)]
     pub narrow: Option<String>,
+    /// The question at a later step whose answer sent this step's work back here.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// The person's words for this step in earlier rounds, oldest first.
+    #[serde(default)]
+    pub earlier: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -334,9 +340,12 @@ impl Run {
                     }
                 }
             }
-            Event::StepInvalidated { step, round, notes, narrow, .. } => {
+            Event::StepInvalidated { step, round, notes, narrow, from, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.narrow = narrow.clone();
+                    s.from = from.clone();
+                    let said = std::mem::take(&mut s.notes);
+                    s.earlier.extend(said);
                     s.round = *round;
                     s.status = Status::Idle;
                     s.spent = 0;
@@ -415,6 +424,15 @@ impl Run {
                         _ => {}
                     }
                 }
+                // what goes back to the step that made the work may not bring back what was dropped there either
+                let maker = self.manifest.steps[i].stop.as_ref().and_then(|st| st.redo.clone()).and_then(|r| self.manifest.index(&r));
+                if let Some(j) = maker.filter(|_| answer.sends_back() && answer.kept_alone(&question).is_none()) {
+                    for item in &question.items {
+                        if answer.verdict(&item.id) == Verdict::Drop && !self.steps[j].dropped.contains(item) {
+                            self.steps[j].dropped.push(item.clone());
+                        }
+                    }
+                }
             }
             Event::Waiting { step, on, why } => {
                 self.phase = Phase::Waiting { step: step.clone(), on: on.clone(), why: why.clone() };
@@ -486,6 +504,17 @@ impl Run {
 
     /// The steps step `i` uses: those it needs, and, for a step on the project, every earlier step that changes
     /// the project, since their changes are in its copy.
+    /// The rounds the person sent step `i`'s work back from its own stop: a choice kept alone is no round.
+    pub fn sent_back_at(&self, i: usize) -> u32 {
+        let name = &self.manifest.steps[i].name;
+        self.questions
+            .values()
+            .filter(|q| &q.question.step == name && q.question.kind == QuestionKind::Decision && !self.steps[i].inputs.contains(&q.question.id))
+            .filter_map(|q| q.answer.as_ref().map(|a| (q, a)))
+            .filter(|(q, a)| a.by.person() && a.sends_back() && a.kept_alone(&q.question).is_none())
+            .count() as u32
+    }
+
     pub fn sources(&self, i: usize) -> Vec<usize> {
         let decl = &self.manifest.steps[i];
         let mut out: Vec<usize> = decl.needs.iter().filter_map(|n| self.manifest.index(n)).collect();

@@ -211,6 +211,9 @@ pub enum Event {
         /// The question whose choice this round keeps alone, without the agent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         narrow: Option<String>,
+        /// The question, at a later step that reviewed this one's work, whose answer sent it back here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
     },
     QuestionOpened {
         question: Question,

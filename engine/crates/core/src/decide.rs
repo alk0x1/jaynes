@@ -349,6 +349,8 @@ impl Ctx {
             holds: stop.holds || self.braked(i),
             about: stop.about.clone(),
             choose: stop.choose,
+            pass: self.run.sent_back_at(i) + 1,
+            passes: stop.passes(),
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
@@ -365,13 +367,19 @@ impl Ctx {
 
     /// Run the step again; `narrow`, the question whose choice the round keeps alone, without the agent.
     fn invalidate_narrowing(&mut self, i: usize, because: Vec<String>, notes: Vec<String>, narrow: Option<String>) {
+        self.invalidate_full(i, because, notes, narrow, None);
+    }
+
+    /// Run the step again; `narrow`, the question whose choice the round keeps alone; `from`, the question at a later
+    /// step that reviewed this one's work and sent it back here.
+    fn invalidate_full(&mut self, i: usize, because: Vec<String>, notes: Vec<String>, narrow: Option<String>, from: Option<String>) {
         if let Some(q) = self.run.open_question(i) {
             let id = q.question.id.clone();
             self.emit(Event::QuestionSuperseded { question: id });
         }
         let round = self.run.steps[i].round + 1;
         let step = self.name(i);
-        self.emit(Event::StepInvalidated { step, round, because, notes, narrow });
+        self.emit(Event::StepInvalidated { step, round, because, notes, narrow, from });
     }
 
     fn start(&mut self, i: usize, executor: &Executor, name: String) -> bool {
@@ -496,6 +504,11 @@ impl Ctx {
             checks: decl.checks.iter().filter(|c| c.kind == CheckKind::Open).cloned().collect(),
             locked: s.locks.values().map(|(item, _)| item.clone()).collect(),
             dropped: s.dropped.clone(),
+            review: s.from.as_ref().and_then(|q| self.run.questions.get(q)).and_then(|q| {
+                let k = self.run.manifest.index(&q.question.step)?;
+                self.run.output(k).map(|o| Read { step: q.question.step.clone(), output: o.clone() })
+            }),
+            earlier: s.earlier.clone(),
             keep: s
                 .narrow
                 .as_ref()
@@ -532,6 +545,8 @@ impl Ctx {
             holds: true,
             about: stop.about,
             choose: false,
+            pass: 0,
+            passes: 0,
         };
         let on = vec![question.id.clone()];
         self.emit(Event::QuestionOpened { question: question.clone() });
@@ -656,6 +671,8 @@ impl Ctx {
                     holds: true,
                     about: about.clone(),
                     choose: false,
+                    pass: 0,
+                    passes: 0,
                 };
                 let on = vec![question.id.clone()];
                 self.emit(Event::InputNeeded { step: step.to_string(), attempt, question: question.clone() });
@@ -677,6 +694,8 @@ impl Ctx {
                     holds: true,
                     about: format!("{step} says it cannot be done as asked"),
                     choose: false,
+                    pass: 0,
+                    passes: 0,
                 };
                 let on = vec![question.id.clone()];
                 self.emit(Event::InputNeeded { step: step.to_string(), attempt, question: question.clone() });
@@ -904,6 +923,8 @@ impl Ctx {
             holds: true,
             about,
             choose: false,
+            pass: 0,
+            passes: 0,
         };
         // the same leave, answered by the person earlier in the run
         let before = self
@@ -971,6 +992,15 @@ impl Ctx {
                 _ => {}
             }
         }
+        if q.question.kind == QuestionKind::Decision && answer.by.person() && answer.sends_back() {
+            if q.question.last() && answer.kept_alone(&q.question).is_none() {
+                return refuse(format!("this was the last round at {}: keep what there is, or abandon the run", q.question.step));
+            }
+            let redo = self.run.manifest.index(&q.question.step).and_then(|i| self.run.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.redo.is_some());
+            if redo && answer.kept_alone(&q.question).is_none() && q.question.items.iter().any(|x| answer.verdict(&x.id) == Verdict::Keep) {
+                return refuse("the work goes back to the step that made it: send all of it back, or keep all of it");
+            }
+        }
         if q.question.choose {
             match answer.choice(&q.question) {
                 None => return refuse("choose one: keep or change one option, or name finalists for the agent to develop, or choose none; the others leave"),
@@ -1024,8 +1054,18 @@ impl Ctx {
                 if answer.sends_back() && !input {
                     let notes = notes(&q.question, answer);
                     let narrow = answer.kept_alone(&q.question).map(|_| q.question.id.clone());
-                    let because = if narrow.is_some() { "you chose one, and sent it back to keep only that" } else { "you sent it back" };
-                    self.invalidate_narrowing(i, vec![because.to_string()], notes, narrow);
+                    let maker = maker(&self.run, i).filter(|_| narrow.is_none());
+                    match maker {
+                        // the work goes back to the step that made it; this one looks again at what comes back
+                        Some(j) => {
+                            let because = vec![format!("you sent it back at {}", q.question.step)];
+                            self.invalidate_full(j, because, notes, None, Some(q.question.id.clone()));
+                        }
+                        None => {
+                            let because = if narrow.is_some() { "you chose one, and sent it back to keep only that" } else { "you sent it back" };
+                            self.invalidate_narrowing(i, vec![because.to_string()], notes, narrow);
+                        }
+                    }
                 }
             }
         }
@@ -1055,6 +1095,24 @@ impl Ctx {
         }
         self.invalidate(i, vec!["what it shows is being done again".to_string()], Vec::new());
     }
+}
+
+/// What follows a send-back: the reviewing step looks again when the work went back to its maker, and what else may
+/// run again.
+fn reviewed(sentences: &mut Vec<String>, run: &Run, i: usize, q: &Question, may: &[String]) {
+    let back = maker(run, i).is_some();
+    if back {
+        sentences.push(format!("{} looks at it again before you see it.", q.step));
+    }
+    let others: Vec<&String> = may.iter().filter(|m| !back || **m != q.step).collect();
+    if !others.is_empty() {
+        sentences.push(format!("Run again only if what they used comes out different: {}.", others.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+    }
+}
+
+/// The step a stop sends its work back to, when the step that asks only reviews it.
+fn maker(run: &Run, i: usize) -> Option<usize> {
+    run.manifest.steps[i].stop.as_ref().and_then(|s| s.redo.as_ref()).and_then(|r| run.manifest.index(r))
 }
 
 /// An item that stands for a step's whole output.
@@ -1161,7 +1219,13 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             (Verdict::Redo { .. }, _) => format!("“{label}” is done again, with your note."),
         });
         if v.sends_back() {
-            let target = if person { run.manifest.index(&item.id) } else { Some(i) };
+            let target = if person {
+                run.manifest.index(&item.id)
+            } else if answer.kept_alone(q).is_none() {
+                Some(maker(run, i).unwrap_or(i))
+            } else {
+                Some(i)
+            };
             if let Some(t) = target
                 && !reruns.contains(&t) {
                     reruns.push(t);
@@ -1213,14 +1277,16 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
         }
     } else if q.choose {
+        let by = maker(run, i).map(|j| run.manifest.steps[j].name.clone()).unwrap_or_else(|| q.step.clone());
         sentences.push(match answer.choice(q) {
-            Some(Choice::Finalists) => format!("The agent at {} develops the finalists, and you choose again.", q.step),
-            Some(Choice::None) => format!("The agent at {} makes new options from your words; these do not come back.", q.step),
-            _ => format!("The agent at {} adjusts what you chose, seeing every option it made, and you see the result.", q.step),
+            Some(Choice::Finalists) => format!("The agent at {by} develops the finalists, and you choose again."),
+            Some(Choice::None) => format!("The agent at {by} makes new options from your words; these do not come back."),
+            _ => format!("The agent at {by} adjusts what you chose, seeing every option it made, and you see the result."),
         });
-        if !may_rerun.is_empty() {
-            sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
-        }
+        reviewed(&mut sentences, run, i, q, &may_rerun);
+    } else if maker(run, i).is_some() && !reruns.contains(&q.step) {
+        sentences.push(format!("Goes back to {}, which made it, on top of what it made.", reruns.join(", ")));
+        reviewed(&mut sentences, run, i, q, &may_rerun);
     } else {
         sentences.push(format!("Runs again, on top of what it made: {}.", reruns.join(", ")));
         if may_rerun.is_empty() {

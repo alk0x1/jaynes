@@ -130,6 +130,10 @@ struct StopFile {
     /// The person chooses one of the options with a click, and may write how to adjust it.
     #[serde(default)]
     choose: bool,
+    /// The earlier step that made the work this step reviews: what the person sends back goes there.
+    redo: Option<String>,
+    /// How many rounds the stop asks at most; three when left out.
+    rounds: Option<u32>,
     #[serde(default)]
     holds: bool,
     #[serde(default)]
@@ -741,6 +745,8 @@ impl TomlRole {
             let stop = s.stop.as_ref().map(|st| StopDecl {
                 verdicts: st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() }),
                 choose: st.choose,
+                redo: st.redo.clone(),
+                rounds: st.rounds,
                 holds: st.holds,
                 from_risk: st.from_risk,
                 release: st.release,

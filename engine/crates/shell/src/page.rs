@@ -694,6 +694,17 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
     let at = path.iter().position(|&j| j == i).map(|n| n + 1).unwrap_or(0);
+    // the last round sends nothing back: one is kept as it is, or the run is abandoned
+    let last = question.last();
+    let rounds = if question.passes > 0 {
+        if last {
+            format!("<span class=\"badge wait\">● Last round of {}: keep one as it is, or abandon the run</span> ", question.passes)
+        } else {
+            format!("<span class=\"badge\">● Round {} of {}</span> ", question.pass, question.passes)
+        }
+    } else {
+        String::new()
+    };
     let badge = if question.holds {
         "<span class=\"badge wait\">● The run waits for your answer</span>"
     } else {
@@ -705,19 +716,23 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     };
     // a stop that chooses: one click on an option sends the choice; a note beside it adjusts the chosen one
     let choose_rows = || -> String {
-        question
+        let rows = question
             .items
             .iter()
             .map(|it| {
+                let more_ways = if last { String::new() } else {
+                    format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\"><button class=\"fin\" data-fin=\"{id}\" title=\"Keep it among two or three finalists that the agent develops, then choose again\">Finalist</button>", id = esc(&it.id))
+                };
                 format!(
-                    "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\"><input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\"><button class=\"fin\" data-fin=\"{id}\" title=\"Keep it among two or three finalists that the agent develops, then choose again\">Finalist</button><button class=\"choose\" data-choose=\"{id}\">Choose</button></div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
+                    "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\">{more_ways}<button class=\"choose\" data-choose=\"{id}\">Choose</button></div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
                     id = esc(&it.id),
                     label = esc(&it.label),
                     more = shown(it)
                 )
             })
-            .collect::<String>()
-            + "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the finalists</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>\
+            .collect::<String>();
+        if last { return rows; }
+        rows + "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the finalists</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>\
                <div class=\"row choose\"><h3>None of these</h3><div class=\"pick\"><input class=\"adjust\" id=\"why\" placeholder=\"What was missing? The agent makes new options; these do not come back\"><button class=\"choose\" id=\"none\" disabled>None of these</button></div><ul class=\"fx-row\" id=\"fx-none\"></ul></div>"
     };
     let rows: String = if question.choose { choose_rows() } else { question
@@ -727,6 +742,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             let buttons: String = question
                 .offered
                 .iter()
+                .filter(|v| !last || matches!(v, VerdictKind::Keep | VerdictKind::Skip))
                 .map(|v| {
                     let key = format!("{v:?}").to_lowercase();
                     format!("<button class=\"{key}\" data-i=\"{}\" data-v=\"{key}\">{}</button>", esc(&it.id), label(*v, permission))
@@ -743,7 +759,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let items: Vec<&str> = question.items.iter().map(|x| x.id.as_str()).collect();
     let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items}).to_string();
     format!(
-        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{badge}</p>{phase}\
+        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
          {rows}{changes}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),

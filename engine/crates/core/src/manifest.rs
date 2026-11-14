@@ -215,6 +215,21 @@ pub struct StopDecl {
     /// the running; without a note the run goes on with the chosen one alone, kept by Jaynes and not the agent.
     #[serde(default, skip_serializing_if = "is_false")]
     pub choose: bool,
+    /// The earlier step whose work this stop asks about, when the step that asks only reviews it: what the person
+    /// sends back goes to that step, and this one looks again at what comes back before the person sees it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redo: Option<String>,
+    /// How many rounds the stop asks at most: after the last, the person keeps what there is or abandons the run,
+    /// so making and rejecting never goes on forever. None is three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rounds: Option<u32>,
+}
+
+impl StopDecl {
+    /// The rounds the stop asks at most.
+    pub fn passes(&self) -> u32 {
+        self.rounds.unwrap_or(3)
+    }
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {
@@ -327,6 +342,15 @@ impl Manifest {
                 }
                 if stop.from_risk < s.from_risk {
                     errors.push(format!("{at} asks at a risk the step does not run at"));
+                }
+                if let Some(r) = &stop.redo {
+                    match self.index(r) {
+                        Some(j) if s.needs.contains(r) && self.steps[j].executor == Executor::Agent && !self.steps[j].hidden && s.executor == Executor::Agent => {}
+                        _ => errors.push(format!("{at} sends back to {r}, which is not an agent's step it needs")),
+                    }
+                }
+                if stop.rounds == Some(0) {
+                    errors.push(format!("{at} has a stop that asks no round"));
                 }
                 if stop.choose {
                     if s.executor != Executor::Agent {

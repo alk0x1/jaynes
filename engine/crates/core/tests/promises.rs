@@ -28,7 +28,7 @@ fn open(name: &str) -> CheckDecl {
 }
 
 fn stop(from_risk: Risk, holds: bool) -> StopDecl {
-    StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds, from_risk, release: false, budget: None, audit_rate: Rate(0.1), about: "Keep it?".into(), choose: false }
+    StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds, from_risk, release: false, budget: None, audit_rate: Rate(0.1), about: "Keep it?".into(), choose: false, redo: None, rounds: None }
 }
 
 /// small-change as it ships: Jaynes finds the suite, the agent changes, its stop asks only from high risk.
@@ -154,6 +154,8 @@ fn choosing() -> Manifest {
     directions.stop = Some(StopDecl {
         verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
         choose: true,
+        redo: None,
+        rounds: None,
         ..stop(Risk::Low, true)
     });
     let mut tokens = step("tokens", Executor::Agent, &["directions"]);

@@ -590,7 +590,8 @@ fn apply(promises: &[Promise], done: &[bool], node: &Node, mv: &Move) -> Option<
             if done[p] || &turn.step != agent_of {
                 continue;
             }
-            let given = turn.given.iter().any(|g| &g.step == step);
+            // what the agent is given, or what a reviewer said of its work when it was sent back to it
+            let given = turn.given.iter().any(|g| &g.step == step) || turn.review.as_ref().is_some_and(|r| &r.step == step);
             let session = run.manifest.index(agent_of).and_then(|a| session_sees(&run.manifest, a, step));
             if given || session.is_some() {
                 let mut tail = says.clone();

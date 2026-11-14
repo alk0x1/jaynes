@@ -167,6 +167,8 @@ pub enum CheckVerdict {
     Blocked { reason: String },
 }
 
+// A turn is the largest command and the most common one: boxing it would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
@@ -233,6 +235,12 @@ pub struct AgentTurn {
     /// no agent works.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<Vec<String>>,
+    /// When the work was sent back from a later step that reviewed it: what that step said of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Read>,
+    /// The person's words for this step in earlier rounds, oldest first, so what was asked is not undone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<String>,
     pub deadline_seconds: u64,
     pub tokens_left: u64,
 }

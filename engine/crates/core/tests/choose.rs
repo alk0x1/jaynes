@@ -40,6 +40,8 @@ fn choosing() -> StopDecl {
         audit_rate: Rate(0.1),
         about: "Which direction?".into(),
         choose: true,
+        redo: None,
+        rounds: None,
     }
 }
 

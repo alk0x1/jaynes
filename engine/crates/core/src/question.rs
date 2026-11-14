@@ -81,6 +81,22 @@ pub struct Question {
     /// The person chooses one item, and may write how to adjust it; the others leave the running.
     #[serde(default, skip_serializing_if = "crate::manifest::is_false")]
     pub choose: bool,
+    /// The round of asking at this stop, from 1, and the most it asks: at the last, nothing is sent back.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pass: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub passes: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl Question {
+    /// Whether this is the stop's last round: an answer may keep, never send back.
+    pub fn last(&self) -> bool {
+        self.passes > 0 && self.pass >= self.passes
+    }
 }
 
 impl Question {

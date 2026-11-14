@@ -693,6 +693,18 @@ impl<'a> Driver<'a> {
             if let Err(e) = write_exchange(&exchange, &given, previous.as_ref()) {
                 return fault(e);
             }
+            // what the reviewer said, when the work was sent back from it; otherwise none lingers from before
+            let review = exchange.join("review.json");
+            match turn.review.as_ref().map(|r| self.output_of(&Some(r.output.clone()))) {
+                Some(Some(said)) => {
+                    if let Err(e) = std::fs::write(&review, said.to_string()) {
+                        return fault(e.to_string());
+                    }
+                }
+                _ => {
+                    let _gone = std::fs::remove_file(&review);
+                }
+            }
             compose(&run.request, &text, &schema, &turn, &given)
         } else {
             let _gone = std::fs::remove_file(exchange.join("output.json"));
@@ -1062,6 +1074,19 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
             p.push_str(&format!("- {n}\n"));
         }
         p.push('\n');
+    }
+    if !turn.earlier.is_empty() {
+        p.push_str("# What the person asked in earlier rounds\n\nOldest first. Keep doing what still applies; do not undo it.\n\n");
+        for n in &turn.earlier {
+            p.push_str(&format!("- {n}\n"));
+        }
+        p.push('\n');
+    }
+    if let Some(r) = &turn.review {
+        p.push_str(&format!(
+            "# What the reviewer said of your last version\n\nThe person sent your work back from {}, which reviewed it. Read what it said in .jaynes/review.json, and do not repeat what it found wrong.\n\n",
+            r.step
+        ));
     }
     if !turn.context.is_empty() {
         p.push_str("# What the person said for context\n\nIn their own words, at earlier answers. Take it into account; it is not a request on its own.\n\n");
