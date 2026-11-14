@@ -1031,3 +1031,73 @@ exit 0
     assert_eq!((unsure["verdict"].as_str(), unsure["reason"].as_str()), (Some("blocked"), Some("cannot tell")));
     assert!(!Path::new(&std::env::var("HOME").expect("home")).join(".jaynes-escaped-the-box").exists());
 }
+
+#[test]
+fn a_role_whose_promise_does_not_hold_is_refused_with_the_path_that_breaks_it() {
+    let s = scratch("promise");
+    let role = s.home.parent().expect("base").join("asks-late");
+    std::fs::create_dir_all(&role).expect("dir");
+    let text = std::fs::read_to_string(root().join("roles/small-change/role.toml")).expect("read")
+        .replace("role = \"small-change\"", "role = \"asks-late\"")
+        + "\n[[promise]]\nsays = \"Nothing is delivered unless you answered at change\"\nnever = \"deliver\"\nunless = \"person answered at change\"\n";
+    std::fs::write(role.join("role.toml"), text).expect("write");
+    let (ok, out) = engine(&s, &["check", role.to_str().expect("path")]);
+    assert!(!ok, "{out}");
+    assert!(out.contains("✔ \"Nothing is delivered before the project's suite passed on the change\": proved"), "{out}");
+    assert!(out.contains("✘ \"Nothing is delivered unless you answered at change\" (role.toml:"), "{out}");
+    assert!(out.contains("low risk → runner's reach is tested → runner done → change's reach is tested → change delivers a small change → change's checks pass → change's stop asks only from high risk → deliver, with no answer of yours at change"), "{out}");
+    let (ok, out) = engine(&s, &["add", role.to_str().expect("path")]);
+    assert!(!ok && out.contains("a promise of the role does not hold, so it was not installed"), "{out}");
+    let (_, roles) = engine(&s, &["roles"]);
+    assert!(!roles.contains("asks-late"), "{roles}");
+}
+
+#[test]
+fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_committing_it() {
+    let s = scratch("diedone");
+    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let role = root().join("roles/small-change");
+    let out = Command::new(BIN)
+        .args(["start", "--run", "diedone", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("JAYNES_DIE_AFTER_DONE", "change")
+        .output().expect("start");
+    assert_eq!(out.status.code(), Some(9), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(types(&events(&s, "diedone")).contains(&"StepDone".to_string()));
+    let (ok, said) = engine(&s, &["continue", "diedone"]);
+    assert!(ok && said.contains("finished: delivered"), "{said}");
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/diedone:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n", "the delivery lost the change of a step the record says is done");
+}
+
+#[test]
+fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
+    let s = bug_project("diemerge");
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let out = Command::new(BIN)
+        .args(["start", "--run", "diemerge", "--role", root().join("roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
+        .env("JAYNES_DIE_AFTER_MERGE", "1")
+        .output().expect("start");
+    assert_eq!(out.status.code(), Some(9), "{}", String::from_utf8_lossy(&out.stderr));
+    // the delivery made again a second later is made of new commits, with the same change
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let mut c = Command::new(BIN);
+    c.args(["continue", "diemerge"]).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
+    let said = String::from_utf8_lossy(&c.output().expect("continue").stdout).to_string();
+    assert!(said.contains("delivered"), "{said}");
+    let log = Command::new("git").arg("-C").arg(&s.project).args(["log", "--format=%s", "main"]).output().expect("git");
+    let merges = String::from_utf8_lossy(&log.stdout).lines().filter(|l| l.contains("merged")).count();
+    assert_eq!(merges, 1, "the fix landed {merges} times: {said}");
+    // the merge made before the process died is the run's, so Undo reverts it
+    let undo = Command::new("script")
+        .args(["-q", "/dev/null", BIN, "undo", "diemerge", "--note", "not now"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .output().expect("undo");
+    assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}", String::from_utf8_lossy(&undo.stdout));
+    assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello $1\"\n");
+}

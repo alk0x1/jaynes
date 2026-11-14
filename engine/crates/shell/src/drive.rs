@@ -355,6 +355,9 @@ impl<'a> Driver<'a> {
     pub fn drive(&mut self, first: Input) -> Result<Run, String> {
         let mut queue: VecDeque<Input> = VecDeque::from([first]);
         let mut last = self.store.state(&self.setup.run)?;
+        if let Some(run) = &last {
+            self.catch_up_ledger(run)?;
+        }
         loop {
             // What came from outside (an answer, a halt, an abandon) goes before what the last turn left to do.
             let mut came = Vec::new();
@@ -374,6 +377,12 @@ impl<'a> Driver<'a> {
                     continue;
                 }
             };
+            // For the tests of recovery: die where a kill can fall, once the record holds a step done.
+            if let Ok(step) = std::env::var("JAYNES_DIE_AFTER_DONE")
+                && events.iter().any(|e| matches!(e, Event::StepDone { step: s, .. } if *s == step))
+            {
+                std::process::exit(9);
+            }
             self.follow_project(&state, &events)?;
             for e in &events {
                 narrate(e);
@@ -484,25 +493,59 @@ impl<'a> Driver<'a> {
     fn follow_project(&self, run: &Run, events: &[Event]) -> Result<(), String> {
         let Some(copy) = &self.setup.copy else { return Ok(()) };
         for e in events {
-            let (step, keep) = match e {
-                Event::StepDone { step, .. } => (step, true),
-                Event::AttemptFailed { step, .. } | Event::AttemptInterrupted { step, .. } | Event::AttemptImpossible { step, .. } => (step, false),
+            let (step, done) = match e {
+                Event::StepDone { step, output, round, .. } => (step, Some((output, *round))),
+                Event::AttemptFailed { step, .. } | Event::AttemptInterrupted { step, .. } | Event::AttemptImpossible { step, .. } => (step, None),
                 _ => continue,
             };
             let Some(i) = run.manifest.index(step) else { continue };
             if run.manifest.steps[i].reach.project != ProjectAccess::Write {
                 continue;
             }
-            if keep {
-                let parent = self.parents().get(step).cloned().unwrap_or(copy.base()?);
-                let mut l = self.ledger();
-                match copy.result(&parent, &format!("{step}, round {}", run.steps[i].round))? {
-                    Some(c) => l.insert(step.clone(), c),
-                    None => l.remove(step),
-                };
-                self.keep_ledger(&l)?;
-            } else {
-                copy.discard()?;
+            match done {
+                Some((output, round)) => self.commit_done(step, output, round)?,
+                None => copy.discard()?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Make the commit of a step's output that passed: the tree Jaynes staged and checked, recorded with the output,
+    /// over the copy as the steps before it left it. Its change is then in the ledger the delivery is made from.
+    fn commit_done(&self, step: &str, output: &Digest, round: u32) -> Result<(), String> {
+        let Some(copy) = &self.setup.copy else { return Ok(()) };
+        let parent = self.parents().get(step).cloned().unwrap_or(copy.base()?);
+        let message = format!("{step}, round {round}");
+        let commit = match self.store.get(output)?["tree"].as_str() {
+            Some(tree) => copy.commit_tree(tree, &parent, &message)?,
+            None => copy.result(&parent, &message)?,
+        };
+        let mut l = self.ledger();
+        match commit {
+            Some(c) => l.insert(step.to_string(), c),
+            None => l.remove(step),
+        };
+        self.keep_ledger(&l)
+    }
+
+    /// A process that died between recording a step done and committing its change left the ledger behind the
+    /// record: commit each such step from the tree recorded with its output, before anything touches the copy.
+    fn catch_up_ledger(&self, run: &Run) -> Result<(), String> {
+        let Some(copy) = &self.setup.copy else { return Ok(()) };
+        let ledger = self.ledger();
+        for (i, s) in run.steps.iter().enumerate() {
+            let decl = &run.manifest.steps[i];
+            let Some(done) = s.done.as_ref().filter(|_| s.status == jaynes_core::run::Status::Done && decl.reach.project == ProjectAccess::Write) else { continue };
+            let Some(tree) = self.store.get(&done.output)?["tree"].as_str().map(str::to_string) else { continue };
+            let have = ledger.get(&decl.name).map(|c| copy.tree_of(c)).transpose()?;
+            let parent_tree = self.parents().get(&decl.name).map(|p| copy.tree_of(p)).transpose()?;
+            let current = match &have {
+                Some(t) => *t == tree,
+                None => parent_tree.as_deref() == Some(tree.as_str()),
+            };
+            if !current {
+                say(&format!("{} was done in the record and its change was not yet kept: kept now", decl.name));
+                self.commit_done(&decl.name, &done.output, done.round)?;
             }
         }
         Ok(())
@@ -559,9 +602,15 @@ impl<'a> Driver<'a> {
                 if ok && merge
                     && let Some(copy) = &self.setup.copy {
                         let head = copy.head().unwrap_or_default();
-                        match copy.merge(&head, &self.setup.run) {
+                        let merged = copy.merge(&head, &self.setup.run);
+                        // For the tests of recovery: die where a kill can fall, once the merge landed.
+                        if std::env::var("JAYNES_DIE_AFTER_MERGE").is_ok() && matches!(merged, Ok(Some(_))) {
+                            std::process::exit(9);
+                        }
+                        match merged {
                             Ok(Some(m)) => {
                                 let mut merges = self.merges();
+                                merges.retain(|x| *x != m);
                                 merges.push(m.clone());
                                 let _kept = std::fs::write(self.setup.dir.join("merges.json"), serde_json::to_string(&merges).unwrap_or_default());
                                 reference.push_str(&format!("; merged as {}", &m[..m.len().min(12)]));

@@ -126,6 +126,19 @@ impl Copy {
         git(&self.dir, &["commit-tree", &tree, "-p", parent, "-m", message]).map(Some)
     }
 
+    /// One commit of `tree` over `parent`; None when the tree is the parent's own.
+    pub fn commit_tree(&self, tree: &str, parent: &str, message: &str) -> Result<Option<String>, String> {
+        if tree == self.tree_of(parent)? {
+            return Ok(None);
+        }
+        git(&self.dir, &["commit-tree", tree, "-p", parent, "-m", message]).map(Some)
+    }
+
+    /// The tree of a commit.
+    pub fn tree_of(&self, commit: &str) -> Result<String, String> {
+        git(&self.dir, &["rev-parse", &format!("{commit}^{{tree}}")])
+    }
+
     /// Throw away what is not committed.
     pub fn discard(&self) -> Result<(), String> {
         git(&self.dir, &["reset", "-q", "--hard", "HEAD"])?;
@@ -173,12 +186,20 @@ impl Copy {
         if git(&self.dir, &["merge-base", "--is-ancestor", head, &tip]).is_ok() {
             return Ok(None);
         }
+        let message = format!("Jaynes: run {run}, merged");
         git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
-        if let Err(e) = git(&self.dir, &["merge", "-q", "--no-ff", "--no-edit", "-m", &format!("Jaynes: run {run}, merged"), head]) {
+        if let Err(e) = git(&self.dir, &["merge", "-q", "--no-ff", "--no-edit", "-m", &message, head]) {
             let _abort = git(&self.dir, &["merge", "--abort"]);
             return Err(format!("it conflicts with what {branch} has now: {e}"));
         }
         let merged = self.head()?;
+        if self.tree_of(&merged)? == self.tree_of(&tip)? {
+            // The branch has the change already: a process that died after the merge landed and before it was
+            // recorded. The run's merge on the branch is the one to record, so Undo reverts it.
+            git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
+            let found = git(&self.dir, &["log", "-1", "--format=%H", "--fixed-strings", &format!("--grep={message}"), &tip])?;
+            return Ok(Some(found).filter(|f| !f.is_empty()));
+        }
         self.land(&branch, &tip, &merged)?;
         Ok(Some(merged))
     }
