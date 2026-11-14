@@ -1,0 +1,32 @@
+# A test role: an agent draws directions as pages, the person chooses one, and an agent applies it.
+
+role = "directions"
+version = "1.0.0"
+
+[[step]]
+name = "directions"
+reach = { project = "write", write = ["design/**"] }
+instructions = """
+Draw a few directions for the look of the project, each as a page in design/:
+
+{{request}}
+"""
+checks = ["output-follows-schema"]
+stop = { ask = "Which direction goes on?", choose = true, holds = true }
+show = { each = "directions", label = "{{name}}", id = "{{name}}", detail = "{{why}}", picture = "{{page}}" }
+
+[step.output]
+directions = { type = "array", items = { type = "object", fields = { name = "string", why = "string", page = "string" } } }
+
+[[step]]
+name = "apply"
+needs = ["directions"]
+reach = { project = "write", write = ["design/**"] }
+instructions = """
+Apply the direction chosen:
+
+{{directions}}
+"""
+
+[step.output]
+applied = "string"

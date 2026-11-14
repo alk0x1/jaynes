@@ -658,6 +658,10 @@ impl<'a> Driver<'a> {
             outcome: AttemptOutcome::Fault { reason },
         };
         let Some(i) = run.manifest.index(&turn.step) else { return fault("no such step".into()) };
+        if let Some(keep) = &turn.keep {
+            let outcome = self.kept_alone(run, i, &turn, keep).unwrap_or_else(|reason| AttemptOutcome::Fault { reason });
+            return Input::AttemptEnded { step: turn.step.clone(), attempt: turn.attempt, fix: turn.fix, outcome };
+        }
         let cwd = self.cwd(run, i, turn.attempt);
         let exchange = cwd.join(EXCHANGE);
         let given = match self.given(&turn.given) {
@@ -804,6 +808,34 @@ impl<'a> Driver<'a> {
         AttemptOutcome::Delivered { output: digest, items, changed, usage, session }
     }
 
+    /// A round of a stop that chooses, when the person chose without a note: the role keeps the chosen options of
+    /// the step's last output, each as it was, with the same files; no agent works.
+    fn kept_alone(&self, run: &Run, i: usize, turn: &AgentTurn, keep: &[String]) -> Result<AttemptOutcome, String> {
+        say(&format!("· {}: keeping only what you chose", turn.step));
+        self.prepare(run, i)?;
+        let previous = turn.previous.as_ref().ok_or("there is no output to choose from")?;
+        let object = self.store.get(previous)?;
+        let output = match self.setup.role.call(Call::Narrow { step: turn.step.clone(), output: object["output"].clone(), keep: keep.to_vec() })? {
+            Body::Result { output } => output,
+            other => return Err(format!("the role could not keep what you chose: {other:?}")),
+        };
+        let digest = self.store.put(&json!({"output": output, "tree": object["tree"].clone()}))?;
+        let shown = match self.setup.role.call(Call::Items { step: turn.step.clone(), output })? {
+            Body::Items { items } => items,
+            other => return Err(format!("the role answered items with {other:?}")),
+        };
+        let mut ids: Vec<&str> = shown.iter().map(|x| x.id.as_str()).collect();
+        let mut want: Vec<&str> = keep.iter().map(String::as_str).collect();
+        ids.sort_unstable();
+        want.sort_unstable();
+        if ids != want {
+            return Err(format!("the role kept {} when you chose {}", ids.join(", "), want.join(", ")));
+        }
+        let items = self.keep_items(&shown, &self.cwd(run, i, turn.attempt))?;
+        let changed = run.steps[i].done.as_ref().map(|d| d.changed.clone()).unwrap_or_default();
+        Ok(AttemptOutcome::Delivered { output: digest, items, changed, usage: Default::default(), session: None })
+    }
+
     /// The items as the core knows them, after keeping a copy of each picture by its fingerprint and how each item
     /// is shown. A picture outside the step's folder, or that does not read, is Jaynes's fault to report.
     fn keep_items(&self, items: &[crate::protocol::ShownItem], root: &Path) -> Result<Vec<jaynes_core::question::Item>, String> {
@@ -819,7 +851,23 @@ impl<'a> Driver<'a> {
                 if !real.starts_with(&base) {
                     return Err(format!("the picture {p} of {} is outside the step's folder", x.id));
                 }
-                let ext = real.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                let mut ext = real.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                // a page is photographed by Jaynes, and the photograph left beside the copy's files for later agents
+                let real = if ext == "html" || ext == "htm" {
+                    let rel = real.strip_prefix(&base).unwrap_or(&real).with_extension("png");
+                    let photo = base.join(EXCHANGE).join("pictures").join(rel);
+                    // the same page keeps the same photograph, so an option kept as it was stays as it was
+                    let page = Digest::of_bytes(&std::fs::read(&real).map_err(|e| e.to_string())?).0;
+                    let of = photo.with_extension("png.of");
+                    if !(photo.is_file() && std::fs::read_to_string(&of).is_ok_and(|d| d == page)) {
+                        self.photograph(&real, &photo).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
+                        std::fs::write(&of, &page).map_err(|e| e.to_string())?;
+                    }
+                    ext = "png".into();
+                    photo
+                } else {
+                    real
+                };
                 if !["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(&ext.as_str()) {
                     return Err(format!("the picture {p} of {} is not an image Jaynes shows", x.id));
                 }
@@ -836,6 +884,25 @@ impl<'a> Driver<'a> {
             out.push(item);
         }
         Ok(out)
+    }
+
+    /// Photograph a page with the library's Chrome, in Jaynes's box and offline.
+    fn photograph(&self, page: &Path, out: &Path) -> Result<(), String> {
+        let python = std::env::var("JAYNES_PYTHON").unwrap_or_else(|_| "python3".to_string());
+        let done = std::process::Command::new(python)
+            .arg(self.setup.role.library.join("jaynes_box.py"))
+            .arg("photograph")
+            .arg(page)
+            .arg(out)
+            .env("PYTHONPATH", &self.setup.role.library)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .map_err(|e| format!("Jaynes could not start its photographer: {e}"))?;
+        if done.status.success() && out.is_file() {
+            return Ok(());
+        }
+        let said = String::from_utf8_lossy(&done.stdout).trim().to_string();
+        Err(if said.is_empty() { String::from_utf8_lossy(&done.stderr).chars().take(400).collect() } else { said })
     }
 
     #[allow(clippy::too_many_arguments)]

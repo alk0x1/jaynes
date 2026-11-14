@@ -299,15 +299,33 @@ fn output(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     (d.clone(), vec![Item { id: "output".into(), label: format!("what {step} made"), digest: d }])
 }
 
-fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize) -> Vec<Move> {
+/// An output of options, for a stop that chooses: two of them, so a choice leaves one.
+fn options(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
+    let d = Digest(format!("{step}.{round}.{what}"));
+    let item = |id: &str| Item { id: id.into(), label: format!("option {id} of {step}"), digest: Digest(format!("{step}.{round}.{what}.{id}")) };
+    (d, vec![item("a"), item("b")])
+}
+
+fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> Vec<Move> {
     let step = &turn.step;
     let mut out = Vec::new();
-    let delivered = |what: &str, changed: Vec<Changed>| {
-        let (d, items) = output(step, round, what);
-        AttemptOutcome::Delivered { output: d, items, changed, usage: Usage::default(), session: Some(format!("session-{step}")) }
-    };
     let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: turn.attempt, fix: turn.fix, outcome };
     let mv = |input, says: String, trouble| Move { input, says, trouble, sends_back: None, answers: Some(k) };
+    let i = r.manifest.index(step);
+    // a round that keeps a choice alone is the role's: it gives the chosen items as they were, or fails like a role
+    if let Some(keep) = &turn.keep {
+        let done = i.and_then(|i| r.steps[i].done.as_ref()).map(|d| d.items.clone()).unwrap_or_default();
+        let items: Vec<Item> = done.into_iter().filter(|x| keep.contains(&x.id)).collect();
+        let d = Digest(format!("{step}.{round}.kept"));
+        out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None }), format!("{step} keeps only what you chose"), false));
+        out.push(mv(ended(AttemptOutcome::Fault { reason: "the role could not keep it".into() }), format!("{step} cannot keep what you chose"), true));
+        return out;
+    }
+    let choose = i.and_then(|i| r.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.choose);
+    let delivered = |what: &str, changed: Vec<Changed>| {
+        let (d, items) = if choose { options(step, round, what) } else { output(step, round, what) };
+        AttemptOutcome::Delivered { output: d, items, changed, usage: Usage::default(), session: Some(format!("session-{step}")) }
+    };
     if turn.reach.project == ProjectAccess::Write {
         out.push(mv(ended(delivered("small", vec![Changed { path: "src/a".into(), lines: 1 }])), format!("{step} delivers a small change"), false));
         // a large change only raises the risk, so it is another way only below high risk
@@ -337,7 +355,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             }
             Command::RunAgent(turn) => {
                 let round = r.manifest.index(&turn.step).map(|i| r.steps[i].round).unwrap_or(0);
-                out.extend(agent_moves(turn, round, r.risk, k));
+                out.extend(agent_moves(turn, round, r.risk, k, r));
             }
             Command::RunRole { step, round, attempt, .. } => {
                 let (d, items) = output(step, *round, "role");
@@ -386,6 +404,23 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
     for q in r.open_questions() {
         let q = &q.question;
         if q.kind != QuestionKind::Decision {
+            continue;
+        }
+        // a choice: the first option kept alone, or kept with a note the agent works from
+        if q.choose {
+            let first = q.items.first().map(|x| x.id.clone()).unwrap_or_default();
+            for (verdict, word) in [(Verdict::Keep, "choose"), (Verdict::Change { text: "adjust it".into() }, "choose and adjust")] {
+                let verdicts: BTreeMap<String, Verdict> = q.items.iter().map(|x| (x.id.clone(), if x.id == first { verdict.clone() } else { Verdict::Drop })).collect();
+                let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: String::new() };
+                let back = answer.sends_back();
+                out.push(Move {
+                    input: Input::Answer { answer },
+                    says: format!("you {word} at {}", q.step),
+                    trouble: false,
+                    sends_back: back.then(|| q.step.clone()),
+                    answers: None,
+                });
+            }
             continue;
         }
         // keeping and skipping go on with the output; changing, redoing and dropping all send the step back

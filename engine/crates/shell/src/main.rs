@@ -437,9 +437,28 @@ fn answer(args: &[String]) -> Result<(), String> {
     let state = s.state(id)?.ok_or("no such run")?;
     let q = state.questions.get(qid).ok_or_else(|| format!("run {id} has no question {qid}"))?.question.clone();
     let mut verdicts = BTreeMap::new();
-    for a in args[2..].iter().filter(|a| a.contains('=')) {
+    for a in args[2..].iter().filter(|a| a.contains('=') && !a.starts_with("--")) {
         let (item, v) = a.split_once('=').unwrap_or((a, "keep"));
         verdicts.insert(item.to_string(), parse_verdict(v)?);
+    }
+    // a stop that chooses: --choose ITEM, and --adjust TEXT for how to adjust it; the other options leave
+    if let Some(chosen) = flag(args, "--choose") {
+        if !q.items.iter().any(|x| x.id == chosen) {
+            return Err(format!("the question has no option {chosen}: {}", q.items.iter().map(|x| x.id.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        let adjust = flag(args, "--adjust").unwrap_or_default();
+        verdicts = q
+            .items
+            .iter()
+            .map(|x| {
+                let v = match (x.id == chosen, adjust.trim().is_empty()) {
+                    (false, _) => Verdict::Drop,
+                    (true, true) => Verdict::Keep,
+                    (true, false) => Verdict::Change { text: adjust.clone() },
+                };
+                (x.id.clone(), v)
+            })
+            .collect();
     }
     let context = flag(args, "--context").unwrap_or_default();
     let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };

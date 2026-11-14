@@ -78,6 +78,9 @@ pub struct Question {
     pub holds: bool,
     #[serde(default)]
     pub about: String,
+    /// The person chooses one item, and may write how to adjust it; the others leave the running.
+    #[serde(default, skip_serializing_if = "crate::manifest::is_false")]
+    pub choose: bool,
 }
 
 impl Question {
@@ -126,6 +129,12 @@ impl Answer {
 
     pub fn sends_back(&self) -> bool {
         self.verdicts.values().any(Verdict::sends_back)
+    }
+
+    /// The items a choice keeps as they are, when it changes none: Jaynes keeps them alone, without the agent.
+    pub fn kept_alone(&self, q: &Question) -> Option<Vec<String>> {
+        let changes = q.items.iter().any(|x| matches!(self.verdict(&x.id), Verdict::Change { .. } | Verdict::Redo { .. }));
+        (q.choose && self.sends_back() && !changes).then(|| q.items.iter().filter(|x| self.verdict(&x.id) == Verdict::Keep).map(|x| x.id.clone()).collect())
     }
 }
 

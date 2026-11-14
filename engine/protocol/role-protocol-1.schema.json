@@ -830,6 +830,32 @@
             "output"
           ],
           "type": "object"
+        },
+        {
+          "description": "The output with only the items the person chose, each as it was: a stop that chooses asks for it when the\nperson chose without a note, so no agent works. The reply is a `result`.",
+          "properties": {
+            "call": {
+              "const": "narrow",
+              "type": "string"
+            },
+            "keep": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "output": true,
+            "step": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "step",
+            "output",
+            "keep"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -1011,6 +1037,10 @@
           ],
           "default": null,
           "description": "The error rate the stop may have once it asks only a sample. None: it always asks."
+        },
+        "choose": {
+          "description": "The person chooses one of the step's options with a click, and may write how to adjust it. The others leave\nthe running; without a note the run goes on with the chosen one alone, kept by Jaynes and not the agent.",
+          "type": "boolean"
         },
         "from_risk": {
           "$ref": "#/$defs/Risk",

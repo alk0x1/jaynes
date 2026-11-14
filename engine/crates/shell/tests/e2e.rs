@@ -1163,3 +1163,104 @@ fn an_index_entry_that_does_not_hold_installs_nothing() {
     assert!(!ok && out.contains("✘ small-change"), "{out}");
     assert!(!s.home.join("roles/small-change").exists());
 }
+
+/// The agent of the directions test role: two pages and an output naming them.
+const DRAW: &str = "mkdir -p design && printf '<html><body style=\"background:#1d4d3a\"><h1>Ink</h1></body></html>' > design/ink.html \
+    && printf '<html><body style=\"background:#f2c14e\"><h1>Sun</h1></body></html>' > design/sun.html \
+    && printf '{\"directions\":[{\"name\":\"Ink\",\"why\":\"dark green\",\"page\":\"design/ink.html\"},{\"name\":\"Sun\",\"why\":\"warm yellow\",\"page\":\"design/sun.html\"}]}' > .jaynes/output.json";
+
+fn copy_of(s: &Scratch, run: &str) -> PathBuf {
+    let runs = s.home.join("runs").join(run);
+    let found = walk(&runs).into_iter().find(|p| p.ends_with(".git") && p.is_dir()).expect("the run's copy");
+    found.parent().expect("copy").to_path_buf()
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        out.push(p.clone());
+        if p.is_dir() && !p.ends_with(".git") && !p.is_symlink() {
+            out.extend(walk(&p));
+        }
+    }
+    out
+}
+
+#[test]
+fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
+    let s = scratch("photo");
+    let role = root().join("crates/shell/tests/roles/directions");
+    let (ok, out) = engine(&s, &["start", "--run", "photo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "two looks", "--agent", &format!("command:{DRAW}")]);
+    assert!(ok && out.contains("Which direction goes on?") && out.contains("- Ink: Ink"), "{out}");
+    // each page was photographed, kept by its fingerprint as a picture, and left in the copy for later agents
+    let kept: Vec<String> = std::fs::read_dir(s.home.join("pictures")).expect("kept").flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept.iter().all(|k| k.ends_with(".png")), "{kept:?}");
+    let copy = copy_of(&s, "photo");
+    let photo = std::fs::read(copy.join(".jaynes/pictures/design/ink.png")).expect("the photograph is in the copy");
+    assert_eq!(&photo[1..4], b"PNG");
+}
+
+/// Answer as the person, at a terminal.
+fn as_person(s: &Scratch, args: &[&str]) -> String {
+    let mut all = vec!["-q", "/dev/null", BIN];
+    all.extend_from_slice(args);
+    let out = Command::new("script")
+        .args(&all)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .output()
+        .expect("script");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+fn question_of(s: &Scratch, run: &str, n: usize) -> Value {
+    events(s, run).into_iter().filter(|e| e["type"] == "QuestionOpened").nth(n).expect("asked")["question"].clone()
+}
+
+#[test]
+fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
+    let s = scratch("choose");
+    let calls = s.home.parent().expect("base").join("calls.txt");
+    let agent = format!("echo x >> {} && {DRAW}", calls.display());
+    let role = root().join("crates/shell/tests/roles/directions");
+    let (ok, out) = engine(&s, &["start", "--run", "choose", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "two looks", "--agent", &format!("command:{agent}")]);
+    assert!(ok && out.contains("Which direction goes on?"), "{out}");
+    let q = question_of(&s, "choose", 0);
+    assert_eq!(q["choose"], true, "{q}");
+    let said = as_person(&s, &["answer", "choose", q["id"].as_str().expect("id"), "--choose", "Sun", "--send"]);
+    assert!(said.contains("“Sun” is chosen") && said.contains("keeps only what you chose"), "{said}");
+    assert!(said.contains("finished: delivered"), "{said}");
+    // the agent worked twice: directions and apply; keeping Sun alone was Jaynes's
+    assert_eq!(std::fs::read_to_string(&calls).expect("calls").lines().count(), 2);
+    assert_eq!(events(&s, "choose").iter().filter(|e| e["type"] == "QuestionOpened").count(), 1, "not asked again");
+    // apply read Sun alone
+    let given = std::fs::read_to_string(copy_of(&s, "choose").join(".jaynes/inputs/directions.json")).expect("given");
+    assert!(given.contains("Sun") && !given.contains("Ink"), "{given}");
+}
+
+#[test]
+fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() {
+    let s = scratch("adjust");
+    // the second time it draws, the agent gives Sun alone with Ink's colour
+    let agent = format!(
+        "if [ -f .jaynes/previous.json ] && grep -q Ink .jaynes/previous.json && ! [ -f .jaynes/inputs/directions.json ]; then \
+         printf '{{\"directions\":[{{\"name\":\"Sun\",\"why\":\"warm with dark green\",\"page\":\"design/sun.html\"}}]}}' > .jaynes/output.json; \
+         printf '<html><body style=\"background:#1d4d3a\"><h1>Sun</h1></body></html>' > design/sun.html; else {DRAW}; fi"
+    );
+    let role = root().join("crates/shell/tests/roles/directions");
+    let (ok, out) = engine(&s, &["start", "--run", "adjust", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "two looks", "--agent", &format!("command:{agent}")]);
+    assert!(ok, "{out}");
+    let q = question_of(&s, "adjust", 0);
+    let said = as_person(&s, &["answer", "adjust", q["id"].as_str().expect("id"), "--choose", "Sun", "--adjust", "with the green of Ink", "--send"]);
+    assert!(said.contains("adjusted as you wrote"), "{said}");
+    let q2 = question_of(&s, "adjust", 1);
+    let ids: Vec<&str> = q2["items"].as_array().expect("items").iter().filter_map(|x| x["id"].as_str()).collect();
+    assert_eq!(ids, ["Sun"], "{q2}");
+    let said = as_person(&s, &["answer", "adjust", q2["id"].as_str().expect("id"), "--choose", "Sun", "--send"]);
+    assert!(said.contains("finished: delivered"), "{said}");
+}

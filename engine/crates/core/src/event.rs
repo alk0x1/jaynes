@@ -208,6 +208,9 @@ pub enum Event {
         round: u32,
         because: Vec<String>,
         notes: Vec<String>,
+        /// The question whose choice this round keeps alone, without the agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        narrow: Option<String>,
     },
     QuestionOpened {
         question: Question,

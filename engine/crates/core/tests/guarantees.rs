@@ -97,7 +97,13 @@ fn role(rng: &mut Rng) -> Manifest {
                 let stop_risk = if from_risk == Risk::High || rng.chance(20) { Risk::High } else { Risk::Low };
                 let release = executor != Executor::Person && rng.chance(40);
                 let budget = (executor != Executor::Person && rng.chance(50)).then_some(jaynes_core::manifest::Rate(0.2));
-                Some(StopDecl { verdicts, holds: rng.chance(30), from_risk: stop_risk, release, budget, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new() })
+                // a stop that chooses among options: an agent's, always asked, offering keep, change and drop
+                if executor == Executor::Agent && rng.chance(25) {
+                    let verdicts = vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop];
+                    Some(StopDecl { verdicts, holds: rng.chance(50), from_risk: stop_risk, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: true })
+                } else {
+                    Some(StopDecl { verdicts, holds: rng.chance(30), from_risk: stop_risk, release, budget, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: false })
+                }
             } else {
                 None
             };
@@ -580,7 +586,20 @@ impl World {
                 if self.rng.chance(50) {
                     self.send(Input::SessionStarted { step: turn.step.clone(), attempt: turn.attempt, session: format!("session-{}", turn.step), confirmed: Default::default() });
                 }
+                // a round that keeps a choice alone: the role keeps the chosen items, as they were, most of the time
+                let kept = turn.keep.as_ref().filter(|_| self.rng.chance(90)).map(|keep| {
+                    let i = run.manifest.index(&turn.step).expect("step");
+                    let done = run.steps[i].done.as_ref().map(|d| d.items.clone()).unwrap_or_default();
+                    done.into_iter().filter(|x| keep.contains(&x.id)).collect::<Vec<_>>()
+                });
                 let outcome = match self.rng.below(100) {
+                    _ if kept.is_some() => AttemptOutcome::Delivered {
+                        output: Digest(format!("kept-{}", turn.round)),
+                        items: kept.unwrap_or_default(),
+                        changed: Vec::new(),
+                        usage: Usage::default(),
+                        session: None,
+                    },
                     0..=71 => AttemptOutcome::Delivered {
                         output: digest_pool(&mut self.rng),
                         items: items_for(&mut self.rng, &run, &turn.step),
@@ -644,6 +663,14 @@ impl World {
             if self.rng.chance(70) {
                 verdicts.insert(item.id.clone(), verdict(&mut self.rng, &q.offered));
             }
+        }
+        // a choice, most of the time: one kept or changed, the rest dropped
+        if q.choose && self.rng.chance(80) && !q.items.is_empty() {
+            let chosen = self.rng.below(q.items.len());
+            verdicts = q.items.iter().enumerate().map(|(n, x)| {
+                let v = if n != chosen { Verdict::Drop } else if self.rng.chance(50) { Verdict::Keep } else { Verdict::Change { text: "the font of the other".to_string() } };
+                (x.id.clone(), v)
+            }).collect();
         }
         let wrong = self.rng.chance(5);
         let shown = if wrong { Digest("stale".to_string()) } else { q.shown() };
@@ -1010,7 +1037,7 @@ fn item(id: &str, d: &str) -> Item {
 fn g13_a_correction_reruns_only_what_used_it() {
     // look → copy (uses look) and tests (uses nothing): changing look reruns copy, not tests.
     let mut look = step("look", Executor::Agent);
-    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false });
     let mut copy = step("copy", Executor::Agent);
     copy.needs = vec!["look".to_string()];
     let tests = step("tests", Executor::Agent);
@@ -1047,7 +1074,7 @@ fn g13_a_correction_reruns_only_what_used_it() {
 #[test]
 fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     let mut plan = step("plan", Executor::Agent);
-    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false });
     let mut push = step("push", Executor::Role);
     push.needs = vec!["plan".to_string()];
     push.effect = Effect::Irreversible { idempotent: true };
@@ -1296,6 +1323,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         for e in &w.log {
             match e {
                 Event::StepInvalidated { because, .. } if because.iter().any(|b| b.contains("came out different")) => hit("rerun because an input changed"),
+                Event::StepInvalidated { narrow: Some(_), .. } => hit("a choice kept alone"),
                 Event::StepInvalidated { .. } => hit("sent back"),
                 Event::StaleReport { .. } => hit("late report"),
                 Event::FixAsked { .. } => hit("fix in place"),
@@ -1315,6 +1343,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
+        "a choice kept alone",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -1357,7 +1386,7 @@ fn simulate_logged(seed: u64) {
 #[test]
 fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false });
     let mut tests = step("tests", Executor::Agent);
     tests.needs = vec!["change".to_string()];
     let mut push = step("push", Executor::Role);
@@ -1425,6 +1454,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
         offered: vec![VerdictKind::Keep, VerdictKind::Redo],
         holds: false,
         about: String::new(),
+        choose: false,
     };
     let verdicts: BTreeMap<String, Verdict> = verdict.into_iter().map(|v| ("change".to_string(), v)).collect();
     let answer = Answer { context: String::new(), question: question.id.clone(), shown: question.shown(), verdicts, by };
@@ -1446,7 +1476,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
 fn g17_the_count_comes_from_what_happened_after_delivery() {
     use jaynes_core::attention::count;
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false });
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], delivery: Default::default() };
     let key = stop_key(&manifest, &Digest("f".to_string()), 0);
     let day = 24 * 3600;
@@ -1484,7 +1514,7 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
 #[test]
 fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false });
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], delivery: Default::default() };
     let f = Digest("f".to_string());
     let key = stop_key(&manifest, &f, 0);
@@ -1514,7 +1544,7 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
 #[test]
 fn the_person_s_context_reaches_the_steps_after_the_answer_and_changes_no_verdict() {
     let mut look = step("look", Executor::Agent);
-    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new() });
+    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false });
     let mut copy = step("copy", Executor::Agent);
     copy.needs = vec!["look".to_string()];
     let (mut run, cmds) = start(vec![look, copy]);
@@ -1652,12 +1682,16 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
         "braked": run.attention.get(&d.name).is_some_and(|c| c.braked),
         "superseded": q.superseded,
         "shownMatches": answer.shown == q.question.shown(),
-        "verdictsValid": valid,
+        "verdictsValid": valid && (!q.question.choose || {
+            let going = q.question.items.iter().filter(|x| answer.verdict(&x.id) != Verdict::Drop).count();
+            going == 1 && q.question.items.iter().all(|x| matches!(answer.verdict(&x.id), Verdict::Keep | Verdict::Change { .. } | Verdict::Drop))
+        }),
         "allKeep": answer.verdicts.values().all(|v| *v == Verdict::Keep),
         "hasContext": !answer.context.trim().is_empty(),
         "answered": q.answer.is_some(),
         "revisable": q.question.kind == QuestionKind::Decision && d.executor != Executor::Person
-            && s.question.as_deref() == Some(q.question.id.as_str()) && s.status == Status::Done,
+            && s.question.as_deref() == Some(q.question.id.as_str()) && s.status == Status::Done
+            && s.done.as_ref().is_some_and(|x| x.round == q.question.round),
     });
     serde_json::json!({"kind": "answer", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
 }
@@ -1688,7 +1722,7 @@ fn gate_case(pre: &Run, input: &Input, events: &[Event]) -> Option<String> {
     let case = serde_json::json!({
         "locks": locks, "dropped": dropped, "items": items,
         "openFails": fails(CheckKind::Open), "hiddenFails": fails(CheckKind::Hidden), "blocked": blocked,
-        "roleStep": d.executor == Executor::Role, "fixesLeft": *fix < d.fixes, "session": s.session.is_some(),
+        "roleStep": d.executor == Executor::Role || s.narrow.is_some(), "fixesLeft": *fix < d.fixes, "session": s.session.is_some(),
     });
     let expected = if events.iter().any(|e| matches!(e, Event::StepDone { .. })) {
         "done"

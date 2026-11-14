@@ -229,6 +229,10 @@ pub struct AgentTurn {
     pub checks: Vec<CheckDecl>,
     pub locked: Vec<Item>,
     pub dropped: Vec<Item>,
+    /// A round that keeps only the items the person chose, by id: the role does it from the previous output, and
+    /// no agent works.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<Vec<String>>,
     pub deadline_seconds: u64,
     pub tokens_left: u64,
 }

@@ -95,6 +95,9 @@ pub struct StepState {
     /// What the checks said of the last attempt they judged. For the person: an agent's turn never carries it.
     #[serde(default)]
     pub checks: Vec<crate::event::CheckRecord>,
+    /// The question whose choice this round keeps alone: once done, its output is what that question was about.
+    #[serde(default)]
+    pub narrow: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -325,10 +328,15 @@ impl Run {
                     s.status = Status::Done;
                     s.pending = None;
                     s.failure.clear();
+                    // what a choice kept alone was already answered: the question stays the round's
+                    if let Some(q) = s.narrow.take() {
+                        s.question = Some(q);
+                    }
                 }
             }
-            Event::StepInvalidated { step, round, notes, .. } => {
+            Event::StepInvalidated { step, round, notes, narrow, .. } => {
                 if let Some(s) = self.step_mut(step) {
+                    s.narrow = narrow.clone();
                     s.round = *round;
                     s.status = Status::Idle;
                     s.spent = 0;
@@ -371,7 +379,7 @@ impl Run {
                 // A leave refused is not work sent back, nor an answer to what a step asked: only a decision about an
                 // output counts as rework.
                 let input = self.manifest.index(&question.step).is_some_and(|i| self.steps[i].inputs.contains(&question.id));
-                if answer.sends_back() && first && question.kind == QuestionKind::Decision && !input {
+                if answer.sends_back() && first && question.kind == QuestionKind::Decision && !input && !question.choose {
                     self.counts.sent_back += 1;
                 }
                 let Some(i) = self.manifest.index(&question.step) else { return };

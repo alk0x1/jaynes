@@ -81,6 +81,9 @@ pub enum Call {
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },
+    /// The output with only the items the person chose, each as it was: a stop that chooses asks for it when the
+    /// person chose without a note, so no agent works. The reply is a `result`.
+    Narrow { step: String, output: Value, keep: Vec<String> },
 }
 
 /// An earlier step's output given to a call.

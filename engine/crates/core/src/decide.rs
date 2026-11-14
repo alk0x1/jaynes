@@ -348,6 +348,7 @@ impl Ctx {
             offered: stop.verdicts.clone(),
             holds: stop.holds || self.braked(i),
             about: stop.about.clone(),
+            choose: stop.choose,
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
@@ -359,13 +360,18 @@ impl Ctx {
     }
 
     fn invalidate(&mut self, i: usize, because: Vec<String>, notes: Vec<String>) {
+        self.invalidate_narrowing(i, because, notes, None);
+    }
+
+    /// Run the step again; `narrow`, the question whose choice the round keeps alone, without the agent.
+    fn invalidate_narrowing(&mut self, i: usize, because: Vec<String>, notes: Vec<String>, narrow: Option<String>) {
         if let Some(q) = self.run.open_question(i) {
             let id = q.question.id.clone();
             self.emit(Event::QuestionSuperseded { question: id });
         }
         let round = self.run.steps[i].round + 1;
         let step = self.name(i);
-        self.emit(Event::StepInvalidated { step, round, because, notes });
+        self.emit(Event::StepInvalidated { step, round, because, notes, narrow });
     }
 
     fn start(&mut self, i: usize, executor: &Executor, name: String) -> bool {
@@ -490,6 +496,11 @@ impl Ctx {
             checks: decl.checks.iter().filter(|c| c.kind == CheckKind::Open).cloned().collect(),
             locked: s.locks.values().map(|(item, _)| item.clone()).collect(),
             dropped: s.dropped.clone(),
+            keep: s
+                .narrow
+                .as_ref()
+                .and_then(|q| self.run.questions.get(q))
+                .and_then(|q| q.answer.as_ref().and_then(|a| a.kept_alone(&q.question))),
             deadline_seconds: self.run.ceiling.seconds.saturating_sub(self.run.spent.seconds),
             tokens_left: self.run.ceiling.tokens.saturating_sub(self.run.spent.tokens),
         }
@@ -520,6 +531,7 @@ impl Ctx {
             offered: stop.verdicts,
             holds: true,
             about: stop.about,
+            choose: false,
         };
         let on = vec![question.id.clone()];
         self.emit(Event::QuestionOpened { question: question.clone() });
@@ -643,6 +655,7 @@ impl Ctx {
                     offered: offered.clone(),
                     holds: true,
                     about: about.clone(),
+                    choose: false,
                 };
                 let on = vec![question.id.clone()];
                 self.emit(Event::InputNeeded { step: step.to_string(), attempt, question: question.clone() });
@@ -663,6 +676,7 @@ impl Ctx {
                     offered: vec![VerdictKind::Change, VerdictKind::Redo],
                     holds: true,
                     about: format!("{step} says it cannot be done as asked"),
+                    choose: false,
                 };
                 let on = vec![question.id.clone()];
                 self.emit(Event::InputNeeded { step: step.to_string(), attempt, question: question.clone() });
@@ -783,7 +797,7 @@ impl Ctx {
             self.advance();
             return Ok(());
         }
-        if decl.executor == Executor::Role {
+        if decl.executor == Executor::Role || self.run.steps[i].narrow.is_some() {
             let reasons: Vec<String> = shape.into_iter().chain(behaviour).collect();
             self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons: reasons.clone(), usage: Default::default(), spent: false });
             self.block(Some(step.to_string()), Fault::Role, format!("the role's own step {step} failed its checks: {}", reasons.join("; ")));
@@ -889,6 +903,7 @@ impl Ctx {
             offered: vec![VerdictKind::Keep, VerdictKind::Drop],
             holds: true,
             about,
+            choose: false,
         };
         // the same leave, answered by the person earlier in the run
         let before = self
@@ -956,6 +971,13 @@ impl Ctx {
                 _ => {}
             }
         }
+        if q.question.choose {
+            let going = q.question.items.iter().filter(|x| answer.verdict(&x.id) != Verdict::Drop).count();
+            let judged = q.question.items.iter().all(|x| matches!(answer.verdict(&x.id), Verdict::Keep | Verdict::Change { .. } | Verdict::Drop));
+            if going != 1 || !judged {
+                return refuse("choose one: keep or change exactly one option, and the others leave");
+            }
+        }
         let i = self.index(&q.question.step)?;
         let executor = self.run.manifest.steps[i].executor;
         if let By::Agent { .. } = &answer.by {
@@ -981,7 +1003,8 @@ impl Ctx {
             let revisable = q.question.kind == QuestionKind::Decision
                 && executor != Executor::Person
                 && self.run.steps[i].question.as_deref() == Some(q.question.id.as_str())
-                && self.run.steps[i].status == Status::Done;
+                && self.run.steps[i].status == Status::Done
+                && self.run.steps[i].done.as_ref().is_some_and(|d| d.round == q.question.round);
             if !revisable {
                 return refuse("this answer was already acted on");
             }
@@ -1000,7 +1023,9 @@ impl Ctx {
                 let input = self.run.steps[i].inputs.contains(&q.question.id);
                 if answer.sends_back() && !input {
                     let notes = notes(&q.question, answer);
-                    self.invalidate(i, vec!["you sent it back".to_string()], notes);
+                    let narrow = answer.kept_alone(&q.question).map(|_| q.question.id.clone());
+                    let because = if narrow.is_some() { "you chose one, and sent it back to keep only that" } else { "you sent it back" };
+                    self.invalidate_narrowing(i, vec![because.to_string()], notes, narrow);
                 }
             }
         }
@@ -1024,7 +1049,7 @@ impl Ctx {
                 continue;
             }
             if let Some(j) = self.run.manifest.index(&item.id) {
-                let note = note(item, &v);
+                let note = note(item, &v, false);
                 self.invalidate(j, vec![format!("you sent it back at {here}")], vec![note]);
             }
         }
@@ -1064,8 +1089,14 @@ pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str
     }
 }
 
-fn note(item: &Item, v: &Verdict) -> String {
+fn note(item: &Item, v: &Verdict, choose: bool) -> String {
     match v {
+        Verdict::Change { text } if choose => format!(
+            "“{}” was chosen. Give it alone, changed as the person writes: {text}. You may take from the other options, in your previous output, what the person names.",
+            item.label
+        ),
+        Verdict::Drop if choose => format!("“{}” was not chosen: do not give it again as an option.", item.label),
+        Verdict::Keep if choose => format!("“{}” was chosen: keep it as it is.", item.label),
         Verdict::Change { text } => format!("Change “{}”: {text}", item.label),
         Verdict::Redo { note } if note.trim().is_empty() => format!("Do “{}” again.", item.label),
         Verdict::Redo { note } => format!("Do “{}” again: {note}", item.label),
@@ -1080,7 +1111,7 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
         .iter()
         .map(|item| (item, answer.verdict(&item.id)))
         .filter(|(_, v)| *v != Verdict::Skip)
-        .map(|(item, v)| note(item, &v))
+        .map(|(item, v)| note(item, &v, q.choose))
         .collect()
 }
 
@@ -1104,6 +1135,9 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         let v = answer.verdict(&item.id);
         let label = &item.label;
         sentences.push(match (&v, person) {
+            (Verdict::Keep, _) if q.choose => format!("“{label}” is chosen: no later round of {} may change it.", q.step),
+            (Verdict::Change { text }, _) if q.choose => format!("“{label}” is chosen, and is adjusted as you wrote: “{text}”."),
+            (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option."),
             (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),
             (Verdict::Keep, false) => format!("“{label}” goes on as it was made."),
             (Verdict::Keep, true) => format!("“{label}” is accepted."),
@@ -1158,6 +1192,16 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         sentences.push("Nothing runs again.".to_string());
         if run.open_question(i).is_some_and(|open| open.question.holds) || person {
             sentences.push("The run goes on from here.".to_string());
+        }
+    } else if answer.kept_alone(q).is_some() {
+        sentences.push(format!("{} keeps only what you chose, without the agent, and is not asked again.", q.step));
+        if !may_rerun.is_empty() {
+            sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
+        }
+    } else if q.choose {
+        sentences.push(format!("The agent at {} adjusts what you chose, seeing every option it made, and you see the result.", q.step));
+        if !may_rerun.is_empty() {
+            sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
         }
     } else {
         sentences.push(format!("Runs again, on top of what it made: {}.", reruns.join(", ")));

@@ -86,10 +86,31 @@ def _subpaths(paths: Iterable[Path | str]) -> str:
     return " ".join(f"(subpath {_lit(p)})" for p in paths)
 
 
+@functools.cache
+def user_temp() -> str:
+    """The folder macOS gives this user for temporary files, apart from ``TMPDIR``: Chrome makes its lock there."""
+    try:
+        out = subprocess.run(["getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return os.path.realpath(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else ""
+
+
+def _chrome_lock() -> list[str]:
+    """Chrome, Chromium and the Chrome that tests use each make one folder of their own in the user's temporary
+    folder, whatever ``TMPDIR`` says, and stop when they cannot: the box lets them write only those folders."""
+    temp = user_temp()
+    if not temp:
+        return []
+    pattern = re.escape(temp).replace('"', '\\"') + r"/\.?(com\.google\.[Cc]hrome|org\.chromium\.[Cc]hromium)[^/]*(/|$)"
+    return [f'(allow file-write* (regex #"^{pattern}"))']
+
+
 def profile(box: Box) -> str:
     """The sandbox-exec profile for ``box``. Where two rules match, an allow with a filter wins over a deny."""
     lines = ["(version 1)", "(allow default)",
              "(deny file-write*)", f"(allow file-write* {' '.join(DEVICES)})"]
+    lines += _chrome_lock()
     if box.writable:
         lines.append(f"(allow file-write* {_subpaths(box.writable)})")
     lines.append(f"(deny file-read* {_subpaths([box.home / s for s in SECRETS] + list(box.hidden))})")
@@ -333,3 +354,64 @@ def refused(ran: Ran) -> list[str]:
     lines = [line.strip() for line in ran.printed.splitlines()
              if "operation not permitted" in line.lower() and not any(h in line for h in HARMLESS)]
     return lines if ran.code != 0 else []
+
+
+# --- photographs ------------------------------------------------------------------------------------------------
+
+CHROMES = ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+           "/Applications/Chromium.app/Contents/MacOS/Chromium")
+SIZE = (1440, 900)
+
+
+def chrome() -> str | None:
+    """The Chrome Jaynes photographs with: ``JAYNES_CHROME``, or one installed where macOS keeps apps."""
+    named = os.environ.get("JAYNES_CHROME", "")
+    for path in ([named] if named else []) + [*CHROMES, *(str(Path.home()) + p for p in CHROMES)]:
+        if path and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tuple[int, ...] = ()) -> str | None:
+    """Photograph ``target``, a page file or an address on a local port in ``ports``, into the PNG ``out``, with a
+    Chrome in the box: no internet, so a page shows only what it carries. None when done, else why not."""
+    program = chrome()
+    if program is None:
+        return "there is no Chrome to photograph with: install Google Chrome, or name one in JAYNES_CHROME"
+    page = target if re.match(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?(/|$)", target) else Path(target).resolve().as_uri()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="jaynes-photo-") as tmp:
+        shot = Path(tmp) / "shot.png"
+        argv = [program, "--headless=new", "--no-sandbox", "--disable-gpu", "--use-mock-keychain", "--no-first-run",
+                "--no-default-browser-check", "--disable-crash-reporter", "--disable-breakpad", "--hide-scrollbars",
+                "--disable-extensions", "--disable-background-networking", "--disable-component-update",
+                f"--user-data-dir={Path(tmp) / 'profile'}", f"--screenshot={shot}", f"--window-size={size[0]},{size[1]}",
+                page]
+        script = " ".join(shlex.quote(a) for a in argv)
+        try:
+            argv = command_in_box(script, Box((Path(tmp),), ports=ports))
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=90, env={**os.environ, "TMPDIR": tmp},
+                                  start_new_session=True)
+        except Unavailable as e:
+            return str(e)
+        except subprocess.TimeoutExpired:
+            return f"Chrome did not photograph {target} within 90 seconds"
+        if done.returncode != 0 or not shot.is_file():
+            said = [line for line in done.stderr.splitlines() if "crashpad" not in line and line.strip()]
+            return f"Chrome could not photograph {target} (exit {done.returncode}): " + " ".join(said[-3:])
+        shutil.copyfile(shot, out)
+    return None
+
+
+if __name__ == "__main__":
+    # jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT]: for the engine and for a role's scripts
+    args = sys.argv[1:]
+    if len(args) in (3, 4) and args[0] == "photograph":
+        w, _, h = (args[3] if len(args) == 4 else f"{SIZE[0]}x{SIZE[1]}").partition("x")
+        why = photograph(args[1], Path(args[2]), (int(w), int(h)))
+        if why:
+            print(why)
+            sys.exit(1)
+        sys.exit(0)
+    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT]")
+    sys.exit(2)

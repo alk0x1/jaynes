@@ -207,6 +207,14 @@ pub struct StopDecl {
     pub audit_rate: Rate,
     #[serde(default)]
     pub about: String,
+    /// The person chooses one of the step's options with a click, and may write how to adjust it. The others leave
+    /// the running; without a note the run goes on with the chosen one alone, kept by Jaynes and not the agent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub choose: bool,
+}
+
+pub(crate) fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Manifest {
@@ -315,6 +323,17 @@ impl Manifest {
                 }
                 if stop.from_risk < s.from_risk {
                     errors.push(format!("{at} asks at a risk the step does not run at"));
+                }
+                if stop.choose {
+                    if s.executor != Executor::Agent {
+                        errors.push(format!("{at} chooses among options, and only an agent's step makes them"));
+                    }
+                    if [VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop].iter().any(|v| !stop.verdicts.contains(v)) {
+                        errors.push(format!("{at} chooses, so it offers keep, change and drop"));
+                    }
+                    if stop.release || stop.budget.is_some() {
+                        errors.push(format!("{at} chooses, a matter of taste: no agent releases it and it always asks"));
+                    }
                 }
             }
             if s.session == SessionKind::Continue {

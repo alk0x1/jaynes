@@ -28,7 +28,7 @@ fn open(name: &str) -> CheckDecl {
 }
 
 fn stop(from_risk: Risk, holds: bool) -> StopDecl {
-    StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds, from_risk, release: false, budget: None, audit_rate: Rate(0.1), about: "Keep it?".into() }
+    StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds, from_risk, release: false, budget: None, audit_rate: Rate(0.1), about: "Keep it?".into(), choose: false }
 }
 
 /// small-change as it ships: Jaynes finds the suite, the agent changes, its stop asks only from high risk.
@@ -145,3 +145,44 @@ fn a_promise_names_only_what_the_role_has() {
     assert!(Form::never_sees("runner", "change", &m).is_err_and(|e| e.contains("not an agent's step")));
 }
 
+
+/// identity's shape: directions drawn as options, the person chooses one, tokens applied after.
+fn choosing() -> Manifest {
+    let mut directions = step("directions", Executor::Agent, &[]);
+    directions.reach = Reach { project: ProjectAccess::Write, write: vec!["design/**".into()], ..Reach::default() };
+    directions.checks = vec![open("output-follows-schema")];
+    directions.stop = Some(StopDecl {
+        verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
+        choose: true,
+        ..stop(Risk::Low, true)
+    });
+    let mut tokens = step("tokens", Executor::Agent, &["directions"]);
+    tokens.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], ..Reach::default() };
+    Manifest { role: "identity".into(), version: "1.0.0".into(), protocol: 1, steps: vec![directions, tokens], delivery: DeliveryKind::Branch }
+}
+
+#[test]
+fn a_choosing_stop_proves_the_next_step_waits_for_the_choice() {
+    let m = choosing();
+    m.validate().expect("the role is valid");
+    let p = promise("The tokens are applied only after you chose a direction", Form::OnlyAfter {
+        on: On::parse("step tokens starts", &m).expect("event"),
+        after: Condition::parse("person answered at directions", &m).expect("condition"),
+    });
+    let proofs = prove(&m, &[p]);
+    assert!(matches!(proofs[0], Proof::Proved { .. }), "{proofs:?}");
+}
+
+#[test]
+fn a_choosing_stop_that_does_not_hold_lets_the_next_step_start_before_the_choice() {
+    let mut m = choosing();
+    if let Some(s) = m.steps[0].stop.as_mut() {
+        s.holds = false;
+    }
+    let p = promise("The tokens are applied only after you chose a direction", Form::OnlyAfter {
+        on: On::parse("step tokens starts", &m).expect("event"),
+        after: Condition::parse("person answered at directions", &m).expect("condition"),
+    });
+    let proofs = prove(&m, &[p]);
+    assert!(matches!(proofs[0], Proof::Broken { .. }), "{proofs:?}");
+}

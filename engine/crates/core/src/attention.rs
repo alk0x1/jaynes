@@ -192,7 +192,8 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
                 runs.insert(run.clone(), (manifest.clone(), role_fingerprint.clone()));
                 agents.insert(run.clone(), agent.clone());
             }
-            Event::QuestionOpened { question } => {
+            // A choice among options is a matter of taste, never a verdict on whether the step went well.
+            Event::QuestionOpened { question } if !question.choose => {
                 questions.insert((run.clone(), question.id.clone()), (question.step.clone(), question.kind));
             }
             Event::StopSkipped { step, .. } => {

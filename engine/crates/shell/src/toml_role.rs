@@ -125,7 +125,11 @@ struct ReachFile {
 #[serde(deny_unknown_fields)]
 struct StopFile {
     ask: String,
-    verdicts: Vec<VerdictKind>,
+    /// The verdicts offered; a stop that chooses offers keep, change and drop, and names none.
+    verdicts: Option<Vec<VerdictKind>>,
+    /// The person chooses one of the options with a click, and may write how to adjust it.
+    #[serde(default)]
+    choose: bool,
     #[serde(default)]
     holds: bool,
     #[serde(default)]
@@ -145,6 +149,17 @@ pub struct ShowFile {
     pub each: Option<String>,
     /// The item's label, with `{{field}}` from the element (or the output) filled in plainly.
     pub label: String,
+    /// The item's id, written like the label. Without it an element's id is its place in the list, which a later
+    /// round that keeps fewer elements changes: a stop that chooses needs ids that stay.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// A few plain sentences shown under the label, written like it.
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// A picture of the item: the path, written like the label, of an image or an `.html` page in the step's copy
+    /// of the project. Jaynes photographs a page itself, offline, and shows the photograph.
+    #[serde(default)]
+    pub picture: Option<String>,
 }
 
 // --- the menu ------------------------------------------------------------------------------------------------
@@ -713,8 +728,19 @@ impl TomlRole {
             {
                 errs.push(format!("show.each names {each}, which the output does not have"));
             }
+            if let Some(st) = &s.stop {
+                match (&st.verdicts, st.choose) {
+                    (None, false) => errs.push("has a stop that names no verdicts: verdicts = [\"keep\", \"redo\"], or choose = true".into()),
+                    (Some(_), true) => errs.push("has a stop that chooses, and its verdicts are Jaynes's: leave verdicts out".into()),
+                    _ => {}
+                }
+                if st.choose && s.show.as_ref().is_none_or(|sh| sh.each.is_none() || sh.id.is_none()) {
+                    errs.push("chooses among options, so its show lists them with an id that stays: show = { each = \"FIELD\", id = \"{{name}}\", label = \"...\" }".into());
+                }
+            }
             let stop = s.stop.as_ref().map(|st| StopDecl {
-                verdicts: st.verdicts.clone(),
+                verdicts: st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() }),
+                choose: st.choose,
                 holds: st.holds,
                 from_risk: st.from_risk,
                 release: st.release,
@@ -873,6 +899,11 @@ checks = ["output-follows-schema", "suite-passes"]
 # Where the person is asked: verdicts from keep, change, redo, drop, skip. from_risk = "high" asks only on a
 # risky run; holds = true makes the steps after it wait; release = true lets an agent let it go on.
 stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
+# A step that makes options asks the person to choose one: stop = {{ ask = "Which one?", choose = true, holds = true }},
+# with show = {{ each = "options", id = "{{{{name}}}}", label = "{{{{name}}}}", detail = "{{{{why}}}}", picture = "{{{{page}}}}" }}.
+# One click keeps the chosen option alone, without the agent; a note beside it has the agent adjust it, seeing all.
+# picture is an image, or an .html page of the copy that Jaynes photographs offline (later agents find the photo at
+# .jaynes/pictures/PATH.png).
 
 [step.output]                # what the agent writes, field by field: string, number, integer, boolean, array, object
 summary = {{ type = "string", max_length = 400, about = "what changed, in a sentence or two" }}
@@ -1047,6 +1078,13 @@ impl TomlRole {
                 Err(b) => b,
                 Ok((_, x)) => Body::Items { items: items(&step, x.show.as_ref(), &output) },
             },
+            Call::Narrow { step, output, keep } => match step_of(&step) {
+                Err(b) => b,
+                Ok((_, x)) => match narrow(&step, x.show.as_ref(), &output, &keep) {
+                    Ok(output) => Body::Result { output },
+                    Err(message) => Body::Error { message },
+                },
+            },
         }
     }
 }
@@ -1054,21 +1092,46 @@ impl TomlRole {
 /// What the person is shown of an output.
 pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownItem> {
     let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new() };
-    match show {
-        None => vec![whole()],
-        Some(ShowFile { each: None, label: l }) => {
-            let text = label(l, output);
-            vec![ShownItem { label: if text.trim().is_empty() { format!("what {step} made") } else { text }, ..whole() }]
+    let Some(show) = show else { return vec![whole()] };
+    let filled = |template: &Option<String>, from: &Value| template.as_deref().map(|t| label(t, from).trim().to_string()).unwrap_or_default();
+    let dressed = |item: ShownItem, from: &Value| {
+        let picture = filled(&show.picture, from);
+        ShownItem { detail: filled(&show.detail, from), pictures: if picture.is_empty() { Vec::new() } else { vec![picture] }, ..item }
+    };
+    match &show.each {
+        None => {
+            let text = label(&show.label, output);
+            let item = ShownItem { label: if text.trim().is_empty() { format!("what {step} made") } else { text }, ..whole() };
+            vec![dressed(item, output)]
         }
-        Some(ShowFile { each: Some(field), label: l }) => match output[field.as_str()].as_array() {
+        Some(field) => match output[field.as_str()].as_array() {
             Some(list) if !list.is_empty() => list
                 .iter()
                 .enumerate()
-                .map(|(n, e)| ShownItem { id: format!("{field}-{}", n + 1), label: label(l, e), content: e.clone(), detail: String::new(), pictures: Vec::new() })
+                .map(|(n, e)| {
+                    let id = Some(filled(&show.id, e)).filter(|i| !i.is_empty()).unwrap_or_else(|| format!("{field}-{}", n + 1));
+                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new() }, e)
+                })
                 .collect(),
             _ => vec![whole()],
         },
     }
+}
+
+/// The output with only the elements of the shown list whose item is in `keep`, each as it was.
+pub fn narrow(step: &str, show: Option<&ShowFile>, output: &Value, keep: &[String]) -> Result<Value, String> {
+    let Some(field) = show.and_then(|s| s.each.as_ref()) else {
+        return Err(format!("{step} shows no list, so it has no options to keep"));
+    };
+    let shown = items(step, show, output);
+    let list = output[field.as_str()].as_array().cloned().unwrap_or_default();
+    if shown.len() != list.len() {
+        return Err(format!("{step}'s {field} is empty, so it has no options to keep"));
+    }
+    let kept: Vec<Value> = list.into_iter().zip(&shown).filter(|(_, i)| keep.contains(&i.id)).map(|(e, _)| e).collect();
+    let mut out = output.clone();
+    out[field.as_str()] = Value::Array(kept);
+    Ok(out)
 }
 
 /// `jaynes role-serve DIR`: answer the one request on standard input for the TOML role in DIR.
@@ -1232,11 +1295,53 @@ files = { type = "array", items = "string" }
     #[test]
     fn items_follow_show() {
         let out = json!({"summary": "s", "examples": [{"case": "a", "now": "b"}, {"case": "c", "now": "d"}]});
-        let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into() };
+        let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into(), id: None, detail: None, picture: None };
         let shown = items("reproduce", Some(&each), &out);
         assert_eq!(shown.iter().map(|i| (i.id.as_str(), i.label.as_str())).collect::<Vec<_>>(), [("examples-1", "a: now b"), ("examples-2", "c: now d")]);
-        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into() }), &out);
+        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None }), &out);
         assert_eq!(whole[0].label, "s");
         assert_eq!(items("fix", None, &out)[0].label, "what fix made");
+    }
+
+    #[test]
+    fn narrowing_keeps_only_the_chosen_elements_as_they_were() {
+        let out = json!({"note": "n", "directions": [{"name": "Ink"}, {"name": "Sun"}, {"name": "Moss"}]});
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None };
+        let kept = narrow("d", Some(&show), &out, &["Sun".to_string()]).expect("kept");
+        assert_eq!(kept, json!({"note": "n", "directions": [{"name": "Sun"}]}));
+        let whole = ShowFile { each: None, ..show };
+        assert!(narrow("d", Some(&whole), &out, &["Sun".to_string()]).is_err());
+    }
+
+    #[test]
+    fn a_stop_that_chooses_needs_a_list_with_ids_and_names_no_verdicts() {
+        let base = GOOD.replace("stop = { ask = \"Keep it?\", verdicts = [\"keep\", \"redo\"], from_risk = \"high\", release = true }", "stop = { ask = \"Which?\", choose = true }");
+        let e = errors("choose-no-show", &base);
+        assert!(e.contains("so its show lists them with an id that stays"), "{e}");
+        let shown = format!("{base}\n[step.show]\neach = \"files\"\nlabel = \"{{{{name}}}}\"\nid = \"{{{{name}}}}\"\n");
+        let r = TomlRole::load(&role("choose", &shown)).expect("reads");
+        let stop = r.manifest.steps[1].stop.clone().expect("stop");
+        assert!(stop.choose);
+        assert_eq!(stop.verdicts, [VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop]);
+        let e = errors("choose-verdicts", &shown.replace("choose = true", "choose = true, verdicts = [\"keep\"]"));
+        assert!(e.contains("its verdicts are Jaynes's"), "{e}");
+    }
+
+    #[test]
+    fn items_take_their_id_sentence_and_picture_from_the_element() {
+        let out = json!({"directions": [{"name": "Ink", "why": "dark on paper", "page": "design/ink.html"}, {"name": "Sun", "why": "", "page": ""}]});
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: Some("{{why}}".into()), picture: Some("{{page}}".into()) };
+        let shown = items("directions", Some(&show), &out);
+        assert_eq!((shown[0].id.as_str(), shown[0].detail.as_str(), shown[0].pictures.clone()), ("Ink", "dark on paper", vec!["design/ink.html".to_string()]));
+        assert_eq!((shown[1].id.as_str(), shown[1].pictures.len()), ("Sun", 0), "an empty path is no picture");
+    }
+
+    #[test]
+    fn show_reads_its_keys_and_refuses_others() {
+        let text = format!("{GOOD}\n[step.show]\neach = \"files\"\nlabel = \"{{{{name}}}}\"\nid = \"{{{{name}}}}\"\npicture = \"{{{{page}}}}\"\n").replace("[step.output]", "[step.output]");
+        let r = TomlRole::load(&role("show", &text)).expect("reads");
+        assert_eq!(r.extras["change"].show.as_ref().and_then(|s| s.picture.clone()).as_deref(), Some("{{page}}"));
+        let e = errors("show-bad", &text.replace("picture =", "photo ="));
+        assert!(e.contains("photo"), "{e}");
     }
 }

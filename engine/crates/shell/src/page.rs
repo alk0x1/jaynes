@@ -703,7 +703,22 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         Phase::Blocked { reason, .. } => format!("<div class=\"notice\">The run is blocked: {}</div>", esc(reason)),
         _ => String::new(),
     };
-    let rows: String = question
+    // a stop that chooses: one click on an option sends the choice; a note beside it adjusts the chosen one
+    let choose_rows = || -> String {
+        question
+            .items
+            .iter()
+            .map(|it| {
+                format!(
+                    "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\"><input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\"><button class=\"choose\" data-choose=\"{id}\">Choose</button></div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
+                    id = esc(&it.id),
+                    label = esc(&it.label),
+                    more = shown(it)
+                )
+            })
+            .collect()
+    };
+    let rows: String = if question.choose { choose_rows() } else { question
         .items
         .iter()
         .map(|it| {
@@ -722,8 +737,9 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
                 more = shown(it)
             )
         })
-        .collect();
-    let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0}).to_string();
+        .collect() };
+    let items: Vec<&str> = question.items.iter().map(|x| x.id.as_str()).collect();
+    let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items}).to_string();
     format!(
         "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
@@ -999,6 +1015,9 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .say input { flex:1; background:transparent; border:0; color:var(--ink); font:inherit; font-size:14px; outline:none; padding:6px 0; }
 .row { padding:16px 0; border-top:1px solid var(--line); } .row h3 { margin:0 0 4px; font-size:16px; font-weight:600; }
 .seg { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.pick { display:flex; gap:8px; margin-top:10px; } .pick .adjust { flex:1; background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:8px 11px; font:inherit; font-size:13.5px; }
+.pick .choose { background:var(--blue); color:#04121f; border:0; border-radius:8px; padding:8px 20px; font-weight:600; } .pick .choose:disabled { background:var(--line-2); color:var(--faint); }
+.fx-row { margin:6px 0 0; padding-left:18px; font-size:12.5px; color:var(--dim); } .fx-row .bad { color:var(--red); list-style:none; margin-left:-18px; } .fx-row .more { list-style:none; margin-left:-18px; } .fx-row summary { cursor:pointer; color:var(--faint); }
 .seg button { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:6px 12px; font-size:13px; color:var(--dim); }
 .seg button.on.keep { border-color:var(--green); color:var(--green); background:var(--green-soft); }
 .seg button.on.change,.seg button.on.redo { border-color:var(--amber); color:var(--amber); background:var(--amber-soft); }
@@ -1076,8 +1095,43 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 <div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
 <script>
 const el = document.getElementById("data");
-if (!el) document.getElementById("fxbar").classList.add("hide");
 const base = el ? JSON.parse(el.textContent) : null;
+if (!el || base.choose) document.getElementById("fxbar").classList.add("hide");
+// a stop that chooses: the answer one click on an option sends, and what it will do, written under each option
+function choice(id) {
+  const note = ((document.querySelector(`.adjust[data-i="${CSS.escape(id)}"]`) || {}).value || "").trim();
+  const v = {}, n = {};
+  for (const x of base.items) v[x] = x === id ? (note ? "change" : "keep") : "drop";
+  if (note) n[id] = note;
+  return JSON.stringify({ ...base, verdicts: v, notes: n, context: (document.getElementById("ctx") || {}).value || "" });
+}
+const esc = t => t.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+async function said(id) {
+  const r = await (await fetch("/api/effects", { method: "POST", headers: { "Content-Type": "application/json" }, body: choice(id) })).json();
+  const ul = document.querySelector(`.fx-row[data-i="${CSS.escape(id)}"]`);
+  // what follows stays in front; what happens to each option is folded
+  const all = r.sentences || [], each = all.filter(s => s.startsWith("“")), next = all.filter(s => !s.startsWith("“"));
+  if (ul) ul.innerHTML = next.map(s => `<li>${esc(s)}</li>`).join("")
+    + (each.length ? `<li class="more"><details><summary>What happens to each option</summary><ul>${each.map(s => `<li>${esc(s)}</li>`).join("")}</ul></details></li>` : "")
+    + (r.ok ? "" : `<li class="bad">${esc(r.refused || "")}</li>`);
+  const b = document.querySelector(`.choose[data-choose="${CSS.escape(id)}"]`);
+  if (b) b.disabled = !r.ok;
+}
+const later = {};
+if (base && base.choose) {
+  base.items.forEach(said);
+  document.addEventListener("input", e => {
+    if (!e.target.classList.contains("adjust")) return;
+    const id = e.target.dataset.i; clearTimeout(later[id]); later[id] = setTimeout(() => said(id), 250);
+  });
+  document.addEventListener("click", async e => {
+    const b = e.target.closest("button.choose"); if (!b || b.disabled) return;
+    document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
+    const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: choice(b.dataset.choose) })).json();
+    if (r.ok) { b.textContent = "Chosen"; setTimeout(() => location.href = "/", 900); }
+    else { const ul = document.querySelector(`.fx-row[data-i="${CSS.escape(b.dataset.choose)}"]`); if (ul) ul.innerHTML = `<li class="bad">${esc(r.refused || "")}</li>`; document.querySelectorAll("button.choose").forEach(x => x.disabled = false); }
+  });
+}
 const verdicts = {}, notes = {};
 function body() { return JSON.stringify({ ...base, verdicts, notes, context: (document.getElementById("ctx") || {}).value || "" }); }
 async function post(path) {
@@ -1116,9 +1170,10 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => {
   if (e.target.classList.contains("note")) notes[e.target.dataset.i] = e.target.value;
+  if (!base || base.choose) return;
   refresh();
 });
-if (base) refresh();
+if (base && !base.choose) refresh();
 const rd = document.getElementById("rundata");
 document.addEventListener("click", async e => {
   const b = e.target.closest("button.act"); if (!b || !rd) return;
