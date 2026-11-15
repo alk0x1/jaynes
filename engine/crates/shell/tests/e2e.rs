@@ -1295,3 +1295,51 @@ fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() 
     let said = as_person(&s, &["answer", "adjust", q2["id"].as_str().expect("id"), "--choose", "Sun", "--send"]);
     assert!(said.contains("finished: delivered"), "{said}");
 }
+
+#[test]
+fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
+    let s = scratch("again");
+    // sent back, the agent gives Ink alone, changed
+    let agent = format!(
+        "if [ -f .jaynes/previous.json ]; then \
+         printf '{{\"directions\":[{{\"name\":\"Ink\",\"why\":\"greener\",\"page\":\"design/ink.html\"}}]}}' > .jaynes/output.json; \
+         printf '<html><body style=\"background:#0d6d3a\"><h1>Ink</h1></body></html>' > design/ink.html; else {DRAW}; fi"
+    );
+    let role = root().join("crates/shell/tests/roles/directions");
+    let (ok, out) = engine(&s, &["start", "--run", "again", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "two looks", "--agent", &format!("command:{agent}")]);
+    assert!(ok && out.contains("Which direction goes on?"), "{out}");
+    let q = question_of(&s, "again", 0);
+    let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
+    let port = 22750 + (std::process::id() % 1000) as u16;
+    let _page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(Page)
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // the person keeps Ink with a change: the step that drew it works again
+    let id = q["id"].as_str().expect("id");
+    let body = format!(r#"{{"run":"again","question":"{id}","shown":"{shown}","verdicts":{{"Ink":"change","Sun":"drop"}},"notes":{{"Ink":"greener"}}}}"#);
+    let r = post(port, "/api/answer", &body, "jaynes_key=k3y");
+    assert_eq!(r["ok"], true, "{r}");
+    let mut asked = false;
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if events(&s, "again").iter().filter(|e| e["type"] == "QuestionOpened").count() == 2 {
+            asked = true;
+            break;
+        }
+    }
+    let t = types(&events(&s, "again"));
+    assert!(asked, "{t:?}");
+    // the page leaves the answer to the run's process, so no attempt is begun where no agent runs it
+    assert!(!t.contains(&"AttemptInterrupted".to_string()), "{t:?}");
+    let started = events(&s, "again").iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == "directions").count();
+    assert_eq!(started, 2, "{t:?}");
+}

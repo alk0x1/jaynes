@@ -125,7 +125,14 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
     let abandon = matches!(input, Input::Abandon { .. });
     let lock = File::create(dir.join("lock")).map_err(|e| e.to_string())?;
     if lock.try_lock().is_ok() {
-        store.decide(&run.id, &input)?;
+        // An input that starts work is left to the process carried on here, which recovers first and then takes it:
+        // decided here, the attempt it begins would be taken by that process for one Jaynes stopped. The rest is
+        // recorded at once.
+        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::Resume { .. }) {
+            store.inbox_put(&run.id, &input)?;
+        } else {
+            store.decide(&run.id, &input)?;
+        }
         drop(lock);
         let log = File::create(dir.join("continue.log")).map_err(|e| e.to_string())?;
         let err = log.try_clone().map_err(|e| e.to_string())?;
@@ -353,6 +360,8 @@ impl<'a> Driver<'a> {
 
     /// Drive the run from `first` until nothing more can happen without someone outside.
     pub fn drive(&mut self, first: Input) -> Result<Run, String> {
+        // A recovery settles what was under way when Jaynes stopped before anything from outside acts on the run.
+        let mut recovering = matches!(first, Input::Recovered);
         let mut queue: VecDeque<Input> = VecDeque::from([first]);
         let mut last = self.store.state(&self.setup.run)?;
         if let Some(run) = &last {
@@ -361,9 +370,12 @@ impl<'a> Driver<'a> {
         loop {
             // What came from outside (an answer, a halt, an abandon) goes before what the last turn left to do.
             let mut came = Vec::new();
-            while let Some(input) = self.store.inbox_take(&self.setup.run)? {
+            while !recovering
+                && let Some(input) = self.store.inbox_take(&self.setup.run)?
+            {
                 came.push(input);
             }
+            recovering = false;
             for input in came.into_iter().rev() {
                 queue.push_front(input);
             }
