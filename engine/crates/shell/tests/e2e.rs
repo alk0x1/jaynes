@@ -459,6 +459,8 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let me = "jaynes_key=k3y";
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you"), "{view}");
+    // what the run waits for is the first thing to do there: a way to the question, apart from the run's controls
+    assert!(view.contains("<a class=\"answer\" href=\"/q/acts/"), "{view}");
     // a run that waits for the person has nothing at work to halt and is far from its ceiling: only abandoning is offered
     assert!(view.contains("data-act=\"abandon\""), "{view}");
     assert!(!view.contains("data-act=\"halt\"") && !view.contains("data-act=\"raise-ceiling\""), "{view}");

@@ -1,8 +1,9 @@
 //! The page: the questions waiting for the person, one at a time, answered in rows with a line of context.
 //!
 //! A local web server on 127.0.0.1. Whoever opened the link with the page's key (kept as a cookie for a year, through
-//! the browser's restarts) answers as the person; anyone else is an agent, and the core refuses what an agent may not answer. What an answer will do is
-//! written by the core (`jaynes_core::effects`) and fetched as the person marks the rows; the page never writes it.
+//! the browser's restarts) answers as the person; anyone else is an agent, and the core refuses what an agent may
+//! not answer. What an answer will do is written by the core (`jaynes_core::effects`) and fetched as the person marks
+//! the rows; the page never writes it.
 //! Requests must name this server as their host and origin, and posts must be JSON, so another site open in the
 //! same browser cannot answer.
 
@@ -597,6 +598,13 @@ fn run_html(r: &Run, changes: &str) -> String {
         Phase::Finished { outcome } => format!("<div class=\"notice ok\">Finished: {}</div>", format!("{outcome:?}").to_lowercase()),
         Phase::Running => String::new(),
     };
+    // what waits for the person comes first, as a way to its question, so the run's controls are not taken for it
+    let answers: String = r
+        .questions
+        .values()
+        .filter(|q| q.open())
+        .map(|q| format!("<a class=\"answer\" href=\"/q/{}/{}\">Answer: {}</a>", esc(&r.id), esc(&q.question.id), esc(&q.question.about)))
+        .collect();
     let finished = r.finished();
     let mut buttons = String::new();
     let mut button = |act: &str, text: &str, cls: &str| buttons.push_str(&format!("<button class=\"act {cls}\" data-act=\"{act}\">{text}</button>"));
@@ -635,7 +643,7 @@ fn run_html(r: &Run, changes: &str) -> String {
     };
     let data = json!({"run": r.id}).to_string();
     format!(
-        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}\
+        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}{answers}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
@@ -1134,6 +1142,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
 .steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
 .acts { display:flex; flex-wrap:wrap; gap:8px; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
+.answer { display:inline-block; margin:2px 0 14px; background:var(--blue); color:#04121f; border-radius:8px; padding:9px 18px; font-weight:600; text-decoration:none; }
 .act:hover { border-color:var(--blue); } .act.danger { color:var(--red); } .act.armed { border-color:var(--red); background:var(--red-soft); }
 select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px; font:inherit; font-size:13px; }
 .effects { position:fixed; left:280px; right:0; bottom:0; background:rgba(14,18,24,.97); border-top:1px solid var(--line-2); padding:14px 32px; display:flex; gap:24px; align-items:flex-start; }
