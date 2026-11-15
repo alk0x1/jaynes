@@ -290,7 +290,10 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     // another address is refused, the key sets a cookie, and the question is on the page
     assert!(http(port, &format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n")).starts_with("HTTP/1.1 403"));
-    assert!(http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).contains("Set-Cookie: jaynes_key=k3y"));
+    let keyed = http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    assert!(keyed.contains("Set-Cookie: jaynes_key=k3y"));
+    // the cookie outlives the browser's restarts, as the key outlives the page's: the link is opened once
+    assert!(keyed.contains("Max-Age=31536000"), "{keyed}");
     let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
     assert!(home.contains("The change turned out bigger than a small one"), "{home}");
     // each run shows its steps as a strip, as the earlier page did

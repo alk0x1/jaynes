@@ -1,7 +1,7 @@
 //! The page: the questions waiting for the person, one at a time, answered in rows with a line of context.
 //!
-//! A local web server on 127.0.0.1. Whoever opened the link with the page's key (kept as a cookie) answers as the
-//! person; anyone else is an agent, and the core refuses what an agent may not answer. What an answer will do is
+//! A local web server on 127.0.0.1. Whoever opened the link with the page's key (kept as a cookie for a year, through
+//! the browser's restarts) answers as the person; anyone else is an agent, and the core refuses what an agent may not answer. What an answer will do is
 //! written by the core (`jaynes_core::effects`) and fetched as the person marks the rows; the page never writes it.
 //! Requests must name this server as their host and origin, and posts must be JSON, so another site open in the
 //! same browser cannot answer.
@@ -105,7 +105,7 @@ impl Page {
         if req.method == "GET" {
             if let Some(k) = req.query.get("key")
                 && *k == self.key {
-                    let cookie = format!("jaynes_key={}; HttpOnly; SameSite=Strict; Path=/", self.key);
+                    let cookie = format!("jaynes_key={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000", self.key);
                     return ("303 See Other", "text/plain", String::new(), vec![("Set-Cookie".into(), cookie), ("Location".into(), req.path.clone())]);
                 }
             if req.path == "/api/version" {
