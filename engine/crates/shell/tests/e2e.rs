@@ -458,7 +458,10 @@ fn the_page_halts_resumes_and_records_a_correction() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     let me = "jaynes_key=k3y";
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
-    assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you") && view.contains("data-act=\"halt\""), "{view}");
+    assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you"), "{view}");
+    // a run that waits for the person has nothing at work to halt and is far from its ceiling: only abandoning is offered
+    assert!(view.contains("data-act=\"abandon\""), "{view}");
+    assert!(!view.contains("data-act=\"halt\"") && !view.contains("data-act=\"raise-ceiling\""), "{view}");
     // what each check said, and where its answer comes from
     assert!(view.contains("suite-passes (open, read runner) passed"), "{view}");
     // what the step changed, line by line, as git shows it
@@ -467,6 +470,8 @@ fn the_page_halts_resumes_and_records_a_correction() {
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"halt"}"#, "")["ok"], true);
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"resume"}"#, "")["ok"], false);
+    let halted = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    assert!(halted.contains("data-act=\"resume\""), "{halted}");
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"resume"}"#, me)["ok"], true);
     std::thread::sleep(std::time::Duration::from_millis(300));
     // a correction of the delivery, on the step that erred
@@ -1199,11 +1204,32 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     assert!(ok && out.contains("Which direction goes on?") && out.contains("- Ink: Ink"), "{out}");
     // each page was photographed, kept by its fingerprint as a picture, and left in the copy for later agents
     let kept: Vec<String> = std::fs::read_dir(s.home.join("pictures")).expect("kept").flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
-    assert_eq!(kept.len(), 2, "{kept:?}");
-    assert!(kept.iter().all(|k| k.ends_with(".png")), "{kept:?}");
+    assert_eq!(kept.iter().filter(|k| k.ends_with(".png")).count(), 2, "{kept:?}");
+    // the page itself is kept beside its photograph, so the person can open it
+    let pages: Vec<&String> = kept.iter().filter(|k| k.ends_with(".html")).collect();
+    assert_eq!(pages.len(), 2, "{kept:?}");
     let copy = copy_of(&s, "photo");
     let photo = std::fs::read(copy.join(".jaynes/pictures/design/ink.png")).expect("the photograph is in the copy");
     assert_eq!(&photo[1..4], b"PNG");
+    // on the page the photograph opens the page, served apart: sandboxed, so what an agent wrote cannot answer
+    let port = 21750 + (std::process::id() % 1000) as u16;
+    let _page = Command::new(BIN)
+        .args(["page", "--port", &port.to_string()])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(Page)
+        .expect("page");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let link = html.split("<a class=\"open\" href=\"/page/").nth(1).and_then(|r| r.split('"').next()).expect("a link to the page").to_string();
+    assert!(pages.contains(&&link), "{link} {pages:?}");
+    let served = http(port, &format!("GET /page/{link} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    assert!(served.starts_with("HTTP/1.1 200") && served.contains("<h1>"), "{served}");
+    assert!(served.contains("Content-Security-Policy: sandbox allow-scripts;"), "{served}");
+    // only a kept page by its fingerprint is served, never a path
+    assert!(http(port, &format!("GET /page/..%2Fpage.key HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).starts_with("HTTP/1.1 404"));
 }
 
 /// Answer as the person, at a terminal.

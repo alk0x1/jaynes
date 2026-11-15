@@ -108,6 +108,18 @@ impl Page {
                     let cookie = format!("jaynes_key={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000", self.key);
                     return ("303 See Other", "text/plain", String::new(), vec![("Set-Cookie".into(), cookie), ("Location".into(), req.path.clone())]);
                 }
+            if let Some(name) = req.path.strip_prefix("/page/") {
+                // a page an agent wrote, kept by its fingerprint: sandboxed, with no origin, so it cannot answer here,
+                // and reaching nothing beyond itself
+                let read = if kept_page(name) { std::fs::read_to_string(self.home.join("pictures").join(name)).ok() } else { None };
+                return match read {
+                    Some(body) => {
+                        let policy = "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:";
+                        ("200 OK", "text/html; charset=utf-8", body, vec![("Content-Security-Policy".into(), policy.into())])
+                    }
+                    _ => ("404 Not Found", "text/plain", "no such page".into(), vec![]),
+                };
+            }
             if req.path == "/api/version" {
                 let seq = self.store().and_then(|s| s.last_seq()).unwrap_or(0);
                 return ("200 OK", "application/json", json!({"seq": seq}).to_string(), vec![]);
@@ -397,7 +409,16 @@ impl Page {
                     if let Some(t) = d["detail"].as_str().filter(|t| !t.is_empty()) {
                         html.push_str(&format!("<p class=\"detail\">{}</p>", esc(t)));
                     }
-                    let pics: Vec<String> = d["pictures"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).filter_map(|name| picture(&self.home, name)).collect();
+                    let pics: Vec<String> = d["pictures"].as_array().into_iter().flatten().filter_map(|p| p.as_str())
+                        .filter_map(|name| {
+                            let img = picture(&self.home, name)?;
+                            // a photographed page opens itself, in a tab of its own
+                            Some(match d["pages"][name].as_str().filter(|p| kept_page(p)) {
+                                Some(page) => format!("<a class=\"open\" href=\"/page/{page}\" target=\"_blank\" rel=\"noopener\" title=\"Open the page\">{img}</a>"),
+                                None => img,
+                            })
+                        })
+                        .collect();
                     if !pics.is_empty() {
                         html.push_str(&format!("<div class=\"pics\">{}</div>", pics.join("")));
                     }
@@ -580,9 +601,11 @@ fn run_html(r: &Run, changes: &str) -> String {
     let mut buttons = String::new();
     let mut button = |act: &str, text: &str, cls: &str| buttons.push_str(&format!("<button class=\"act {cls}\" data-act=\"{act}\">{text}</button>"));
     if !finished {
+        // each control only when it can do something: halting needs something at work, raising the ceiling a run
+        // stopped by it or near it (four fifths of its time or tokens)
         if r.halted {
             button("resume", "Resume", "");
-        } else {
+        } else if matches!(r.phase, Phase::Running) {
             button("halt", "Halt", "");
         }
         if r.blocked() {
@@ -591,7 +614,10 @@ fn run_html(r: &Run, changes: &str) -> String {
         if r.risk == jaynes_core::risk::Risk::Low {
             button("raise-risk", "Raise the risk", "");
         }
-        button("raise-ceiling", "Raise the ceiling by 30 min", "");
+        let near = r.spent.seconds * 5 >= r.ceiling.seconds * 4 || r.spent.tokens * 5 >= r.ceiling.tokens * 4;
+        if near || matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }) {
+            button("raise-ceiling", "Raise the ceiling by 30 min", "");
+        }
         button("abandon", "Abandon", "danger");
     }
     if r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge && r.delivered.is_some() && !r.undone {
@@ -653,6 +679,11 @@ fn label(v: VerdictKind, permission: bool) -> &'static str {
         (VerdictKind::Drop, _) => "Drop",
         (VerdictKind::Skip, _) => "I don't know",
     }
+}
+
+/// The name of a page Jaynes kept beside its photograph: its fingerprint, and nothing that could reach another file.
+fn kept_page(name: &str) -> bool {
+    name.len() == 69 && name[..64].chars().all(|c| c.is_ascii_hexdigit()) && &name[64..] == ".html"
 }
 
 /// A picture Jaynes kept, by its fingerprint, as an image inside the page: no address reaches a file.

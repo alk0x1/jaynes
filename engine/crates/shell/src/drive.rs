@@ -871,6 +871,8 @@ impl<'a> Driver<'a> {
         let mut out = Vec::new();
         for x in items {
             let mut kept = Vec::new();
+            // a photographed page, kept too by its fingerprint, under its photograph's name: the person opens it
+            let mut pages = serde_json::Map::new();
             for p in &x.pictures {
                 let path = root.join(p);
                 let real = std::fs::canonicalize(&path).map_err(|e| format!("the picture {p} of {} does not read: {e}", x.id))?;
@@ -879,12 +881,18 @@ impl<'a> Driver<'a> {
                     return Err(format!("the picture {p} of {} is outside the step's folder", x.id));
                 }
                 let mut ext = real.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                let mut page_kept = None;
                 // a page is photographed by Jaynes, and the photograph left beside the copy's files for later agents
                 let real = if ext == "html" || ext == "htm" {
                     let rel = real.strip_prefix(&base).unwrap_or(&real).with_extension("png");
                     let photo = base.join(EXCHANGE).join("pictures").join(rel);
                     // the same page keeps the same photograph, so an option kept as it was stays as it was
-                    let page = Digest::of_bytes(&std::fs::read(&real).map_err(|e| e.to_string())?).0;
+                    let source = std::fs::read(&real).map_err(|e| e.to_string())?;
+                    let page = Digest::of_bytes(&source).0;
+                    let name = format!("{page}.html");
+                    std::fs::create_dir_all(&shelf).map_err(|e| e.to_string())?;
+                    std::fs::write(shelf.join(&name), &source).map_err(|e| e.to_string())?;
+                    page_kept = Some(name);
                     let of = photo.with_extension("png.of");
                     if !(photo.is_file() && std::fs::read_to_string(&of).is_ok_and(|d| d == page)) {
                         self.photograph(&real, &photo).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
@@ -902,11 +910,14 @@ impl<'a> Driver<'a> {
                 let name = format!("{}.{ext}", Digest::of_bytes(&bytes).0);
                 std::fs::create_dir_all(&shelf).map_err(|e| e.to_string())?;
                 std::fs::write(shelf.join(&name), &bytes).map_err(|e| e.to_string())?;
+                if let Some(page) = page_kept {
+                    pages.insert(name.clone(), page.into());
+                }
                 kept.push(name);
             }
             let item = x.item_with(&kept);
             if !x.detail.is_empty() || !kept.is_empty() {
-                self.store.put_display(&item.digest, &json!({"detail": x.detail, "pictures": kept}))?;
+                self.store.put_display(&item.digest, &json!({"detail": x.detail, "pictures": kept, "pages": pages}))?;
             }
             out.push(item);
         }
