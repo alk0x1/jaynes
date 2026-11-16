@@ -21,7 +21,28 @@ struct Scratch {
     project: PathBuf,
 }
 
+/// Each run of these tests leaves its folders behind, since the Lean model reads their records after the run. What an
+/// earlier run left more than an hour ago is swept here, so a machine that runs the tests often does not fill up.
+fn sweep() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+        let mine = format!("-{}", std::process::id());
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with("jaynes-e2e-") || name.ends_with(&mine) {
+                continue;
+            }
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 3600);
+            if old {
+                let _gone = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
+}
+
 fn scratch(name: &str) -> Scratch {
+    sweep();
     let base = std::env::temp_dir().join(format!("jaynes-e2e-{name}-{}", std::process::id()));
     let _gone = std::fs::remove_dir_all(&base);
     let project = base.join("project");
