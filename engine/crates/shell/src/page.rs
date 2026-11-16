@@ -733,14 +733,15 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
     let at = path.iter().position(|&j| j == i).map(|n| n + 1).unwrap_or(0);
-    // the last round sends nothing back: one is kept as it is, or the run is abandoned
-    let last = question.last();
-    let rounds = if question.passes > 0 {
-        if last {
-            format!("<span class=\"badge wait\">● Last round of {}: keep one as it is, or abandon the run</span> ", question.passes)
-        } else {
-            format!("<span class=\"badge\">● Round {} of {}</span> ", question.pass, question.passes)
-        }
+    // rounds the person opens have no ceiling: the round and what the run spent so far, for the person to decide
+    // when to stop
+    let rounds = if question.pass > 0 {
+        format!(
+            "<span class=\"badge\">● Round {} · {} min and {} tokens spent so far</span> ",
+            question.pass,
+            run.spent.seconds / 60,
+            tokens(run.spent.tokens)
+        )
     } else {
         String::new()
     };
@@ -759,9 +760,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             .items
             .iter()
             .map(|it| {
-                let more_ways = if last { String::new() } else {
-                    format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\"><button class=\"fin\" data-fin=\"{id}\" title=\"Keep it among two or three finalists that the agent develops, then choose again\">Finalist</button>", id = esc(&it.id))
-                };
+                let more_ways = format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\"><button class=\"fin\" data-fin=\"{id}\" title=\"Keep it among two or three finalists that the agent develops, then choose again\">Finalist</button>", id = esc(&it.id));
                 format!(
                     "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\">{more_ways}<button class=\"choose\" data-choose=\"{id}\">Choose</button></div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
                     id = esc(&it.id),
@@ -770,7 +769,6 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
                 )
             })
             .collect::<String>();
-        if last { return rows; }
         rows + "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the finalists</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>\
                <div class=\"row choose\"><h3>None of these</h3><div class=\"pick\"><input class=\"adjust\" id=\"why\" placeholder=\"What was missing? The agent makes new options; these do not come back\"><button class=\"choose\" id=\"none\" disabled>None of these</button></div><ul class=\"fx-row\" id=\"fx-none\"></ul></div>"
     };
@@ -781,7 +779,6 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             let buttons: String = question
                 .offered
                 .iter()
-                .filter(|v| !last || matches!(v, VerdictKind::Keep | VerdictKind::Skip))
                 .map(|v| {
                     let key = format!("{v:?}").to_lowercase();
                     format!("<button class=\"{key}\" data-i=\"{}\" data-v=\"{key}\">{}</button>", esc(&it.id), label(*v, permission))
@@ -798,13 +795,12 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let items: Vec<&str> = question.items.iter().map(|x| x.id.as_str()).collect();
     let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items}).to_string();
     format!(
-        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · round {round} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}\
+        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
          {rows}{changes}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
-        round = question.round,
         n = path.len(),
         title = esc(&title(q)),
         strip = strip(run),
@@ -1012,6 +1008,15 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
         part("Delivered", "The last 7 days, newest first. Undo and Correct are on each run's page.", &delivered(&new), "Nothing was delivered this week.") + &fold("Earlier", earlier.len(), &delivered(&earlier)),
         fold("Abandoned", abandoned, &dropped),
     )
+}
+
+/// Tokens as a person reads them: 950, 12k, 1.4M.
+fn tokens(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => format!("{}k", n / 1_000),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
+    }
 }
 
 fn esc(s: &str) -> String {

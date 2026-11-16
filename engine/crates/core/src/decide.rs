@@ -350,7 +350,7 @@ impl Ctx {
             about: stop.about.clone(),
             choose: stop.choose,
             pass: self.run.sent_back_at(i) + 1,
-            passes: stop.passes(),
+            passes: 0,
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
@@ -998,9 +998,6 @@ impl Ctx {
             }
         }
         if q.question.kind == QuestionKind::Decision && answer.by.person() && answer.sends_back() {
-            if q.question.last() && answer.kept_alone(&q.question).is_none() {
-                return refuse(format!("this was the last round at {}: keep what there is, or abandon the run", q.question.step));
-            }
             let redo = self.run.manifest.index(&q.question.step).and_then(|i| self.run.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.redo.is_some());
             if redo && answer.kept_alone(&q.question).is_none() && q.question.items.iter().any(|x| answer.verdict(&x.id) == Verdict::Keep) {
                 return refuse("the work goes back to the step that made it: send all of it back, or keep all of it");

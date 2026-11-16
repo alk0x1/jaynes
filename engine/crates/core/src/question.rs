@@ -81,7 +81,8 @@ pub struct Question {
     /// The person chooses one item, and may write how to adjust it; the others leave the running.
     #[serde(default, skip_serializing_if = "crate::manifest::is_false")]
     pub choose: bool,
-    /// The round of asking at this stop, from 1, and the most it asks: at the last, nothing is sent back.
+    /// The round of asking at this stop, from 1, shown as information. `passes` is no longer set: rounds the
+    /// person opens have no ceiling. Questions recorded before keep theirs, and they no longer limit.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub pass: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -90,13 +91,6 @@ pub struct Question {
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
-}
-
-impl Question {
-    /// Whether this is the stop's last round: an answer may keep, never send back.
-    pub fn last(&self) -> bool {
-        self.passes > 0 && self.pass >= self.passes
-    }
 }
 
 impl Question {

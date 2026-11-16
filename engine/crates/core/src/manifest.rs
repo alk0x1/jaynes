@@ -219,17 +219,12 @@ pub struct StopDecl {
     /// sends back goes to that step, and this one looks again at what comes back before the person sees it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redo: Option<String>,
-    /// How many rounds the stop asks at most: after the last, the person keeps what there is or abandons the run,
-    /// so making and rejecting never goes on forever. None is three.
+    /// Kept so roles that set it still load; it limits nothing. Every round at a stop is opened by an answer of
+    /// the person, who decides when to stop, so no count of them is a ceiling. Agents redoing without a new answer
+    /// are what a ceiling guards against, and a step's attempts and fixes already are that ceiling: when they are
+    /// spent the run is blocked and calls the person, never ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rounds: Option<u32>,
-}
-
-impl StopDecl {
-    /// The rounds the stop asks at most.
-    pub fn passes(&self) -> u32 {
-        self.rounds.unwrap_or(3)
-    }
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {

@@ -132,7 +132,7 @@ struct StopFile {
     choose: bool,
     /// The earlier step that made the work this step reviews: what the person sends back goes there.
     redo: Option<String>,
-    /// How many rounds the stop asks at most; three when left out.
+    /// Kept so roles that set it still load; it limits nothing, since rounds the person opens have no ceiling.
     rounds: Option<u32>,
     #[serde(default)]
     holds: bool,

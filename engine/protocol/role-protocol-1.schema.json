@@ -1078,7 +1078,7 @@
           "type": "boolean"
         },
         "rounds": {
-          "description": "How many rounds the stop asks at most: after the last, the person keeps what there is or abandons the run,\nso making and rejecting never goes on forever. None is three.",
+          "description": "Kept so roles that set it still load; it limits nothing. Every round at a stop is opened by an answer of\nthe person, who decides when to stop, so no count of them is a ceiling. Agents redoing without a new answer\nare what a ceiling guards against, and a step's attempts and fixes already are that ceiling: when they are\nspent the run is blocked and calls the person, never ended.",
           "format": "uint32",
           "minimum": 0,
           "type": [

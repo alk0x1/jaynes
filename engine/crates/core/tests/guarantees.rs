@@ -1709,7 +1709,7 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
         "shownMatches": answer.shown == q.question.shown(),
         "verdictsValid": valid && (!q.question.choose || answer.choice(&q.question).is_some_and(|c| c != jaynes_core::question::Choice::None || !answer.context.trim().is_empty()))
             && !(q.question.kind == QuestionKind::Decision && answer.by.person() && answer.sends_back() && answer.kept_alone(&q.question).is_none()
-                && (q.question.last() || (d.stop.as_ref().is_some_and(|st| st.redo.is_some()) && q.question.items.iter().any(|x| answer.verdict(&x.id) == Verdict::Keep)))),
+                && d.stop.as_ref().is_some_and(|st| st.redo.is_some()) && q.question.items.iter().any(|x| answer.verdict(&x.id) == Verdict::Keep)),
         "allKeep": answer.verdicts.values().all(|v| *v == Verdict::Keep),
         "hasContext": !answer.context.trim().is_empty(),
         "answered": q.answer.is_some(),

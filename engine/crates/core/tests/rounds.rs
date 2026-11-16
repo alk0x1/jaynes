@@ -1,6 +1,7 @@
 //! Sending work back, for any role: what the person sends back goes to the step that made the work, not to the one
-//! that reviewed it; who redoes it sees the reviewer's word and everything the person asked before; and a stop sends
-//! back at most a few times, so making and rejecting never goes on forever.
+//! that reviewed it; who redoes it sees the reviewer's word and everything the person asked before; rounds the person
+//! opens have no ceiling, since the person decides when to stop; and agents redoing without the person stop at their
+//! attempts and call the person, so making and rejecting never goes on forever without them.
 
 use jaynes_core::digest::Digest;
 use jaynes_core::event::{Event, Usage};
@@ -73,13 +74,6 @@ fn settle(run: &mut Run, mut events: Vec<Event>, mut cmds: Vec<Command>) -> (Vec
         cmds.extend(more.commands);
     }
     (events, cmds)
-}
-
-fn refused(run: &Run, input: Input) -> String {
-    match decide(Some(run), &input) {
-        Ok(_) => panic!("taken: {input:?}"),
-        Err(r) => r.to_string(),
-    }
 }
 
 fn item(id: &str, d: &str) -> Item {
@@ -176,20 +170,28 @@ fn who_redoes_sees_everything_the_person_asked_before() {
 }
 
 #[test]
-fn a_stop_sends_back_three_times_at_most_then_the_person_keeps_one_or_abandons() {
+fn rounds_the_person_opens_have_no_ceiling_so_a_fifth_adjustment_is_taken() {
     let (mut run, mut q) = started(true, true);
-    assert_eq!((q.pass, q.passes), (1, 3));
-    for n in 2..=3 {
-        let (_, cmds) = feed(&mut run, answer(&q, &[("B", Verdict::Change { text: format!("round {n}") }), ("A", Verdict::Drop)].into_iter().filter(|(id, _)| q.items.iter().any(|x| x.id == *id)).collect::<Vec<_>>()));
+    assert_eq!(q.pass, 1);
+    for n in 2..=5 {
+        let verdicts: Vec<(&str, Verdict)> = [("B", Verdict::Change { text: format!("adjust {n}") }), ("A", Verdict::Drop)]
+            .into_iter()
+            .filter(|(id, _)| q.items.iter().any(|x| x.id == *id))
+            .collect();
+        let (_, cmds) = feed(&mut run, answer(&q, &verdicts));
         let (_, cmds) = deliver(&mut run, &turn(&cmds), &format!("draw-{n}"), vec![item("B", &format!("b{n}"))]);
         let (events, _) = deliver(&mut run, &turn(&cmds), &format!("review-{n}"), vec![item("B", &format!("rb{n}"))]);
         q = asked(&events);
-        assert_eq!((q.pass, q.passes), (n, 3));
+        assert_eq!(q.pass, n, "the round is still counted, as information");
+        assert_eq!(q.passes, 0, "a round the person opened has no ceiling");
     }
-    let e = refused(&run, answer(&q, &[("B", Verdict::Change { text: "once more".into() })]));
-    assert!(e.contains("last round"), "{e}");
-    let (_, cmds) = feed(&mut run, answer(&q, &[("B", Verdict::Keep)]));
-    assert_eq!(turn(&cmds).step, "apply");
+    // the fifth adjustment in a row is taken like the first, and goes back to the maker
+    let (_, cmds) = feed(&mut run, answer(&q, &[("B", Verdict::Change { text: "adjust 6".into() })]));
+    let t = turn(&cmds);
+    assert_eq!(t.step, "draw");
+    assert!(t.notes.join("\n").contains("adjust 6"), "{:?}", t.notes);
+    assert!(t.earlier.join("\n").contains("adjust 2"), "{:?}", t.earlier);
+    assert!(!run.finished());
 }
 
 #[test]
@@ -211,4 +213,43 @@ fn the_person_s_context_at_a_stop_reaches_the_maker_it_sends_back_to() {
     let t = turn(&cmds);
     assert_eq!(t.step, "draw");
     assert!(t.context.iter().any(|c| c.contains("money should be green")), "{:?}", t.context);
+}
+
+#[test]
+fn agents_redoing_without_the_person_stop_at_their_ceiling_and_call_the_person_without_ending_the_run() {
+    use jaynes_core::run::Phase;
+    let out = decide(None, &Input::Start {
+        run: "r".into(),
+        request: "a screen".into(),
+        manifest: manifest(true, true),
+        role_fingerprint: Digest("f".into()),
+        agent: "claude:m1".into(),
+        raise: None,
+        attention: BTreeMap::new(),
+    })
+    .expect("start");
+    let mut run = Run::fold(&out.events).expect("run");
+    let (_, mut cmds) = settle(&mut run, Vec::new(), out.commands);
+    // the reviewing check turns the maker's work down every time, and nobody answers in between
+    let mut turns = 0;
+    let mut notified = false;
+    while let Some(t) = cmds.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.clone()) } else { None }) {
+        turns += 1;
+        assert!(turns < 20, "agents went on without the person");
+        assert_eq!(t.step, "draw");
+        feed(&mut run, Input::AttemptEnded {
+            step: t.step.clone(),
+            attempt: t.attempt,
+            fix: t.fix,
+            outcome: AttemptOutcome::Delivered { output: Digest(format!("draw-{turns}")), items: vec![item("A", "a")], changed: Vec::new(), usage: Usage::default(), session: Some("s".into()) },
+        });
+        let reasons = vec!["the director turns it down".to_string()];
+        let (_, next) = feed(&mut run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: t.fix, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Fail { reasons, detail: String::new() } }] });
+        notified |= next.iter().any(|c| matches!(c, Command::Notify { .. }));
+        cmds = next;
+    }
+    assert!(matches!(run.phase, Phase::Blocked { .. }), "the run waits for the person: {:?}", run.phase);
+    assert!(!run.finished(), "the run is not ended");
+    assert!(notified, "the person is called");
+    assert_eq!(turns, 9, "three attempts of three tries each, then the person");
 }
