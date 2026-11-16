@@ -17,6 +17,8 @@ app="$out/Jaynes.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$target/$profile/jaynes-app" "$app/Contents/MacOS/Jaynes"
+# the icon, made from assets/icon.svg (see the comment in it)
+cp "$here/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,6 +29,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Jaynes</string>
   <key>CFBundleExecutable</key><string>Jaynes</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

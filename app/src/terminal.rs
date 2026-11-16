@@ -679,6 +679,12 @@ impl TerminalView {
         self.shown_in.get() == FRAME.load(Ordering::Relaxed)
     }
 
+    /// JAYNES: types text into the terminal as a paste would, for the app's own buttons ("+ New run").
+    pub fn type_text(&self, text: &str) {
+        let bytes = self.grid.borrow().vt.paste_bytes(text);
+        self.send(&bytes);
+    }
+
     fn send(&self, bytes: &[u8]) {
         self.typed_at.set(Some(Instant::now()));
         let mut g = self.grid.borrow_mut();

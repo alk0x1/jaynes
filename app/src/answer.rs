@@ -79,7 +79,7 @@ pub fn understand(stop: &Stop, words: &str, pressed: Option<&str>) -> Result<Und
 }
 
 /// The engine program that carries a run on after an answer: JAYNES_BIN, else the installed `jaynes`.
-fn engine_program() -> PathBuf {
+pub fn engine_program() -> PathBuf {
     std::env::var_os("JAYNES_BIN").map(PathBuf::from).unwrap_or_else(|| {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         home.join(".local/bin/jaynes")

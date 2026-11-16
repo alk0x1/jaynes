@@ -38,6 +38,16 @@ const GRAPHITE: Palette = Palette {
         0xcbb7e6, 0xa4d5db, 0xf0f0f2,
     ],
 };
+/// JAYNES: the Jaynes window's own dark: graphite's colours on the background the panels have (look.rs), so the
+/// terminal and the panels are one surface.
+const JAYNES: Palette = Palette {
+    background: 0x101217,
+    foreground: 0xd6d9e0,
+    selection: 0x2b3444,
+    cursor: None,
+    status: DARK_STATUS,
+    ansi: GRAPHITE.ansi,
+};
 const INK: Palette = Palette {
     background: 0x111720,
     foreground: 0xcdd6e4,
@@ -75,14 +85,15 @@ const PAPER: Palette = Palette {
     ],
 };
 
-pub const PRESETS: &[&str] = &["graphite", "ink", "moss", "paper"];
+pub const PRESETS: &[&str] = &["jaynes", "graphite", "ink", "moss", "paper"];
 
 /// The theme a layout without one shows, by appearance.
-pub const DEFAULT_DARK: &str = "graphite";
+pub const DEFAULT_DARK: &str = "jaynes";
 pub const DEFAULT_LIGHT: &str = "paper";
 
 fn preset(name: &str) -> Option<&'static Palette> {
     match name {
+        "jaynes" => Some(&JAYNES),
         "graphite" => Some(&GRAPHITE),
         "ink" => Some(&INK),
         "moss" => Some(&MOSS),
@@ -264,7 +275,7 @@ impl Default for Settings {
             terminal_line_height: 1.0,
             terminal_cell_width: 1.0,
             terminal_scroll_speed: 1.0,
-            ui_font_family: "Geist".into(),
+            ui_font_family: "Instrument Sans".into(),
             ui_font_size: 13.0,
             zoom: 1.0,
             theme: DEFAULT_DARK.into(),
@@ -312,7 +323,7 @@ pub fn rgb(s: &str) -> Rgb {
 
 thread_local! {
     static CURRENT: RefCell<(Rc<Settings>, Rc<Theme>)> =
-        RefCell::new((Rc::new(Settings::default()), Rc::new(resolve(&GRAPHITE, &BTreeMap::new()))));
+        RefCell::new((Rc::new(Settings::default()), Rc::new(resolve(&JAYNES, &BTreeMap::new()))));
 }
 
 const ZOOM_MIN: f32 = 0.5;
@@ -352,7 +363,7 @@ pub fn set(s: Settings) -> bool {
     CURRENT.with(|c| {
         // Read the theme even when the settings are the same: its file may
         // have new colors under the same name.
-        let p = preset(&s.theme).cloned().unwrap_or_else(|| GRAPHITE.clone());
+        let p = preset(&s.theme).cloned().unwrap_or_else(|| JAYNES.clone());
         let theme = resolve(&p, &s.colors);
         if *c.borrow().0 == s && *c.borrow().1 == theme {
             return false;
@@ -414,6 +425,12 @@ pub fn terminal_font() -> String {
 
 /// Fonts Herdr ships, so the defaults look the same everywhere.
 pub const BUNDLED_FONTS: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/InstrumentSans-Variable.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexMono-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexMono-Italic.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Variable.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Italic-Variable.ttf"),
     include_bytes!("../assets/fonts/Geist.ttf"),
@@ -429,5 +446,5 @@ pub const SYMBOLS_FONT_FILE: &[u8] = include_bytes!("../assets/fonts/SymbolsNerd
 pub const SYMBOLS_FONT: &str = "Symbols Nerd Font";
 
 /// Terminals' font unless a layout or settings.json picks another.
-pub const DEFAULT_FONT: &str = "JetBrains Mono";
+pub const DEFAULT_FONT: &str = "IBM Plex Mono";
 

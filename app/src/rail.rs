@@ -21,11 +21,11 @@ impl Rail {
 }
 
 /// How a step's circle looks: its fill, its ring and what it holds.
-fn circle(class: &str) -> Div {
+fn circle(class: &str, name: &str) -> Div {
     let base = div().size(px(18.)).flex_none().rounded_full().border_1().flex().items_center().justify_center().text_size(px(10.)).mt(px(1.));
     match class {
         "checked" | "accepted" | "sampled" | "jaynes" => base.bg(rgb(look::GREEN)).border_color(rgb(look::GREEN)).text_color(rgb(look::ON_FILL)).child("✓"),
-        "running" => base.border_color(rgb(look::BLUE)).child(div().size(px(6.)).rounded_full().bg(rgb(look::BLUE))),
+        "running" => base.border_color(rgb(look::BLUE)).child(look::breathing(SharedString::from(format!("breathe-{name}")), 7., look::BLUE)),
         "waiting" => base.bg(rgb(look::AMBER)).border_color(rgb(look::AMBER)).text_color(rgb(look::ON_FILL)).child("!"),
         "blocked" => base.border_color(rgb(look::RED)).text_color(rgb(look::RED)).child("×"),
         _ => base.border_color(rgb(look::LINE_2)),
@@ -39,7 +39,7 @@ fn step(s: &Stage) -> impl IntoElement {
         .gap(px(10.))
         .items_start()
         .py(px(5.))
-        .child(circle(s.class))
+        .child(circle(s.class, &s.name))
         .child(
             div()
                 .flex()
@@ -63,7 +63,7 @@ fn now(text: &str) -> impl IntoElement {
         .bg(rgb(look::PANEL_2))
         .border_1()
         .border_color(rgb(look::LINE))
-        .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(look::BLUE)))
+        .child(look::spinner("now-spin", 11., look::BLUE))
         .child(div().min_w_0().flex_1().truncate().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::DIM)).child(text.to_string()))
 }
 

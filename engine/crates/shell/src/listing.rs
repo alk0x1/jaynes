@@ -197,40 +197,83 @@ pub fn stages(r: &Run) -> Vec<Stage> {
 /// What the agent did last in a turn's transcript (Claude Code's stream): the tool it called with what it called it
 /// on, else what it said, else that it thinks. Paths inside `project` are shown from there.
 pub fn last_action(transcript: &str, project: &Path) -> Option<String> {
+    for line in transcript.lines().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match (v["type"].as_str(), v["subtype"].as_str()) {
+            (Some("result"), _) => return Some("finished its turn".into()),
+            (Some("system"), Some("thinking_tokens")) => return Some("thinking".into()),
+            _ => {
+                if let Some(last) = actions(&v, project).pop() {
+                    return Some(last);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// What one line of the stream shows the agent doing: each tool it calls with what it calls it on, and each thing it
+/// says (its first line), in order. Paths inside `project` are shown from there.
+fn actions(v: &serde_json::Value, project: &Path) -> Vec<String> {
     let inside = format!("{}/", project.display());
     let shown = |v: &serde_json::Value| -> String {
         let text = v.as_str().unwrap_or_default();
         let text = text.strip_prefix(inside.as_str()).unwrap_or(text);
         text.lines().next().unwrap_or_default().trim().chars().take(160).collect()
     };
-    for line in transcript.lines().rev() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        match (v["type"].as_str(), v["subtype"].as_str()) {
-            (Some("result"), _) => return Some("finished its turn".into()),
-            (Some("system"), Some("thinking_tokens")) => return Some("thinking".into()),
-            (Some("assistant"), _) => {
-                let blocks = v["message"]["content"].as_array().cloned().unwrap_or_default();
-                for b in blocks.iter().rev() {
-                    match b["type"].as_str() {
-                        Some("tool_use") => {
-                            let name = b["name"].as_str().unwrap_or("a tool");
-                            let input = &b["input"];
-                            let on = ["file_path", "command", "pattern", "url", "query", "path", "description"]
-                                .iter()
-                                .map(|k| shown(&input[*k]))
-                                .find(|s| !s.is_empty())
-                                .unwrap_or_default();
-                            return Some(if on.is_empty() { name.to_string() } else { format!("{name} {on}") });
-                        }
-                        Some("text") if !shown(&b["text"]).is_empty() => return Some(shown(&b["text"])),
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
+    if v["type"].as_str() != Some("assistant") {
+        return Vec::new();
     }
-    None
+    let blocks = v["message"]["content"].as_array().cloned().unwrap_or_default();
+    blocks
+        .iter()
+        .filter_map(|b| match b["type"].as_str() {
+            Some("tool_use") => {
+                let name = b["name"].as_str().unwrap_or("a tool");
+                let input = &b["input"];
+                let on = ["file_path", "command", "pattern", "url", "query", "path", "description"].iter().map(|k| shown(&input[*k])).find(|s| !s.is_empty()).unwrap_or_default();
+                Some(if on.is_empty() { name.to_string() } else { format!("{name} {on}") })
+            }
+            Some("text") if !shown(&b["text"]).is_empty() => Some(shown(&b["text"])),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A run's story: each step its agents worked, in the order they started, with what they did there, turn after turn,
+/// read from the transcripts the engine writes as the agents speak. The app shows it in the run's tab.
+pub fn story(home: &Path, run: &str) -> Vec<(String, Vec<String>)> {
+    let dir = home.join("runs").join(run);
+    let project = dir.join("project");
+    let when = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
+    let mut steps: Vec<(Option<std::time::SystemTime>, String, Vec<std::path::PathBuf>)> = std::fs::read_dir(dir.join("steps"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|step| {
+            let mut turns: Vec<std::path::PathBuf> = std::fs::read_dir(step.path())
+                .ok()?
+                .flatten()
+                .map(|f| f.path())
+                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("turn-")))
+                .collect();
+            turns.sort_by_key(|p| (when(p), p.clone()));
+            let first = turns.first().and_then(|p| when(p));
+            (!turns.is_empty()).then(|| (first, step.file_name().to_string_lossy().into_owned(), turns))
+        })
+        .collect();
+    steps.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    steps
+        .into_iter()
+        .map(|(_, name, turns)| {
+            let said = turns
+                .iter()
+                .filter_map(|t| tail(t, 1024 * 1024))
+                .flat_map(|text| text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).flat_map(|v| actions(&v, &project)).collect::<Vec<_>>())
+                .collect();
+            (name, said)
+        })
+        .collect()
 }
 
 /// What the agent of a run is doing now: the last action in its newest transcript.
@@ -344,5 +387,32 @@ mod tests {
         let ended = format!("{bash}\n{}", r#"{"type":"result","subtype":"success"}"#);
         assert_eq!(last_action(&ended, project).as_deref(), Some("finished its turn"));
         assert_eq!(last_action("not json\n--- stderr ---\n", project), None);
+    }
+
+    #[test]
+    fn a_runs_story_is_what_each_step_did_in_the_order_the_steps_worked() {
+        let home = std::env::temp_dir().join(format!("jaynes-story-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let steps = home.join("runs/r1/steps");
+        let project = home.join("runs/r1/project");
+        let said = |text: &str| format!(r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#);
+        let tool = |name: &str, path: &str| format!(r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"{name}","input":{{"file_path":"{}/{path}"}}}}]}}}}"#, project.display());
+        let write = |step: &str, turn: &str, lines: &[String]| {
+            std::fs::create_dir_all(steps.join(step)).expect("dir");
+            std::fs::write(steps.join(step).join(turn), lines.join("\n") + "\n--- stderr ---\n").expect("write");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        write("reproduce", "turn-1-0.jsonl", &[r#"{"type":"system","subtype":"init"}"#.into(), said("I will run the failing test."), tool("Read", "auth/google.go")]);
+        write("fix", "turn-1-0.jsonl", &[tool("Edit", "auth/google.go"), r#"{"type":"system","subtype":"thinking_tokens"}"#.into()]);
+        write("fix", "turn-2-0.jsonl", &[said("Done: the token refreshes."), r#"{"type":"result","subtype":"success"}"#.into()]);
+
+        let told = story(&home, "r1");
+
+        assert_eq!(told, vec![
+            ("reproduce".to_string(), vec!["I will run the failing test.".to_string(), "Read auth/google.go".to_string()]),
+            ("fix".to_string(), vec!["Edit auth/google.go".to_string(), "Done: the token refreshes.".to_string()]),
+        ]);
+        assert!(story(&home, "no-such-run").is_empty());
+        let _gone = std::fs::remove_dir_all(&home);
     }
 }

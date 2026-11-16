@@ -9,7 +9,7 @@ The Jaynes app reuses parts of other projects. Each keeps its own licence.
 | `vendor/gpui-kit` (only `crates/base`) | [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit), as vendored by herdr-app | Apache-2.0, `vendor/gpui-kit/LICENSE-APACHE` |
 | `vendor/taffy` | [Taffy](https://github.com/DioxusLabs/taffy), as patched by herdr-app | MIT, `vendor/taffy/LICENSE` |
 | `vendor/ghostty` (git submodule, libghostty-vt) | [Ghostty](https://github.com/ghostty-org/ghostty) at 291fd05 | MIT, `vendor/ghostty/LICENSE` |
-| JetBrains Mono, Geist and Geist Mono fonts | `assets/fonts` | SIL Open Font License 1.1, `assets/fonts/OFL*.txt` |
+| Instrument Sans, IBM Plex Mono, JetBrains Mono, Geist and Geist Mono fonts | `assets/fonts` | SIL Open Font License 1.1, `assets/fonts/OFL*.txt` |
 | Symbols Nerd Font | `assets/fonts` | MIT, `assets/fonts/LICENSE-SymbolsNerdFont.txt` |
 
 Files copied from herdr-app and changed here say so in their first lines (`JAYNES:`). The terminals themselves live in

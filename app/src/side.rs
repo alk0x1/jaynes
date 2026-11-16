@@ -11,17 +11,20 @@ pub const WIDTH: f32 = 250.;
 
 pub struct Side {
     runs: Entity<Runs>,
+    tabs: Entity<crate::tabs::Tabs>,
+    /// What "+ New run" does: asks Claude Code in the terminal for a run.
+    new_run: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 impl Side {
-    pub fn new(runs: Entity<Runs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, tabs: Entity<crate::tabs::Tabs>, new_run: std::rc::Rc<dyn Fn(&mut Window, &mut App)>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
-        Side { runs }
+        Side { runs, tabs, new_run }
     }
 
     fn row(&self, row: &Row, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let id = row.id.clone();
-        let runs = self.runs.clone();
+        let tabs = self.tabs.clone();
         div()
             .id(SharedString::from(format!("run-{}", row.id)))
             .mx(px(6.))
@@ -34,8 +37,12 @@ impl Side {
             .when(on, |d| d.bg(rgb(look::SELECTED)))
             .hover(|d| d.bg(rgb(look::SELECTED)))
             .cursor_pointer()
-            .on_click(cx.listener(move |_, _, _, cx| runs.update(cx, |runs, cx| runs.select(id.clone(), cx))))
-            .child(div().mt(px(5.)).size(px(8.)).flex_none().rounded_full().bg(rgb(look::colour(row.mark))))
+            .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |tabs, cx| tabs.show(Some(id.clone()), cx))))
+            .child(div().mt(px(3.)).size(px(12.)).flex_none().flex().items_center().justify_center().child(if row.mark == Mark::Working {
+                look::spinner(SharedString::from(format!("spin-{}", row.id)), 11., look::BLUE).into_any_element()
+            } else {
+                div().size(px(8.)).rounded_full().bg(rgb(look::colour(row.mark))).into_any_element()
+            }))
             .child(
                 div()
                     .flex()
@@ -92,5 +99,29 @@ impl Render for Side {
             .border_r_1()
             .border_color(rgb(look::LINE))
             .child(list)
+            .child(
+                div()
+                    .id("new-run")
+                    .m(px(10.))
+                    .px(px(10.))
+                    .py(px(7.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(rgb(look::LINE_2))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(12.5))
+                    .text_color(rgb(look::DIM))
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(rgb(look::TEXT)).bg(rgb(look::SELECTED)))
+                    .on_click({
+                        let new_run = self.new_run.clone();
+                        move |_, window, cx| new_run(window, cx)
+                    })
+                    .child("+ New run")
+                    .child(look::kbd("⌘N")),
+            )
     }
 }

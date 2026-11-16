@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The Jaynes app icon (icon 1 of the polish): the J on its dark tile, with the amber dot of what waits.
+       The tile follows macOS's icon grid: 824 px with a 100 px margin. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b1f27"/><stop offset="1" stop-color="#0d0f13"/></linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".45"/></filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)" filter="url(#shadow)"/>
+  <rect x="104" y="104" width="816" height="816" rx="181" fill="none" stroke="#2b303b" stroke-width="8"/>
+  <path d="M578 298v300a116 116 0 0 1-232 0" fill="none" stroke="#e9ecf1" stroke-width="74" stroke-linecap="round"/>
+  <circle cx="694" cy="330" r="58" fill="#ffb35c"/>
+</svg>

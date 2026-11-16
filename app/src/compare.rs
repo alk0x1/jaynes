@@ -16,10 +16,12 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-const BG: u32 = 0x0c0f14;
+const BG: u32 = look::PANEL;
 const FINALIST: &str = "A finalist: develop it further, keeping what it is.";
 
 pub struct Compare {
+    /// Whether every sentence of what the answer does shows, or only the first.
+    all_said: bool,
     key: Option<Arc<Key>>,
     stop: Option<Stop>,
     open: bool,
@@ -55,6 +57,7 @@ fn idea(label: &str) -> String {
 impl Compare {
     pub fn new(key: Option<Arc<Key>>, cx: &mut Context<Self>) -> Self {
         Compare {
+            all_said: false,
             key,
             stop: None,
             open: false,
@@ -312,6 +315,43 @@ impl Compare {
     }
 }
 
+impl Compare {
+    /// What the answer does: its first sentence, and the others behind a click, so the decision stays in front.
+    fn consequences(&self, cx: &mut Context<Self>) -> AnyElement {
+        let said = &self.reckoned.sentences;
+        if said.len() <= 1 || self.all_said {
+            let mut d = sentences(said);
+            if said.len() > 1 {
+                d = d.child(div().id("fewer").cursor_pointer().text_size(px(12.)).text_color(rgb(look::FAINT)).on_click(cx.listener(|this, _, _, cx| {
+                    this.all_said = false;
+                    cx.notify();
+                })).child("▾ fewer"));
+            }
+            return d.into_any_element();
+        }
+        div()
+            .flex()
+            .gap(px(10.))
+            .items_center()
+            .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(look::DIM)).child(said[0].clone()))
+            .child(
+                div()
+                    .id("more-said")
+                    .flex_none()
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .text_color(rgb(look::FAINT))
+                    .hover(|d| d.text_color(rgb(look::TEXT)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.all_said = true;
+                        cx.notify();
+                    }))
+                    .child(format!("▸ {} more of what this does", said.len() - 1)),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for Compare {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(stop) = self.stop.clone().filter(|_| self.open) else { return div().into_any_element() };
@@ -338,6 +378,58 @@ impl Render for Compare {
             Some(p) => div().flex_1().min_h_0().flex().items_center().justify_center().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain).rounded(px(10.))),
             None => div().flex_1().flex().items_center().justify_center().text_color(rgb(look::FAINT)).child("This direction has no picture."),
         };
+        // the directions as a strip of large pictures under the stage, each with its star
+        let mut strip = div().flex().gap(px(12.)).items_end().flex_none();
+        for (i, it) in stop.items.iter().enumerate() {
+            let on = i == self.dir;
+            let starred = self.keep.contains(&i);
+            let pins = self.pins.iter().filter(|(d, _)| *d == i).count();
+            strip = strip.child(
+                div()
+                    .id(SharedString::from(format!("dir-{i}")))
+                    .w(px(208.))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .p(px(6.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(rgb(if on { look::TEXT } else { look::LINE_2 }))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(look::PANEL_2)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dir = i;
+                        this.pic = 0;
+                        this.reckon(cx);
+                    }))
+                    .child(match it.pictures.first() {
+                        Some(p) => img(p.clone()).w_full().h(px(112.)).object_fit(ObjectFit::Cover).rounded(px(6.)).into_any_element(),
+                        None => div().w_full().h(px(112.)).rounded(px(6.)).bg(rgb(look::PANEL_2)).into_any_element(),
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(if on { look::TEXT } else { look::DIM })).child(if pins > 0 { format!("{} · {} · {pins} pinned", i + 1, names[i]) } else { format!("{} · {}", i + 1, names[i]) }))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("star-{i}")))
+                                    .px(px(2.))
+                                    .text_size(px(15.))
+                                    .text_color(rgb(if starred { look::AMBER } else { look::FAINT }))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.star(i, cx);
+                                    }))
+                                    .child(if starred { "★" } else { "☆" }),
+                            ),
+                    ),
+            );
+        }
+        strip = strip.child(div().pb(px(10.)).pl(px(4.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("← → flip · ☆ keep two to develop both"));
         let left = div()
             .flex_1()
             .min_w_0()
@@ -349,55 +441,8 @@ impl Render for Compare {
             .pb(px(10.))
             .child(tabs)
             .child(stage)
-            .child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).flex().justify_center().child("← → flips the direction in place · pin, at the right, the parts that stay"));
-        // the side: the directions, this one's parts with their pins, and what was said of it
-        let mut dirs = div().flex().flex_col().gap(px(8.));
-        for (i, it) in stop.items.iter().enumerate() {
-            let on = i == self.dir;
-            let starred = self.keep.contains(&i);
-            let pins = self.pins.iter().filter(|(d, _)| *d == i).count();
-            dirs = dirs.child(
-                div()
-                    .id(SharedString::from(format!("dir-{i}")))
-                    .flex()
-                    .gap(px(10.))
-                    .items_center()
-                    .p(px(8.))
-                    .rounded(px(10.))
-                    .border_1()
-                    .border_color(rgb(if on { look::TEXT } else { look::LINE }))
-                    .bg(rgb(look::PANEL_2))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.dir = i;
-                        this.pic = 0;
-                        this.reckon(cx);
-                    }))
-                    .children(it.pictures.first().map(|p| img(p.clone()).w(px(64.)).h(px(40.)).object_fit(ObjectFit::Cover).rounded(px(4.))))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .flex_1()
-                            .child(div().text_size(px(13.)).text_color(rgb(look::TEXT)).child(if pins > 0 { format!("{} · {} · {pins} pinned", i + 1, names[i]) } else { format!("{} · {}", i + 1, names[i]) }))
-                            .child(div().truncate().text_size(px(11.5)).text_color(rgb(look::DIM)).child(idea(&it.label))),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("star-{i}")))
-                            .px(px(4.))
-                            .text_size(px(16.))
-                            .text_color(rgb(if starred { look::AMBER } else { look::FAINT }))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.star(i, cx);
-                            }))
-                            .child(if starred { "★" } else { "☆" }),
-                    ),
-            );
-        }
+            .child(strip);
+        // the side: this direction's parts with their pins, and what was said of it
         let mut parts = div().flex().flex_col().gap(px(8.));
         for (label, text) in &item.aspects {
             let on = self.pins.contains(&(self.dir, label.clone()));
@@ -411,7 +456,7 @@ impl Render for Compare {
                     .rounded(px(8.))
                     .border_1()
                     .border_color(rgb(if on { look::AMBER } else { look::LINE }))
-                    .child(div().flex().items_center().child(div().flex_1().text_size(px(12.5)).text_color(rgb(look::TEXT)).child(label.clone())).child(button(format!("pin-{label}"), if on { "Stays" } else { "Pin: this stays" }, on, look::AMBER).on_click(cx.listener(move |this, _, _, cx| this.pin(d, l.clone(), cx)))))
+                    .child(div().flex().items_center().child(div().flex_1().text_size(px(12.5)).text_color(rgb(look::TEXT)).child(label.clone())).child(button(format!("pin-{label}"), if on { "Stays" } else { "Pin" }, on, look::AMBER).on_click(cx.listener(move |this, _, _, cx| this.pin(d, l.clone(), cx)))))
                     .child(div().text_size(px(12.)).text_color(rgb(look::DIM)).child(text.clone())),
             );
         }
@@ -435,7 +480,7 @@ impl Render for Compare {
         let page = item.page.clone();
         let side = div()
             .id("compare-side")
-            .w(px(330.))
+            .w(px(300.))
             .flex_none()
             .h_full()
             .overflow_y_scroll()
@@ -446,7 +491,6 @@ impl Render for Compare {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(div().flex().flex_col().gap(px(6.)).child(look::label("Directions · ☆ keep two to develop both", look::FAINT)).child(dirs))
             .when(!item.aspects.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("Its parts", look::FAINT)).child(parts)))
             .when(!stop.back.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("You dropped earlier · only you bring it back", look::FAINT)).child(back)))
             .when(!item.detail.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("What was said of it", look::FAINT)).child(div().text_size(px(12.5)).text_color(rgb(look::DIM)).child(item.detail.clone()))))
@@ -511,7 +555,7 @@ impl Render for Compare {
                     .flex()
                     .gap(px(12.))
                     .items_end()
-                    .child(div().flex_1().min_w_0().child(sentences(&self.reckoned.sentences)))
+                    .child(div().flex_1().min_w_0().child(self.consequences(cx)))
                     .when_some(self.reckoned.refused.clone(), |d, r| d.child(div().max_w(px(360.)).text_size(px(12.)).text_color(rgb(look::RED)).child(r)))
                     .when_some(self.said.clone(), |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).child(s)))
                     .child(primary("go", if self.sending { "Sending…".into() } else { format!("{label} ↵") }, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.go(cx))))),
@@ -525,6 +569,7 @@ impl Render for Compare {
             .border_b_1()
             .border_color(rgb(look::LINE))
             .bg(rgb(look::PANEL))
+            .pl(px(84.))
             .child(div().size(px(8.)).rounded_full().bg(rgb(look::AMBER)))
             .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::TEXT)).child(stop.title.clone())).when(!stop.about.is_empty(), |d| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::DIM)).child(format!("At {}: {}", stop.step, stop.about)))))
             .when(stop.round > 0, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).child(format!("round {}", stop.round))))

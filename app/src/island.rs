@@ -39,6 +39,8 @@ pub struct Island {
     shrunk: HashSet<String>,
     sending: bool,
     said: Option<String>,
+    /// The tabs over the middle, so a test can open one (`tab <run>`, `tab main`).
+    pub tabs: Option<Entity<crate::tabs::Tabs>>,
 }
 
 /// A verdict that sends the item back takes the person's words.
@@ -135,6 +137,7 @@ impl Island {
             shrunk: HashSet::new(),
             sending: false,
             said: None,
+            tabs: None,
         }
     }
 
@@ -345,11 +348,10 @@ impl Island {
             .items_center()
             .px(px(16.))
             .py(px(12.))
-            .rounded(px(14.))
+            .rounded(px(12.))
             .bg(rgb(look::PANEL_2))
             .border_1()
-            .border_color(rgb(look::AMBER))
-            .shadow_lg()
+            .border_color(rgba((look::AMBER << 8) | 0x73))
             .child(div().text_size(px(14.)).text_color(rgb(look::AMBER)).flex_none().child(format!("◆ {} options", stop.items.len())))
             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::TEXT)).child(stop.title.clone()))
             .child(primary("compare", "Compare".into(), true).on_click(open))
@@ -420,6 +422,12 @@ impl Island {
                 let id = rest.to_string();
                 self.runs.update(cx, |r, cx| r.select(id, cx));
             }
+            "tab" => {
+                let run = (rest != "main").then(|| rest.to_string());
+                if let Some(tabs) = self.tabs.clone() {
+                    tabs.update(cx, |t, cx| t.show(run, cx));
+                }
+            }
             "diff" => {
                 if let Some(stop) = self.stop(cx) {
                     self.diff(&stop, window, cx);
@@ -452,7 +460,8 @@ impl Render for Island {
             return div().into_any_element();
         }
         let project = self.runs.read(cx).chosen().map(|d| d.project.clone()).unwrap_or_default();
-        let wrap = div().absolute().bottom(px(18.)).left(px(18.)).right(px(18.)).flex().justify_center().font_family(look::UI_FONT);
+        // docked under the terminal, which shrinks to make room: the stop never covers the line where the person types
+        let wrap = div().w_full().flex_none().px(px(14.)).pb(px(12.)).pt(px(4.)).flex().justify_center().font_family(look::UI_FONT);
         if self.shrunk.contains(&stop.question) {
             let q = stop.question.clone();
             return wrap
@@ -477,7 +486,7 @@ impl Render for Island {
                 .into_any_element();
         }
         if stop.choose {
-            return wrap.child(div().w_full().max_w(px(820.)).child(self.invite(&stop, cx))).into_any_element();
+            return wrap.child(div().w_full().child(self.invite(&stop, cx))).into_any_element();
         }
         if self.words.is_none() {
             self.words = Some(self.input("Your words: say what you think, in any language (or answer with the buttons)", window, cx));
@@ -554,15 +563,13 @@ impl Render for Island {
         let card = div()
             .id("island")
             .w_full()
-            .max_w(px(820.))
-            .max_h(px(640.))
+            .max_h(px(460.))
             .overflow_y_scroll()
             .p(px(16.))
-            .rounded(px(14.))
+            .rounded(px(12.))
             .bg(rgb(look::PANEL_2))
             .border_1()
-            .border_color(rgb(look::LINE_2))
-            .shadow_lg()
+            .border_color(rgba((look::AMBER << 8) | 0x73))
             .flex()
             .flex_col()
             .gap(px(12.))
