@@ -129,7 +129,8 @@ one before it, so a change to any past entry shows (`jaynes verify`).
 | Sampled stops and the brake | Works in tests; no real certification yet |
 
 Missing, roughly in order: plans of several runs, the Codex adapter, roles for
-design work on this protocol, Linux.
+design work on this protocol, a native app where the person works, with runs,
+terminals and stops in one window, Linux.
 
 The same change that took the earlier engine three runs and 1 h 35 min without
 delivering was delivered by this one in under ten minutes, in one attempt
