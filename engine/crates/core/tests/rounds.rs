@@ -119,7 +119,7 @@ fn started(choose: bool, redo: bool) -> (Run, Question) {
 
 fn answer(q: &Question, verdicts: &[(&str, Verdict)]) -> Input {
     Input::Answer {
-        answer: Answer {
+        answer: Answer { back: Default::default(),
             question: q.id.clone(),
             shown: q.shown(),
             verdicts: verdicts.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
@@ -252,4 +252,61 @@ fn agents_redoing_without_the_person_stop_at_their_ceiling_and_call_the_person_w
     assert!(!run.finished(), "the run is not ended");
     assert!(notified, "the person is called");
     assert_eq!(turns, 9, "three attempts of three tries each, then the person");
+}
+
+fn answer_bringing_back(q: &Question, verdicts: &[(&str, Verdict)], back: &[(&str, &str)]) -> Input {
+    let Input::Answer { mut answer } = answer(q, verdicts) else { unreachable!() };
+    answer.back = back.iter().map(|(k, w)| (k.to_string(), w.to_string())).collect();
+    Input::Answer { answer }
+}
+
+/// None of the first two: both go, with what was missing; the maker makes C, which the person is asked about.
+fn after_none() -> (Run, Question) {
+    let (mut run, q) = started(true, true);
+    let Input::Answer { mut answer } = answer(&q, &[("A", Verdict::Drop), ("B", Verdict::Drop)]) else { unreachable!() };
+    answer.context = "something calmer".into();
+    let (_, cmds) = feed(&mut run, Input::Answer { answer });
+    let (_, cmds) = deliver(&mut run, &turn(&cmds), "draw-2", vec![item("C", "c2")]);
+    let (events, _) = deliver(&mut run, &turn(&cmds), "review-2", vec![item("C", "rc2")]);
+    (run, asked(&events))
+}
+
+#[test]
+fn what_the_person_dropped_stays_in_view_and_they_may_bring_it_back() {
+    let (mut run, q) = after_none();
+    assert_eq!(q.back.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["A", "B"], "what was dropped stays in view");
+    // the person changes their mind: A comes back, adjusted, and C goes
+    let (events, cmds) = feed(&mut run, answer_bringing_back(&q, &[("C", Verdict::Drop)], &[("A", "money in green")]));
+    let fx = events.iter().find_map(|e| if let Event::AnswerRecorded { effects, .. } = e { Some(effects.clone()) } else { None }).expect("recorded");
+    assert!(fx.sentences.join(" ").contains("“A”, which you dropped in an earlier round, comes back"), "{:?}", fx.sentences);
+    let t = turn(&cmds);
+    assert_eq!(t.step, "draw", "the maker brings it back");
+    let back: Vec<(&str, &str, &str)> = t.back.iter().map(|b| (b.item.id.as_str(), b.output.0.as_str(), b.words.as_str())).collect();
+    assert_eq!(back, [("A", "draw-1", "money in green")], "with the output it was in");
+    assert!(!t.dropped.iter().any(|x| x.id == "A"), "A may come back: {:?}", t.dropped);
+    assert!(t.dropped.iter().any(|x| x.id == "B") && t.dropped.iter().any(|x| x.id == "C"), "what was not brought back stays out: {:?}", t.dropped);
+    assert!(t.notes.join("\n").contains("money in green"), "{:?}", t.notes);
+    // A comes back and passes; B, not brought back, still may not
+    let (events, _) = deliver(&mut run, &t, "draw-3", vec![item("A", "a3"), item("B", "b1")]);
+    assert!(!events.iter().any(|e| matches!(e, Event::StepDone { .. })), "B came back unasked: {events:?}");
+}
+
+#[test]
+fn bringing_one_back_alone_is_a_choice_of_it_made_by_the_maker() {
+    let (mut run, q) = after_none();
+    let (_, cmds) = feed(&mut run, answer_bringing_back(&q, &[("C", Verdict::Drop)], &[("B", "")]));
+    let t = turn(&cmds);
+    assert_eq!(t.step, "draw");
+    assert!(t.notes.join("\n").contains("“B”, which the person dropped in an earlier round, comes back as it was"), "{:?}", t.notes);
+}
+
+#[test]
+fn only_the_person_brings_back_and_only_what_was_dropped() {
+    let (run, q) = after_none();
+    let Input::Answer { answer: mut a } = answer_bringing_back(&q, &[], &[("A", "")]) else { unreachable!() };
+    a.by = By::Agent { who: "claude".into() };
+    let e = match decide(Some(&run), &Input::Answer { answer: a }) { Ok(_) => panic!("an agent brought back"), Err(r) => r.to_string() };
+    assert!(e.contains("yours"), "{e}");
+    let e = match decide(Some(&run), &answer_bringing_back(&q, &[], &[("Z", "")])) { Ok(_) => panic!("brought back what never was"), Err(r) => r.to_string() };
+    assert!(e.contains("no earlier option Z"), "{e}");
 }

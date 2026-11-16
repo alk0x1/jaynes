@@ -208,6 +208,16 @@ pub enum Command {
     Notify { text: String },
 }
 
+/// Something the person dropped in an earlier round and now brings back: the item, the step's output it was in, and
+/// the person's words on how it comes back (empty: as it was).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Brought {
+    pub item: Item,
+    pub output: Digest,
+    #[serde(default)]
+    pub words: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentTurn {
     pub step: String,
@@ -241,6 +251,9 @@ pub struct AgentTurn {
     /// The person's words for this step in earlier rounds, oldest first, so what was asked is not undone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub earlier: Vec<String>,
+    /// What the person brings back of what they dropped, with the output it was in, so the agent can make it again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub back: Vec<Brought>,
     pub deadline_seconds: u64,
     pub tokens_left: u64,
 }

@@ -190,7 +190,11 @@ impl Page {
         }
         let shown = jaynes_core::Digest(body["shown"].as_str().unwrap_or("").to_string());
         let context = body["context"].as_str().unwrap_or("").to_string();
-        let answer = Answer { question: q.question.id.clone(), shown, verdicts, by, context };
+        let back: BTreeMap<String, String> = body["back"]
+            .as_object()
+            .map(|m| m.iter().map(|(id, w)| (id.clone(), w.as_str().unwrap_or("").to_string())).collect())
+            .unwrap_or_default();
+        let answer = Answer { back, question: q.question.id.clone(), shown, verdicts, by, context };
         Ok((run, q, answer))
     }
 
@@ -792,8 +796,30 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             )
         })
         .collect() };
+    // what the person dropped in earlier rounds stays in view, folded: only they bring it back
+    let rows = if question.back.is_empty() { rows } else {
+        let earlier: String = question
+            .back
+            .iter()
+            .map(|it| {
+                let id = esc(&it.id);
+                let words = format!("<input class=\"adjust bring\" data-b=\"{id}\" placeholder=\"How it comes back (optional): as it was, or what to change\">");
+                let control = if question.choose {
+                    format!("<div class=\"pick\">{words}<button class=\"choose\" id=\"bring-{id}\" data-back=\"{id}\">Bring back</button></div><ul class=\"fx-row\" id=\"fx-b-{id}\"></ul>")
+                } else {
+                    format!("<div class=\"seg\"><button class=\"bringt\" data-back=\"{id}\">Bring back</button></div>{words}")
+                };
+                format!("<div class=\"row{c}\" data-back-item=\"{id}\"><h3>{label}</h3>{more}{control}</div>", c = if question.choose { " choose" } else { "" }, label = esc(&it.label), more = shown(it))
+            })
+            .collect();
+        format!(
+            "{rows}<details class=\"earlier\"><summary>Dropped in earlier rounds · {}: you can bring one back</summary>{earlier}</details>",
+            question.back.len()
+        )
+    };
     let items: Vec<&str> = question.items.iter().map(|x| x.id.as_str()).collect();
-    let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items}).to_string();
+    let earlier: Vec<&str> = question.back.iter().map(|x| x.id.as_str()).collect();
+    let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items, "earlier": earlier}).to_string();
     format!(
         "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}\
          <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
@@ -1116,6 +1142,7 @@ aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min
 .stages .who { font-family:var(--mono); font-weight:400; color:var(--faint); margin-left:10px; font-size:11px; }
 .stages .about { margin:1px 0 0; font-size:13px; line-height:1.45; color:var(--dim); max-width:64ch; }
 details.way { margin-top:18px; border-top:1px solid var(--line); padding-top:10px; } details.way summary { cursor:pointer; color:var(--dim); font-size:13px; }
+details.earlier { margin-top:14px; border-top:1px solid var(--line); padding-top:10px; } details.earlier > summary { cursor:pointer; color:var(--dim); font-size:13px; } details.earlier .row { opacity:.85; } details.earlier .row:hover { opacity:1; }
 .changes { margin-top:22px; } .changes .qh { margin-bottom:8px; padding-left:0; }
 pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius:6px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--dim); white-space:pre; }
 .diff > span { display:block; padding:0 14px; min-width:max-content; }
@@ -1179,6 +1206,12 @@ function finalists() {
   for (const x of base.items) { v[x] = finals.has(x) ? "change" : "drop"; if (finals.has(x)) n[x] = noteOf(x) || "A finalist: develop it further, keeping what it is."; }
   return JSON.stringify({ ...base, verdicts: v, notes: n, context: ctxOf() });
 }
+// bring back one dropped in an earlier round: it goes on, made again by the agent, and the current options leave
+const bringOf = id => ((document.querySelector(`.bring[data-b="${CSS.escape(id)}"]`) || {}).value || "").trim();
+function bringBack(id) {
+  const v = {}; for (const x of base.items) v[x] = "drop";
+  return JSON.stringify({ ...base, verdicts: v, notes: {}, back: { [id]: bringOf(id) }, context: ctxOf() });
+}
 // none: every option leaves, and the person's words say what was missing
 function none() {
   const v = {}; for (const x of base.items) v[x] = "drop";
@@ -1206,7 +1239,9 @@ function sayFinals() {
 const later = {};
 if (base && base.choose) {
   base.items.forEach(id => said(id));
+  (base.earlier || []).forEach(id => said(null, bringBack(id), `fx-b-${id}`, `bring-${id}`));
   document.addEventListener("input", e => {
+    if (e.target.classList.contains("bring")) { const id = e.target.dataset.b; clearTimeout(later["b" + id]); later["b" + id] = setTimeout(() => said(null, bringBack(id), `fx-b-${id}`, `bring-${id}`), 250); return; }
     if (e.target.id === "why") { clearTimeout(later.why); later.why = setTimeout(() => e.target.value.trim() ? said(null, none(), "fx-none", "none") : (document.getElementById("none").disabled = true), 250); return; }
     if (!e.target.classList.contains("adjust")) return;
     const id = e.target.dataset.i; clearTimeout(later[id]); later[id] = setTimeout(() => { said(id); if (finals.has(id)) sayFinals(); }, 250);
@@ -1215,15 +1250,15 @@ if (base && base.choose) {
     const f = e.target.closest("button.fin");
     if (f) { const id = f.dataset.fin; if (finals.has(id)) finals.delete(id); else finals.add(id); f.classList.toggle("on", finals.has(id)); sayFinals(); return; }
     const b = e.target.closest("button.choose"); if (!b || b.disabled) return;
-    const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : choice(b.dataset.choose);
+    const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : choice(b.dataset.choose);
     document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
     const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
     if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/", 900); }
     else { const ul = b.closest(".row").querySelector(".fx-row"); if (ul) ul.innerHTML = `<li class="bad">${esc(r.refused || "")}</li>`; document.querySelectorAll("button.choose").forEach(x => x.disabled = false); }
   });
 }
-const verdicts = {}, notes = {};
-function body() { return JSON.stringify({ ...base, verdicts, notes, context: (document.getElementById("ctx") || {}).value || "" }); }
+const verdicts = {}, notes = {}, back = {};
+function body() { return JSON.stringify({ ...base, verdicts, notes, back, context: (document.getElementById("ctx") || {}).value || "" }); }
 async function post(path) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body() });
   return r.json();
@@ -1241,6 +1276,11 @@ function refresh() {
 document.addEventListener("click", e => { if (e.target.matches(".pics img")) e.target.classList.toggle("big"); });
 document.addEventListener("click", async e => {
   const b = e.target.closest("button"); if (!b || !base) return;
+  if (b.classList.contains("bringt")) {
+    const id = b.dataset.back;
+    if (id in back) delete back[id]; else back[id] = (document.querySelector(`.bring[data-b="${CSS.escape(id)}"]`) || {}).value || "";
+    b.classList.toggle("on", id in back); refresh(); return;
+  }
   if (b.dataset.v) {
     const i = b.dataset.i; verdicts[i] = b.dataset.v;
     const row = b.closest(".row");
@@ -1260,6 +1300,7 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("input", e => {
   if (e.target.classList.contains("note")) notes[e.target.dataset.i] = e.target.value;
+  if (e.target.classList.contains("bring") && e.target.dataset.b in back) back[e.target.dataset.b] = e.target.value;
   if (!base || base.choose) return;
   refresh();
 });

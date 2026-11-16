@@ -422,7 +422,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             ];
             for (word, verdict, context) in ways {
                 let verdicts: BTreeMap<String, Verdict> = q.items.iter().map(|x| (x.id.clone(), verdict(&x.id))).collect();
-                let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: context.to_string() };
+                let answer = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: context.to_string() };
                 if answer.choice(q).is_none() {
                     continue;
                 }
@@ -452,7 +452,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             let verdicts = q.items.iter().map(|x| (x.id.clone(), verdict.clone())).collect();
             let word = if back { "send back" } else { "keep" };
             out.push(Move {
-                input: Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: String::new() } },
+                input: Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: String::new() } },
                 says: format!("you {word} {}", q.step),
                 trouble: false,
                 sends_back: back.then(|| q.step.clone()),
@@ -460,7 +460,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             });
         }
         out.push(Move {
-            input: Input::Answer { answer: Answer { question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "an agent".into() }, context: String::new() } },
+            input: Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "an agent".into() }, context: String::new() } },
             says: format!("an agent lets {} go on", q.step),
             trouble: false,
             sends_back: None,

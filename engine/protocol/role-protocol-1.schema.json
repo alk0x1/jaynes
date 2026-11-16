@@ -2,6 +2,13 @@
   "$defs": {
     "Answer": {
       "properties": {
+        "back": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "What the person brings back of what they dropped in earlier rounds, by id, with their words on how; empty\nwords bring it back as it was. Only the person brings back.",
+          "type": "object"
+        },
         "by": {
           "$ref": "#/$defs/By"
         },

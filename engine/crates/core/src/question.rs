@@ -87,6 +87,9 @@ pub struct Question {
     pub pass: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub passes: u32,
+    /// What the person dropped at this stop in earlier rounds, kept in view: an answer may bring any of it back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub back: Vec<Item>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -130,6 +133,10 @@ pub struct Answer {
     /// The person's own words for the agents that work after this answer. It changes no verdict.
     #[serde(default)]
     pub context: String,
+    /// What the person brings back of what they dropped in earlier rounds, by id, with their words on how; empty
+    /// words bring it back as it was. Only the person brings back.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub back: BTreeMap<String, String>,
 }
 
 impl Answer {
@@ -138,14 +145,16 @@ impl Answer {
     }
 
     pub fn sends_back(&self) -> bool {
-        self.verdicts.values().any(Verdict::sends_back)
+        self.verdicts.values().any(Verdict::sends_back) || !self.back.is_empty()
     }
 
     /// What an answer to a stop that chooses does: one option goes on, two or three finalists are developed and
     /// asked about again, or none goes on and new options are made. None when it is no valid choice.
     pub fn choice(&self, q: &Question) -> Option<Choice> {
-        let going: Vec<Verdict> = q.items.iter().map(|x| self.verdict(&x.id)).filter(|v| *v != Verdict::Drop).collect();
+        let mut going: Vec<Verdict> = q.items.iter().map(|x| self.verdict(&x.id)).filter(|v| *v != Verdict::Drop).collect();
         let judged = q.items.iter().all(|x| matches!(self.verdict(&x.id), Verdict::Keep | Verdict::Change { .. } | Verdict::Drop));
+        // what comes back goes on too, and the agent makes it again, as it was or as the person writes
+        going.extend(self.back.values().map(|words| Verdict::Change { text: words.clone() }));
         match going.len() {
             _ if !judged => None,
             0 => Some(Choice::None),
@@ -158,7 +167,7 @@ impl Answer {
     /// The items a choice keeps as they are, when it changes none: Jaynes keeps them alone, without the agent.
     pub fn kept_alone(&self, q: &Question) -> Option<Vec<String>> {
         let changes = q.items.iter().any(|x| matches!(self.verdict(&x.id), Verdict::Change { .. } | Verdict::Redo { .. }));
-        (q.choose && self.choice(q) == Some(Choice::One) && self.sends_back() && !changes).then(|| q.items.iter().filter(|x| self.verdict(&x.id) == Verdict::Keep).map(|x| x.id.clone()).collect())
+        (q.choose && self.choice(q) == Some(Choice::One) && self.sends_back() && !changes && self.back.is_empty()).then(|| q.items.iter().filter(|x| self.verdict(&x.id) == Verdict::Keep).map(|x| x.id.clone()).collect())
     }
 }
 

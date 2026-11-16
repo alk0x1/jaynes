@@ -253,7 +253,8 @@ theorem g10_shown (a : AnswerCase) (h : a.accepts = true) : a.shownMatches = tru
 /-! ## What the person kept -/
 
 /-- **G12.** An output passes the gate only when it keeps every item the person kept, unchanged, and brings back
-    no item they dropped, by id or by content. -/
+    no item they dropped, by id or by content. Dropped is what stays dropped: an item the person brought back has
+    left that list, so only the person undoes a drop. -/
 theorem g12_kept (g : GateCase) (h : g.outcome = .done) :
     (∀ l ∈ g.locks, ∃ x ∈ g.items, x.id = l.id ∧ x.digest = l.digest) ∧
       (∀ d ∈ g.dropped, ∀ x ∈ g.items, x.id ≠ d.id ∧ x.digest ≠ d.digest) := by

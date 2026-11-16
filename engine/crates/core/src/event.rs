@@ -214,6 +214,9 @@ pub enum Event {
         /// The question, at a later step that reviewed this one's work, whose answer sent it back here.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
+        /// What the person brings back of what they dropped, for this round to make again.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        bring: Vec<crate::io::Brought>,
     },
     QuestionOpened {
         question: Question,

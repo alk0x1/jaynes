@@ -82,6 +82,12 @@ pub struct StepState {
     /// Items the person kept, by id, with the question that kept them.
     pub locks: BTreeMap<String, (Item, String)>,
     pub dropped: Vec<Item>,
+    /// The step's output each dropped item was in, by id, so the person can bring it back from there.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dropped_from: BTreeMap<String, Digest>,
+    /// What the person brings back for this round to make again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bring: Vec<crate::io::Brought>,
     /// The question of this round's output, once asked.
     pub question: Option<String>,
     /// What a role step asked in this round, in order.
@@ -340,8 +346,9 @@ impl Run {
                     }
                 }
             }
-            Event::StepInvalidated { step, round, notes, narrow, from, .. } => {
+            Event::StepInvalidated { step, round, notes, narrow, from, bring, .. } => {
                 if let Some(s) = self.step_mut(step) {
+                    s.bring = bring.clone();
                     s.narrow = narrow.clone();
                     s.from = from.clone();
                     let said = std::mem::take(&mut s.notes);
@@ -412,6 +419,7 @@ impl Run {
                 for item in &question.items {
                     s.locks.remove(&item.id);
                 }
+                let here = s.done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
                 for item in &question.items {
                     match answer.verdict(&item.id) {
                         Verdict::Keep => {
@@ -420,17 +428,30 @@ impl Run {
                         Verdict::Drop
                             if !s.dropped.contains(item) => {
                                 s.dropped.push(item.clone());
+                                s.dropped_from.insert(item.id.clone(), here.clone());
                             }
                         _ => {}
                     }
                 }
+                // what the person brings back may come again: they undo their own drop, never an agent
+                for id in answer.back.keys() {
+                    s.dropped.retain(|x| &x.id != id);
+                    s.dropped_from.remove(id);
+                }
                 // what goes back to the step that made the work may not bring back what was dropped there either
                 let maker = self.manifest.steps[i].stop.as_ref().and_then(|st| st.redo.clone()).and_then(|r| self.manifest.index(&r));
                 if let Some(j) = maker.filter(|_| answer.sends_back() && answer.kept_alone(&question).is_none()) {
+                    let made = self.steps[j].done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
+                    let m = &mut self.steps[j];
                     for item in &question.items {
-                        if answer.verdict(&item.id) == Verdict::Drop && !self.steps[j].dropped.contains(item) {
-                            self.steps[j].dropped.push(item.clone());
+                        if answer.verdict(&item.id) == Verdict::Drop && !m.dropped.contains(item) {
+                            m.dropped.push(item.clone());
+                            m.dropped_from.insert(item.id.clone(), made.clone());
                         }
+                    }
+                    for id in answer.back.keys() {
+                        m.dropped.retain(|x| &x.id != id);
+                        m.dropped_from.remove(id);
                     }
                 }
             }

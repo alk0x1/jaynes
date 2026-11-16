@@ -717,6 +717,15 @@ impl<'a> Driver<'a> {
                     let _gone = std::fs::remove_file(&review);
                 }
             }
+            // what the person brings back, each with the output it was in; none lingers from an earlier round
+            let back = exchange.join("back");
+            let _gone = std::fs::remove_dir_all(&back);
+            for (n, b) in turn.back.iter().enumerate() {
+                let Some(was) = self.output_of(&Some(b.output.clone())) else { continue };
+                if let Err(e) = std::fs::create_dir_all(&back).and_then(|()| std::fs::write(back.join(format!("{}.json", n + 1)), was.to_string())) {
+                    return fault(e.to_string());
+                }
+            }
             compose(&run.request, &text, &schema, &turn, &given)
         } else {
             let _gone = std::fs::remove_file(exchange.join("output.json"));
@@ -1129,6 +1138,14 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         p.push_str("# Kept by the person: keep each exactly as it is, with its id\n\n");
         for i in &turn.locked {
             p.push_str(&format!("- {} ({})\n", i.label, i.id));
+        }
+        p.push('\n');
+    }
+    if !turn.back.is_empty() {
+        p.push_str("# Brought back by the person\n\nThey dropped these in an earlier round and want them again. Each is in the output it was in, under .jaynes/back/; give it again with the same id.\n\n");
+        for (n, b) in turn.back.iter().enumerate() {
+            let how = if b.words.trim().is_empty() { "as it was".to_string() } else { format!("changed as they write: {}", b.words.trim()) };
+            p.push_str(&format!("- {} ({}), {how}: .jaynes/back/{}.json\n", b.item.label, b.item.id, n + 1));
         }
         p.push('\n');
     }

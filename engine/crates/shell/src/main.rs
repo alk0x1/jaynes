@@ -479,7 +479,7 @@ fn answer(args: &[String]) -> Result<(), String> {
         verdicts = q.items.iter().map(|x| (x.id.clone(), Verdict::Drop)).collect();
     }
     let context = [why.unwrap_or_default(), flag(args, "--context").unwrap_or_default()].iter().filter(|t| !t.trim().is_empty()).cloned().collect::<Vec<_>>().join(" ");
-    let answer = Answer { question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };
+    let answer = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };
     let effects = drive::effects(&home(), &state, &q, &answer)?;
     println!("What this answer will do:");
     for line in &effects.sentences {

@@ -351,6 +351,7 @@ impl Ctx {
             choose: stop.choose,
             pass: self.run.sent_back_at(i) + 1,
             passes: 0,
+            back: s.dropped.clone(),
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
@@ -373,13 +374,18 @@ impl Ctx {
     /// Run the step again; `narrow`, the question whose choice the round keeps alone; `from`, the question at a later
     /// step that reviewed this one's work and sent it back here.
     fn invalidate_full(&mut self, i: usize, because: Vec<String>, notes: Vec<String>, narrow: Option<String>, from: Option<String>) {
+        self.invalidate_bringing(i, because, notes, narrow, from, Vec::new());
+    }
+
+    /// Run the step again, bringing back what the person names of what they dropped.
+    fn invalidate_bringing(&mut self, i: usize, because: Vec<String>, notes: Vec<String>, narrow: Option<String>, from: Option<String>, bring: Vec<crate::io::Brought>) {
         if let Some(q) = self.run.open_question(i) {
             let id = q.question.id.clone();
             self.emit(Event::QuestionSuperseded { question: id });
         }
         let round = self.run.steps[i].round + 1;
         let step = self.name(i);
-        self.emit(Event::StepInvalidated { step, round, because, notes, narrow, from });
+        self.emit(Event::StepInvalidated { step, round, because, notes, narrow, from, bring });
     }
 
     fn start(&mut self, i: usize, executor: &Executor, name: String) -> bool {
@@ -514,6 +520,7 @@ impl Ctx {
                 self.run.output(k).map(|o| Read { step: q.question.step.clone(), output: o.clone() })
             }),
             earlier: s.earlier.clone(),
+            back: s.bring.clone(),
             keep: s
                 .narrow
                 .as_ref()
@@ -540,7 +547,7 @@ impl Ctx {
             .filter_map(|n| self.run.manifest.index(n))
             .map(|j| whole(&self.name(j), self.run.output(j)))
             .collect();
-        let question = Question {
+        let question = Question { back: Default::default(),
             id: self.question_id(&name),
             step: name.clone(),
             round: self.run.steps[i].round,
@@ -666,7 +673,7 @@ impl Ctx {
                 if offered.is_empty() || items.is_empty() {
                     return refuse("a question needs items and verdicts");
                 }
-                let question = Question {
+                let question = Question { back: Default::default(),
                     id: self.question_id(step),
                     step: step.to_string(),
                     round: self.run.steps[i].round,
@@ -689,7 +696,7 @@ impl Ctx {
                     return refuse("only an agent says a step cannot be done; a role step refuses");
                 }
                 self.emit(Event::AttemptImpossible { step: step.to_string(), attempt, reason: reason.clone(), usage: *usage, session: session.clone() });
-                let question = Question {
+                let question = Question { back: Default::default(),
                     id: self.question_id(step),
                     step: step.to_string(),
                     round: self.run.steps[i].round,
@@ -918,7 +925,7 @@ impl Ctx {
             return Ok(());
         }
         let about = describe_ask(ask);
-        let question = Question {
+        let question = Question { back: Default::default(),
             id: self.question_id(step),
             step: step.to_string(),
             round: self.run.steps[i].round,
@@ -943,7 +950,7 @@ impl Ctx {
         self.emit(Event::QuestionOpened { question: question.clone() });
         if let Some(earlier) = before {
             let allow = earlier.verdict("leave") == Verdict::Keep;
-            let answer = Answer {
+            let answer = Answer { back: Default::default(),
                 question: question.id.clone(),
                 shown: question.shown(),
                 verdicts: [("leave".to_string(), earlier.verdict("leave"))].into_iter().collect(),
@@ -954,7 +961,7 @@ impl Ctx {
             self.emit(Event::AnswerRecorded { answer, effects });
             self.command(Command::Permit { step: step.to_string(), attempt, allow });
         } else if let Some(rule) = routine(&self.run.manifest.steps[i].reach, ask) {
-            let answer = Answer {
+            let answer = Answer { back: Default::default(),
                 question: question.id.clone(),
                 shown: question.shown(),
                 verdicts: [("leave".to_string(), Verdict::Keep)].into_iter().collect(),
@@ -984,6 +991,12 @@ impl Ctx {
         }
         if answer.shown != q.question.shown() {
             return refuse("the question changed since it was shown to you; look at it again");
+        }
+        if !answer.back.is_empty() && !answer.by.person() {
+            return refuse("only you bring back what you dropped: that undoing is yours");
+        }
+        if let Some(id) = answer.back.keys().find(|id| !q.question.back.iter().any(|x| &x.id == *id)) {
+            return refuse(format!("the question has no earlier option {id} to bring back"));
         }
         for (id, v) in &answer.verdicts {
             if !q.question.items.iter().any(|x| &x.id == id) {
@@ -1042,6 +1055,19 @@ impl Ctx {
             }
         }
         let effects = effects(&self.run, &q.question, answer);
+        // what comes back, with the output it was in, read before the answer undoes the drop
+        let bring = |k: usize| -> Vec<crate::io::Brought> {
+            answer
+                .back
+                .iter()
+                .filter_map(|(id, words)| {
+                    let item = q.question.back.iter().find(|x| &x.id == id)?.clone();
+                    let output = self.run.steps[k].dropped_from.get(id).or_else(|| self.run.steps[i].dropped_from.get(id)).cloned().unwrap_or_default();
+                    Some(crate::io::Brought { item, output, words: words.clone() })
+                })
+                .collect()
+        };
+        let brought = (bring(maker(&self.run, i).unwrap_or(i)), bring(i));
         self.emit(Event::AnswerRecorded { answer: answer.clone(), effects });
         match q.question.kind {
             QuestionKind::Permission => {
@@ -1061,11 +1087,11 @@ impl Ctx {
                         // the work goes back to the step that made it; this one looks again at what comes back
                         Some(j) => {
                             let because = vec![format!("you sent it back at {}", q.question.step)];
-                            self.invalidate_full(j, because, notes, None, Some(q.question.id.clone()));
+                            self.invalidate_bringing(j, because, notes, None, Some(q.question.id.clone()), brought.0);
                         }
                         None => {
                             let because = if narrow.is_some() { "you chose one, and sent it back to keep only that" } else { "you sent it back" };
-                            self.invalidate_narrowing(i, vec![because.to_string()], notes, narrow);
+                            self.invalidate_bringing(i, vec![because.to_string()], notes, narrow, None, brought.1);
                         }
                     }
                 }
@@ -1180,6 +1206,14 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
         .filter(|(_, v)| *v != Verdict::Skip)
         .map(|(item, v)| note(item, &v, choice))
         .collect();
+    for (id, words) in &answer.back {
+        let label = q.back.iter().find(|x| &x.id == id).map_or(id.as_str(), |x| x.label.as_str());
+        out.push(if words.trim().is_empty() {
+            format!("“{label}”, which the person dropped in an earlier round, comes back as it was: give it again, from the output it was in.")
+        } else {
+            format!("“{label}”, which the person dropped in an earlier round, comes back, changed as the person writes: {}. Start from the output it was in.", words.trim())
+        });
+    }
     if choice == Some(Choice::None) {
         out.push(
             "None was chosen: make new options from what the person said, which comes first: these may not come back, but what the person said they liked may stay."
@@ -1214,12 +1248,12 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
                 format!("“{label}” is a finalist: the agent develops it as you wrote: “{text}”.")
             }
             (Verdict::Change { text }, _) if q.choose => format!("“{label}” is chosen, and is adjusted as you wrote: “{text}”."),
-            (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option."),
+            (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option unless you bring it back."),
             (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),
             (Verdict::Keep, false) => format!("“{label}” goes on as it was made."),
             (Verdict::Keep, true) => format!("“{label}” is accepted."),
             (Verdict::Skip, _) => format!("“{label}” stays as it was made, and is not judged."),
-            (Verdict::Drop, _) => format!("“{label}” is dropped: it does not come back in this run."),
+            (Verdict::Drop, _) => format!("“{label}” is dropped: it does not come back in this run unless you bring it back."),
             (Verdict::Change { text }, _) => format!("“{label}” is changed as you wrote: “{text}”."),
             (Verdict::Redo { .. }, _) => format!("“{label}” is done again, with your note."),
         });
@@ -1235,6 +1269,18 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
                 && !reruns.contains(&t) {
                     reruns.push(t);
                 }
+        }
+    }
+    for (id, words) in &answer.back {
+        let label = q.back.iter().find(|x| &x.id == id).map_or(id.as_str(), |x| x.label.as_str());
+        let to = maker(run, i).unwrap_or(i);
+        sentences.push(if words.trim().is_empty() {
+            format!("“{label}”, which you dropped in an earlier round, comes back as it was: {} makes it again.", run.manifest.steps[to].name)
+        } else {
+            format!("“{label}”, which you dropped in an earlier round, comes back, changed as you wrote: “{}”.", words.trim())
+        });
+        if !reruns.contains(&to) {
+            reruns.push(to);
         }
     }
     if input {

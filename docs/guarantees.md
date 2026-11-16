@@ -1,6 +1,6 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -45,7 +45,8 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 - **G11.** What each answer will do is written by Jaynes, not by the role, before you send it,
   and Jaynes does what it said.
 - **G12.** Something you kept stays as it is unless you change it, and something you dropped
-  never comes back in the run.
+  never comes back in the run unless you bring it back. Only you undo your own decisions: what
+  you dropped stays in view, and you can bring it back in a later round.
 
 ## Asking less
 

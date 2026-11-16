@@ -124,7 +124,7 @@ fn asked() -> (Run, Question) {
 
 fn answer(q: &Question, verdicts: &[(&str, Verdict)]) -> Input {
     Input::Answer {
-        answer: Answer {
+        answer: Answer { back: Default::default(),
             question: q.id.clone(),
             shown: q.shown(),
             verdicts: verdicts.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
