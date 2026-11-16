@@ -1,0 +1,62 @@
+# The Jaynes app: a native window where the person works, with Claude Code terminals kept alive by herdr-core.
+# The terminal (src/hc.rs, src/vt.rs, src/terminal.rs and their helpers), crates/ghostty-sys and vendor/ are copied
+# from herdr-app (github.com/herdrdev/herdr-app, Apache-2.0, see LICENSE-herdr-app and NOTICE.md). Files changed
+# here say so at their top.
+[workspace]
+members = ["crates/ghostty-sys"]
+exclude = ["vendor/gpui-kit", "vendor/gpui-pre", "vendor/gpui-pre-wgpu", "vendor/gpui-pre-apple", "vendor/gpui-pre-macos", "vendor/taffy"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package]
+name = "jaynes-app"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "jaynes-app"
+path = "src/main.rs"
+
+[dependencies]
+ghostty-sys = { path = "crates/ghostty-sys" }
+gpui = { package = "gpui-pre", version = "=0.3.8", features = ["render-to-image"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-base = { path = "vendor/gpui-kit/crates/base" }
+anyhow = "1"
+async-channel = "2"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "tiff", "bmp"] }
+png = "0.17"
+ttf-parser = "0.25"
+smallvec = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fancy-regex = "0.19"
+sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_macos = { package = "gpui-pre-macos", version = "=0.3.8", features = ["render-to-image"] }
+libc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSDockTile", "NSResponder"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString"] }
+
+[patch.crates-io]
+# herdr-app's copies of Zed's GPUI snapshot: terminal cell metrics, and an idle window that stops waking every vsync
+# (their patches are marked HERDR:).
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+taffy = { path = "vendor/taffy" }
+
+[profile.dev.package."*"]
+opt-level = 2
