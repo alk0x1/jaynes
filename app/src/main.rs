@@ -1,6 +1,6 @@
 //! The Jaynes app: a native window where the person works with Claude Code.
 //!
-//! Step 1 of the build: one window with one terminal running `claude`. The terminal lives in herdr-core (`hc`), not in
+//! The window: the runs beside (from the engine's record), and one terminal running `claude`. The terminal lives in herdr-core (`hc`), not in
 //! the app, so closing the window leaves the conversation running, and opening the app again shows it where it was.
 //! The app finds its terminal by a label it puts on it (`jaynes.app=main`); a terminal whose program ended is replaced.
 
@@ -13,6 +13,7 @@ mod core_bin;
 mod hc;
 mod links;
 mod settings;
+mod side;
 mod spawn;
 mod sprites;
 mod terminal;
@@ -48,6 +49,7 @@ fn folder() -> String {
 }
 
 struct Root {
+    side: Entity<side::Side>,
     terminal: Entity<TerminalView>,
 }
 
@@ -56,10 +58,12 @@ impl Render for Root {
         terminal::next_frame();
         div()
             .size_full()
+            .flex()
             .key_context("Jaynes")
             .on_action(copy_into(&self.terminal))
             .on_action(paste_into(&self.terminal))
-            .child(self.terminal.clone())
+            .child(self.side.clone())
+            .child(div().flex_1().min_w_0().h_full().child(self.terminal.clone()))
     }
 }
 
@@ -129,7 +133,7 @@ fn main() {
 }
 
 fn open(core: Arc<hc::Core>, cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(1100.), px(720.)), cx);
+    let bounds = Bounds::centered(None, size(px(1100. + side::WIDTH), px(720.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), ..Default::default() }),
@@ -149,7 +153,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let view = cx.new(|cx| TerminalView::attach(core.clone(), address, (120, 40), cx));
         let focus = view.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
-        cx.new(|_| Root { terminal: view })
+        let side = cx.new(side::Side::new);
+        cx.new(|_| Root { side, terminal: view })
     })
     .map(|handle| {
         if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {

@@ -8,6 +8,7 @@
 //! same browser cannot answer.
 
 use crate::drive::{self, say};
+use crate::listing::{short, title, where_in};
 use crate::store::Store;
 use jaynes_core::question::{Answer, By, QuestionKind, Verdict, VerdictKind};
 use jaynes_core::run::{Phase, QuestionState, Run};
@@ -625,12 +626,6 @@ fn stage_list(r: &Run) -> String {
 }
 
 /// Where a run is, in words: the step it is on, of how many.
-fn where_in(r: &Run) -> String {
-    let path = r.path();
-    let at = path.iter().position(|&i| !r.fresh(i)).map(|n| n + 1).unwrap_or(path.len());
-    format!("step {at} of {}", path.len())
-}
-
 enum View {
     Home,
     Overview,
@@ -638,11 +633,6 @@ enum View {
     Setup,
     Question(String, String),
     Run(String),
-}
-
-fn short(s: &str) -> String {
-    let s = s.trim();
-    if s.chars().count() <= 60 { s.to_string() } else { format!("{}…", s.chars().take(59).collect::<String>()) }
 }
 
 fn phase_word(r: &Run) -> String {
@@ -735,16 +725,6 @@ fn run_html(r: &Run, changes: &str) -> String {
         corr = if r.counts.corrections > 0 { format!(", {} corrected after delivery", r.counts.corrections) } else { String::new() },
         data = data.replace('<', "\\u003c"),
     )
-}
-
-fn title(q: &QuestionState) -> String {
-    if !q.question.about.trim().is_empty() {
-        q.question.about.clone()
-    } else if q.question.kind == QuestionKind::Permission {
-        format!("May the agent {}?", q.question.about)
-    } else {
-        format!("Does what {} made go on?", q.question.step)
-    }
 }
 
 fn label(v: VerdictKind, permission: bool) -> &'static str {

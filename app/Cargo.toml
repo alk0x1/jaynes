@@ -28,6 +28,7 @@ ghostty-sys = { path = "crates/ghostty-sys" }
 gpui = { package = "gpui-pre", version = "=0.3.8", features = ["render-to-image"] }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
+jaynes-shell = { path = "../engine/crates/shell" }
 anyhow = "1"
 async-channel = "2"
 base64 = "0.22"

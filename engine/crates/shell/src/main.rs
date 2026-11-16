@@ -1,19 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-mod agent;
-mod conformance;
-mod drive;
-mod index;
-mod install;
-mod mcp;
-mod page;
-mod permit;
-mod project;
-mod protocol;
-mod role;
-mod store;
-mod toml_role;
-mod understand;
+use jaynes_shell::{home, agent, conformance, drive, index, install, mcp, page, permit, project, protocol, role, store, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -58,12 +45,6 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     }
-}
-
-fn home() -> PathBuf {
-    std::env::var("JAYNES_ENGINE_HOME").map(PathBuf::from).unwrap_or_else(|_| {
-        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".jaynes/engine")
-    })
 }
 
 fn library() -> PathBuf {

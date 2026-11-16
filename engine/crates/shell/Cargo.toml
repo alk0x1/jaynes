@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "jaynes_shell"
+path = "src/lib.rs"
+
 [[bin]]
 name = "jaynes"
 path = "src/main.rs"
