@@ -12,14 +12,12 @@ pub const WIDTH: f32 = 250.;
 pub struct Side {
     runs: Entity<Runs>,
     tabs: Entity<crate::tabs::Tabs>,
-    /// What "+ New run" does: asks Claude Code in the terminal for a run.
-    new_run: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 impl Side {
-    pub fn new(runs: Entity<Runs>, tabs: Entity<crate::tabs::Tabs>, new_run: std::rc::Rc<dyn Fn(&mut Window, &mut App)>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, tabs: Entity<crate::tabs::Tabs>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
-        Side { runs, tabs, new_run }
+        Side { runs, tabs }
     }
 
     fn row(&self, row: &Row, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -88,40 +86,7 @@ impl Render for Side {
                 list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), cx));
             }
         }
-        div()
-            .w(px(WIDTH))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .font_family(look::UI_FONT)
-            .bg(rgb(look::PANEL))
-            .border_r_1()
-            .border_color(rgb(look::LINE))
-            .child(list)
-            .child(
-                div()
-                    .id("new-run")
-                    .m(px(10.))
-                    .px(px(10.))
-                    .py(px(7.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_dashed()
-                    .border_color(rgb(look::LINE_2))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .text_size(px(12.5))
-                    .text_color(rgb(look::DIM))
-                    .cursor_pointer()
-                    .hover(|d| d.text_color(rgb(look::TEXT)).bg(rgb(look::SELECTED)))
-                    .on_click({
-                        let new_run = self.new_run.clone();
-                        move |_, window, cx| new_run(window, cx)
-                    })
-                    .child("+ New run")
-                    .child(look::kbd("⌘N")),
-            )
+        // the column's width, its header and its line at the right are the window's (main.rs)
+        div().size_full().flex().flex_col().min_h_0().font_family(look::UI_FONT).child(list)
     }
 }

@@ -42,8 +42,10 @@ use terminal::TerminalView;
 
 actions!(jaynes, [Copy, Paste, Quit, ToggleSteps, NewRun]);
 
-/// The top bar's height; the macOS window buttons sit inside it.
-const TOP: f32 = 40.;
+/// The top bar's height; the macOS window buttons sit inside it, in the runs column's header.
+const TOP: f32 = 42.;
+/// The status bar's height, at the bottom of the window.
+const STATUS: f32 = 28.;
 
 /// The label the app puts on its terminal, so it finds it again after the window closes.
 const LABEL: (&str, &str) = ("jaynes.app", "main");
@@ -77,75 +79,11 @@ struct Root {
     lightbox: Entity<lightbox::Lightbox>,
     /// Whether the steps panel shows (Command-E).
     steps: bool,
-}
-
-impl Root {
-    /// The window's own top bar: the macOS buttons, the mark and the project, then the steps panel's switch and
-    /// "Halt all". Dragging it moves the window, a double click zooms it, as a title bar does.
-    fn top(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let runs = self.runs.read(cx);
-        let project = runs.chosen().map(|d| d.project.clone()).unwrap_or_else(|| {
-            std::path::Path::new(&folder()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-        });
-        let working: Vec<String> = runs
-            .snap
-            .listing
-            .projects
-            .iter()
-            .flat_map(|(_, rows)| rows.iter())
-            .filter(|r| r.mark == jaynes_shell::listing::Mark::Working)
-            .map(|r| r.id.clone())
-            .collect();
-        let steps = self.steps;
-        div()
-            .id("top")
-            .h(px(TOP))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            // room for the macOS buttons
-            .pl(px(84.))
-            .pr(px(12.))
-            .bg(rgb(look::PANEL))
-            .border_b_1()
-            .border_color(rgb(look::LINE))
-            .font_family(look::UI_FONT)
-            .on_mouse_down(MouseButton::Left, |e, window, _| {
-                if e.click_count == 2 {
-                    window.titlebar_double_click();
-                } else {
-                    window.start_window_move();
-                }
-            })
-            .child(look::mark_icon(18.))
-            .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Jaynes"))
-            .child(div().text_size(px(12.5)).text_color(rgb(look::FAINT)).child(format!("· {project}")))
-            .child(div().flex_1())
-            .child(
-                look::key_button("steps-switch", if steps { "◨ Steps" } else { "◧ Steps" }, "⌘E")
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.steps = !this.steps;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .id("halt-all")
-                    .px(px(10.))
-                    .py(px(4.))
-                    .rounded(px(7.))
-                    .border_1()
-                    .border_color(rgba((look::RED << 8) | 0x59))
-                    .text_size(px(12.5))
-                    .text_color(rgb(if working.is_empty() { look::FAINT } else { look::RED }))
-                    .when(!working.is_empty(), |d| d.cursor_pointer().hover(|d| d.bg(rgba((look::RED << 8) | 0x1f))))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, _, _| halt(&working))
-                    .child("■ Halt all"),
-            )
-    }
+    /// Whether the runs column shows.
+    sidebar: bool,
+    /// The branch of the folder Claude Code works in, read every few seconds; empty outside git.
+    branch: String,
+    _branch: Task<()>,
 }
 
 /// Halts each run at work: the engine stops its agent where it is, and the run can be resumed.
@@ -162,11 +100,39 @@ impl Render for Root {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         terminal::next_frame();
         let terminal = self.terminal.clone();
+        let middle = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(self.tabs_bar(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(div().flex_1().min_h_0().child(match self.tabs.read(cx).body(cx) {
+                                Some(story) => story,
+                                None => self.terminal.clone().into_any_element(),
+                            }))
+                            .child(self.island.clone()),
+                    )
+                    .children(self.steps.then(|| self.rail.clone())),
+            );
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(rgb(look::PANEL))
+            .font_family(look::UI_FONT)
             .key_context("Jaynes")
             .on_action(copy_into(&self.terminal))
             .on_action(paste_into(&self.terminal))
@@ -176,33 +142,168 @@ impl Render for Root {
             }))
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
             .relative()
-            .child(self.top(cx))
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .child(self.side.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .child(self.tabs.clone())
-                            .child(div().flex_1().min_h_0().child(match self.tabs.read(cx).body(cx) {
-                                Some(story) => story,
-                                None => self.terminal.clone().into_any_element(),
-                            }))
-                            .child(self.island.clone()),
-                    )
-                    .children(self.steps.then(|| self.rail.clone())),
+                    .when(self.sidebar, |d| {
+                        d.child(
+                            div()
+                                .w(px(side::WIDTH))
+                                .h_full()
+                                .flex_none()
+                                .flex()
+                                .flex_col()
+                                .border_r_1()
+                                .border_color(rgb(look::LINE))
+                                .child(self.side_head(cx))
+                                .child(div().flex_1().min_h_0().child(self.side.clone())),
+                        )
+                    })
+                    .child(middle),
             )
+            .child(self.status_bar(cx))
             // over everything: the compare mode, then a picture or a diff at full size
             .child(self.compare.clone())
             .child(self.lightbox.clone())
     }
+}
+
+/// A piece of the top bar: dragging it moves the window, a double click zooms it, as a title bar does.
+fn title_bar(id: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(TOP))
+        .flex_none()
+        .flex()
+        .items_center()
+        .border_b_1()
+        .border_color(rgb(look::LINE))
+        .on_mouse_down(MouseButton::Left, |e, window, _| {
+            if e.click_count == 2 {
+                window.titlebar_double_click();
+            } else {
+                window.start_window_move();
+            }
+        })
+}
+
+/// A press on a button in the top bar is the button's, not the bar's.
+fn own_press<E: InteractiveElement>(e: E) -> E {
+    e.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+
+impl Root {
+    /// The runs column's header, after herdr: the macOS buttons, the mark and the name, then the column's switch.
+    fn side_head(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        title_bar("side-head")
+            // room for the macOS buttons
+            .pl(px(82.))
+            .pr(px(8.))
+            .gap(px(8.))
+            .child(look::mark_icon(18.))
+            .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Jaynes"))
+            .child(div().flex_1())
+            .child(self.sidebar_switch(cx))
+    }
+
+    fn sidebar_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        own_press(look::icon_button("sidebar-switch", look::Icon::Sidebar, false)).on_click(cx.listener(|this, _, _, cx| {
+            this.sidebar = !this.sidebar;
+            cx.notify();
+        }))
+    }
+
+    /// The middle's header: the tabs are the bar, then a new run and the steps panel's switch, as icons.
+    fn tabs_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        title_bar("tabs-bar")
+            .items_stretch()
+            .pr(px(10.))
+            .gap(px(4.))
+            // without the runs column, the macOS buttons and its switch move here
+            .when(!self.sidebar, |d| d.pl(px(82.)).child(div().flex().items_center().child(self.sidebar_switch(cx))))
+            .when(self.sidebar, |d| d.pl(px(4.)))
+            .child(self.tabs.clone())
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(own_press(look::icon_button("new-run", look::Icon::Plus, false)).on_click(cx.listener(|this, _, window, cx| {
+                        new_run(&this.terminal, window, cx);
+                    })))
+                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.steps)).on_click(cx.listener(|this, _, _, cx| {
+                        this.steps = !this.steps;
+                        cx.notify();
+                    }))),
+            )
+    }
+
+    /// The status bar, after herdr: where Claude Code works, how many runs work and wait, and "Halt all".
+    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let runs = self.runs.read(cx);
+        let working: Vec<String> = runs
+            .snap
+            .listing
+            .projects
+            .iter()
+            .flat_map(|(_, rows)| rows.iter())
+            .filter(|r| r.mark == jaynes_shell::listing::Mark::Working)
+            .map(|r| r.id.clone())
+            .collect();
+        let waits = runs.snap.listing.needs.len();
+        let item = || div().flex().items_center().gap(px(6.));
+        let home = std::env::var("HOME").unwrap_or_default();
+        let place = match folder() {
+            f if !home.is_empty() && f.starts_with(&home) => format!("~{}", &f[home.len()..]),
+            f => f,
+        };
+        let halt_colour = if working.is_empty() { look::FAINT } else { look::RED };
+        div()
+            .h(px(STATUS))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(16.))
+            .px(px(12.))
+            .border_t_1()
+            .border_color(rgb(look::LINE))
+            .text_size(px(11.5))
+            .text_color(rgb(look::DIM))
+            .child(item().child(look::icon(look::Icon::Folder, 13., look::DIM)).child(place))
+            .when(!self.branch.is_empty(), |d| d.child(item().child(look::icon(look::Icon::Branch, 13., look::DIM)).child(self.branch.clone())))
+            .when(!working.is_empty(), |d| d.child(item().child(look::spinner("status-spin", 10., look::BLUE)).child(format!("{} working", working.len()))))
+            .when(waits > 0, |d| {
+                d.child(item().text_color(rgb(look::AMBER)).child(div().size(px(7.)).rounded_full().bg(rgb(look::AMBER))).child(format!("{waits} waiting")))
+            })
+            .child(div().flex_1())
+            .child(
+                item()
+                    .id("halt-all")
+                    .px(px(6.))
+                    .py(px(2.))
+                    .rounded(px(5.))
+                    .text_color(rgb(halt_colour))
+                    .when(!working.is_empty(), |d| d.cursor_pointer().hover(|d| d.bg(rgba((look::RED << 8) | 0x1f))))
+                    .on_click(move |_, _, _| halt(&working))
+                    .child(look::icon(look::Icon::Stop, 13., halt_colour))
+                    .child("Halt all"),
+            )
+    }
+}
+
+/// The branch checked out where Claude Code works; empty when it is not a git folder.
+fn branch_of(folder: &str) -> String {
+    spawn::command("git")
+        .args(["-C", folder, "branch", "--show-current"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 /// "+ New run": asks Claude Code in the terminal for a run through Jaynes, the person finishing the sentence.
@@ -287,7 +388,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // the window draws its own top bar, the macOS buttons inside it
-        titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(13.))) }),
+        titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         app_id: Some("jaynes-app".into()),
         focus: std::env::var_os("JAYNES_APP_SHOT").is_none(),
         ..Default::default()
@@ -305,12 +406,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let focus = view.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
         let runs = cx.new(model::Runs::new);
-        let new_run_in = {
-            let view = view.clone();
-            std::rc::Rc::new(move |window: &mut Window, cx: &mut App| new_run(&view, window, cx)) as std::rc::Rc<dyn Fn(&mut Window, &mut App)>
-        };
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), cx));
-        let side = cx.new(|cx| side::Side::new(runs.clone(), tabs.clone(), new_run_in, cx));
+        let side = cx.new(|cx| side::Side::new(runs.clone(), tabs.clone(), cx));
         let rail = cx.new(|cx| rail::Rail::new(runs.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
@@ -320,7 +417,26 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         cx.new(|cx| {
             cx.observe(&runs, |_, _, cx| cx.notify()).detach();
             cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
-            Root { runs, tabs, side, terminal: view, rail, island, compare, lightbox, steps: true }
+            // the branch, read again every few seconds: the person may switch it in the terminal
+            let place = folder();
+            let branch = cx.spawn(async move |this, cx| loop {
+                let at = place.clone();
+                let now = cx.background_executor().spawn(async move { branch_of(&at) }).await;
+                let gone = this
+                    .update(cx, |root: &mut Root, cx| {
+                        if root.branch != now {
+                            root.branch = now;
+                            cx.notify();
+                        }
+                    })
+                    .is_err();
+                if gone {
+                    break;
+                }
+                cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
+            });
+            // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
+            Root { runs, tabs, side, terminal: view, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), _branch: branch }
         })
     })
     .map(|handle| {

@@ -5,7 +5,6 @@
 
 use crate::look;
 use crate::model::Runs;
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::Mark;
 use std::time::Duration;
@@ -131,51 +130,51 @@ impl Tabs {
     }
 }
 
-fn tab(id: SharedString, on: bool) -> Stateful<Div> {
+/// A tab in the top bar, underlined when it shows: amber for a run that waits, the text's colour otherwise. A press
+/// on it is the tab's, not the bar's, so it does not move the window.
+fn tab(id: SharedString, on: bool, line: u32) -> Stateful<Div> {
     div()
         .id(id)
+        .h_full()
         .flex()
         .items_center()
         .gap(px(7.))
-        .px(px(11.))
-        .py(px(5.))
-        .rounded(px(7.))
-        .max_w(px(220.))
+        .px(px(12.))
+        .max_w(px(240.))
+        .border_b_2()
+        .border_color(if on { rgb(line) } else { rgba(0) })
         .text_size(px(12.5))
         .text_color(rgb(if on { look::TEXT } else { look::DIM }))
-        .when(on, |d| d.bg(rgb(look::PANEL_2)))
         .hover(|d| d.text_color(rgb(look::TEXT)))
         .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
 impl Render for Tabs {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // the tabs are the top bar's: its height, its line under them
         let mut row = div()
             .id("tabs")
-            .h(px(38.))
-            .flex_none()
+            .h_full()
+            .min_w_0()
             .flex()
-            .items_center()
-            .gap(px(2.))
-            .px(px(8.))
+            .items_stretch()
             .overflow_x_scroll()
-            .border_b_1()
-            .border_color(rgb(look::LINE))
             .font_family(look::UI_FONT)
             .child(
-                tab("tab-main".into(), self.open.is_none())
+                tab("tab-main".into(), self.open.is_none(), look::TEXT)
                     .on_click(cx.listener(|this, _, _, cx| this.show(None, cx)))
-                    .child(div().size(px(7.)).rounded_full().bg(rgb(look::GREY)))
-                    .child("claude"),
+                    .child(look::claude_icon())
+                    .child("Claude Code"),
             );
         for (id, title, mark) in self.tabbed(cx) {
             let on = self.open.as_deref() == Some(id.as_str());
             let pick = id.clone();
             row = row.child(
-                tab(SharedString::from(format!("tab-{id}")), on)
+                tab(SharedString::from(format!("tab-{id}")), on, if mark == Mark::Needs { look::AMBER } else { look::TEXT })
                     .on_click(cx.listener(move |this, _, _, cx| this.show(Some(pick.clone()), cx)))
                     .child(if mark == Mark::Working {
-                        look::spinner(SharedString::from(format!("tab-spin-{id}")), 9., look::BLUE).into_any_element()
+                        look::spinner(SharedString::from(format!("tab-spin-{id}")), 10., look::BLUE).into_any_element()
                     } else {
                         div().size(px(7.)).flex_none().rounded_full().bg(rgb(look::colour(mark))).into_any_element()
                     })

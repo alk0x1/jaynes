@@ -41,7 +41,7 @@ const GRAPHITE: Palette = Palette {
 /// JAYNES: the Jaynes window's own dark: graphite's colours on the background the panels have (look.rs), so the
 /// terminal and the panels are one surface.
 const JAYNES: Palette = Palette {
-    background: 0x101217,
+    background: 0x0b0c0f,
     foreground: 0xd6d9e0,
     selection: 0x2b3444,
     cursor: None,

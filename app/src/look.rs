@@ -1,15 +1,16 @@
 //! The window's colours and the small pieces the list and the steps panel share: one dark for the whole window, the
-//! terminal's included (the theme `jaynes` in settings.rs has the same background), as direction A of the polish drew.
+//! terminal's included (the theme `jaynes` in settings.rs has the same background): the near-black of direction C of
+//! the top bar (docs/prototypes/app-topbar.html), after T3 Code's quiet.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::Mark;
 
-pub const PANEL: u32 = 0x101217;
-pub const PANEL_2: u32 = 0x171a21;
-pub const SELECTED: u32 = 0x1d212a;
-pub const LINE: u32 = 0x20242d;
-pub const LINE_2: u32 = 0x2b303b;
+pub const PANEL: u32 = 0x0b0c0f;
+pub const PANEL_2: u32 = 0x131519;
+pub const SELECTED: u32 = 0x181a20;
+pub const LINE: u32 = 0x1b1d23;
+pub const LINE_2: u32 = 0x262931;
 pub const TEXT: u32 = 0xe9ecf1;
 pub const DIM: u32 = 0x9298a5;
 pub const FAINT: u32 = 0x5d6370;
@@ -48,9 +49,9 @@ pub fn word(mark: Mark) -> &'static str {
     }
 }
 
-/// A small uppercase heading.
+/// A small heading, as written: quiet, after T3 Code, not shouted in capitals.
 pub fn label(text: &str, color: u32) -> Div {
-    div().text_size(px(11.)).text_color(rgb(color)).child(text.to_uppercase())
+    div().text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(rgb(color)).child(text.to_string())
 }
 
 /// The mark as a chip: its word on a soft fill of its colour.
@@ -157,4 +158,56 @@ pub fn key_button(id: &'static str, text: &str, key: &str) -> Stateful<Div> {
 /// A key, drawn small in its box.
 pub fn kbd(key: &str) -> Div {
     div().px(px(5.)).rounded(px(5.)).border_1().border_color(rgb(LINE_2)).font_family(MONO_FONT).text_size(px(10.5)).text_color(rgb(FAINT)).child(key.to_string())
+}
+
+/// The window's small line icons, drawn in the colour of the text around them.
+#[derive(Clone, Copy)]
+pub enum Icon {
+    /// The runs list's switch: a window with its left column.
+    Sidebar,
+    /// The steps panel's switch: a window with its right column.
+    Panel,
+    Plus,
+    Folder,
+    Branch,
+    Stop,
+}
+
+impl Icon {
+    fn svg(self) -> &'static str {
+        match self {
+            Icon::Sidebar => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.7" y="2.7" width="12.6" height="10.6" rx="2"/><path d="M6 2.7v10.6"/></svg>"##,
+            Icon::Panel => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.7" y="2.7" width="12.6" height="10.6" rx="2"/><path d="M10 2.7v10.6"/></svg>"##,
+            Icon::Plus => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>"##,
+            Icon::Folder => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linejoin="round"><path d="M1.7 4.5a1 1 0 0 1 1-1h3.4l1.5 1.5h5.7a1 1 0 0 1 1 1v6.3a1 1 0 0 1-1 1H2.7a1 1 0 0 1-1-1z"/></svg>"##,
+            Icon::Branch => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 6.6c0 3-7 2-7 4.3"/></svg>"##,
+            Icon::Stop => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.5" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.6"/></svg>"##,
+        }
+    }
+}
+
+/// An icon at a size, in a colour.
+pub fn icon(which: Icon, size: f32, color: u32) -> Svg {
+    svg().data(which.svg().as_bytes()).size(px(size)).flex_none().text_color(rgb(color))
+}
+
+/// An icon that is a button: a quiet square that lights up under the pointer, bright when what it switches is on.
+pub fn icon_button(id: &'static str, which: Icon, on: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(26.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .hover(|d| d.bg(rgb(SELECTED)))
+        .child(icon(which, 16., if on { TEXT } else { DIM }))
+}
+
+/// Claude Code's critter, small, for the tab of the person's own Claude Code.
+pub fn claude_icon() -> Svg {
+    const CRITTER: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 12"><path fill="#000" fill-rule="evenodd" d="M3 0h10v3h3v3h-3v6h-1V9h-1v3h-1V9H6v3H5V9H4v3H3V6H0V3h3zM5 3v2h1V3zm5 0v2h1V3z"/></svg>"##;
+    svg().data(CRITTER.as_bytes()).w(px(14.)).h(px(10.5)).flex_none().text_color(rgb(0xe8875f))
 }
