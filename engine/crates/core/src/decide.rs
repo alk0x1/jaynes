@@ -493,11 +493,16 @@ impl Ctx {
             given: self.given(i),
             previous: (s.round > 0).then(|| s.done.as_ref().map(|d| d.output.clone())).flatten(),
             notes: s.notes.clone(),
+            // the person's words reach every step from the stop on, and the maker that stop sends work back to
             context: self
                 .run
                 .context
                 .iter()
-                .filter(|(at, _)| self.run.manifest.index(at).is_some_and(|j| j <= i))
+                .filter(|(at, _)| {
+                    self.run.manifest.index(at).is_some_and(|j| {
+                        j <= i || self.run.manifest.steps[j].stop.as_ref().and_then(|st| st.redo.as_deref()) == Some(decl.name.as_str())
+                    })
+                })
                 .map(|(_, text)| text.clone())
                 .collect(),
             failure: s.failure.clone(),
@@ -1179,7 +1184,10 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
         .map(|(item, v)| note(item, &v, choice))
         .collect();
     if choice == Some(Choice::None) {
-        out.push("None was chosen: make new options, truly different from these, from what the person said was missing.".to_string());
+        out.push(
+            "None was chosen: make new options from what the person said, which comes first: these may not come back, but what the person said they liked may stay."
+                .to_string(),
+        );
     }
     out
 }

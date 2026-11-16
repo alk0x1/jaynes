@@ -198,3 +198,17 @@ fn a_stop_without_a_maker_named_sends_back_to_itself_as_before() {
     let (_, cmds) = feed(&mut run, answer(&q, &[("B", Verdict::Change { text: "warmer".into() })]));
     assert_eq!(turn(&cmds).step, "review");
 }
+
+#[test]
+fn the_person_s_context_at_a_stop_reaches_the_maker_it_sends_back_to() {
+    let (mut run, q) = started(true, true);
+    let Input::Answer { mut answer } = answer(&q, &[("A", Verdict::Drop), ("B", Verdict::Drop)]) else { unreachable!() };
+    answer.context = "I like the colours, but money should be green".into();
+    let (events, cmds) = feed(&mut run, Input::Answer { answer });
+    let fx = events.iter().find_map(|e| if let Event::AnswerRecorded { effects, .. } = e { Some(effects.clone()) } else { None }).expect("recorded");
+    assert!(fx.sentences.join(" ").contains("goes with it to draw"), "{:?}", fx.sentences);
+    // what the page promised: the maker, before the stop, reads the person's words too
+    let t = turn(&cmds);
+    assert_eq!(t.step, "draw");
+    assert!(t.context.iter().any(|c| c.contains("money should be green")), "{:?}", t.context);
+}
