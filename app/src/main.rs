@@ -9,11 +9,14 @@
 // theme switching); the later steps use them.
 #![allow(dead_code)]
 
+mod answer;
 mod bench;
+mod compare;
 mod core_bin;
 mod hc;
 mod island;
 mod key;
+mod lightbox;
 mod links;
 mod look;
 mod model;
@@ -60,6 +63,8 @@ struct Root {
     terminal: Entity<TerminalView>,
     rail: Entity<rail::Rail>,
     island: Entity<island::Island>,
+    compare: Entity<compare::Compare>,
+    lightbox: Entity<lightbox::Lightbox>,
     /// Whether the steps panel shows (Command-E).
     steps: bool,
 }
@@ -77,9 +82,13 @@ impl Render for Root {
                 this.steps = !this.steps;
                 cx.notify();
             }))
+            .relative()
             .child(self.side.clone())
             .child(div().relative().flex_1().min_w_0().h_full().child(self.terminal.clone()).child(self.island.clone()))
             .children(self.steps.then(|| self.rail.clone()))
+            // over everything: the compare mode, then a picture or a diff at full size
+            .child(self.compare.clone())
+            .child(self.lightbox.clone())
     }
 }
 
@@ -173,8 +182,11 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let runs = cx.new(model::Runs::new);
         let side = cx.new(|cx| side::Side::new(runs.clone(), cx));
         let rail = cx.new(|cx| rail::Rail::new(runs.clone(), cx));
-        let island = cx.new(|cx| island::Island::new(runs, the_key(), cx));
-        cx.new(|_| Root { side, terminal: view, rail, island, steps: true })
+        let key = the_key();
+        let lightbox = cx.new(lightbox::Lightbox::new);
+        let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));
+        let island = cx.new(|cx| island::Island::new(runs, key, lightbox.clone(), compare.clone(), cx));
+        cx.new(|_| Root { side, terminal: view, rail, island, compare, lightbox, steps: true })
     })
     .map(|handle| {
         if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {

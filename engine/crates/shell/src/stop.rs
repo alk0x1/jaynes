@@ -16,6 +16,8 @@ pub struct Item {
     pub aspects: Vec<(String, String)>,
     /// Pictures of the item, as files.
     pub pictures: Vec<PathBuf>,
+    /// The page the role kept of it, by name, served sandboxed by the page at `/page/<name>`.
+    pub page: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +32,12 @@ pub struct Stop {
     pub choose: bool,
     pub offered: Vec<VerdictKind>,
     pub items: Vec<Item>,
+    /// What the person dropped at this stop in earlier rounds: only they bring it back.
+    pub back: Vec<Item>,
+    /// The round of asking at this stop, from 1, when the role counts rounds.
+    pub round: u32,
+    /// What the stop's step does, as its role says it.
+    pub about: String,
     /// What lies ahead of this stop that cannot be undone, in a sentence, if anything does.
     pub ahead: Option<String>,
 }
@@ -41,30 +49,29 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
     }
     let q = run.questions.values().find(|q| q.open())?;
     let store = crate::store::Store::open(&home.join("record.sqlite3")).ok();
-    let items = q
-        .question
-        .items
-        .iter()
-        .map(|it| {
-            let d = store.as_ref().map(|s| s.display(&it.digest)).unwrap_or_default();
-            let aspects = d["aspects"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|a| (a["label"].as_str().unwrap_or("").to_string(), a["text"].as_str().unwrap_or("").to_string()))
-                .collect();
-            let pictures = d["pictures"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|p| p.as_str())
-                .filter(|name| !name.contains('/') && !name.starts_with('.'))
-                .map(|name| home.join("pictures").join(name))
-                .filter(|p| p.exists())
-                .collect();
-            Item { id: it.id.clone(), label: it.label.clone(), detail: d["detail"].as_str().unwrap_or("").to_string(), aspects, pictures }
-        })
-        .collect();
+    let shown = |it: &jaynes_core::question::Item| {
+        let d = store.as_ref().map(|s| s.display(&it.digest)).unwrap_or_default();
+        let aspects = d["aspects"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|a| (a["label"].as_str().unwrap_or("").to_string(), a["text"].as_str().unwrap_or("").to_string()))
+            .collect();
+        let names: Vec<String> = d["pictures"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_str())
+            .filter(|name| !name.contains('/') && !name.starts_with('.'))
+            .map(str::to_string)
+            .collect();
+        let page = names.iter().find_map(|n| d["pages"][n.as_str()].as_str()).filter(|p| kept_page(p)).map(str::to_string);
+        let pictures = names.iter().map(|name| home.join("pictures").join(name)).filter(|p| p.exists()).collect();
+        Item { id: it.id.clone(), label: it.label.clone(), detail: d["detail"].as_str().unwrap_or("").to_string(), aspects, pictures, page }
+    };
+    let items = q.question.items.iter().map(&shown).collect();
+    let back = q.question.back.iter().map(&shown).collect();
+    let about = run.manifest.index(&q.question.step).map(|i| run.manifest.steps[i].about.clone()).unwrap_or_default();
     Some(Stop {
         run: run.id.clone(),
         question: q.question.id.clone(),
@@ -75,8 +82,16 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
         choose: q.question.choose,
         offered: q.question.offered.clone(),
         items,
+        back,
+        round: q.question.pass,
+        about,
         ahead: ahead(run, &q.question.step),
     })
+}
+
+/// A page the role kept, named by its fingerprint: nothing else is served.
+fn kept_page(name: &str) -> bool {
+    name.len() == 69 && name[..64].chars().all(|c| c.is_ascii_hexdigit()) && &name[64..] == ".html"
 }
 
 /// The answer the person's marks make: a verdict per item, with their words for a change or a redo.
@@ -143,7 +158,7 @@ mod tests {
         let decl = |name: &str, irreversible: bool| StepDecl {
             name: name.into(), needs: vec![], executor: if irreversible { Executor::Role } else { Executor::Agent }, session: SessionKind::Fresh, reach: Reach::default(),
             effect: if irreversible { Effect::Irreversible { idempotent: false } } else { Default::default() },
-            checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: String::new(),
+            checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: if name == "plan" { "Plans the work.".into() } else { String::new() },
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: steps.iter().map(|(n, i)| decl(n, *i)).collect(), delivery };
         let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };
@@ -155,7 +170,7 @@ mod tests {
         let question = Question {
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![item("a", "Plan A"), item("b", "Plan B")],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, about: "Which plan goes on?".into(),
-            choose: false, pass: 0, passes: 0, back: vec![],
+            choose: false, pass: 2, passes: 0, back: vec![item("c", "Plan C")],
         };
         r.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
         r.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits".into() };
@@ -172,6 +187,8 @@ mod tests {
         assert_eq!(stop.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["Plan A", "Plan B"]);
         assert_eq!(stop.offered, [VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop]);
         assert_eq!(stop.ahead, None);
+        assert_eq!(stop.back.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["Plan C"]);
+        assert_eq!((stop.round, stop.about.as_str()), (2, "Plans the work."));
         let mut marks = BTreeMap::new();
         marks.insert("a".to_string(), (VerdictKind::Keep, String::new()));
         marks.insert("b".to_string(), (VerdictKind::Redo, "it misses the tests".to_string()));

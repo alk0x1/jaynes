@@ -201,8 +201,8 @@ impl Page {
     }
 }
 
-/// The answer a body from the page means, with the run and the question it is about.
-fn answer_in(home: &std::path::Path, body: &Value, by: By) -> Result<(Run, QuestionState, Answer), String> {
+/// The answer a body from the page (or the app, which sends the same) means, with the run and the question it is about.
+pub fn answer_in(home: &std::path::Path, body: &Value, by: By) -> Result<(Run, QuestionState, Answer), String> {
         let run_id = body["run"].as_str().ok_or("which run?")?;
         let qid = body["question"].as_str().ok_or("which question?")?;
         let run = Store::open(&home.join("record.sqlite3"))?.state(run_id)?.ok_or("no such run")?;
@@ -233,7 +233,7 @@ fn answer_in(home: &std::path::Path, body: &Value, by: By) -> Result<(Run, Quest
 }
 
 /// The person's words read into the answer they mean, with what Jaynes says it will do: a proposal, never an answer.
-fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Value, String> {
+pub fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Value, String> {
     let run_id = body["run"].as_str().ok_or("which run?")?;
     let qid = body["question"].as_str().ok_or("which question?")?;
     let store = Store::open(&home.join("record.sqlite3"))?;
