@@ -13,6 +13,7 @@ mod protocol;
 mod role;
 mod store;
 mod toml_role;
+mod understand;
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};

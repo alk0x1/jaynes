@@ -71,6 +71,25 @@ impl Page {
 
     fn handle(&self, mut stream: TcpStream) -> Result<(), String> {
         let req = read(&stream)?;
+        // reading the person's words takes a model's time: it is answered on a thread of its own, and the page goes on
+        if req.method == "POST" && req.path == "/api/understand" && self.local(req.headers.get("host"), false) {
+            let json_body = req.headers.get("content-type").is_some_and(|c| c.starts_with("application/json"));
+            let origin_ok = req.headers.get("origin").is_none_or(|o| self.local(Some(o), true));
+            if json_body && origin_ok {
+                let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                let by = if self.person(&req) { By::Person } else { By::Agent { who: "a client without the page's key".into() } };
+                let home = self.home.clone();
+                std::thread::spawn(move || {
+                    let reply = understand_in(&home, &body, by).unwrap_or_else(|e| json!({"ok": false, "refused": e})).to_string();
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                        reply.len()
+                    );
+                    let _sent = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(reply.as_bytes()));
+                });
+                return Ok(());
+            }
+        }
         let (status, kind, body, extra) = self.route(&req);
         let mut head = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nConnection: close\r\n",
@@ -169,9 +188,22 @@ impl Page {
     }
 
     fn answer_from(&self, body: &Value, by: By) -> Result<(Run, QuestionState, Answer), String> {
+        answer_in(&self.home, body, by)
+    }
+
+    fn effects(&self, body: &Value, by: By) -> Result<Value, String> {
+        let (run, q, answer) = self.answer_from(body, by)?;
+        let fx = drive::effects(&self.home, &run, &q.question, &answer)?;
+        let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
+        Ok(json!({"ok": refused.is_none(), "sentences": fx.sentences, "refused": refused}))
+    }
+}
+
+/// The answer a body from the page means, with the run and the question it is about.
+fn answer_in(home: &std::path::Path, body: &Value, by: By) -> Result<(Run, QuestionState, Answer), String> {
         let run_id = body["run"].as_str().ok_or("which run?")?;
         let qid = body["question"].as_str().ok_or("which question?")?;
-        let run = self.store()?.state(run_id)?.ok_or("no such run")?;
+        let run = Store::open(&home.join("record.sqlite3"))?.state(run_id)?.ok_or("no such run")?;
         let q = run.questions.get(qid).cloned().ok_or("no such question")?;
         let mut verdicts = BTreeMap::new();
         if let Some(m) = body["verdicts"].as_object() {
@@ -196,15 +228,39 @@ impl Page {
             .unwrap_or_default();
         let answer = Answer { back, question: q.question.id.clone(), shown, verdicts, by, context };
         Ok((run, q, answer))
-    }
+}
 
-    fn effects(&self, body: &Value, by: By) -> Result<Value, String> {
-        let (run, q, answer) = self.answer_from(body, by)?;
-        let fx = drive::effects(&self.home, &run, &q.question, &answer)?;
-        let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
-        Ok(json!({"ok": refused.is_none(), "sentences": fx.sentences, "refused": refused}))
+/// The person's words read into the answer they mean, with what Jaynes says it will do: a proposal, never an answer.
+fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Value, String> {
+    let run_id = body["run"].as_str().ok_or("which run?")?;
+    let qid = body["question"].as_str().ok_or("which question?")?;
+    let store = Store::open(&home.join("record.sqlite3"))?;
+    let run = store.state(run_id)?.ok_or("no such run")?;
+    let q = run.questions.get(qid).cloned().ok_or("no such question")?;
+    let text = body["text"].as_str().unwrap_or("").trim().to_string();
+    if text.is_empty() {
+        return Err("write what you think first".into());
     }
+    let detail = |it: &jaynes_core::question::Item| {
+        let d = store.display(&it.digest);
+        let mut parts: Vec<String> = d["detail"].as_str().filter(|t| !t.is_empty()).map(str::to_string).into_iter().collect();
+        parts.extend(d["aspects"].as_array().into_iter().flatten().map(|a| format!("{}: {}", a["label"].as_str().unwrap_or(""), a["text"].as_str().unwrap_or(""))));
+        parts.join("; ")
+    };
+    let prompt = crate::understand::prompt(&run, &q.question, &detail, &text, body["pressed"].as_str());
+    let read = crate::understand::read(&run.agent, &prompt)?;
+    let proposal = crate::understand::proposal(&q.question, &read, &text);
+    let mut sent = proposal.clone();
+    for k in ["run", "question", "shown"] {
+        sent[k] = body[k].clone();
+    }
+    let (run, q, answer) = answer_in(home, &sent, by)?;
+    let fx = drive::effects(home, &run, &q.question, &answer)?;
+    let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
+    Ok(json!({"ok": refused.is_none(), "body": sent, "sentences": fx.sentences, "refused": refused, "unsure": proposal["unsure"], "repeats": proposal["repeats"]}))
+}
 
+impl Page {
     fn answer(&self, body: &Value, by: By) -> Result<Value, String> {
         let (run, _, answer) = self.answer_from(body, by)?;
         self.submit(&run, Input::Answer { answer })
@@ -413,6 +469,16 @@ impl Page {
                     let mut html = String::new();
                     if let Some(t) = d["detail"].as_str().filter(|t| !t.is_empty()) {
                         html.push_str(&format!("<p class=\"detail\">{}</p>", esc(t)));
+                    }
+                    // the parts the person judges apart, each with its label
+                    let parts: String = d["aspects"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|a| format!("<dt>{}</dt><dd>{}</dd>", esc(a["label"].as_str().unwrap_or("")), esc(a["text"].as_str().unwrap_or(""))))
+                        .collect();
+                    if !parts.is_empty() {
+                        html.push_str(&format!("<dl class=\"aspects\">{parts}</dl>"));
                     }
                     let pics: Vec<String> = d["pictures"].as_array().into_iter().flatten().filter_map(|p| p.as_str())
                         .filter_map(|name| {
@@ -822,7 +888,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items, "earlier": earlier}).to_string();
     format!(
         "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}\
-         <div class=\"say\"><label>Context</label><input id=\"ctx\" placeholder=\"Anything the agent should know, in any language (optional)\"></div>\
+         <div class=\"say\"><label>Your words</label><input id=\"ctx\" placeholder=\"Say what you think, in any language: what stays, what changes (or answer with the buttons)\"><button class=\"read\" id=\"read\">Read my words</button></div><div class=\"understood\" id=\"understood\" hidden></div>\
          {rows}{changes}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
@@ -1101,6 +1167,12 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .say { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; padding:6px 12px; margin-bottom:6px; }
 .say label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
 .say input { flex:1; background:transparent; border:0; color:var(--ink); font:inherit; font-size:14px; outline:none; padding:6px 0; }
+.say .read { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
+.understood { background:var(--panel); border:1px solid var(--line-2); border-left:3px solid var(--blue); border-radius:10px; padding:12px 16px; margin:8px 0 12px; font-size:14px; }
+.understood .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px; }
+.understood ul { margin:0 0 8px; padding-left:18px; } .understood .repeat { color:var(--amber); font-size:13px; margin:4px 0; } .understood .unsure { color:var(--amber); font-size:13px; margin:4px 0; }
+.understood .btns { display:flex; gap:8px; margin-top:8px; } .understood .btns button { border-radius:8px; padding:7px 14px; font:inherit; font-size:13px; cursor:pointer; border:1px solid var(--line-2); background:var(--panel-2); color:var(--ink); }
+.understood .btns .go { background:var(--blue); color:#06101c; border-color:var(--blue); font-weight:600; } .understood .btns .go:disabled { opacity:.4; cursor:default; }
 .row { padding:16px 0; border-top:1px solid var(--line); } .row h3 { margin:0 0 4px; font-size:16px; font-weight:600; }
 .seg { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .pick { display:flex; gap:8px; margin-top:10px; } .pick .adjust { flex:1; background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:8px 11px; font:inherit; font-size:13.5px; }
@@ -1142,6 +1214,7 @@ aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min
 .stages .who { font-family:var(--mono); font-weight:400; color:var(--faint); margin-left:10px; font-size:11px; }
 .stages .about { margin:1px 0 0; font-size:13px; line-height:1.45; color:var(--dim); max-width:64ch; }
 details.way { margin-top:18px; border-top:1px solid var(--line); padding-top:10px; } details.way summary { cursor:pointer; color:var(--dim); font-size:13px; }
+dl.aspects { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:6px 0 10px; font-size:13.5px; } dl.aspects dt { color:var(--dim); font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; padding-top:2px; } dl.aspects dd { margin:0; }
 details.earlier { margin-top:14px; border-top:1px solid var(--line); padding-top:10px; } details.earlier > summary { cursor:pointer; color:var(--dim); font-size:13px; } details.earlier .row { opacity:.85; } details.earlier .row:hover { opacity:1; }
 .changes { margin-top:22px; } .changes .qh { margin-bottom:8px; padding-left:0; }
 pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius:6px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--dim); white-space:pre; }
@@ -1219,6 +1292,37 @@ function none() {
   return JSON.stringify({ ...base, verdicts: v, notes: {}, context: [why, ctxOf()].filter(t => t.trim()).join(" ") });
 }
 const esc = t => t.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+// the person's words, read into the answer they mean; Jaynes says what it does, and the person sends it or not
+let readBody = null, pressedBody = null;
+async function readWords(text, pressed, asPressed) {
+  const box = document.getElementById("understood"); if (!box || !base) return;
+  box.hidden = false; box.innerHTML = '<div class="label">Reading your words…</div>';
+  box.scrollIntoView({ block: "nearest" });
+  pressedBody = asPressed || null;
+  const r = await (await fetch("/api/understand", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...base, text, pressed }) })).json();
+  readBody = r.body || null;
+  const fallback = pressedBody ? '<button id="sendpressed">Send what I pressed</button>' : "";
+  if (!readBody) { box.innerHTML = `<div class="refused">${esc(r.refused || "")}</div><div class="btns">${fallback}<button id="byhand">Answer with the buttons</button></div>`; return; }
+  box.innerHTML = '<div class="label">What Jaynes read · this is what it does when you send</div>'
+    + `<ul>${(r.sentences || []).map(s => `<li>${esc(s)}</li>`).join("")}</ul>`
+    + ((r.repeats || []).length ? `<div class="repeat">You asked this in an earlier round: ${r.repeats.map(esc).join("; ")}</div>` : "")
+    + (r.unsure ? `<div class="unsure">Not sure: ${esc(r.unsure)}</div>` : "")
+    + (r.ok ? "" : `<div class="refused">${esc(r.refused || "")}</div>`)
+    + `<div class="btns"><button class="go" id="sendread" ${r.ok ? "" : "disabled"}>Send this</button>${fallback}<button id="byhand">Answer with the buttons</button></div>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b || !base) return;
+  if (b.id === "read") { const t = ctxOf().trim(); if (t) readWords(t, null); return; }
+  if (b.id === "byhand") { document.getElementById("understood").hidden = true; return; }
+  if (b.id === "sendread" || b.id === "sendpressed") {
+    const body = b.id === "sendread" ? JSON.stringify({ ...base, ...readBody }) : pressedBody;
+    b.disabled = true;
+    const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
+    if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/", 900); }
+    else { b.disabled = false; document.getElementById("understood").insertAdjacentHTML("beforeend", `<div class="refused">${esc(r.refused || "")}</div>`); }
+  }
+});
+document.addEventListener("keydown", e => { if (e.target.id === "ctx" && e.key === "Enter" && e.target.value.trim()) { e.preventDefault(); readWords(e.target.value.trim(), null); } });
 async function said(id, body, ulId, btn) {
   const r = await (await fetch("/api/effects", { method: "POST", headers: { "Content-Type": "application/json" }, body: body || choice(id) })).json();
   const ul = ulId ? document.getElementById(ulId) : document.querySelector(`.fx-row[data-i="${CSS.escape(id)}"]`);
@@ -1250,6 +1354,10 @@ if (base && base.choose) {
     const f = e.target.closest("button.fin");
     if (f) { const id = f.dataset.fin; if (finals.has(id)) finals.delete(id); else finals.add(id); f.classList.toggle("on", finals.has(id)); sayFinals(); return; }
     const b = e.target.closest("button.choose"); if (!b || b.disabled) return;
+    if (b.id === "none") {
+      const words = [(document.getElementById("why") || {}).value || "", ctxOf()].filter(t => t.trim()).join(" ");
+      readWords(words, "None of these", none()); return;
+    }
     const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : choice(b.dataset.choose);
     document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
     const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();

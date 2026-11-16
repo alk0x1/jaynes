@@ -937,8 +937,8 @@ impl<'a> Driver<'a> {
                 kept.push(name);
             }
             let item = x.item_with(&kept);
-            if !x.detail.is_empty() || !kept.is_empty() {
-                self.store.put_display(&item.digest, &json!({"detail": x.detail, "pictures": kept, "pages": pages}))?;
+            if !x.detail.is_empty() || !kept.is_empty() || !x.aspects.is_empty() {
+                self.store.put_display(&item.digest, &json!({"detail": x.detail, "pictures": kept, "pages": pages, "aspects": x.aspects}))?;
             }
             out.push(item);
         }

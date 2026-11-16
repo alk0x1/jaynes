@@ -164,6 +164,18 @@ pub struct ShowFile {
     /// of the project. Jaynes photographs a page itself, offline, and shows the photograph.
     #[serde(default)]
     pub picture: Option<String>,
+    /// The parts of each item the person judges apart, each a label and a text written like the label, such as
+    /// `{ label = "Palette", text = "{{palette}}" }`. Shown under the item, in order; an empty text is left out.
+    #[serde(default)]
+    pub aspects: Vec<AspectFile>,
+}
+
+/// One part of an item, as the role writes it.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AspectFile {
+    pub label: String,
+    pub text: String,
 }
 
 // --- the menu ------------------------------------------------------------------------------------------------
@@ -1097,12 +1109,18 @@ impl TomlRole {
 
 /// What the person is shown of an output.
 pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownItem> {
-    let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new() };
+    let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new() };
     let Some(show) = show else { return vec![whole()] };
     let filled = |template: &Option<String>, from: &Value| template.as_deref().map(|t| label(t, from).trim().to_string()).unwrap_or_default();
     let dressed = |item: ShownItem, from: &Value| {
         let picture = filled(&show.picture, from);
-        ShownItem { detail: filled(&show.detail, from), pictures: if picture.is_empty() { Vec::new() } else { vec![picture] }, ..item }
+        let aspects = show
+            .aspects
+            .iter()
+            .map(|a| crate::protocol::Aspect { label: a.label.clone(), text: label(&a.text, from).trim().to_string() })
+            .filter(|a| !a.text.is_empty())
+            .collect();
+        ShownItem { detail: filled(&show.detail, from), pictures: if picture.is_empty() { Vec::new() } else { vec![picture] }, aspects, ..item }
     };
     match &show.each {
         None => {
@@ -1116,7 +1134,7 @@ pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownIt
                 .enumerate()
                 .map(|(n, e)| {
                     let id = Some(filled(&show.id, e)).filter(|i| !i.is_empty()).unwrap_or_else(|| format!("{field}-{}", n + 1));
-                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new() }, e)
+                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new() }, e)
                 })
                 .collect(),
             _ => vec![whole()],
@@ -1301,10 +1319,10 @@ files = { type = "array", items = "string" }
     #[test]
     fn items_follow_show() {
         let out = json!({"summary": "s", "examples": [{"case": "a", "now": "b"}, {"case": "c", "now": "d"}]});
-        let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into(), id: None, detail: None, picture: None };
+        let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() };
         let shown = items("reproduce", Some(&each), &out);
         assert_eq!(shown.iter().map(|i| (i.id.as_str(), i.label.as_str())).collect::<Vec<_>>(), [("examples-1", "a: now b"), ("examples-2", "c: now d")]);
-        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None }), &out);
+        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() }), &out);
         assert_eq!(whole[0].label, "s");
         assert_eq!(items("fix", None, &out)[0].label, "what fix made");
     }
@@ -1312,7 +1330,7 @@ files = { type = "array", items = "string" }
     #[test]
     fn narrowing_keeps_only_the_chosen_elements_as_they_were() {
         let out = json!({"note": "n", "directions": [{"name": "Ink"}, {"name": "Sun"}, {"name": "Moss"}]});
-        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None };
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects: Vec::new() };
         let kept = narrow("d", Some(&show), &out, &["Sun".to_string()]).expect("kept");
         assert_eq!(kept, json!({"note": "n", "directions": [{"name": "Sun"}]}));
         let whole = ShowFile { each: None, ..show };
@@ -1336,10 +1354,24 @@ files = { type = "array", items = "string" }
     #[test]
     fn items_take_their_id_sentence_and_picture_from_the_element() {
         let out = json!({"directions": [{"name": "Ink", "why": "dark on paper", "page": "design/ink.html"}, {"name": "Sun", "why": "", "page": ""}]});
-        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: Some("{{why}}".into()), picture: Some("{{page}}".into()) };
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: Some("{{why}}".into()), picture: Some("{{page}}".into()), aspects: Vec::new() };
         let shown = items("directions", Some(&show), &out);
         assert_eq!((shown[0].id.as_str(), shown[0].detail.as_str(), shown[0].pictures.clone()), ("Ink", "dark on paper", vec!["design/ink.html".to_string()]));
         assert_eq!((shown[1].id.as_str(), shown[1].pictures.len()), ("Sun", 0), "an empty path is no picture");
+    }
+
+    #[test]
+    fn items_show_the_parts_the_person_judges_apart() {
+        let out = json!({"directions": [{"name": "Lastro", "palette": "deep green, sand", "money": "green", "fonts": ""}]});
+        let aspects = vec![
+            AspectFile { label: "Palette".into(), text: "{{palette}}".into() },
+            AspectFile { label: "Money".into(), text: "money in {{money}}".into() },
+            AspectFile { label: "Fonts".into(), text: "{{fonts}}".into() },
+        ];
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects };
+        let shown = items("directions", Some(&show), &out);
+        let got: Vec<(&str, &str)> = shown[0].aspects.iter().map(|a| (a.label.as_str(), a.text.as_str())).collect();
+        assert_eq!(got, [("Palette", "deep green, sand"), ("Money", "money in green")], "an empty one is left out");
     }
 
     #[test]

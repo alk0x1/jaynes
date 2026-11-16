@@ -40,6 +40,22 @@
       ],
       "type": "object"
     },
+    "Aspect": {
+      "description": "One part of an item, shown apart: its label and what it is, in plain words.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "text"
+      ],
+      "type": "object"
+    },
     "By": {
       "description": "Who gave an answer, and under which authority.",
       "oneOf": [
@@ -918,6 +934,13 @@
     "ShownItem": {
       "description": "An item as the role lists it. The engine computes its fingerprint from `content`.",
       "properties": {
+        "aspects": {
+          "description": "The parts of the item the person judges apart, each with its label, such as an option's palette and fonts.\nShown, and read with the person's words; the engine judges the item as a whole.",
+          "items": {
+            "$ref": "#/$defs/Aspect"
+          },
+          "type": "array"
+        },
         "content": {
           "default": null
         },

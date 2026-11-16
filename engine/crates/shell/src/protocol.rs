@@ -147,6 +147,17 @@ pub struct ShownItem {
     /// each, by its fingerprint, so what the person sees never changes under them.
     #[serde(default)]
     pub pictures: Vec<String>,
+    /// The parts of the item the person judges apart, each with its label, such as an option's palette and fonts.
+    /// Shown, and read with the person's words; the engine judges the item as a whole.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aspects: Vec<Aspect>,
+}
+
+/// One part of an item, shown apart: its label and what it is, in plain words.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Aspect {
+    pub label: String,
+    pub text: String,
 }
 
 impl ShownItem {

@@ -1177,6 +1177,11 @@ pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str
 
 fn note(item: &Item, v: &Verdict, choose: Option<Choice>) -> String {
     let choose_one = choose.is_some();
+    // the person's words end the sentence they are put in, so their own last period is not doubled
+    let v = &match v {
+        Verdict::Change { text } => Verdict::Change { text: text.trim().trim_end_matches('.').to_string() },
+        other => other.clone(),
+    };
     match v {
         Verdict::Change { text } if choose == Some(Choice::Finalists) => format!(
             "“{}” is a finalist: develop it further as the person writes, keeping its name: {text}",
