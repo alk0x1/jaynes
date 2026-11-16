@@ -20,6 +20,7 @@ create table if not exists objects (digest text primary key, body text not null)
 create table if not exists runs (run text primary key, setup text not null);
 create table if not exists inbox (id integer primary key, run text not null, input text not null);
 create table if not exists displays (item text primary key, body text not null);
+create table if not exists proofs (id integer primary key, run text not null, question text not null, key text not null, signature text not null, ts integer not null);
 ";
 
 /// Seconds since 1970, as the record keeps time.
@@ -235,6 +236,14 @@ impl Store {
     }
 
     /// Leave an input for the process that drives the run.
+    /// Keeps the signature an answer from the person's own key came with.
+    pub fn put_proof(&self, run: &str, question: &str, key: &str, signature: &str) -> Result<(), String> {
+        self.db
+            .execute("insert into proofs (run, question, key, signature, ts) values (?1, ?2, ?3, ?4, ?5)", rusqlite::params![run, question, key, signature, now() as i64])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn inbox_put(&self, run: &str, input: &jaynes_core::Input) -> Result<(), String> {
         let body = serde_json::to_string(input).map_err(|e| e.to_string())?;
         self.db.execute("insert into inbox(run, input) values (?1, ?2)", params![run, body]).map_err(|e| e.to_string())?;

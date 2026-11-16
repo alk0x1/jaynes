@@ -12,9 +12,12 @@
 mod bench;
 mod core_bin;
 mod hc;
+mod island;
+mod key;
 mod links;
 mod look;
 mod model;
+mod presence;
 mod rail;
 mod settings;
 mod side;
@@ -56,6 +59,7 @@ struct Root {
     side: Entity<side::Side>,
     terminal: Entity<TerminalView>,
     rail: Entity<rail::Rail>,
+    island: Entity<island::Island>,
     /// Whether the steps panel shows (Command-E).
     steps: bool,
 }
@@ -74,7 +78,7 @@ impl Render for Root {
                 cx.notify();
             }))
             .child(self.side.clone())
-            .child(div().flex_1().min_w_0().h_full().child(self.terminal.clone()))
+            .child(div().relative().flex_1().min_w_0().h_full().child(self.terminal.clone()).child(self.island.clone()))
             .children(self.steps.then(|| self.rail.clone()))
     }
 }
@@ -168,8 +172,9 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         window.focus(&focus, cx);
         let runs = cx.new(model::Runs::new);
         let side = cx.new(|cx| side::Side::new(runs.clone(), cx));
-        let rail = cx.new(|cx| rail::Rail::new(runs, cx));
-        cx.new(|_| Root { side, terminal: view, rail, steps: true })
+        let rail = cx.new(|cx| rail::Rail::new(runs.clone(), cx));
+        let island = cx.new(|cx| island::Island::new(runs, the_key(), cx));
+        cx.new(|_| Root { side, terminal: view, rail, island, steps: true })
     })
     .map(|handle| {
         if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {
@@ -177,6 +182,18 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         }
     })
     .expect("cannot open the Jaynes window");
+}
+
+/// The person's own key, paired with the engine; None when either fails, and the app then answers nothing.
+fn the_key() -> Option<Arc<key::Key>> {
+    // a test's key is paired only with a test's engine, never with the person's own
+    if std::env::var_os("JAYNES_APP_TEST_KEY").is_some() && std::env::var_os("JAYNES_ENGINE_HOME").is_none() {
+        tracing::warn!("a test key pairs only with an engine named in JAYNES_ENGINE_HOME");
+        return None;
+    }
+    let key = key::Key::load().map_err(|e| tracing::warn!("no key of the person's: {e}")).ok()?;
+    key.pair(&jaynes_shell::home()).map_err(|e| tracing::warn!("the key is not paired: {e}")).ok()?;
+    Some(Arc::new(key))
 }
 
 /// With JAYNES_APP_SHOT=<file>, the window draws itself into that PNG every second, even when it is covered: how a

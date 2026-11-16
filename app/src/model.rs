@@ -4,6 +4,7 @@
 
 use gpui::*;
 use jaynes_shell::listing::{self, Listing, Mark, Row, Stage};
+use jaynes_shell::stop::{self, Stop};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -28,6 +29,8 @@ pub struct Detail {
 pub struct Snapshot {
     pub listing: Listing,
     pub details: HashMap<String, Detail>,
+    /// The stop each run that needs the person waits at.
+    pub stops: HashMap<String, Stop>,
 }
 
 pub struct Runs {
@@ -79,6 +82,11 @@ impl Runs {
     pub fn chosen(&self) -> Option<&Detail> {
         self.selected.as_ref().and_then(|id| self.snap.details.get(id))
     }
+
+    /// The stop the picked run waits at.
+    pub fn stop(&self) -> Option<&Stop> {
+        self.selected.as_ref().and_then(|id| self.snap.stops.get(id))
+    }
 }
 
 /// The run shown first: the first that waits for the person, else the newest.
@@ -97,7 +105,11 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
     let rows: HashMap<&str, &Row> =
         listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.as_str(), r)).collect();
     let mut details = HashMap::new();
+    let mut stops = HashMap::new();
     for e in &entries {
+        if let Some(s) = stop::waiting(home, &e.run) {
+            stops.insert(e.run.id.clone(), s);
+        }
         let Some(row) = rows.get(e.run.id.as_str()) else { continue };
         let going = !e.run.finished() && !e.run.halted;
         let until = if going { now_seconds() } else { e.at };
@@ -117,7 +129,7 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
             },
         );
     }
-    Ok(Snapshot { listing, details })
+    Ok(Snapshot { listing, details, stops })
 }
 
 /// Sends the runs at once, then whenever they change; looks once a second.

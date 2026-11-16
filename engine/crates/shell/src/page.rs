@@ -9,8 +9,9 @@
 
 use crate::drive::{self, say};
 use crate::listing::{short, title, where_in};
+use crate::stop::label;
 use crate::store::Store;
-use jaynes_core::question::{Answer, By, QuestionKind, Verdict, VerdictKind};
+use jaynes_core::question::{Answer, By, QuestionKind, Verdict};
 use jaynes_core::run::{Phase, QuestionState, Run};
 use jaynes_core::{decide, Input};
 use serde_json::{json, Value};
@@ -689,18 +690,6 @@ fn run_html(r: &Run, changes: &str) -> String {
         corr = if r.counts.corrections > 0 { format!(", {} corrected after delivery", r.counts.corrections) } else { String::new() },
         data = data.replace('<', "\\u003c"),
     )
-}
-
-fn label(v: VerdictKind, permission: bool) -> &'static str {
-    match (v, permission) {
-        (VerdictKind::Keep, true) => "Allow",
-        (VerdictKind::Drop, true) => "Refuse",
-        (VerdictKind::Keep, _) => "Keep",
-        (VerdictKind::Change, _) => "Change",
-        (VerdictKind::Redo, _) => "Redo",
-        (VerdictKind::Drop, _) => "Drop",
-        (VerdictKind::Skip, _) => "I don't know",
-    }
 }
 
 /// The name of a page Jaynes kept beside its photograph: its fingerprint, and nothing that could reach another file.

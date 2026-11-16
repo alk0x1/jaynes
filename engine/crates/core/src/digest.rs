@@ -22,8 +22,7 @@ impl Digest {
     /// The digest of a value's JSON with the keys of every object sorted, so equal values give equal digests
     /// whatever order their fields were built in.
     pub fn of_json<T: Serialize + ?Sized>(value: &T) -> Self {
-        let canonical = serde_json::to_value(value).map(|v| v.to_string()).unwrap_or_default();
-        Digest::of_bytes(canonical.as_bytes())
+        Digest::of_bytes(canonical(value).as_bytes())
     }
 
     pub fn short(&self) -> &str {
@@ -40,6 +39,26 @@ impl fmt::Display for Digest {
 impl From<&str> for Digest {
     fn from(s: &str) -> Self {
         Digest(s.to_string())
+    }
+}
+
+/// A value's JSON with every object's keys sorted: the same value gives the same text in every program.
+pub fn canonical<T: Serialize + ?Sized>(value: &T) -> String {
+    serde_json::to_value(value).map(|v| sorted(v).to_string()).unwrap_or_default()
+}
+
+/// The value with every object's keys in sorted order. serde_json keeps them sorted unless a program that links it
+/// asks it to keep the order they came in (its `preserve_order`), as some libraries do: the digest must not depend
+/// on which program computed it.
+fn sorted(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(pairs.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
     }
 }
 

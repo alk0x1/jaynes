@@ -29,6 +29,7 @@ gpui = { package = "gpui-pre", version = "=0.3.8", features = ["render-to-image"
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
 jaynes-shell = { path = "../engine/crates/shell" }
+jaynes-core = { path = "../engine/crates/core" }
 anyhow = "1"
 async-channel = "2"
 base64 = "0.22"
@@ -42,13 +43,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fancy-regex = "0.19"
 sha2 = "0.10"
+ed25519-dalek = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_macos = { package = "gpui-pre-macos", version = "=0.3.8", features = ["render-to-image"] }
 libc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSDockTile", "NSResponder"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString", "NSError"] }
+objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["LAContext", "LAPublicDefines", "block2"] }
+block2 = "0.6"
+security-framework = "3"
 
 [patch.crates-io]
 # herdr-app's copies of Zed's GPUI snapshot: terminal cell metrics, and an idle window that stops waking every vsync
