@@ -20,6 +20,9 @@ mod lightbox;
 mod links;
 mod look;
 mod model;
+mod menubar;
+mod news;
+mod notify;
 mod presence;
 mod rail;
 mod settings;
@@ -52,10 +55,10 @@ fn existing(core: &hc::Core) -> Option<String> {
 
 /// The folder Claude Code starts in: the one named on the command line, else the one the app was started from.
 fn folder() -> String {
-    std::env::args()
-        .nth(1)
-        .or_else(|| std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()))
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    // opened from Finder or the Dock, the app starts in "/": the person's home is where they work
+    let here = std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned()).filter(|d| d != "/");
+    std::env::args().nth(1).filter(|a| !a.starts_with("-psn")).or(here).unwrap_or(home)
 }
 
 struct Root {
@@ -117,6 +120,7 @@ fn main() {
     if let Some(bin) = core_bin::find(None) {
         core_bin::use_core(bin);
     }
+    tracing::info!("bundle: {}", if std::env::current_exe().is_ok_and(|e| e.to_string_lossy().contains(".app/Contents/MacOS/")) { "Jaynes.app" } else { "none, a bare build" });
     let core = match hc::Core::connect() {
         Ok(core) => core,
         Err(e) => {

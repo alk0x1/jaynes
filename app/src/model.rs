@@ -38,7 +38,10 @@ pub struct Runs {
     pub selected: Option<String>,
     /// Why the record could not be read, shown instead of the list.
     pub trouble: Option<String>,
+    /// Whether the record was read once: what changes after that is news.
+    read_once: bool,
     _watch: Task<()>,
+    _clicks: Task<()>,
 }
 
 impl Runs {
@@ -54,6 +57,12 @@ impl Runs {
                     .update(cx, |this, cx| {
                         match read {
                             Ok(snap) => {
+                                // what changed since the last reading is news; the first reading is what stood
+                                if this.read_once {
+                                    crate::notify::post(&crate::news::between(&this.snap, &snap), crate::notify::looking());
+                                }
+                                this.read_once = true;
+                                crate::menubar::show(snap.listing.needs.len());
                                 this.snap = snap;
                                 this.trouble = None;
                                 let known = this.selected.as_ref().is_some_and(|id| this.snap.details.contains_key(id));
@@ -71,7 +80,29 @@ impl Runs {
                 }
             }
         });
-        Runs { snap: Snapshot::default(), selected: None, trouble: None, _watch: watch }
+        // a click on the menu bar brings the window forward on the first run that waits
+        let clicks = cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            if !crate::menubar::clicked() {
+                continue;
+            }
+            let gone = this
+                .update(cx, |this, cx| {
+                    if let Some(r) = this.snap.listing.needs.first() {
+                        this.selected = Some(r.id.clone());
+                    }
+                    // a test that draws the window into a picture leaves the person's screen as it is
+                    if std::env::var_os("JAYNES_APP_SHOT").is_none() {
+                        cx.activate(true);
+                    }
+                    cx.notify();
+                })
+                .is_err();
+            if gone {
+                break;
+            }
+        });
+        Runs { snap: Snapshot::default(), selected: None, trouble: None, read_once: false, _watch: watch, _clicks: clicks }
     }
 
     pub fn select(&mut self, id: String, cx: &mut Context<Self>) {

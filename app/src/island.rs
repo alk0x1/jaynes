@@ -415,6 +415,11 @@ impl Island {
             }
             "read" => self.read_words(cx),
             "close-box" => self.lightbox.update(cx, |l, cx| l.close(cx)),
+            "menubar" => crate::menubar::click(),
+            "select" => {
+                let id = rest.to_string();
+                self.runs.update(cx, |r, cx| r.select(id, cx));
+            }
             "diff" => {
                 if let Some(stop) = self.stop(cx) {
                     self.diff(&stop, window, cx);

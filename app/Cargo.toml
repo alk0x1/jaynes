@@ -49,8 +49,9 @@ ed25519-dalek = "2"
 gpui_macos = { package = "gpui-pre-macos", version = "=0.3.8", features = ["render-to-image"] }
 libc = "0.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSDockTile", "NSResponder"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString", "NSError"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSDockTile", "NSResponder", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSRunningApplication"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "block2"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString", "NSError", "NSBundle"] }
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["LAContext", "LAPublicDefines", "block2"] }
 block2 = "0.6"
 security-framework = "3"
