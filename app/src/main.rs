@@ -1,7 +1,8 @@
 //! The Jaynes app: a native window where the person works with Claude Code.
 //!
-//! The window: the runs beside (from the engine's record), and one terminal running `claude`. The terminal lives in herdr-core (`hc`), not in
-//! the app, so closing the window leaves the conversation running, and opening the app again shows it where it was.
+//! The window: the runs at the left (from the engine's record), one terminal running `claude` in the middle, and the
+//! picked run's steps at the right. The terminal lives in herdr-core (`hc`), not in the app, so closing the window
+//! leaves the conversation running, and opening the app again shows it where it was.
 //! The app finds its terminal by a label it puts on it (`jaynes.app=main`); a terminal whose program ended is replaced.
 
 // The terminal copied from herdr-app keeps abilities this first window does not call yet (search, scrolling commands,
@@ -12,6 +13,9 @@ mod bench;
 mod core_bin;
 mod hc;
 mod links;
+mod look;
+mod model;
+mod rail;
 mod settings;
 mod side;
 mod spawn;
@@ -25,7 +29,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use terminal::TerminalView;
 
-actions!(jaynes, [Copy, Paste, Quit]);
+actions!(jaynes, [Copy, Paste, Quit, ToggleSteps]);
 
 /// The label the app puts on its terminal, so it finds it again after the window closes.
 const LABEL: (&str, &str) = ("jaynes.app", "main");
@@ -51,10 +55,13 @@ fn folder() -> String {
 struct Root {
     side: Entity<side::Side>,
     terminal: Entity<TerminalView>,
+    rail: Entity<rail::Rail>,
+    /// Whether the steps panel shows (Command-E).
+    steps: bool,
 }
 
 impl Render for Root {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         terminal::next_frame();
         div()
             .size_full()
@@ -62,8 +69,13 @@ impl Render for Root {
             .key_context("Jaynes")
             .on_action(copy_into(&self.terminal))
             .on_action(paste_into(&self.terminal))
+            .on_action(cx.listener(|this, _: &ToggleSteps, _, cx| {
+                this.steps = !this.steps;
+                cx.notify();
+            }))
             .child(self.side.clone())
             .child(div().flex_1().min_w_0().h_full().child(self.terminal.clone()))
+            .children(self.steps.then(|| self.rail.clone()))
     }
 }
 
@@ -114,6 +126,7 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("cmd-c", Copy, Some("Jaynes")),
             KeyBinding::new("cmd-v", Paste, Some("Jaynes")),
+            KeyBinding::new("cmd-e", ToggleSteps, Some("Jaynes")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -133,7 +146,7 @@ fn main() {
 }
 
 fn open(core: Arc<hc::Core>, cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(1100. + side::WIDTH), px(720.)), cx);
+    let bounds = Bounds::centered(None, size(px(1440.), px(880.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), ..Default::default() }),
@@ -153,8 +166,10 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let view = cx.new(|cx| TerminalView::attach(core.clone(), address, (120, 40), cx));
         let focus = view.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
-        let side = cx.new(side::Side::new);
-        cx.new(|_| Root { side, terminal: view })
+        let runs = cx.new(model::Runs::new);
+        let side = cx.new(|cx| side::Side::new(runs.clone(), cx));
+        let rail = cx.new(|cx| rail::Rail::new(runs, cx));
+        cx.new(|_| Root { side, terminal: view, rail, steps: true })
     })
     .map(|handle| {
         if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {

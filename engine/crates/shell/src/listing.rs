@@ -41,11 +41,13 @@ pub struct Listing {
 }
 
 /// A run with what the list needs from outside its events.
+#[derive(Clone)]
 pub struct Entry {
     pub run: Run,
     /// The project's folder, empty when the run has none.
     pub project: String,
-    /// When the run last changed, in seconds.
+    /// When the run started and last changed, in seconds.
+    pub started: u64,
     pub at: u64,
     /// Whether what it delivered was merged into the person's branch.
     pub merged: bool,
@@ -53,23 +55,29 @@ pub struct Entry {
 
 /// Every run of the record, as `jaynes runs` lists them, in the list.
 pub fn read(home: &Path) -> Result<Listing, String> {
+    Ok(arrange(&entries(home)?))
+}
+
+/// Every run of the record, as `jaynes runs` lists them, with what the list needs from outside its events.
+pub fn entries(home: &Path) -> Result<Vec<Entry>, String> {
     let store = Store::open(&home.join("record.sqlite3"))?;
     let times = store.times()?;
     let mut entries = Vec::new();
     for id in store.runs()? {
         let Some(run) = store.state(&id)? else { continue };
         let project = store.setup(&id).ok().and_then(|s| s["project"].as_str().map(str::to_owned)).unwrap_or_default();
-        let at = times.get(&id).map(|t| t.1).unwrap_or(0);
+        let (started, at) = times.get(&id).copied().unwrap_or((0, 0));
         let merged = !crate::drive::merges(&home.join("runs").join(&id)).is_empty();
-        entries.push(Entry { run, project, at, merged });
+        entries.push(Entry { run, project, started, at, merged });
     }
-    Ok(arrange(entries))
+    Ok(entries)
 }
 
-pub fn arrange(mut entries: Vec<Entry>) -> Listing {
+pub fn arrange(entries: &[Entry]) -> Listing {
+    let mut entries: Vec<&Entry> = entries.iter().collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.at));
     let mut listing = Listing::default();
-    for e in &entries {
+    for e in entries {
         let r = &e.run;
         let request = short(&r.request);
         let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open()) };
@@ -128,6 +136,127 @@ pub fn title(q: &QuestionState) -> String {
     }
 }
 
+/// One step of a run, as the page's list and the app's panel show it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stage {
+    pub index: usize,
+    pub name: String,
+    pub about: String,
+    /// done ones are "checked", "accepted", "sampled" or "jaynes"; then "running", "waiting", "blocked", "todo".
+    pub class: &'static str,
+    pub detail: String,
+}
+
+/// Every step of the run in order, with how it stands.
+pub fn stages(r: &Run) -> Vec<Stage> {
+    use jaynes_core::manifest::Executor;
+    use jaynes_core::question::By;
+    use jaynes_core::run::Status;
+    let path = r.path();
+    let blocked = match &r.phase {
+        Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
+        _ => None,
+    };
+    r.manifest
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let s = &r.steps[i];
+            let tries = format!("{} attempt{}", s.attempt, if s.attempt == 1 { "" } else { "s" });
+            let round = if s.round > 0 { format!(", round {}", s.round + 1) } else { String::new() };
+            let answer = s.question.as_ref().and_then(|q| r.questions.get(q)).and_then(|q| q.answer.clone());
+            let (class, detail) = if !path.contains(&i) {
+                ("todo", "left out at this risk".to_string())
+            } else if blocked == Some(d.name.as_str()) {
+                ("blocked", format!("blocked, {tries}"))
+            } else {
+                match &s.status {
+                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running, attempt {attempt}{round}")),
+                    Status::Probing if !r.finished() => ("running", "testing what it reaches".to_string()),
+                    Status::AwaitingInput { .. } => ("waiting", format!("waiting for you{round}")),
+                    Status::Done if r.fresh(i) && r.open_question(i).is_some() => ("waiting", format!("waiting for you{round}")),
+                    Status::Done if r.fresh(i) && s.skipped == Some(s.round) => ("sampled", "not asked, sampled".to_string()),
+                    Status::Done if r.fresh(i) => match (&answer, d.executor) {
+                        (Some(a), _) if matches!(a.by, By::Agent { .. }) => ("checked", "an agent let it go on".to_string()),
+                        (Some(_), Executor::Person) => ("accepted", "you answered".to_string()),
+                        (Some(_), _) => ("accepted", format!("you kept it, {tries}")),
+                        (None, Executor::Role) => ("jaynes", "by jaynes".to_string()),
+                        (None, _) => ("checked", format!("checked, {tries}{round}")),
+                    },
+                    _ if matches!(&r.phase, Phase::Waiting { step: Some(w), .. } if *w == d.name) => ("waiting", "waiting for you".to_string()),
+                    _ if s.done.is_some() => ("todo", format!("to run again{round}")),
+                    _ => ("todo", String::new()),
+                }
+            };
+            Stage { index: i, name: d.name.clone(), about: d.about.clone(), class, detail }
+        })
+        .collect()
+}
+
+/// What the agent did last in a turn's transcript (Claude Code's stream): the tool it called with what it called it
+/// on, else what it said, else that it thinks. Paths inside `project` are shown from there.
+pub fn last_action(transcript: &str, project: &Path) -> Option<String> {
+    let inside = format!("{}/", project.display());
+    let shown = |v: &serde_json::Value| -> String {
+        let text = v.as_str().unwrap_or_default();
+        let text = text.strip_prefix(inside.as_str()).unwrap_or(text);
+        text.lines().next().unwrap_or_default().trim().chars().take(160).collect()
+    };
+    for line in transcript.lines().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match (v["type"].as_str(), v["subtype"].as_str()) {
+            (Some("result"), _) => return Some("finished its turn".into()),
+            (Some("system"), Some("thinking_tokens")) => return Some("thinking".into()),
+            (Some("assistant"), _) => {
+                let blocks = v["message"]["content"].as_array().cloned().unwrap_or_default();
+                for b in blocks.iter().rev() {
+                    match b["type"].as_str() {
+                        Some("tool_use") => {
+                            let name = b["name"].as_str().unwrap_or("a tool");
+                            let input = &b["input"];
+                            let on = ["file_path", "command", "pattern", "url", "query", "path", "description"]
+                                .iter()
+                                .map(|k| shown(&input[*k]))
+                                .find(|s| !s.is_empty())
+                                .unwrap_or_default();
+                            return Some(if on.is_empty() { name.to_string() } else { format!("{name} {on}") });
+                        }
+                        Some("text") if !shown(&b["text"]).is_empty() => return Some(shown(&b["text"])),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What the agent of a run is doing now: the last action in its newest transcript.
+pub fn now(home: &Path, run: &str) -> Option<String> {
+    let dir = home.join("runs").join(run);
+    let newest = std::fs::read_dir(dir.join("steps"))
+        .ok()?
+        .flatten()
+        .flat_map(|step| std::fs::read_dir(step.path()).into_iter().flatten().flatten())
+        .filter(|f| f.file_name().to_string_lossy().starts_with("turn-"))
+        .max_by_key(|f| f.metadata().and_then(|m| m.modified()).ok())?;
+    last_action(&tail(&newest.path(), 256 * 1024)?, &dir.join("project"))
+}
+
+/// The last `max` bytes of a file, from the first whole line in them.
+fn tail(path: &Path, max: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(max))).ok()?;
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Some(if len > max { text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default() } else { text })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,7 +276,7 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), at, merged: false }
+        Entry { run, project: project.into(), started: 0, at, merged: false }
     }
 
     #[test]
@@ -164,7 +293,7 @@ mod tests {
         older.phase = Phase::Finished { outcome: Outcome::Delivered };
         let other = run("r4", "Add a dark theme");
 
-        let listing = arrange(vec![entry(waits, "/p/app", 30), entry(older, "/p/app", 10), entry(works, "/p/app", 20), entry(other, "/p/site", 40)]);
+        let listing = arrange(&[entry(waits, "/p/app", 30), entry(older, "/p/app", 10), entry(works, "/p/app", 20), entry(other, "/p/site", 40)]);
 
         assert_eq!(listing.needs, vec![Row { id: "r1".into(), title: "Make the onboarding friendlier".into(), line: "Which plan goes on?".into(), mark: Mark::Needs }]);
         let names: Vec<&str> = listing.projects.iter().map(|(p, _)| p.as_str()).collect();
@@ -181,11 +310,39 @@ mod tests {
         dropped.phase = Phase::Finished { outcome: Outcome::Abandoned };
         let mut merged = run("c", "z");
         merged.phase = Phase::Finished { outcome: Outcome::Delivered };
-        let listing = arrange(vec![entry(halted, "", 1), entry(dropped, "/q", 2), Entry { merged: true, ..entry(merged, "/q", 3) }]);
+        let listing = arrange(&[entry(halted, "", 1), entry(dropped, "/q", 2), Entry { merged: true, ..entry(merged, "/q", 3) }]);
         let mut ids: Vec<&str> = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).map(|r| r.id.as_str()).collect();
         ids.sort_unstable();
         assert_eq!(ids, ["a", "b", "c"]);
         let marks: Vec<(String, Mark)> = listing.projects.iter().flat_map(|(p, rows)| rows.iter().map(move |r| (p.clone(), r.mark))).collect();
         assert_eq!(marks, [("q".to_string(), Mark::Merged), ("q".to_string(), Mark::Abandoned), ("no project".to_string(), Mark::Halted)]);
+    }
+
+    #[test]
+    fn each_step_says_how_it_stands() {
+        let mut r = run("s", "x");
+        r.steps[0].status = jaynes_core::run::Status::Running { attempt: 2, fix: 0 };
+        let stages = stages(&r);
+        let seen: Vec<(&str, &str, &str)> = stages.iter().map(|s| (s.name.as_str(), s.class, s.detail.as_str())).collect();
+        assert_eq!(seen, [("plan", "running", "running, attempt 2"), ("change", "todo", "")]);
+    }
+
+    #[test]
+    fn the_last_thing_the_agent_did_is_its_last_tool_or_what_it_said() {
+        let project = Path::new("/home/x/.jaynes/engine/runs/r1/project");
+        let lines = [
+            r#"{"type":"system","subtype":"init","session_id":"s"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"I will read the brief first.\nThen draw."}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/home/x/.jaynes/engine/runs/r1/project/docs/brief.md"}}]}}"#,
+        ];
+        assert_eq!(last_action(&lines[..2].join("\n"), project).as_deref(), Some("I will read the brief first."));
+        assert_eq!(last_action(&lines.join("\n"), project).as_deref(), Some("Read docs/brief.md"));
+        let bash = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm test -- --run\nnpm run lint","description":"Run the tests"}}]}}"#;
+        assert_eq!(last_action(bash, project).as_deref(), Some("Bash npm test -- --run"));
+        let thinking = format!("{bash}\n{}", r#"{"type":"system","subtype":"thinking_tokens","tokens":12}"#);
+        assert_eq!(last_action(&thinking, project).as_deref(), Some("thinking"));
+        let ended = format!("{bash}\n{}", r#"{"type":"result","subtype":"success"}"#);
+        assert_eq!(last_action(&ended, project).as_deref(), Some("finished its turn"));
+        assert_eq!(last_action("not json\n--- stderr ---\n", project), None);
     }
 }

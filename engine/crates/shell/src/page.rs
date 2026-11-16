@@ -559,47 +559,11 @@ fn who(d: &jaynes_core::manifest::StepDecl, r: &Run) -> String {
 /// The run's steps top to bottom: who does each, what the role says it does, and where it is, as the earlier
 /// page showed them.
 fn stage_list(r: &Run) -> String {
-    use jaynes_core::manifest::Executor;
-    use jaynes_core::question::By;
-    use jaynes_core::run::Status;
-    let path = r.path();
-    let blocked = match &r.phase {
-        Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
-        _ => None,
-    };
-    let rows: String = r
-        .manifest
-        .steps
-        .iter()
-        .enumerate()
-        .map(|(i, d)| {
-            let s = &r.steps[i];
-            let tries = format!("{} attempt{}", s.attempt, if s.attempt == 1 { "" } else { "s" });
-            let round = if s.round > 0 { format!(", round {}", s.round + 1) } else { String::new() };
-            let answer = s.question.as_ref().and_then(|q| r.questions.get(q)).and_then(|q| q.answer.clone());
-            let (class, detail) = if !path.contains(&i) {
-                ("todo", "left out at this risk".to_string())
-            } else if blocked == Some(d.name.as_str()) {
-                ("blocked", format!("blocked, {tries}"))
-            } else {
-                match &s.status {
-                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running, attempt {attempt}{round}")),
-                    Status::Probing if !r.finished() => ("running", "testing what it reaches".to_string()),
-                    Status::AwaitingInput { .. } => ("waiting", format!("waiting for you{round}")),
-                    Status::Done if r.fresh(i) && r.open_question(i).is_some() => ("waiting", format!("waiting for you{round}")),
-                    Status::Done if r.fresh(i) && s.skipped == Some(s.round) => ("sampled", "not asked, sampled".to_string()),
-                    Status::Done if r.fresh(i) => match (&answer, d.executor) {
-                        (Some(a), _) if matches!(a.by, By::Agent { .. }) => ("checked", "an agent let it go on".to_string()),
-                        (Some(_), Executor::Person) => ("accepted", "you answered".to_string()),
-                        (Some(_), _) => ("accepted", format!("you kept it, {tries}")),
-                        (None, Executor::Role) => ("jaynes", "by jaynes".to_string()),
-                        (None, _) => ("checked", format!("checked, {tries}{round}")),
-                    },
-                    _ if matches!(&r.phase, Phase::Waiting { step: Some(w), .. } if *w == d.name) => ("waiting", "waiting for you".to_string()),
-                    _ if s.done.is_some() => ("todo", format!("to run again{round}")),
-                    _ => ("todo", String::new()),
-                }
-            };
+    let rows: String = crate::listing::stages(r)
+        .into_iter()
+        .map(|stage| {
+            let (i, class, detail) = (stage.index, stage.class, stage.detail);
+            let (d, s) = (&r.manifest.steps[i], &r.steps[i]);
             let mark = who(d, r);
             let mark = if mark.is_empty() { String::new() } else { format!("<span class=\"who\">{}</span>", esc(&mark)) };
             let about = if d.about.is_empty() { String::new() } else { format!("<p class=\"about\">{}</p>", esc(&d.about)) };

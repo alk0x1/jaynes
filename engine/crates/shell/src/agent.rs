@@ -101,7 +101,18 @@ const STALLS: u32 = 2;
 /// What the agent is told when its silent connection is taken up again.
 const RESUME: &str = "Your connection to the model dropped in the middle of the work. Continue the task where you left off; nothing you did is lost.";
 
-fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession) -> Result<Watched, String> {
+/// A turn's transcript, emptied as the turn starts: the program's output is added to it as it comes, and it is
+/// written whole when the turn ends.
+fn live(transcript: Option<&Path>) -> Option<&Path> {
+    if let Some(t) = transcript {
+        let _emptied = std::fs::write(t, "");
+    }
+    transcript
+}
+
+/// `live`: a file the program's output is added to line by line as it comes, so the person can watch the agent work.
+#[allow(clippy::too_many_arguments)]
+fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession, live: Option<&Path>) -> Result<Watched, String> {
     use std::os::unix::process::CommandExt;
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let started = Instant::now();
@@ -110,7 +121,7 @@ fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>
     if let Some(f) = pidfile {
         std::fs::write(f, pid.to_string()).map_err(|e| format!("Jaynes could not note the agent's process: {e}"))?;
     }
-    let result = watch(&mut child, pid, input, deadline, idle, started, paused, on_session);
+    let result = watch(&mut child, pid, input, deadline, idle, started, paused, on_session, live);
     if let Some(f) = pidfile {
         let _gone = std::fs::remove_file(f);
     }
@@ -140,7 +151,7 @@ pub fn stop_left(pidfile: &Path) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, idle: Option<Duration>, started: Instant, paused: Option<&Path>, mut on_session: OnSession) -> Result<Watched, String> {
+fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, idle: Option<Duration>, started: Instant, paused: Option<&Path>, mut on_session: OnSession, live: Option<&Path>) -> Result<Watched, String> {
     if let Some(mut stdin) = child.stdin.take() {
         let _wrote = stdin.write_all(input.as_bytes());
     }
@@ -153,6 +164,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     // when the program last said anything, and how many of its tools are at work
     let life = std::sync::Arc::new(std::sync::Mutex::new((Instant::now(), 0i64)));
     let beat = life.clone();
+    let mut live = live.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
     let out = std::thread::spawn(move || {
         use std::io::BufRead;
         let mut lines = std::io::BufReader::new(stdout);
@@ -173,6 +185,9 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
                 && let Ok(mut t) = kept.lock()
             {
                 t.push_str(&line);
+                if let Some(f) = live.as_mut() {
+                    let _shown = f.write_all(line.as_bytes());
+                }
             }
             line.clear();
         }
@@ -290,7 +305,7 @@ impl Agent for Shell {
             cmd.env("JAYNES_SESSION", s);
         }
         let applied = json!({"command": self.command});
-        let ended = match run(cmd, spec.prompt, spec.deadline, None, spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session) {
+        let ended = match run(cmd, spec.prompt, spec.deadline, None, spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session, live(spec.transcript.as_deref())) {
             Err(reason) => Ended::Fault { reason },
             Ok(Watched { code, out, err, took, timed_out, .. }) => {
                 if let Some(t) = &spec.transcript {
@@ -454,6 +469,7 @@ impl Agent for Claude {
                              "resume": spec.session});
         // A connection that went silent is taken up again in the same session, a few times, with nothing lost.
         let mut on_session = spec.on_session;
+        let transcript = live(spec.transcript.as_deref());
         let mut session: Option<String> = spec.session.map(str::to_string);
         let mut prompt = spec.prompt.to_string();
         let mut deadline = spec.deadline;
@@ -461,7 +477,7 @@ impl Agent for Claude {
         let mut watched = None;
         let mut failure = "the agent program did not start".to_string();
         for _ in 0..=STALLS {
-            let w = match run(command(session.as_deref()), &prompt, deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), on_session.take()) {
+            let w = match run(command(session.as_deref()), &prompt, deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), on_session.take(), transcript) {
                 Err(reason) => {
                     failure = reason;
                     break;
@@ -597,7 +613,7 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 30 & python3 -c 'import os,time; os.setsid(); time.sleep(30)' & echo hi");
         let started = Instant::now();
-        let w = run(cmd, "", Duration::from_secs(60), None, None, None, None).expect("ran");
+        let w = run(cmd, "", Duration::from_secs(60), None, None, None, None, None).expect("ran");
         assert_eq!((w.code, w.timed_out), (Some(0), false));
         assert!(w.out.contains("hi"), "{}", w.out);
         assert!(started.elapsed() < Duration::from_secs(15), "the turn waited {:?} for what it left running", started.elapsed());
@@ -609,7 +625,7 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(r#"echo '{"type":"system","session_id":"s1"}'; sleep 20"#);
         let started = Instant::now();
-        let w = run(cmd, "", Duration::from_secs(60), Some(Duration::from_secs(1)), None, None, None).expect("ran");
+        let w = run(cmd, "", Duration::from_secs(60), Some(Duration::from_secs(1)), None, None, None, None).expect("ran");
         assert!(w.stalled && !w.timed_out, "{w:?}");
         assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
         // a tool at work is silent too, and is let be: its own limits are the agent program's
@@ -617,13 +633,34 @@ mod tests {
         cmd.arg("-c").arg(
             r#"echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}'; sleep 3; echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}'; echo '{"type":"result"}'"#,
         );
-        let w = run(cmd, "", Duration::from_secs(60), Some(Duration::from_secs(1)), None, None, None).expect("ran");
+        let w = run(cmd, "", Duration::from_secs(60), Some(Duration::from_secs(1)), None, None, None, None).expect("ran");
         assert!(!w.stalled && w.code == Some(0), "{w:?}");
         // the model's text as it comes is a sign of life, and is not kept in the turn's output
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(r#"for i in 1 2 3 4; do echo '{"type":"stream_event","event":{"type":"content_block_delta"}}'; sleep 0.6; done; echo '{"type":"result"}'"#);
-        let w = run(cmd, "", Duration::from_secs(60), Some(Duration::from_secs(1)), None, None, None).expect("ran");
+        let w = run(cmd, "", Duration::from_secs(60), Some(Duration::from_secs(1)), None, None, None, None).expect("ran");
         assert!(!w.stalled && !w.out.contains("stream_event"), "{w:?}");
+    }
+
+    #[test]
+    fn what_the_agent_says_is_kept_as_it_says_it_so_the_person_can_watch_it_work() {
+        let dir = std::env::temp_dir().join(format!("jaynes-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let live = dir.join("turn-1-0.jsonl");
+        let _gone = std::fs::remove_file(&live);
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(
+            r#"echo '{"type":"assistant","said":"first"}'; echo '{"type":"stream_event","event":{}}'; sleep 2; echo '{"type":"result","said":"last"}'"#,
+        );
+        let kept = live.clone();
+        let turn = std::thread::spawn(move || run(cmd, "", Duration::from_secs(60), None, None, None, None, Some(&kept)));
+        std::thread::sleep(Duration::from_millis(1000));
+        let meanwhile = std::fs::read_to_string(&live).unwrap_or_default();
+        assert!(meanwhile.contains(r#""said":"first""#) && !meanwhile.contains("last"), "while it works: {meanwhile:?}");
+        assert!(!meanwhile.contains("stream_event"), "the model's text as it comes is not kept: {meanwhile:?}");
+        let w = turn.join().expect("thread").expect("ran");
+        assert_eq!(w.code, Some(0));
+        assert!(std::fs::read_to_string(&live).unwrap_or_default().contains(r#""said":"last""#));
     }
 
     #[test]
@@ -634,13 +671,13 @@ mod tests {
         // the program waits 2 s for the person, with a deadline of 1 s: it is not cut off, and the 2 s are not its
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(format!("touch {m}; sleep 2; rm {m}", m = mark.display()));
-        let w = run(cmd, "", Duration::from_secs(1), None, None, Some(&mark), None).expect("ran");
+        let w = run(cmd, "", Duration::from_secs(1), None, None, Some(&mark), None, None).expect("ran");
         assert_eq!((w.code, w.timed_out), (Some(0), false));
         assert!(w.took < Duration::from_millis(900), "{:?}", w.took);
         // without the person, the same deadline cuts it off
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("sleep 2");
-        let w = run(cmd, "", Duration::from_secs(1), None, None, Some(&mark), None).expect("ran");
+        let w = run(cmd, "", Duration::from_secs(1), None, None, Some(&mark), None, None).expect("ran");
         assert!(w.timed_out);
     }
 
