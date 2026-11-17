@@ -120,7 +120,7 @@ pub fn breathing(id: impl Into<ElementId>, size: f32, color: u32) -> impl IntoEl
 pub fn mark_icon(height: f32) -> Img {
     static MARK: std::sync::OnceLock<std::sync::Arc<Image>> = std::sync::OnceLock::new();
     let mark = MARK.get_or_init(|| std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, include_bytes!("../assets/mark.png").to_vec())));
-    img(mark.clone()).h(px(height)).w(px(height * 67. / 88.)).flex_none()
+    img(mark.clone()).h(px(height)).w(px(height * 70. / 88.)).flex_none()
 }
 
 /// A quiet button with its key, as the top bar shows them.

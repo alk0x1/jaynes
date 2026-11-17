@@ -20,7 +20,7 @@ DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} xcrun
 cp "$work/Assets.car" "$work/AppIcon.icns" "$here/"
 
 # the mark, at four times the 22 px it is shown at, on a transparent background
-printf '<html><body style="margin:0;background:transparent"><img src="file://%s" width="67" height="88"></body></html>' "$here/mark.svg" > "$work/mark.html"
+printf '<html><body style="margin:0;background:transparent"><img src="file://%s" width="70" height="88"></body></html>' "$here/mark.svg" > "$work/mark.html"
 "$chrome" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 --default-background-color=00000000 \
-  --window-size=67,88 --screenshot="$here/mark.png" "file://$work/mark.html" 2>/dev/null
+  --window-size=70,88 --screenshot="$here/mark.png" "file://$work/mark.html" 2>/dev/null
 echo "made Assets.car, AppIcon.icns and mark.png in $here"
