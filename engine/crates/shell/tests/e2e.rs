@@ -1027,6 +1027,21 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
 }
 
 #[test]
+fn a_finished_run_leaves_no_toolchain_cache_behind() {
+    let s = scratch("caches");
+    // what Go leaves: a build cache, and modules it makes read-only
+    let fill = r#"mkdir -p "$GOCACHE/ab" "$GOPATH/pkg/mod/m@v1" "$npm_config_cache" && echo x > "$GOCACHE/ab/o" && echo x > "$GOPATH/pkg/mod/m@v1/m.go" && echo x > "$npm_config_cache/p" && chmod -R a-w "$GOPATH/pkg/mod""#;
+    let agent = format!("{fill} && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let out = start(&s, "caches", &agent);
+    assert!(out.contains("finished: delivered"), "{out}");
+    let exchange = s.home.join("runs/caches/project/.jaynes");
+    assert!(exchange.exists(), "the exchange stays");
+    assert!(!exchange.join("tmp").exists(), "the toolchains' caches are gone once the run is finished");
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/caches:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+#[test]
 fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     let s = scratch("sweep");
     let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");

@@ -314,6 +314,9 @@ pub fn sweep_copies(home: &Path, store: &Store) -> Result<(), String> {
             continue;
         }
         let Ok(Some(run)) = store.state(&id) else { continue };
+        if run.finished() {
+            clear_caches(&home.join("runs").join(&id));
+        }
         let last = times.get(&id).map(|t| t.1).unwrap_or(now);
         if !run.finished() || last.saturating_add(keep_copies()) > now {
             continue;
@@ -325,9 +328,46 @@ pub fn sweep_copies(home: &Path, store: &Store) -> Result<(), String> {
                 std::fs::write(saved.join(format!("{}.diff", d.name)), text).map_err(|e| e.to_string())?;
             }
         }
-        std::fs::remove_dir_all(&copy).map_err(|e| format!("Jaynes could not clear the copy of run {id}: {e}"))?;
+        remove_all(&copy).map_err(|e| format!("Jaynes could not clear the copy of run {id}: {e}"))?;
     }
     Ok(())
+}
+
+/// Clear the toolchains' caches a run's turns filled (Go's builds and modules, npm's packages) in each folder an
+/// agent worked in: a finished run starts no turn again, and they are hundreds of megabytes a run.
+fn clear_caches(dir: &Path) {
+    let mut places = vec![dir.join("project")];
+    if let Ok(steps) = std::fs::read_dir(dir.join("steps")) {
+        for step in steps.flatten() {
+            places.extend(std::fs::read_dir(step.path()).into_iter().flatten().flatten().map(|a| a.path()));
+        }
+    }
+    for p in places {
+        let tmp = p.join(EXCHANGE).join("tmp");
+        if tmp.is_dir() {
+            let _gone = remove_all(&tmp);
+        }
+    }
+}
+
+/// Remove a folder and all it holds, the folders Go makes read-only in its module cache included.
+fn remove_all(dir: &Path) -> std::io::Result<()> {
+    if std::fs::remove_dir_all(dir).is_ok() {
+        return Ok(());
+    }
+    use std::os::unix::fs::PermissionsExt;
+    fn writable(p: &Path) {
+        let Ok(meta) = std::fs::symlink_metadata(p) else { return };
+        if !meta.is_dir() {
+            return;
+        }
+        let _set = std::fs::set_permissions(p, std::fs::Permissions::from_mode(meta.permissions().mode() | 0o700));
+        for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+            writable(&e.path());
+        }
+    }
+    writable(dir);
+    std::fs::remove_dir_all(dir)
 }
 
 /// Where an agent writes why a step cannot be done as asked, in its exchange folder.
@@ -417,6 +457,9 @@ impl<'a> Driver<'a> {
                 std::process::exit(9);
             }
             self.follow_project(&state, &events)?;
+            if events.iter().any(|e| matches!(e, Event::RunFinished { .. })) {
+                clear_caches(&self.setup.dir);
+            }
             for e in &events {
                 narrate(e);
             }
