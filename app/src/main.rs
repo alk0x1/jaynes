@@ -87,6 +87,12 @@ struct Root {
     tabs: Entity<tabs::Tabs>,
     side: Entity<side::Side>,
     terminal: Entity<TerminalView>,
+    core: Arc<hc::Core>,
+    agents: Entity<agents::Agents>,
+    /// The agent from the column open in the middle, attached while it shows: attached, the app sets its size while
+    /// the person uses it here, and Herdr sets it again once they type there (herdr-core sizes for the viewer used
+    /// last).
+    agent_view: Option<(String, Entity<TerminalView>)>,
     rail: Entity<rail::Rail>,
     island: Entity<island::Island>,
     compare: Entity<compare::Compare>,
@@ -120,6 +126,7 @@ impl Render for Root {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         terminal::next_frame();
         let terminal = self.terminal.clone();
+        let shown = self.shown_terminal();
         let middle = div()
             .flex()
             .flex_col()
@@ -139,9 +146,10 @@ impl Render for Root {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(div().flex_1().min_h_0().child(match self.tabs.read(cx).body(cx) {
-                                Some(story) => story,
-                                None => self.terminal.clone().into_any_element(),
+                            .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
+                                (Some((_, agent)), _) => agent.clone().into_any_element(),
+                                (None, Some(story)) => story,
+                                (None, None) => self.terminal.clone().into_any_element(),
                             }))
                             .child(self.island.clone()),
                     )
@@ -155,8 +163,8 @@ impl Render for Root {
             .font_family(look::UI_FONT)
             .track_focus(&self.focus)
             .key_context("Jaynes")
-            .on_action(copy_into(&self.terminal))
-            .on_action(paste_into(&self.terminal))
+            .on_action(copy_into(&shown))
+            .on_action(paste_into(&shown))
             .on_action(cx.listener(|this, _: &ToggleSteps, _, cx| {
                 this.steps = !this.steps;
                 cx.notify();
@@ -252,6 +260,24 @@ fn own_press<E: InteractiveElement>(e: E) -> E {
 }
 
 impl Root {
+    /// The terminal in the middle: the agent open from the column, else the person's own Claude Code.
+    fn shown_terminal(&self) -> Entity<TerminalView> {
+        self.agent_view.as_ref().map(|(_, v)| v.clone()).unwrap_or_else(|| self.terminal.clone())
+    }
+
+    /// Attaches the agent the tabs show, letting go of the one shown before; the person looks at it from now on.
+    fn follow_agent(&mut self, address: Option<String>, cx: &mut Context<Self>) {
+        if self.agent_view.as_ref().map(|(a, _)| a) == address.as_ref() {
+            return;
+        }
+        if let Some((_, old)) = self.agent_view.take() {
+            old.read(cx).detach();
+        }
+        let core = self.core.clone();
+        self.agent_view = address.clone().map(|a| (a.clone(), cx.new(|cx| TerminalView::attach(core, a, (120, 40), cx))));
+        self.agents.update(cx, |agents, cx| agents.open(address, cx));
+    }
+
     /// The runs column's header, after herdr: the macOS buttons, the mark and the name, then the column's switch.
     fn side_head(&self, cx: &mut Context<Self>) -> impl IntoElement {
         title_bar("side-head")
@@ -603,7 +629,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let runs = cx.new(model::Runs::new);
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), cx));
         let agents = cx.new(|cx| agents::Agents::new(core.clone(), cx));
-        let side = cx.new(|cx| side::Side::new(runs.clone(), agents, tabs.clone(), cx));
+        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
         let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));
@@ -616,10 +642,17 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             // the keys go where the person looks: the terminal on Claude Code's tab, else the window itself, or a
             // shortcut pressed over a run's story would reach nothing, the terminal being off the screen
             cx.observe_in(&tabs, window, move |this: &mut Root, tabs, window, cx| {
-                let open = tabs.read(cx).open.clone();
-                if open != this.was_open {
+                let (open, agent) = (tabs.read(cx).open.clone(), tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone()));
+                let was_agent = this.agent_view.as_ref().map(|(a, _)| a.clone());
+                if open != this.was_open || agent != was_agent {
                     this.was_open = open.clone();
-                    window.focus(if open.is_some() { &this.focus } else { &terminal_focus }, cx);
+                    this.follow_agent(agent, cx);
+                    let to = match (&this.agent_view, &open) {
+                        (Some((_, v)), _) => v.read(cx).focus_handle().clone(),
+                        (None, Some(_)) => this.focus.clone(),
+                        (None, None) => terminal_focus.clone(),
+                    };
+                    window.focus(&to, cx);
                 }
                 cx.notify();
             })
@@ -643,7 +676,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, _branch: branch }
         })
     })
     .map(|handle| {

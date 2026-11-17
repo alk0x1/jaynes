@@ -40,6 +40,7 @@ impl Side {
     pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
         cx.observe(&agents, |_, _, cx| cx.notify()).detach();
+        cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
         Side { runs, agents, tabs, folded: HashSet::new() }
     }
 
@@ -103,7 +104,7 @@ impl Side {
             .when(folded && waits, |d| d.child(dot(look::AMBER)))
     }
 
-    fn agent(&self, a: &Agent, now: u64) -> impl IntoElement {
+    fn agent(&self, a: &Agent, on: bool, now: u64, cx: &mut Context<Self>) -> impl IntoElement {
         let icon = if a.shell {
             div().flex_none().whitespace_nowrap().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_").into_any_element()
         } else if a.state == State::Working {
@@ -118,7 +119,9 @@ impl Side {
         } else {
             div().text_color(rgb(colour(a.state))).child(a.state.word())
         };
+        let (tabs, address, title) = (self.tabs.clone(), a.address.clone(), a.title.clone());
         div()
+            .id(SharedString::from(format!("agent-{}", a.address)))
             .mx(px(8.))
             .pl(px(26.))
             .pr(px(10.))
@@ -127,6 +130,10 @@ impl Side {
             .flex()
             .items_center()
             .gap(px(9.))
+            .when(on, |d| d.bg(rgb(look::SELECTED)))
+            .hover(|d| d.bg(rgb(look::SELECTED)))
+            .cursor_pointer()
+            .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |t, cx| t.show_agent(address.clone(), title.clone(), cx))))
             .child(div().w(px(14.)).flex_none().flex().items_center().justify_center().child(icon))
             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::TEXT)).child(a.title.clone()))
             .child(right.flex_none().text_size(px(11.5)))
@@ -184,6 +191,7 @@ impl Render for Side {
         let (spaces, core_trouble) = (agents.spaces.clone(), agents.trouble.clone());
         let (waiting, review) = agents.counts();
         let now = agents::now_ms();
+        let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
         let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
         list = list.child(self.inbox(waiting + listing.needs.len(), review));
 
@@ -199,7 +207,7 @@ impl Render for Side {
             list = list.child(self.space_head(&space.id, &space.name, folded, waits, cx));
             if !folded {
                 for a in &space.agents {
-                    list = list.child(self.agent(a, now));
+                    list = list.child(self.agent(a, open.as_deref() == Some(a.address.as_str()), now, cx));
                 }
             }
         }

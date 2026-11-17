@@ -13,15 +13,19 @@ pub struct Agents {
     pub spaces: Vec<Space>,
     /// Why herdr-core could not be read, shown instead of the spaces.
     pub trouble: Option<String>,
+    /// The agent open in the middle: the person looks at it, so what it finished is seen.
+    pub open: Option<String>,
+    core: Arc<hc::Core>,
     _watch: Task<()>,
 }
 
 impl Agents {
     pub fn new(core: Arc<hc::Core>, cx: &mut Context<Self>) -> Self {
+        let reader = core.clone();
         let (tx, rx) = async_channel::bounded::<Result<Vec<Space>, String>>(1);
         std::thread::Builder::new()
             .name("agents".into())
-            .spawn(move || watch(&core, tx))
+            .spawn(move || watch(&reader, tx))
             .expect("cannot start the thread that reads the agents");
         let watch = cx.spawn(async move |this, cx| {
             while let Ok(read) = rx.recv().await {
@@ -31,6 +35,7 @@ impl Agents {
                             Ok(spaces) => (this.spaces, this.trouble) = (spaces, None),
                             Err(e) => this.trouble = Some(e),
                         }
+                        this.mark_seen();
                         cx.notify();
                     })
                     .is_err();
@@ -39,7 +44,30 @@ impl Agents {
                 }
             }
         });
-        Agents { spaces: Vec::new(), trouble: None, _watch: watch }
+        Agents { spaces: Vec::new(), trouble: None, open: None, core, _watch: watch }
+    }
+
+    /// Opens an agent in the middle (None: none), marking at once what it finished as seen.
+    pub fn open(&mut self, address: Option<String>, cx: &mut Context<Self>) {
+        self.open = address;
+        self.mark_seen();
+        cx.notify();
+    }
+
+    /// Writes `herdr.seen` on the open agent when it finished a turn the person had not looked at, as Herdr does
+    /// when the person looks at it: both apps read the same label, so it stops waiting for review in both. The
+    /// column shows it seen at once, before herdr-core is read again.
+    fn mark_seen(&mut self) {
+        let Some((address, turn)) = seen_now(&self.spaces, self.open.as_deref()) else { return };
+        for a in self.spaces.iter_mut().flat_map(|s| s.agents.iter_mut()).filter(|a| a.address == address) {
+            a.state = State::Idle;
+        }
+        let core = self.core.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = core.call("terminal.label", json!({"terminal": address, "labels": {"herdr.seen": turn.to_string()}})) {
+                tracing::warn!("cannot mark {address} seen: {e:#}");
+            }
+        });
     }
 
     /// How many agents wait for the person, and how many finished unseen.
@@ -65,6 +93,13 @@ fn watch(core: &hc::Core, tx: async_channel::Sender<Result<Vec<Space>, String>>)
         }
         std::thread::sleep(Duration::from_secs(1));
     }
+}
+
+/// The open agent and its turn, when it finished a turn the person had not looked at.
+pub fn seen_now(spaces: &[Space], open: Option<&str>) -> Option<(String, u64)> {
+    let open = open?;
+    let a = spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == open)?;
+    (a.state == State::ToReview).then(|| (a.address.clone(), a.turn))
 }
 
 pub fn now_ms() -> u64 {
@@ -103,6 +138,8 @@ pub struct Agent {
     pub since_ms: u64,
     /// A plain shell, not a coding agent.
     pub shell: bool,
+    /// How many turns it finished; `herdr.seen` holds the last one the person looked at.
+    pub turn: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,7 +219,7 @@ fn agent(t: &Value) -> Agent {
         .find(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| address.clone());
-    Agent { address, title, state, since_ms: t["status_ms"].as_u64().unwrap_or(0), shell }
+    Agent { address, title, state, since_ms: t["status_ms"].as_u64().unwrap_or(0), shell, turn }
 }
 
 /// How long ago, shortly: now, 5m, 7h, 2d.
@@ -199,7 +236,7 @@ pub fn age(since_ms: u64, now_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     // not super::*: gpui's glob brings its own `test` attribute, which would shadow the standard one
-    use super::{State, Value, age, arrange};
+    use super::{State, Value, age, arrange, seen_now};
     use serde_json::json;
 
     fn term(address: &str, space: &str, state: Option<&str>, turn: u64, seen: u64) -> Value {
@@ -300,6 +337,23 @@ mod tests {
         let spaces = arrange(&doc(), &json!({"terminals": [claude, quiet, shell]}));
         let shell_of = |t: &str| spaces[0].agents.iter().find(|a| a.address == t).unwrap().shell;
         assert_eq!([shell_of("t1"), shell_of("t2"), shell_of("t3")], [false, false, true]);
+    }
+
+    #[test]
+    fn the_open_agent_is_seen_when_it_finished_a_turn_the_person_had_not_looked_at() {
+        let list = json!({"terminals": [
+            term("t1", "s1", Some("done"), 7, 6),
+            term("t2", "s1", Some("done"), 7, 7),
+            term("t3", "s1", Some("working"), 8, 7),
+        ]});
+        let spaces = arrange(&doc(), &list);
+        // open and finished unseen: its turn becomes herdr.seen, as Herdr does when the person looks
+        assert_eq!(seen_now(&spaces, Some("t1")), Some(("t1".to_string(), 7)));
+        // already seen, still working, closed, or not there: nothing to write
+        assert_eq!(seen_now(&spaces, Some("t2")), None);
+        assert_eq!(seen_now(&spaces, Some("t3")), None);
+        assert_eq!(seen_now(&spaces, None), None);
+        assert_eq!(seen_now(&spaces, Some("t9")), None);
     }
 
     #[test]

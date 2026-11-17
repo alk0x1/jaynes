@@ -26,6 +26,8 @@ pub struct Tabs {
     runs: Entity<Runs>,
     /// The run whose tab shows; None for the person's own terminal.
     pub open: Option<String>,
+    /// The agent from the column that shows in the middle, over the rest: its address and title.
+    pub agent: Option<(String, String)>,
     story: Vec<(String, Vec<String>)>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
     scroll: ScrollHandle,
@@ -53,7 +55,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, open: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, open: None, agent: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -98,8 +100,16 @@ impl Tabs {
         }
     }
 
+    /// Shows one of the person's agents (from the column) in the middle.
+    pub fn show_agent(&mut self, address: String, title: String, cx: &mut Context<Self>) {
+        self.show(None, cx);
+        self.agent = Some((address, title));
+        cx.notify();
+    }
+
     /// Shows a run's tab (and picks the run), or the person's terminal with None.
     pub fn show(&mut self, run: Option<String>, cx: &mut Context<Self>) {
+        self.agent = None;
         if run != self.open {
             self.story.clear();
             self.seek = None;
@@ -125,6 +135,10 @@ impl Tabs {
     /// Command-W: closes the run's tab that shows and moves to its neighbour, as a browser does; it stays closed until
     /// the run moves on. Claude Code's tab never closes.
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        if self.agent.take().is_some() {
+            cx.notify();
+            return;
+        }
         let Some(id) = self.open.clone() else { return };
         let keys: Vec<Option<String>> = self.shown(cx).into_iter().map(|(k, _, _)| k).collect();
         let at = keys.iter().position(|k| k.as_deref() == Some(id.as_str())).unwrap_or(0);
@@ -164,8 +178,9 @@ impl Tabs {
     /// The next tab (1) or the one before (-1), round the ends.
     pub fn step_by(&mut self, by: isize, cx: &mut Context<Self>) {
         let keys: Vec<Option<String>> = self.shown(cx).into_iter().map(|(k, _, _)| k).collect();
-        let here = keys.iter().position(|k| *k == self.open).unwrap_or(0) as isize;
         let n = keys.len() as isize;
+        // the agent's tab stands after the rest: the next is the first, the one before the last
+        let here = if self.agent.is_some() { if by > 0 { -1 } else { n } } else { keys.iter().position(|k| *k == self.open).unwrap_or(0) as isize };
         if n > 0 {
             let key = keys[((here + by) % n + n) as usize % keys.len()].clone();
             self.show(key, cx);
@@ -305,7 +320,7 @@ impl Render for Tabs {
         // the tabs are the top bar's: its height, its line under them
         let mut row = div().id("tabs").h_full().min_w_0().flex().items_stretch().overflow_x_scroll().font_family(look::UI_FONT);
         for (at, (key, title, mark)) in shown.into_iter().enumerate() {
-            let on = self.open == key;
+            let on = self.open == key && self.agent.is_none();
             let (pick, dragged) = (key.clone(), Dragged { key: key.clone(), title: if key.is_none() { "Claude Code".into() } else { title.clone() } });
             let id = SharedString::from(match &key {
                 None => "tab-main".to_string(),
@@ -327,6 +342,14 @@ impl Render for Tabs {
                     })
                     .child(div().truncate().child(title)),
             });
+        }
+        // the agent opened from the column, after the rest
+        if let Some((address, title)) = &self.agent {
+            row = row.child(
+                tab(SharedString::from(format!("tab-agent-{address}")), true, look::TEXT)
+                    .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_"))
+                    .child(div().truncate().child(title.clone())),
+            );
         }
         row
     }
