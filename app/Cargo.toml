@@ -50,7 +50,7 @@ gpui_macos = { package = "gpui-pre-macos", version = "=0.3.8", features = ["rend
 libc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSDockTile", "NSResponder", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSRunningApplication"] }
-objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "block2"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNNotification", "UNNotificationResponse", "block2"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSString", "NSError", "NSBundle"] }
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["LAContext", "LAPublicDefines", "block2"] }
 block2 = "0.6"

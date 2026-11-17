@@ -1316,6 +1316,7 @@ fn main() {
             }
         })
         .detach();
+        notify::listen();
         open(core.clone(), cx);
         // A test that draws the window into a picture leaves the person's keyboard where it is.
         if std::env::var_os("JAYNES_APP_SHOT").is_none() {
@@ -1403,6 +1404,24 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             })
             .detach();
             // the branch and the changes, read again every few seconds: the person or an agent changes them
+            // a click on a notice opens what it was about: the agent, or else the run
+            let clicks = notify::clicked();
+            cx.spawn(async move |this, cx| {
+                while let Ok(about) = clicks.recv().await {
+                    let opened = this.update(cx, |root: &mut Root, cx| {
+                        cx.activate(true);
+                        let agent = root.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == about).map(|a| a.title.clone());
+                        match agent {
+                            Some(title) => root.tabs.update(cx, |t, cx| t.show_agent(about, title, cx)),
+                            None => root.tabs.update(cx, |t, cx| t.show(Some(about), cx)),
+                        }
+                    });
+                    if opened.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
             let branch = cx.spawn(async move |this, cx| loop {
                 let Ok(at) = this.update(cx, |root: &mut Root, cx| root.place(cx).1) else { break };
                 let status = cx.background_executor().spawn({

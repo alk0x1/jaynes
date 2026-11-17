@@ -392,7 +392,7 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -463,6 +463,8 @@ impl Island {
                     tabs.update(cx, |t, cx| t.show_agent(rest.to_string(), rest.to_string(), cx));
                 }
             }
+            // a click on the system's notice about an agent or a run
+            "notice" => crate::notify::click(rest.to_string()),
             // a file in the Changes panel, as a click on it stacks it in the Changes tab
             "file" => {
                 if let Some(changes) = self.changes.clone() {
