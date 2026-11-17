@@ -114,6 +114,8 @@ struct Grid {
     vt: Vt,
     core: Arc<Core>,
     channel: Option<u32>,
+    /// Keys typed into a terminal just opened, before its attach is done: they go to the program once it is.
+    held_input: Vec<u8>,
     attach_ready: bool,
     fit_ready: Option<async_channel::Sender<()>>,
     cell: Size<Pixels>,
@@ -281,6 +283,9 @@ impl Grid {
     }
 }
 
+/// What a terminal just opened keeps of the keys typed before its attach is done: a burst, not a paste.
+const HELD_INPUT_AT_MOST: usize = 4096;
+
 /// A cell in device pixels.
 fn device_cell(cell: Size<Pixels>, scale: f32) -> (u32, u32) {
     let px = |v: Pixels| (f32::from(v) * scale).round().max(1.0) as u32;
@@ -326,6 +331,7 @@ impl TerminalView {
                 vt: Vt::new(size_hint.0.max(2), size_hint.1.max(1)),
                 core: core.clone(),
                 channel: None,
+                held_input: Vec::new(),
                 attach_ready: false,
                 fit_ready: None,
                 cell: size(px(9.0), px(18.0)),
@@ -478,6 +484,10 @@ impl TerminalView {
                     return None;
                 }
                 g.channel = Some(attached.channel);
+                let held = std::mem::take(&mut g.held_input);
+                if !held.is_empty() {
+                    g.core.input(attached.channel, &held);
+                }
                 // The theme or cell may have changed while the attach was in flight.
                 let cell = device_cell(g.cell, g.scale);
                 g.refresh_theme(&vt::theme(), cell);
@@ -708,11 +718,15 @@ impl TerminalView {
     fn send(&self, bytes: &[u8]) {
         self.typed_at.set(Some(Instant::now()));
         let mut g = self.grid.borrow_mut();
-        if let Some(ch) = g.channel
-            && !bytes.is_empty()
-        {
+        if bytes.is_empty() {
+            return;
+        }
+        if let Some(ch) = g.channel {
             g.vt.scroll_to_bottom();
             g.core.input(ch, bytes);
+        } else if !self.lost && self.ended.is_none() && g.held_input.len() + bytes.len() <= HELD_INPUT_AT_MOST {
+            // typed right after opening it, before the attach is done
+            g.held_input.extend_from_slice(bytes);
         }
     }
 
