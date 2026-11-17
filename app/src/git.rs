@@ -166,6 +166,30 @@ pub fn commit(root: &str, message: &str, anything_staged: bool) -> Result<(), St
     }
 }
 
+/// Stages one piece of a file (its patch from diff.rs), or with `back` takes a staged piece out again.
+pub fn apply(root: &str, patch: &str, back: bool) -> Result<(), String> {
+    use std::io::Write;
+    let mut child = spawn::command("git")
+        .arg("-C")
+        .arg(root)
+        .args(["apply", "--cached", "--unidiff-zero"])
+        .args(back.then_some("--reverse"))
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child.stdin.take().ok_or("no stdin")?.write_all(patch.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()) }
+}
+
+/// Sends the branch's commits to its upstream; git's words when it refuses.
+pub fn push(root: &str) -> Result<(), String> {
+    change(root, &["push", "-q"])
+}
+
 #[cfg(test)]
 mod tests {
     use super::{commit, parse_log, parse_numstat, parse_status, read, stage, unstage, Entry};

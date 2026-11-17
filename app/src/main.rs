@@ -50,7 +50,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox
     ]
 );
 
@@ -194,6 +194,12 @@ impl Render for Root {
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
                 this.changes_on = !this.changes_on;
+                cx.notify();
+            }))
+            // c in the Changes tab: the panel shows, its commit message takes the keys
+            .on_action(cx.listener(|this, _: &CommitBox, window, cx| {
+                this.changes_on = true;
+                this.changes.update(cx, |c, cx| c.focus_message(window, cx));
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleRuns, _, cx| {
@@ -1096,7 +1102,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                     this.was_changes = changes;
                     this.follow_agent(agent, cx);
                     let to = match (&this.agent_view, &open) {
-                        _ if inbox || changes => this.focus.clone(),
+                        _ if changes => this.stack.read(cx).focus.clone(),
+                        _ if inbox => this.focus.clone(),
                         (Some((_, v)), _) => v.read(cx).focus_handle().clone(),
                         (None, Some(_)) => this.focus.clone(),
                         (None, None) => terminal_focus.clone(),

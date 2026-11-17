@@ -19,6 +19,10 @@ pub struct Piece {
     pub at: String,
     pub before: Vec<Line>,
     pub after: Vec<Line>,
+    /// Already staged for the next commit (git's index), or still only in the file.
+    pub staged: bool,
+    /// The piece as a patch git can apply on its own: the file's header and this one piece; empty for a new file.
+    pub patch: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -147,7 +151,7 @@ fn piece(at: String, before: Vec<(u32, String)>, after: Vec<(u32, String)>) -> P
         .into_iter()
         .map(|later| {
             let (ca, cb) = matched(&wa, &wb, later);
-            Piece { at: at.clone(), before: lit(&before, &ca), after: lit(&after, &cb) }
+            Piece { at: at.clone(), before: lit(&before, &ca), after: lit(&after, &cb), ..Default::default() }
         })
         .min_by_key(|p| bits(&p.before) + bits(&p.after))
         .unwrap_or_default()
@@ -157,6 +161,11 @@ fn piece(at: String, before: Vec<(u32, String)>, after: Vec<(u32, String)>) -> P
 /// is "fn agent", "const SHORTCUTS: &[…]" is "const SHORTCUTS".
 fn short(at: &str) -> String {
     let at = at.trim();
+    // git takes any line that starts with a letter; in prose or a plain list that names nothing: only a line that
+    // looks like code (a brace, a parenthesis, a colon or an equals) says where
+    if !at.contains(['{', '(', ':', '=']) {
+        return String::new();
+    }
     at.find(['{', '(', ':', '=', '<']).map_or(at, |i| &at[..i]).trim().to_owned()
 }
 
@@ -165,22 +174,33 @@ fn start(spec: &str) -> u32 {
     spec[1..].split(',').next().and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
-/// The pieces of one file's `git diff -U0`.
-pub fn parse(out: &str) -> Vec<Piece> {
+/// The pieces of one file's `git diff -U0`; `staged` when it compared the last commit with the index.
+pub fn parse(out: &str, staged: bool) -> Vec<Piece> {
     let mut pieces = vec![];
-    let mut cur: Option<(String, Vec<(u32, String)>, Vec<(u32, String)>, u32, u32)> = None;
+    // the file's header, before its first piece, which every piece's patch starts with
+    let mut header = String::new();
+    let mut cur: Option<(String, Vec<(u32, String)>, Vec<(u32, String)>, u32, u32, String)> = None;
+    let done = |cur: Option<(String, Vec<(u32, String)>, Vec<(u32, String)>, u32, u32, String)>, header: &str, pieces: &mut Vec<Piece>| {
+        if let Some((at, b, a, _, _, raw)) = cur {
+            pieces.push(Piece { staged, patch: format!("{header}{raw}"), ..piece(at, b, a) });
+        }
+    };
     for line in out.lines() {
         if let Some(head) = line.strip_prefix("@@ ") {
-            if let Some((at, b, a, _, _)) = cur.take() {
-                pieces.push(piece(at, b, a));
-            }
+            done(cur.take(), &header, &mut pieces);
             let mut f = head.splitn(3, ' ');
             let (old, new) = (f.next().unwrap_or("-0"), f.next().unwrap_or("+0"));
             let at = short(f.next().unwrap_or("").trim_start_matches("@@"));
-            cur = Some((at, vec![], vec![], start(old), start(new)));
+            cur = Some((at, vec![], vec![], start(old), start(new), format!("{line}\n")));
             continue;
         }
-        let Some((_, before, after, nb, na)) = cur.as_mut() else { continue };
+        let Some((_, before, after, nb, na, raw)) = cur.as_mut() else {
+            header.push_str(line);
+            header.push('\n');
+            continue;
+        };
+        raw.push_str(line);
+        raw.push('\n');
         if let Some(t) = line.strip_prefix('-') {
             before.push((*nb, t.to_owned()));
             *nb += 1;
@@ -189,16 +209,14 @@ pub fn parse(out: &str) -> Vec<Piece> {
             *na += 1;
         }
     }
-    if let Some((at, b, a, _, _)) = cur.take() {
-        pieces.push(piece(at, b, a));
-    }
+    done(cur.take(), &header, &mut pieces);
     pieces
 }
 
 /// The longest new file the tab shows whole.
 const NEW_LINES: usize = 400;
 
-/// A file's changes against the last commit; a new file as all After.
+/// A file's changes against the last commit, staged pieces first; a new file as all After.
 pub fn read(root: &str, path: &str, new: bool) -> FileDiff {
     let mut d = FileDiff { path: path.to_owned(), new, ..Default::default() };
     if new {
@@ -209,31 +227,68 @@ pub fn read(root: &str, path: &str, new: bool) -> FileDiff {
                 let lines: Vec<(u32, String)> = text.lines().enumerate().map(|(i, l)| (i as u32 + 1, l.to_owned())).collect();
                 d.cut = lines.len().saturating_sub(NEW_LINES);
                 let after = lines.into_iter().take(NEW_LINES).map(|(n, t)| Line { n, parts: vec![(t, true)] }).collect();
-                d.pieces = vec![Piece { at: String::new(), before: vec![], after }];
+                d.pieces = vec![Piece { before: vec![], after, ..Default::default() }];
             }
             // a new folder: its files are listed in the panel once one is added
             Err(_) => {}
         }
         return d;
     }
-    let out = spawn::command("git")
-        .arg("-C")
-        .arg(root)
-        .args(["diff", "HEAD", "-U0", "--no-color", "--no-ext-diff", "--"])
-        .arg(path)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    d.binary = out.lines().any(|l| l.starts_with("Binary files "));
-    d.pieces = parse(&out);
+    let diff = |cached: bool| {
+        spawn::command("git")
+            .arg("-C")
+            .arg(root)
+            .args(["diff", "-U0", "--no-color", "--no-ext-diff"])
+            .args(cached.then_some("--cached"))
+            .arg("--")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    // what is staged, then what is only in the file, as magit lists them
+    let (staged, work) = (diff(true), diff(false));
+    d.binary = staged.lines().chain(work.lines()).any(|l| l.starts_with("Binary files "));
+    d.pieces = parse(&staged, true).into_iter().chain(parse(&work, false)).collect();
     d
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, short, tokens, FileDiff, Line, Piece};
+    use super::{parse, read, short, tokens, FileDiff, Line, Piece};
+
+    fn parse_w(out: &str) -> Vec<Piece> {
+        parse(out, false)
+    }
+
+    #[test]
+    fn a_piece_is_staged_and_unstaged_alone() {
+        let dir = std::env::temp_dir().join(format!("jaynes-diff-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success(), "git {args:?}");
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "T"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.join("f.txt"), "a\nb\nc\nd\ne\nf\ng\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "first"]);
+        std::fs::write(dir.join("f.txt"), "A\nb\nc\nd\ne\nf\nG\n").unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let d = read(&root, "f.txt", false);
+        assert_eq!(d.pieces.iter().map(|p| p.staged).collect::<Vec<_>>(), [false, false]);
+        // the first piece alone goes into the next commit
+        crate::git::apply(&root, &d.pieces[0].patch, false).unwrap();
+        let d = read(&root, "f.txt", false);
+        assert_eq!(d.pieces.iter().map(|p| (p.staged, p.before[0].n)).collect::<Vec<_>>(), [(true, 1), (false, 7)]);
+        // and comes back out
+        crate::git::apply(&root, &d.pieces[0].patch, true).unwrap();
+        assert_eq!(read(&root, "f.txt", false).pieces.iter().map(|p| p.staged).collect::<Vec<_>>(), [false, false]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_heading_is_cut_to_its_name() {
@@ -241,6 +296,8 @@ mod tests {
         assert_eq!(short("fn agent(t: &Value) -> Agent {"), "fn agent");
         assert_eq!(short("pub struct Agent {"), "pub struct Agent");
         assert_eq!(short(""), "");
+        assert_eq!(short("f"), "");
+        assert_eq!(short("The tabs keep their place"), "");
     }
 
     /// The parts of a side that are lit, joined.
@@ -257,7 +314,7 @@ mod tests {
     fn code_moved_into_a_block_is_not_lit() {
         // the real change of 6219917 in main.rs: halt_picked went inside an if, nothing was taken out
         let out = "diff --git a/app/src/main.rs b/app/src/main.rs\n--- a/app/src/main.rs\n+++ b/app/src/main.rs\n@@ -216 +217,8 @@ impl Render for Root {\n-            .on_action(cx.listener(|this, _: &HaltRun, _, cx| this.halt_picked(cx)))\n+            .on_action(cx.listener(|this, _: &HaltRun, _, cx| {\n+                // over an agent, it stops the agent; else the picked run\n+                if this.agent_view.is_some() {\n+                    this.stop_agent(cx);\n+                } else {\n+                    this.halt_picked(cx);\n+                }\n+            }))\n";
-        let pieces = parse(out);
+        let pieces = parse(out, false);
         assert_eq!(pieces.len(), 1);
         let p = &pieces[0];
         assert_eq!(p.at, "impl Render for Root");
@@ -274,20 +331,20 @@ mod tests {
     #[test]
     fn a_changed_word_is_lit_on_both_sides() {
         let out = "@@ -57 +57 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[\n-    (\"⌘.\", \"Halt the picked run\"),\n+    (\"⌘.\", \"Stop the open agent, or halt the picked run\"),\n";
-        let p = &parse(out)[0];
+        let p = &parse(out, false)[0];
         assert_eq!(lit(&p.before), ["Halt"]);
         assert_eq!(lit(&p.after).join(""), "Stoptheopenagent,orhalt");
     }
 
     #[test]
     fn a_line_added_after_another_lights_only_itself() {
-        let p = &parse("@@ -2 +2,2 @@ fn main() {\n-    println!(\"hi\");\n+    println!(\"hello\");\n+    run();\n")[0];
+        let p = &parse_w("@@ -2 +2,2 @@ fn main() {\n-    println!(\"hi\");\n+    println!(\"hello\");\n+    run();\n")[0];
         assert_eq!(lit(&p.after), ["hello", "run();"]);
     }
 
     #[test]
     fn a_reindent_is_not_a_change() {
-        let p = &parse("@@ -3,2 +3,2 @@\n-if a {\n-  b();\n+if a {\n+      b();\n")[0];
+        let p = &parse_w("@@ -3,2 +3,2 @@\n-if a {\n-  b();\n+if a {\n+      b();\n")[0];
         assert!(lit(&p.before).is_empty() && lit(&p.after).is_empty());
     }
 

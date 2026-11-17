@@ -23,6 +23,8 @@ pub struct Changes {
     message: Entity<InputState>,
     /// What git said when it refused the last change.
     error: Option<String>,
+    /// What the last change did, when it says something worth seeing (Pushed.).
+    note: Option<String>,
     tabs: Entity<Tabs>,
     /// The files stacked in the Changes tab, in the order the person clicked them.
     pub shown: Vec<String>,
@@ -47,7 +49,7 @@ impl Changes {
             }
         })
         .detach();
-        Changes { folder: String::new(), status: None, message, error: None, tabs, shown: vec![], diffs: HashMap::new() }
+        Changes { folder: String::new(), status: None, message, error: None, note: None, tabs, shown: vec![], diffs: HashMap::new() }
     }
 
     /// The folder's status, read on the main loop's turn.
@@ -131,16 +133,55 @@ impl Changes {
 
     /// Runs a change to the repository off the window's thread, then reads it again; git's words stay when it refuses.
     fn act(&mut self, job: impl FnOnce(&str) -> Result<(), String> + Send + 'static, cx: &mut Context<Self>) {
+        self.act_saying(job, None, cx);
+    }
+
+    /// As `act`, with a note to show when it went well.
+    fn act_saying(&mut self, job: impl FnOnce(&str) -> Result<(), String> + Send + 'static, said: Option<String>, cx: &mut Context<Self>) {
         let Some(root) = self.status.as_ref().map(|s| s.root.clone()) else { return };
+        self.note = None;
         cx.spawn(async move |this, cx| {
             let done = cx.background_executor().spawn(async move { job(&root) }).await;
             let _ = this.update(cx, |c, cx| {
+                c.note = done.is_ok().then_some(said).flatten();
                 c.error = done.err();
                 c.reload(cx);
+                // a piece moved between staged and not: the stack reads its files again
+                c.read_diffs(c.shown.clone(), cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// The + or − of a piece in the Changes tab: stages it, or takes it back when it is staged. A new file is staged
+    /// whole.
+    pub fn piece_act(&mut self, path: &str, i: usize, cx: &mut Context<Self>) {
+        let Some(d) = self.diffs.get(path) else { return };
+        let Some(p) = d.pieces.get(i) else { return };
+        if d.new || p.patch.is_empty() {
+            let path = path.to_owned();
+            self.act(move |root| git::stage(root, &path), cx);
+        } else {
+            let (patch, back) = (p.patch.clone(), p.staged);
+            self.act(move |root| git::apply(root, &patch, back), cx);
+        }
+    }
+
+    /// P in the Changes tab: the commits not pushed go to the upstream.
+    pub fn push(&mut self, cx: &mut Context<Self>) {
+        let Some(status) = &self.status else { return };
+        let Some(up) = status.upstream.clone() else {
+            self.error = Some("This branch has no upstream to push to.".into());
+            cx.notify();
+            return;
+        };
+        self.act_saying(git::push, Some(format!("Pushed to {up}.")), cx);
+    }
+
+    /// c in the Changes tab: the cursor goes to the commit message.
+    pub fn focus_message(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.message.update(cx, |m, cx| m.focus(window, cx));
     }
 
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -292,6 +333,9 @@ impl Render for Changes {
         if let Some(e) = &self.error {
             panel = panel.child(div().px(px(16.)).pb(px(6.)).text_size(px(12.)).text_color(rgb(look::RED)).child(e.clone()));
         }
+        if let Some(n) = &self.note {
+            panel = panel.child(div().px(px(16.)).pb(px(6.)).text_size(px(12.)).text_color(rgb(look::GREEN)).child(n.clone()));
+        }
         if !status.staged.is_empty() {
             panel = panel.child(section("Staged"));
             for e in &status.staged {
@@ -354,15 +398,55 @@ impl Render for Changes {
 }
 
 /// The Changes tab in the middle: the files clicked in the panel, one under the other, each piece with Before and
-/// After side by side and only what changed lit.
+/// After side by side and only what changed lit, staged pieces first. Each piece has its + (stage it) or − (take it
+/// back); a blue border marks the piece the keys act on, as magit's cursor: n and p move it, s stages, u takes back,
+/// c goes to the commit message, P pushes, Esc closes the tab. The keys show at the bottom.
 pub struct Stack {
     changes: Entity<Changes>,
+    pub focus: FocusHandle,
+    /// The piece the keys act on, counted across the files.
+    cursor: usize,
 }
 
 impl Stack {
     pub fn new(changes: Entity<Changes>, cx: &mut Context<Self>) -> Self {
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();
-        Stack { changes }
+        Stack { changes, focus: cx.focus_handle(), cursor: 0 }
+    }
+
+    /// Every piece in the stack, in order: its file and its place in it.
+    fn pieces(&self, cx: &App) -> Vec<(String, usize)> {
+        let c = self.changes.read(cx);
+        c.shown.iter().flat_map(|p| (0..c.diffs.get(p).map_or(0, |d| if d.binary { 0 } else { d.pieces.len() })).map(move |i| (p.clone(), i))).collect()
+    }
+
+    fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let m = &e.keystroke.modifiers;
+        if m.platform || m.control || m.alt {
+            return;
+        }
+        let all = self.pieces(cx);
+        let at = all.get(self.cursor.min(all.len().saturating_sub(1))).cloned();
+        match (e.keystroke.key.as_str(), m.shift) {
+            ("n", false) | ("down", false) => self.cursor = (self.cursor + 1).min(all.len().saturating_sub(1)),
+            ("p", false) | ("up", false) => self.cursor = self.cursor.saturating_sub(1),
+            ("s", false) | ("u", false) => {
+                let staged = e.keystroke.key == "u";
+                if let Some((path, i)) = at {
+                    // s stages only what is not staged, u takes back only what is
+                    let fits = self.changes.read(cx).diffs.get(&path).and_then(|d| d.pieces.get(i)).is_some_and(|p| p.staged == staged);
+                    if fits {
+                        self.changes.update(cx, |c, cx| c.piece_act(&path, i, cx));
+                    }
+                }
+            }
+            ("c", false) => window.dispatch_action(Box::new(crate::CommitBox), cx),
+            ("p", true) => self.changes.update(cx, |c, cx| c.push(cx)),
+            ("escape", _) => window.dispatch_action(Box::new(crate::CloseTab), cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
     }
 }
 
@@ -398,10 +482,36 @@ fn side(label: &'static str, lines: &[diff::Line], colour: u32) -> Div {
     col
 }
 
+/// The keys the Changes tab answers, at its bottom, as magit's menu shows what works.
+fn keys_line() -> Div {
+    let key = |k: &str, what: &str| div().flex().gap(px(4.)).child(div().font_family(look::MONO_FONT).text_color(rgb(look::TEXT)).child(k.to_string())).child(what.to_string());
+    div()
+        .flex_none()
+        .flex()
+        .flex_wrap()
+        .gap_x(px(14.))
+        .gap_y(px(4.))
+        .px(px(18.))
+        .py(px(8.))
+        .border_t_1()
+        .border_color(rgb(look::LINE))
+        .text_size(px(11.5))
+        .text_color(rgb(look::FAINT))
+        .child(key("s", "stage"))
+        .child(key("u", "unstage"))
+        .child(key("n p", "next, previous piece"))
+        .child(key("c", "commit"))
+        .child(key("P", "push"))
+        .child(key("Esc", "close"))
+}
+
 impl Render for Stack {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let all = self.pieces(cx);
+        self.cursor = self.cursor.min(all.len().saturating_sub(1));
+        let cursor = all.get(self.cursor).cloned();
         let changes = self.changes.read(cx);
-        let mut page = div().id("changes-stack").size_full().overflow_y_scroll().px(px(18.)).py(px(8.)).font_family(look::UI_FONT).flex().flex_col();
+        let mut page = div().id("changes-stack").flex_1().min_h_0().overflow_y_scroll().px(px(18.)).py(px(8.)).flex().flex_col();
         for (k, path) in changes.shown.iter().enumerate() {
             let (name, dir) = split(path);
             let d = changes.diffs.get(path);
@@ -439,27 +549,54 @@ impl Render for Stack {
                 page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child(if d.new { "A new folder: add it with + to see its files." } else { "No changes left." }));
                 continue;
             }
-            for p in &d.pieces {
+            for (i, p) in d.pieces.iter().enumerate() {
+                let here = cursor.as_ref().is_some_and(|(cp, ci)| cp == path && *ci == i);
+                let at = all.iter().position(|(ap, ai)| ap == path && *ai == i).unwrap_or(0);
+                let act = {
+                    let (changes, path) = (self.changes.clone(), path.clone());
+                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        cx.stop_propagation();
+                        changes.update(cx, |c, cx| c.piece_act(&path, i, cx));
+                    }
+                };
                 page = page.child(
                     div()
+                        .id(SharedString::from(format!("piece-{path}-{i}")))
+                        .relative()
                         .mt(px(6.))
                         .flex()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(rgb(look::LINE_2))
+                        .border_color(rgb(if here { look::BLUE } else { look::LINE_2 }))
                         .font_family(look::MONO_FONT)
                         .text_size(px(12.))
                         .line_height(px(19.5))
-                        .child(side("Before", &p.before, look::RED))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.cursor = at;
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        }))
+                        .child(side(if p.staged { "Before · staged" } else { "Before" }, &p.before, look::RED))
                         .child(div().w(px(1.)).flex_none().bg(rgb(look::LINE_2)))
-                        .child(side("After", &p.after, look::GREEN)),
+                        .child(side("After", &p.after, look::GREEN))
+                        // its + or −, at the top right corner
+                        .child(div().absolute().top(px(3.)).right(px(4.)).child(act_icon(SharedString::from(format!("piece-act-{path}-{i}")), if p.staged { look::Icon::Minus } else { look::Icon::Plus }).on_click(act))),
                 );
             }
             if d.cut > 0 {
                 page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child(format!("… {} more lines", d.cut)));
             }
         }
-        page.child(div().h(px(24.)))
+        div()
+            .id("changes-tab")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| this.key(e, window, cx)))
+            .size_full()
+            .flex()
+            .flex_col()
+            .font_family(look::UI_FONT)
+            .child(page.child(div().h(px(24.))))
+            .child(keys_line())
     }
 }
 
