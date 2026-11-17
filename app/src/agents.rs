@@ -34,7 +34,12 @@ impl Agents {
                 let gone = this
                     .update(cx, |this, cx| {
                         match read {
-                            Ok(spaces) => (this.spaces, this.trouble) = (spaces, None),
+                            Ok(spaces) => {
+                                // the agent open in the front window is the one the person looks at
+                                let looking = this.open.clone().filter(|_| crate::notify::looking());
+                                crate::notify::post(&news(&this.spaces, &spaces, looking.as_deref()), false);
+                                (this.spaces, this.trouble) = (spaces, None);
+                            }
                             Err(e) => this.trouble = Some(e),
                         }
                         this.mark_seen();
@@ -192,6 +197,31 @@ pub fn start_in(core: &hc::Core, space: &Space, display: Value) -> Result<String
     Ok(address)
 }
 
+/// What is worth telling the person about their agents between two readings: one that starts to need them, one that
+/// finished a turn they have not seen. Not the one they look at (`looking`), and nothing at the first reading.
+pub fn news(before: &[Space], now: &[Space], looking: Option<&str>) -> Vec<crate::news::News> {
+    if before.is_empty() {
+        return Vec::new();
+    }
+    let was = |address: &str| before.iter().flat_map(|s| &s.agents).find(|a| a.address == address).map(|a| a.state);
+    let mut out = Vec::new();
+    for s in now {
+        for a in &s.agents {
+            if Some(a.address.as_str()) == looking || was(&a.address) == Some(a.state) {
+                continue;
+            }
+            let (title, body) = match a.state {
+                State::Waiting => (format!("{} needs you", a.title), format!("{} · {}", s.name, crate::ask::what(a.kind.as_deref(), &a.msg))),
+                State::Error => (format!("{} stopped", a.title), format!("{} · {}", s.name, if a.msg.is_empty() { "an error" } else { &a.msg })),
+                State::ToReview => (format!("{} finished", a.title), s.name.clone()),
+                _ => continue,
+            };
+            out.push(crate::news::News { run: a.address.clone(), title, body });
+        }
+    }
+    out
+}
+
 /// The open agent and its turn, when it finished a turn the person had not looked at.
 pub fn seen_now(spaces: &[Space], open: Option<&str>) -> Option<(String, u64)> {
     let open = open?;
@@ -347,14 +377,14 @@ pub fn age(since_ms: u64, now_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     // not super::*: gpui's glob brings its own `test` attribute, which would shadow the standard one
-    use super::{State, Value, age, arrange, seen_now, with_tab};
+    use super::{State, Value, age, arrange, news, seen_now, with_tab};
     use serde_json::json;
 
     fn term(address: &str, space: &str, state: Option<&str>, turn: u64, seen: u64) -> Value {
         json!({
             "address": address, "state": "live", "agent": "claude-code", "title": format!("title {address}"),
             "turn": turn, "status_ms": 1000,
-            "status": state.map(|s| json!({"app": "claude-code", "state": s})),
+            "status": state.map(|s| json!({"app": "claude-code", "state": s, "kind": "permission", "msg": "approve Bash: ls"})),
             "labels": {"herdr.space": space, "herdr.seen": seen.to_string(), "where": "named / 1"}
         })
     }
@@ -500,6 +530,25 @@ mod tests {
         assert_eq!(spaces[0].agents.last().unwrap().address, "t8");
         // a space that is gone takes no tab
         assert!(with_tab(&value, "s9", "tbnew", "pnew", "t8").is_none());
+    }
+
+    #[test]
+    fn news_is_an_agent_that_starts_to_need_the_person_or_finishes() {
+        let read = |terms: Vec<Value>| arrange(&doc(), &json!({"terminals": terms}));
+        let before = read(vec![term("t1", "s1", Some("working"), 3, 3), term("t2", "s1", Some("working"), 5, 5), term("t3", "s1", Some("blocked"), 1, 1)]);
+        let now = read(vec![term("t1", "s1", Some("blocked"), 3, 3), term("t2", "s1", Some("done"), 6, 5), term("t3", "s1", Some("blocked"), 1, 1)]);
+        let told = news(&before, &now, None);
+        // in the order the column shows them (the space's tabs: t2 first)
+        assert_eq!(told.iter().map(|n| n.run.as_str()).collect::<Vec<_>>(), ["t2", "t1"]);
+        assert_eq!(told[1].title, "title t1 needs you");
+        assert_eq!(told[1].body, "jaynes/tenure · wants to approve Bash: ls");
+        assert_eq!(told[0].title, "title t2 finished");
+        // the agent the person looks at is not news; what stood at the first reading is not news either
+        assert_eq!(news(&before, &now, Some("t1")).iter().map(|n| n.run.as_str()).collect::<Vec<_>>(), ["t2"]);
+        assert!(news(&[], &now, None).is_empty());
+        // an agent that comes waiting is news
+        let more = read(vec![term("t1", "s1", Some("blocked"), 3, 3), term("t2", "s1", Some("done"), 6, 5), term("t3", "s1", Some("blocked"), 1, 1), term("t9", "s1", Some("blocked"), 0, 0)]);
+        assert_eq!(news(&now, &more, None).iter().map(|n| n.run.as_str()).collect::<Vec<_>>(), ["t9"]);
     }
 
     #[test]
