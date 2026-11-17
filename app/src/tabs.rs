@@ -388,7 +388,24 @@ impl Tabs {
                     .when(n < 9, |d| d.child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.5)).text_color(rgb(look::FAINT)).child(format!("⌘{}", n + 1)))),
             );
         }
-        row
+        // a new agent in this space (Command-T)
+        row.child(
+            div()
+                .id("tab-new-agent")
+                .h(px(28.))
+                .flex_none()
+                .px(px(9.))
+                .rounded(px(7.))
+                .flex()
+                .items_center()
+                .text_size(px(16.))
+                .text_color(rgb(look::FAINT))
+                .hover(|d| d.text_color(rgb(look::DIM)).bg(rgb(look::SELECTED)))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::NewAgent), cx))
+                .child("+"),
+        )
     }
 }
 

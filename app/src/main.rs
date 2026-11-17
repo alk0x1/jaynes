@@ -45,13 +45,13 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent
     ]
 );
 
 /// Every shortcut, as the list over the window (Command-/) shows it.
 const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
-    ("Tabs", &[("⌘1 … ⌘8", "The tab at that place"), ("⌘9", "The last tab"), ("⇧⌘]  ⇧⌘[", "Next tab, previous tab"), ("⌘W", "Close a run's tab")]),
+    ("Tabs", &[("⌘1 … ⌘8", "The tab at that place"), ("⌘9", "The last tab"), ("⇧⌘]  ⇧⌘[", "Next tab, previous tab"), ("⌘W", "Close a run's tab"), ("⌘T", "New agent in this space")]),
     ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"), ("⌘O", "Open what waits for you"), ("⌘↩", "Send your answer"), ("⌘.", "Halt the picked run"), ("⌘N", "New run")]),
     ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⌘/", "This list")]),
 ];
@@ -191,6 +191,7 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &SendAnswer, _, cx| this.island.update(cx, |i, cx| i.send_if_ready(cx))))
             .on_action(cx.listener(|this, _: &HaltRun, _, cx| this.halt_picked(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.tabs.update(cx, |t, cx| t.close(cx))))
+            .on_action(cx.listener(|this, _: &NewAgent, window, cx| this.new_agent(window, cx)))
             .on_action(cx.listener(|this, _: &Shortcuts, _, cx| {
                 this.help = !this.help;
                 cx.notify();
@@ -276,6 +277,22 @@ impl Root {
         let core = self.core.clone();
         self.agent_view = address.clone().map(|a| (a.clone(), cx.new(|cx| TerminalView::attach(core, a, (120, 40), cx))));
         self.agents.update(cx, |agents, cx| agents.open(address, cx));
+    }
+
+    /// Command-T or the + after a space's tabs: Claude Code in a new tab of the open agent's space, opened at once.
+    fn new_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((open, _)) = self.tabs.read(cx).agent.clone() else { return };
+        let Some(space) = self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).cloned() else { return };
+        let (core, tabs, display) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window));
+        cx.spawn(async move |_, cx| {
+            match cx.background_executor().spawn(async move { agents::start_in(&core, &space, display) }).await {
+                Ok(address) => {
+                    let _ = tabs.update(cx, |t, cx| t.show_agent(address, "claude".into(), cx));
+                }
+                Err(e) => tracing::warn!("{e}"),
+            }
+        })
+        .detach();
     }
 
     /// The runs column's header, after herdr: the macOS buttons, the mark and the name, then the column's switch.
@@ -552,6 +569,7 @@ fn main() {
             KeyBinding::new("cmd-enter", SendAnswer, Some("Jaynes")),
             KeyBinding::new("cmd-.", HaltRun, Some("Jaynes")),
             KeyBinding::new("cmd-w", CloseTab, Some("Jaynes")),
+            KeyBinding::new("cmd-t", NewAgent, Some("Jaynes")),
             KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
@@ -569,6 +587,7 @@ fn main() {
                     MenuItem::action("Next Tab", NextTab),
                     MenuItem::action("Previous Tab", PreviousTab),
                     MenuItem::action("Close Tab", CloseTab),
+                    MenuItem::action("New Agent", NewAgent),
                 ],
             },
             Menu {

@@ -95,6 +95,60 @@ fn watch(core: &hc::Core, tx: async_channel::Sender<Result<Vec<Space>, String>>)
     }
 }
 
+/// A fresh id as Herdr makes its own: a prefix, then 32 hex digits.
+fn new_id(prefix: &str) -> String {
+    use std::io::Read as _;
+    let mut bytes = [0u8; 16];
+    let random = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).is_ok();
+    if !random {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        bytes = (now ^ ((std::process::id() as u128) << 64)).to_le_bytes();
+    }
+    format!("{prefix}{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+}
+
+/// Herdr's document with a new tab at the end of a space, holding one terminal, drawn as Herdr draws a tab: a row
+/// whose id is the tab's, with one block. Everything else stays as it was. None when the space is gone.
+pub fn with_tab(value: &Value, space: &str, tab: &str, block: &str, terminal: &str) -> Option<Value> {
+    let mut out = value.clone();
+    let found = out["spaces"].as_array_mut()?.iter_mut().find(|s| s["id"].as_str() == Some(space))?;
+    if !found["tabs"].is_array() {
+        found["tabs"] = json!([]);
+    }
+    found["tabs"].as_array_mut()?.push(json!({
+        "id": tab, "name": "",
+        "root": {"type": "row", "id": tab, "children": [{"type": "block", "id": block, "content": {"terminal": terminal}}]}
+    }));
+    Some(out)
+}
+
+/// Starts Claude Code in a space's folder, in a tab of its own at the end of the space, so Herdr shows it too; its
+/// address. The document is written only if no one wrote it since it was read, else read again: Herdr writes it too.
+/// Without the tab, the agent still shows in the space here, by its labels.
+pub fn start_in(core: &hc::Core, space: &Space, display: Value) -> Result<String, String> {
+    let (tab, block) = (new_id("tb"), new_id("p"));
+    let folder = Some(space.folder.clone()).filter(|f| std::path::Path::new(f).is_dir());
+    let labels = json!({"herdr.space": space.id, "herdr.tab": tab});
+    let address = core.run(vec!["claude".into()], folder, labels, None, None, display).map_err(|e| format!("cannot start Claude Code: {e:#}"))?;
+    for _ in 0..5 {
+        let read = core.call("doc.get", json!({"name": "herdr-app"})).map_err(|e| format!("{e:#}"));
+        let written = read.and_then(|doc| {
+            let value = with_tab(&doc["value"], &space.id, &tab, &block, &address).ok_or("the space is gone")?;
+            core.call("doc.set", json!({"name": "herdr-app", "value": value, "version": doc["version"]})).map_err(|e| format!("{e:#}"))
+        });
+        match written {
+            Ok(_) => return Ok(address),
+            Err(e) if e.contains("conflict") => continue,
+            Err(e) => {
+                tracing::warn!("{address} has no tab in Herdr: {e}");
+                return Ok(address);
+            }
+        }
+    }
+    tracing::warn!("{address} has no tab in Herdr: the document kept changing");
+    Ok(address)
+}
+
 /// The open agent and its turn, when it finished a turn the person had not looked at.
 pub fn seen_now(spaces: &[Space], open: Option<&str>) -> Option<(String, u64)> {
     let open = open?;
@@ -236,7 +290,7 @@ pub fn age(since_ms: u64, now_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     // not super::*: gpui's glob brings its own `test` attribute, which would shadow the standard one
-    use super::{State, Value, age, arrange, seen_now};
+    use super::{State, Value, age, arrange, seen_now, with_tab};
     use serde_json::json;
 
     fn term(address: &str, space: &str, state: Option<&str>, turn: u64, seen: u64) -> Value {
@@ -362,6 +416,33 @@ mod tests {
         shell.as_object_mut().unwrap().remove("status_ms");
         shell["created_ms"] = json!(5000);
         assert_eq!(arrange(&doc(), &json!({"terminals": [shell]}))[0].agents[0].since_ms, 5000);
+    }
+
+    #[test]
+    fn a_new_agent_gets_a_tab_at_the_end_of_its_space_as_herdr_draws_one() {
+        let mut value = doc()["value"].clone();
+        // fields this app does not know stay as they were
+        value["theme"] = json!("dark");
+        value["spaces"][0]["pinned"] = json!(true);
+        let out = with_tab(&value, "s1", "tbnew", "pnew", "t8").unwrap();
+        assert_eq!(out["theme"], "dark");
+        assert_eq!(out["spaces"][0]["pinned"], true);
+        assert_eq!(out["spaces"][1], value["spaces"][1]);
+        let tabs = out["spaces"][0]["tabs"].as_array().unwrap();
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0], value["spaces"][0]["tabs"][0]);
+        assert_eq!(
+            tabs[1],
+            json!({"id": "tbnew", "name": "", "root": {"type": "row", "id": "tbnew", "children": [
+                {"type": "block", "id": "pnew", "content": {"terminal": "t8"}}
+            ]}})
+        );
+        // and the column then shows it in that space, last
+        let list = json!({"terminals": [term("t1", "s1", None, 0, 0), term("t2", "s1", None, 0, 0), term("t8", "s1", None, 0, 0)]});
+        let spaces = arrange(&json!({"value": out}), &list);
+        assert_eq!(spaces[0].agents.last().unwrap().address, "t8");
+        // a space that is gone takes no tab
+        assert!(with_tab(&value, "s9", "tbnew", "pnew", "t8").is_none());
     }
 
     #[test]
