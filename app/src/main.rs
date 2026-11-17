@@ -629,13 +629,15 @@ impl Root {
         )
     }
 
-    /// Command-T or the + after a space's tabs: Claude Code in a new tab of the open agent's space, opened at once.
+    /// Command-T or the + after a space's tabs: Claude Code in a new tab of the open agent's space, in the open agent's
+    /// folder, opened at once.
     fn new_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((open, _)) = self.tabs.read(cx).agent.clone() else { return };
         let Some(space) = self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).cloned() else { return };
+        let folder = agents::new_agent_folder(&space, &open);
         let (core, tabs, display) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window));
         cx.spawn(async move |_, cx| {
-            match cx.background_executor().spawn(async move { agents::start_in(&core, &space, display) }).await {
+            match cx.background_executor().spawn(async move { agents::start_in(&core, &space, folder, display) }).await {
                 Ok(address) => {
                     let _ = tabs.update(cx, |t, cx| t.show_agent(address, "claude".into(), cx));
                 }

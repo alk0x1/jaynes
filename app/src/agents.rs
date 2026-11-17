@@ -170,11 +170,17 @@ pub fn with_tab(value: &Value, space: &str, tab: &str, block: &str, terminal: &s
     Some(out)
 }
 
-/// Starts Claude Code in a space's folder, in a tab of its own at the end of the space, so Herdr shows it too; its
-/// address. The document is written only if no one wrote it since it was read, else read again: Herdr writes it too.
-/// Without the tab, the agent still shows in the space here, by its labels.
-pub fn start_in(core: &hc::Core, space: &Space, display: Value) -> Result<String, String> {
-    let folder = Some(space.folder.clone()).filter(|f| std::path::Path::new(f).is_dir());
+/// Where a new agent beside `open` starts: the folder `open` works in, else the space's. Herdr's folder for a space
+/// can be another project's (a space made in one folder and used for another).
+pub fn new_agent_folder(space: &Space, open: &str) -> Option<String> {
+    let cwd = space.agents.iter().find(|a| a.address == open).map(|a| a.cwd.clone());
+    cwd.into_iter().chain([space.folder.clone()]).find(|f| !f.is_empty() && std::path::Path::new(f).is_dir())
+}
+
+/// Starts Claude Code in a folder, in a tab of its own at the end of the space, so Herdr shows it too; its address.
+/// The document is written only if no one wrote it since it was read, else read again: Herdr writes it too. Without
+/// the tab, the agent still shows in the space here, by its labels.
+pub fn start_in(core: &hc::Core, space: &Space, folder: Option<String>, display: Value) -> Result<String, String> {
     run_in(core, space, vec!["claude".into()], folder, display).map_err(|e| format!("cannot start Claude Code: {e}"))
 }
 
@@ -417,8 +423,22 @@ pub fn age(since_ms: u64, now_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     // not super::*: gpui's glob brings its own `test` attribute, which would shadow the standard one
-    use super::{State, Value, age, arrange, news, seen_now, with_tab};
+    use super::{State, Value, age, arrange, new_agent_folder, news, seen_now, with_tab};
     use serde_json::json;
+
+    #[test]
+    fn a_new_agent_starts_where_the_open_one_works() {
+        let mut spaces = arrange(&doc(), &json!({"terminals": [term("t1", "s1", Some("done"), 1, 1)]}));
+        let s = &mut spaces[0];
+        s.folder = "/usr".into();
+        s.agents[0].cwd = "/tmp".into();
+        // Herdr's folder for a space can be another project's: the open agent's own folder comes first
+        assert_eq!(new_agent_folder(s, "t1"), Some("/tmp".to_owned()));
+        s.agents[0].cwd = "/no/such/folder".into();
+        assert_eq!(new_agent_folder(s, "t1"), Some("/usr".to_owned()));
+        s.folder = "/no/such/either".into();
+        assert_eq!(new_agent_folder(s, "t1"), None);
+    }
 
     fn term(address: &str, space: &str, state: Option<&str>, turn: u64, seen: u64) -> Value {
         json!({
