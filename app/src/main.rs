@@ -54,7 +54,7 @@ actions!(
 /// Every shortcut, as the list over the window (Command-/) shows it.
 const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Tabs", &[("⌘1 … ⌘8", "The tab at that place"), ("⌘9", "The last tab"), ("⇧⌘]  ⇧⌘[", "Next tab, previous tab"), ("⌘W", "Close a run's tab"), ("⌘T", "New agent in this space")]),
-    ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"),  ("⌘↩", "Send your answer"), ("⌘.", "Halt the picked run"), ("⌘N", "New run")]),
+    ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"),  ("⌘↩", "Send your answer"), ("⌘.", "Stop the open agent, or halt the picked run"), ("⌘N", "New run")]),
     ("Inbox", &[("⌘I", "The Inbox: what needs you, in every space"), ("⌘O", "The next thing that needs you")]),
     ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
     ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⌘/", "This list")]),
@@ -159,7 +159,8 @@ impl Render for Root {
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
                             }))
-                            .child(self.island.clone()),
+                            // a run's question, over Claude Code's terminal and the runs' tabs, not over an agent or the Inbox
+                            .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox, |d| d.child(self.island.clone())),
                     )
                     .children(self.steps.then(|| self.rail.clone())),
             );
@@ -213,7 +214,14 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &Pick7, _, cx| this.answer_or_pass(Answer::Pick(7), cx)))
             .on_action(cx.listener(|this, _: &Pick8, _, cx| this.answer_or_pass(Answer::Pick(8), cx)))
             .on_action(cx.listener(|this, _: &Pick9, _, cx| this.answer_or_pass(Answer::Pick(9), cx)))
-            .on_action(cx.listener(|this, _: &HaltRun, _, cx| this.halt_picked(cx)))
+            .on_action(cx.listener(|this, _: &HaltRun, _, cx| {
+                // over an agent, it stops the agent; else the picked run
+                if this.agent_view.is_some() {
+                    this.stop_agent(cx);
+                } else {
+                    this.halt_picked(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.tabs.update(cx, |t, cx| t.close(cx))))
             .on_action(cx.listener(|this, _: &NewAgent, window, cx| this.new_agent(window, cx)))
             .on_action(cx.listener(|this, _: &Shortcuts, _, cx| {
@@ -427,12 +435,9 @@ impl Root {
     /// The runs column's header, after herdr: the macOS buttons, the mark and the name, then the column's switch.
     fn side_head(&self, cx: &mut Context<Self>) -> impl IntoElement {
         title_bar("side-head")
-            // room for the macOS buttons
+            // room for the macOS buttons, as the familiar look leaves it
             .pl(px(82.))
             .pr(px(8.))
-            .gap(px(8.))
-            .child(look::mark_icon(22.))
-            .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Jaynes"))
             .child(div().flex_1())
             .child(self.sidebar_switch(cx))
     }
@@ -672,6 +677,20 @@ impl Root {
     }
 
     /// Command-.: halts the picked run when it works; a run that waits or ended has nothing to halt.
+    /// Stop, or Command-. over an agent: herdr-core presses its stop key (Esc for an agent that reports, else
+    /// Ctrl-C), never more.
+    fn stop_agent(&self, cx: &App) {
+        let Some((address, _)) = self.agent_view.clone() else { return };
+        let core = self.core.clone();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(e) = core.call("terminal.interrupt", json!({"terminal": address})) {
+                    tracing::warn!("cannot stop {address}: {e:#}");
+                }
+            })
+            .detach();
+    }
+
     fn halt_picked(&self, cx: &App) {
         if let Some(d) = self.runs.read(cx).chosen().filter(|d| d.mark == jaynes_shell::listing::Mark::Working) {
             halt(std::slice::from_ref(&d.id));
@@ -720,10 +739,23 @@ impl Root {
             .child(panel)
     }
 
-    /// The status bar, after herdr: where Claude Code works, how many runs work and wait, and "Halt all".
+    /// Where the middle works: the open agent's space and folder, else the folder Claude Code works in.
+    fn place(&self, cx: &App) -> (Option<String>, String) {
+        if let Some((open, _)) = &self.agent_view {
+            let spaces = &self.agents.read(cx).spaces;
+            if let Some((s, a)) = spaces.iter().flat_map(|s| s.agents.iter().map(move |a| (s, a))).find(|(_, a)| a.address == *open) {
+                return (Some(s.name.clone()), a.cwd.clone());
+            }
+        }
+        (None, folder())
+    }
+
+    /// The status bar, in the familiar look: where the middle works (the space, its branch, its folder, and Stop
+    /// while the agent works), then how many things wait, wait for review and work, each opening the Inbox, and the
+    /// list of shortcuts; "Halt all" while Jaynes runs work.
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let runs = self.runs.read(cx);
-        let working: Vec<String> = runs
+        let working_runs: Vec<String> = runs
             .snap
             .listing
             .projects
@@ -732,15 +764,21 @@ impl Root {
             .filter(|r| r.mark == jaynes_shell::listing::Mark::Working)
             .map(|r| r.id.clone())
             .collect();
-        let waits = runs.snap.listing.needs.len();
+        let waiting_runs = runs.snap.listing.needs.len();
+        let agents = self.agents.read(cx);
+        let (waiting, review) = agents.counts();
+        let working = agents.spaces.iter().flat_map(|s| &s.agents).filter(|a| a.state == agents::State::Working).count() + working_runs.len();
+        let waiting = waiting + waiting_runs;
+        let inbox = self.tabs.read(cx).inbox;
+        let open_works = self.agent_view.as_ref().is_some_and(|(open, _)| agents.spaces.iter().flat_map(|s| &s.agents).any(|a| a.address == *open && a.state == agents::State::Working));
+        let (space, place) = self.place(cx);
+        let place = home_short(&place, &std::env::var("HOME").unwrap_or_default());
         let item = || div().flex().items_center().gap(px(6.));
-        let home = std::env::var("HOME").unwrap_or_default();
-        let place = match folder() {
-            f if !home.is_empty() && f.starts_with(&home) => format!("~{}", &f[home.len()..]),
-            f => f,
+        let count = |id: &'static str| {
+            item().id(id).cursor_pointer().hover(|d| d.text_color(rgb(look::TEXT))).on_click(cx.listener(|this, _, _, cx| this.tabs.update(cx, |t, cx| t.show_inbox(cx))))
         };
-        let halt_colour = if working.is_empty() { look::FAINT } else { look::RED };
-        div()
+        let dot = |c: u32| div().size(px(7.)).rounded_full().bg(rgb(c));
+        let mut bar = div()
             .h(px(STATUS))
             .flex_none()
             .flex()
@@ -750,25 +788,55 @@ impl Root {
             .border_t_1()
             .border_color(rgb(look::LINE))
             .text_size(px(11.5))
-            .text_color(rgb(look::DIM))
-            .child(item().child(look::icon(look::Icon::Folder, 13., look::DIM)).child(place))
-            .when(!self.branch.is_empty(), |d| d.child(item().child(look::icon(look::Icon::Branch, 13., look::DIM)).child(self.branch.clone())))
-            .when(!working.is_empty(), |d| d.child(item().child(look::spinner("status-spin", 10., look::BLUE)).child(format!("{} working", working.len()))))
-            .when(waits > 0, |d| {
-                d.child(item().text_color(rgb(look::AMBER)).child(div().size(px(7.)).rounded_full().bg(rgb(look::AMBER))).child(format!("{waits} waiting")))
+            .text_color(rgb(look::DIM));
+        if inbox {
+            bar = bar.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::TEXT)).child("Inbox"));
+        } else {
+            bar = bar
+                .when_some(space, |d, s| d.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::TEXT)).child(s)))
+                .when(!self.branch.is_empty(), |d| d.child(div().font_family(look::MONO_FONT).text_size(px(11.)).text_color(rgb(look::BLUE)).child(format!("⎇ {}", self.branch))))
+                .child(div().min_w_0().truncate().child(place))
+                .when(open_works, |d| {
+                    d.child(
+                        item()
+                            .id("stop-agent")
+                            .cursor_pointer()
+                            .hover(|d| d.text_color(rgb(look::TEXT)))
+                            .on_click(cx.listener(|this, _, _, cx| this.stop_agent(cx)))
+                            .child("Stop")
+                            .child(div().opacity(0.6).child("⌘.")),
+                    )
+                });
+        }
+        bar.child(div().flex_1())
+            .when(waiting > 0, |d| d.child(count("count-waiting").child(dot(look::AMBER)).child(format!("{waiting} waiting"))))
+            .when(review > 0, |d| d.child(count("count-review").child(dot(look::VIOLET)).child(format!("{review} to review"))))
+            .when(working > 0, |d| d.child(count("count-working").child(look::spinner("status-spin", 10., look::BLUE)).child(format!("{working} working"))))
+            .when(!working_runs.is_empty(), |d| {
+                d.child(
+                    item()
+                        .id("halt-all")
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(px(5.))
+                        .text_color(rgb(look::RED))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(rgba((look::RED << 8) | 0x1f)))
+                        .on_click(move |_, _, _| halt(&working_runs))
+                        .child(look::icon(look::Icon::Stop, 13., look::RED))
+                        .child("Halt all runs"),
+                )
             })
-            .child(div().flex_1())
             .child(
                 item()
-                    .id("halt-all")
-                    .px(px(6.))
-                    .py(px(2.))
-                    .rounded(px(5.))
-                    .text_color(rgb(halt_colour))
-                    .when(!working.is_empty(), |d| d.cursor_pointer().hover(|d| d.bg(rgba((look::RED << 8) | 0x1f))))
-                    .on_click(move |_, _, _| halt(&working))
-                    .child(look::icon(look::Icon::Stop, 13., halt_colour))
-                    .child("Halt all"),
+                    .id("shortcuts-hint")
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(rgb(look::TEXT)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.help = true;
+                        cx.notify();
+                    }))
+                    .child("⌘/"),
             )
     }
 }
@@ -778,6 +846,14 @@ impl Root {
 enum Answer {
     Pick(usize),
     Deny,
+}
+
+/// A folder under the person's home, from the tilde.
+fn home_short(folder: &str, home: &str) -> String {
+    match folder.strip_prefix(home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
+        _ => folder.to_owned(),
+    }
 }
 
 /// The branch checked out where Claude Code works; empty when it is not a git folder.
@@ -990,9 +1066,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             })
             .detach();
             // the branch, read again every few seconds: the person may switch it in the terminal
-            let place = folder();
             let branch = cx.spawn(async move |this, cx| loop {
-                let at = place.clone();
+                let Ok(at) = this.update(cx, |root: &mut Root, cx| root.place(cx).1) else { break };
                 let now = cx.background_executor().spawn(async move { branch_of(&at) }).await;
                 let gone = this
                     .update(cx, |root: &mut Root, cx| {
@@ -1005,7 +1080,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 if gone {
                     break;
                 }
-                cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
+                cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
             Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
@@ -1049,4 +1124,17 @@ fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::home_short;
+
+    #[test]
+    fn a_folder_under_home_is_shown_from_the_tilde() {
+        assert_eq!(home_short("/Users/a/Projects/jaynes", "/Users/a"), "~/Projects/jaynes");
+        assert_eq!(home_short("/Users/a", "/Users/a"), "~");
+        assert_eq!(home_short("/Users/ab/x", "/Users/a"), "/Users/ab/x");
+        assert_eq!(home_short("/tmp/x", ""), "/tmp/x");
+    }
 }

@@ -563,7 +563,7 @@ mod tests {
     }
 
     fn space(id: &str, agents: &[&str]) -> Space {
-        let agent = |a: &&str| Agent { address: a.to_string(), title: a.to_uppercase(), state: State::Idle, since_ms: 0, shell: false, turn: 0, kind: None, msg: String::new() };
+        let agent = |a: &&str| Agent { address: a.to_string(), title: a.to_uppercase(), state: State::Idle, since_ms: 0, shell: false, turn: 0, kind: None, msg: String::new(), cwd: String::new() };
         Space { id: id.into(), name: id.into(), folder: String::new(), agents: agents.iter().map(agent).collect() }
     }
 

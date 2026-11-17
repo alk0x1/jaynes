@@ -281,6 +281,8 @@ pub struct Agent {
     /// While it waits: what kind of thing it asks (permission, question, auth) and its words.
     pub kind: Option<String>,
     pub msg: String,
+    /// The folder it works in.
+    pub cwd: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -360,7 +362,7 @@ fn agent(t: &Value) -> Agent {
         .find(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| address.clone());
-    Agent { address, title, state, since_ms: t["status_ms"].as_u64().or_else(|| t["created_ms"].as_u64()).unwrap_or(0), shell, turn, kind: t["status"]["kind"].as_str().map(str::to_owned), msg: t["status"]["msg"].as_str().unwrap_or_default().to_owned() }
+    Agent { address, title, state, since_ms: t["status_ms"].as_u64().or_else(|| t["created_ms"].as_u64()).unwrap_or(0), shell, turn, kind: t["status"]["kind"].as_str().map(str::to_owned), msg: t["status"]["msg"].as_str().unwrap_or_default().to_owned(), cwd: t["cwd"].as_str().unwrap_or_default().to_owned() }
 }
 
 /// How long ago, shortly: now, 5m, 7h, 2d.
@@ -549,6 +551,13 @@ mod tests {
         // an agent that comes waiting is news
         let more = read(vec![term("t1", "s1", Some("blocked"), 3, 3), term("t2", "s1", Some("done"), 6, 5), term("t3", "s1", Some("blocked"), 1, 1), term("t9", "s1", Some("blocked"), 0, 0)]);
         assert_eq!(news(&now, &more, None).iter().map(|n| n.run.as_str()).collect::<Vec<_>>(), ["t9"]);
+    }
+
+    #[test]
+    fn an_agent_knows_the_folder_it_works_in() {
+        let mut t = term("t1", "s1", Some("working"), 1, 1);
+        t["cwd"] = json!("/p/jaynes/app");
+        assert_eq!(arrange(&doc(), &json!({"terminals": [t]}))[0].agents[0].cwd, "/p/jaynes/app");
     }
 
     #[test]

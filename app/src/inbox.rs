@@ -63,7 +63,7 @@ mod tests {
     use jaynes_shell::listing::{Listing, Mark, Row};
 
     fn agent(address: &str, state: State) -> Agent {
-        Agent { address: address.into(), title: address.to_uppercase(), state, since_ms: 0, shell: false, turn: 0, kind: Some("permission".into()), msg: "approve Bash: ls".into() }
+        Agent { address: address.into(), title: address.to_uppercase(), state, since_ms: 0, shell: false, turn: 0, kind: Some("permission".into()), msg: "approve Bash: ls".into(), cwd: String::new() }
     }
 
     #[test]
