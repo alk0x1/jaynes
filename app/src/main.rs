@@ -340,9 +340,11 @@ struct Cover {
 }
 
 /// What the middle showed before a switch to an agent.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 enum Shown {
     Terminal(Entity<TerminalView>),
+    /// An agent's tab split in panes: the pane with the keyboard, the layout and every pane's view.
+    Split(String, layout::Layout, Vec<(String, Entity<TerminalView>)>),
     Inbox,
     Changes,
 }
@@ -352,7 +354,7 @@ const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700)
 
 impl Root {
     /// What the middle shows now, if it can stay over an agent while it opens (a run's story cannot).
-    fn middle_shown(&self) -> Option<Shown> {
+    fn middle_shown(&self, cx: &App) -> Option<Shown> {
         if self.was_changes {
             return Some(Shown::Changes);
         }
@@ -360,7 +362,10 @@ impl Root {
             return Some(Shown::Inbox);
         }
         match &self.agent_view {
-            Some((_, v)) => Some(Shown::Terminal(v.clone())),
+            Some((open, v)) => Some(match self.open_layout(cx) {
+                Some(l) => Shown::Split(open.clone(), l, self.panes.clone()),
+                None => Shown::Terminal(v.clone()),
+            }),
             None => self.was_open.is_none().then(|| Shown::Terminal(self.terminal.clone())),
         }
     }
@@ -371,6 +376,8 @@ impl Root {
         let Some((_, new)) = self.agent_view.clone() else { return };
         let Some(was) = before.filter(|was| match was {
             Shown::Terminal(old) => *old != new && !self.panes.iter().any(|(_, v)| v == old),
+            // another pane of the same tab: the tab stays as it is
+            Shown::Split(_, _, panes) => !panes.iter().any(|(_, v)| *v == new),
             _ => true,
         }) else {
             return;
@@ -399,6 +406,7 @@ impl Root {
         let Some(cover) = &self.cover else { return body };
         let was = match cover.was.clone() {
             Shown::Terminal(view) => view.into_any_element(),
+            Shown::Split(open, l, panes) => self.layout_element(&l, &open, &panes, true, cx).into_any_element(),
             Shown::Inbox => self.inbox_view(cx),
             Shown::Changes => self.stack.clone().into_any_element(),
         };
@@ -453,13 +461,14 @@ impl Root {
     fn agent_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some((open, view)) = self.agent_view.clone() else { return div().into_any_element() };
         let Some(l) = self.open_layout(cx) else { return view.into_any_element() };
-        self.layout_element(&l, &open, cx).into_any_element()
+        self.layout_element(&l, &open, &self.panes, true, cx).into_any_element()
     }
 
-    fn layout_element(&self, l: &layout::Layout, open: &str, cx: &mut Context<Self>) -> Div {
+    /// A tab's panes as `l` lays them out, each drawn by its view among `panes`; `top` for the whole tab.
+    fn layout_element(&self, l: &layout::Layout, open: &str, panes: &[(String, Entity<TerminalView>)], top: bool, cx: &mut Context<Self>) -> Div {
         match l {
             layout::Layout::Pane(a) => {
-                let view = self.panes.iter().find(|(p, _)| p == a).map(|(_, v)| v.clone());
+                let view = panes.iter().find(|(p, _)| p == a).map(|(_, v)| v.clone());
                 let title = self.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|x| x.address == *a).map(|x| x.title.clone()).unwrap_or_else(|| a.clone());
                 let (address, on) = (a.clone(), a == open);
                 div()
@@ -485,9 +494,9 @@ impl Root {
                     d = d.flex_col();
                 }
                 for (w, k) in kids {
-                    d = d.child(div().flex_basis(px(0.)).flex_grow(w / total).flex_shrink(1.).min_w_0().min_h_0().flex().child(self.layout_element(k, open, cx)));
+                    d = d.child(div().flex_basis(px(0.)).flex_grow(w / total).flex_shrink(1.).min_w_0().min_h_0().flex().child(self.layout_element(k, open, panes, false, cx)));
                 }
-                d.p(px(if self.open_layout(cx).as_ref() == Some(l) { 6. } else { 0. }))
+                d.p(px(if top { 6. } else { 0. }))
             }
         }
     }
@@ -1387,7 +1396,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 let changes = tabs.read(cx).changes.is_some();
                 let was_agent = this.agent_view.as_ref().map(|(a, _)| a.clone());
                 if open != this.was_open || agent != was_agent || inbox != this.was_inbox || changes != this.was_changes {
-                    let before = this.middle_shown();
+                    let before = this.middle_shown(cx);
                     this.was_open = open.clone();
                     this.was_inbox = inbox;
                     this.was_changes = changes;
