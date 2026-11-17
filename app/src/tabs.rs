@@ -30,6 +30,8 @@ pub struct Tabs {
     pub open: Option<String>,
     /// The agent from the column that shows in the middle, over the rest: its address and title.
     pub agent: Option<(String, String)>,
+    /// Whether the Inbox shows in the middle (Command-I), over the rest.
+    pub inbox: bool,
     story: Vec<(String, Vec<String>)>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
     scroll: ScrollHandle,
@@ -58,7 +60,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -103,6 +105,13 @@ impl Tabs {
         }
     }
 
+    /// Shows the Inbox in the middle.
+    pub fn show_inbox(&mut self, cx: &mut Context<Self>) {
+        self.show(None, cx);
+        self.inbox = true;
+        cx.notify();
+    }
+
     /// Shows one of the person's agents (from the column) in the middle.
     pub fn show_agent(&mut self, address: String, title: String, cx: &mut Context<Self>) {
         self.show(None, cx);
@@ -113,6 +122,7 @@ impl Tabs {
     /// Shows a run's tab (and picks the run), or the person's terminal with None.
     pub fn show(&mut self, run: Option<String>, cx: &mut Context<Self>) {
         self.agent = None;
+        self.inbox = false;
         if run != self.open {
             self.story.clear();
             self.seek = None;
@@ -138,7 +148,7 @@ impl Tabs {
     /// Command-W: closes the run's tab that shows and moves to its neighbour, as a browser does; it stays closed until
     /// the run moves on. Claude Code's tab never closes.
     pub fn close(&mut self, cx: &mut Context<Self>) {
-        if self.agent.take().is_some() {
+        if self.agent.take().is_some() || std::mem::take(&mut self.inbox) {
             cx.notify();
             return;
         }
@@ -421,7 +431,7 @@ impl Render for Tabs {
         // the tabs are the top bar's: its height, its line under them
         let mut row = div().id("tabs").h_full().min_w_0().flex().items_stretch().overflow_x_scroll().font_family(look::UI_FONT);
         for (at, (key, title, mark)) in shown.into_iter().enumerate() {
-            let on = self.open == key && self.agent.is_none();
+            let on = self.open == key && self.agent.is_none() && !self.inbox;
             let (pick, dragged) = (key.clone(), Dragged { key: key.clone(), title: if key.is_none() { "Claude Code".into() } else { title.clone() } });
             let id = SharedString::from(match &key {
                 None => "tab-main".to_string(),
@@ -443,6 +453,9 @@ impl Render for Tabs {
                     })
                     .child(div().truncate().child(title)),
             });
+        }
+        if self.inbox {
+            row = row.child(tab("tab-inbox".into(), true, look::TEXT).child(look::icon(look::Icon::Inbox, 13., look::DIM)).child("Inbox"));
         }
         // the agent opened from the column, after the rest
         if let Some((address, title)) = &self.agent {

@@ -44,9 +44,11 @@ impl Side {
         Side { runs, agents, tabs, folded: HashSet::new() }
     }
 
-    fn inbox(&self, waiting: usize, review: usize) -> impl IntoElement {
+    fn inbox(&self, waiting: usize, review: usize, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let need = waiting + review;
+        let tabs = self.tabs.clone();
         div()
+            .id("side-inbox")
             .mx(px(8.))
             .mt(px(8.))
             .px(px(10.))
@@ -57,7 +59,11 @@ impl Side {
             .gap(px(10.))
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(look::DIM))
+            .text_color(rgb(if on { look::TEXT } else { look::DIM }))
+            .when(on, |d| d.bg(rgb(look::SELECTED)))
+            .hover(|d| d.bg(rgb(look::SELECTED)).text_color(rgb(look::TEXT)))
+            .cursor_pointer()
+            .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |t, cx| t.show_inbox(cx))))
             .child(look::icon(look::Icon::Inbox, 14., look::DIM))
             .child("Inbox")
             .child(div().flex_1())
@@ -199,7 +205,8 @@ impl Render for Side {
         let now = agents::now_ms();
         let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
         let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
-        list = list.child(self.inbox(waiting + listing.needs.len(), review));
+        let inbox_on = self.tabs.read(cx).inbox;
+        list = list.child(self.inbox(waiting + listing.needs.len(), review, inbox_on, cx));
 
         list = list.child(section("Spaces", None, look::FAINT));
         if let Some(trouble) = core_trouble {

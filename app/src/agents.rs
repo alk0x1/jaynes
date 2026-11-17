@@ -90,6 +90,18 @@ impl Agents {
     /// column shows it seen at once, before herdr-core is read again.
     fn mark_seen(&mut self) {
         let Some((address, turn)) = seen_now(&self.spaces, self.open.as_deref()) else { return };
+        self.write_seen(address, turn);
+    }
+
+    /// "Mark reviewed" in the Inbox: what the agent finished is seen without opening it.
+    pub fn mark_reviewed(&mut self, address: &str, cx: &mut Context<Self>) {
+        if let Some((address, turn)) = seen_now(&self.spaces, Some(address)) {
+            self.write_seen(address, turn);
+            cx.notify();
+        }
+    }
+
+    fn write_seen(&mut self, address: String, turn: u64) {
         for a in self.spaces.iter_mut().flat_map(|s| s.agents.iter_mut()).filter(|a| a.address == address) {
             a.state = State::Idle;
         }

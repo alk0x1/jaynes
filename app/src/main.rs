@@ -11,6 +11,7 @@
 
 mod agents;
 mod ask;
+mod inbox;
 mod answer;
 mod bench;
 mod compare;
@@ -46,14 +47,15 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox
     ]
 );
 
 /// Every shortcut, as the list over the window (Command-/) shows it.
 const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Tabs", &[("⌘1 … ⌘8", "The tab at that place"), ("⌘9", "The last tab"), ("⇧⌘]  ⇧⌘[", "Next tab, previous tab"), ("⌘W", "Close a run's tab"), ("⌘T", "New agent in this space")]),
-    ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"), ("⌘O", "Open what waits for you"), ("⌘↩", "Send your answer"), ("⌘.", "Halt the picked run"), ("⌘N", "New run")]),
+    ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"),  ("⌘↩", "Send your answer"), ("⌘.", "Halt the picked run"), ("⌘N", "New run")]),
+    ("Inbox", &[("⌘I", "The Inbox: what needs you, in every space"), ("⌘O", "The next thing that needs you")]),
     ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
     ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⌘/", "This list")]),
 ];
@@ -111,6 +113,8 @@ struct Root {
     focus: FocusHandle,
     /// The tab that showed when the focus last followed it.
     was_open: Option<String>,
+    /// Whether the Inbox showed then.
+    was_inbox: bool,
     _branch: Task<()>,
 }
 
@@ -150,6 +154,7 @@ impl Render for Root {
                             .h_full()
                             .children(self.ask_bar(cx))
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
+                                _ if self.tabs.read(cx).inbox => self.inbox_view(cx),
                                 (Some((_, agent)), _) => agent.clone().into_any_element(),
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
@@ -190,7 +195,8 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.tabs.update(cx, |t, cx| t.step_by(-1, cx))))
             .on_action(cx.listener(|this, _: &NextRun, _, cx| this.step_run(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousRun, _, cx| this.step_run(-1, cx)))
-            .on_action(cx.listener(|this, _: &OpenWaiting, window, cx| this.open_waiting(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenWaiting, window, cx| this.open_next(window, cx)))
+            .on_action(cx.listener(|this, _: &ShowInbox, _, cx| this.tabs.update(cx, |t, cx| t.show_inbox(cx))))
             .on_action(cx.listener(|this, _: &SendAnswer, _, cx| {
                 // the open agent's first choice when it asks, else the run's answer
                 if !this.answer(Answer::Pick(1), cx) {
@@ -486,10 +492,174 @@ impl Root {
         self.tabs.update(cx, |t, cx| t.show(Some(id), cx));
     }
 
-    /// Command-O: the first run that waits, its tab at the step that waits and its question open.
-    fn open_waiting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// What the Inbox lists: what needs the person, then what finished unseen.
+    fn inbox_items(&self, cx: &App) -> (Vec<inbox::Item>, Vec<inbox::Item>) {
+        inbox::gather(&self.agents.read(cx).spaces, &self.runs.read(cx).snap.listing)
+    }
+
+    /// Command-O: the next thing in the Inbox after the one open, round the end.
+    fn open_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (needs, review) = self.inbox_items(cx);
+        let order: Vec<inbox::Key> = needs.iter().chain(review.iter()).map(|i| i.key.clone()).collect();
+        let tabs = self.tabs.read(cx);
+        let open = match (&tabs.agent, &tabs.open) {
+            (Some((a, _)), _) => Some(inbox::Key::Agent(a.clone())),
+            (None, Some(r)) => Some(inbox::Key::Run(r.clone())),
+            _ => None,
+        };
+        if let Some(key) = inbox::next(&order, open.as_ref()) {
+            let title = needs.iter().chain(review.iter()).find(|i| i.key == key).map(|i| i.title.clone()).unwrap_or_default();
+            self.open_item(key, title, window, cx);
+        }
+    }
+
+    fn open_item(&mut self, key: inbox::Key, title: String, window: &mut Window, cx: &mut Context<Self>) {
+        match key {
+            inbox::Key::Agent(address) => self.tabs.update(cx, |t, cx| t.show_agent(address, title, cx)),
+            inbox::Key::Run(id) => self.open_run_waiting(id, window, cx),
+        }
+    }
+
+    /// The Inbox in the middle, in the familiar look: what needs the person in every space, then what finished
+    /// unseen, each with what it asks or did, where, and what to do; a click opens it.
+    fn inbox_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (needs, review) = self.inbox_items(cx);
+        let spaces = self.agents.read(cx).spaces.len();
+        let now = agents::now_ms();
+        let mut page = div()
+            .id("inbox")
+            .size_full()
+            .overflow_y_scroll()
+            .px(px(34.))
+            .py(px(26.))
+            .font_family(look::UI_FONT)
+            .flex()
+            .flex_col()
+            .child(div().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Inbox"))
+            .child(
+                div()
+                    .mt(px(4.))
+                    .text_size(px(12.5))
+                    .text_color(rgb(look::FAINT))
+                    .child(format!("What needs you, across all {spaces} spaces. Agents land here when they ask something or finish.")),
+            );
+        let button = |id: SharedString, text: &'static str| {
+            div()
+                .id(id)
+                .flex_none()
+                .px(px(12.))
+                .py(px(6.))
+                .rounded(px(7.))
+                .border_1()
+                .border_color(rgb(look::LINE_2))
+                .bg(rgb(look::PANEL_2))
+                .text_size(px(12.5))
+                .text_color(rgb(look::TEXT))
+                .hover(|d| d.bg(rgb(look::SELECTED)))
+                .cursor_pointer()
+                .child(text)
+        };
+        for (name, items) in [("Needs you", &needs), ("Finished, to review", &review)] {
+            if items.is_empty() {
+                continue;
+            }
+            page = page.child(
+                div()
+                    .mt(px(22.))
+                    .mb(px(6.))
+                    .flex()
+                    .gap(px(8.))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(look::DIM))
+                    .child(name)
+                    .child(div().font_weight(FontWeight::NORMAL).text_color(rgb(look::FAINT)).child(items.len().to_string())),
+            );
+            for item in items.iter() {
+                let id = match &item.key {
+                    inbox::Key::Agent(a) => format!("inbox-agent-{a}"),
+                    inbox::Key::Run(r) => format!("inbox-run-{r}"),
+                };
+                let (key, title) = (item.key.clone(), item.title.clone());
+                let act = match &item.key {
+                    inbox::Key::Agent(address) if item.state == agents::State::ToReview => {
+                        let (agents, address) = (self.agents.clone(), address.clone());
+                        button(SharedString::from(format!("{id}-seen")), "Mark reviewed").on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            agents.update(cx, |a, cx| a.mark_reviewed(&address, cx));
+                        })
+                    }
+                    _ => {
+                        let (key, title) = (item.key.clone(), item.title.clone());
+                        button(SharedString::from(format!("{id}-open")), "Open").on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.open_item(key.clone(), title.clone(), window, cx);
+                        }))
+                    }
+                };
+                let colour = match item.state {
+                    agents::State::Waiting => look::AMBER,
+                    agents::State::Error => look::RED,
+                    _ => look::VIOLET,
+                };
+                page = page.child(
+                    div()
+                        .id(SharedString::from(id))
+                        .flex()
+                        .items_center()
+                        .gap(px(14.))
+                        .px(px(14.))
+                        .py(px(11.))
+                        .rounded(px(9.))
+                        .hover(|d| d.bg(rgb(look::PANEL_2)))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_item(key.clone(), title.clone(), window, cx)))
+                        .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(colour)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(6.))
+                                        .text_size(px(13.))
+                                        .child(div().flex_none().max_w(px(320.)).truncate().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child(item.title.clone()))
+                                        .child(div().min_w_0().truncate().text_color(rgb(look::DIM)).child(item.what.clone())),
+                                )
+                                .child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).child(item.place.clone())),
+                        )
+                        .child(act)
+                        .child(
+                            div()
+                                .w(px(34.))
+                                .flex_none()
+                                .text_right()
+                                .text_size(px(12.))
+                                .text_color(rgb(look::FAINT))
+                                .child(if item.since_ms > 0 { agents::age(item.since_ms, now) } else { String::new() }),
+                        ),
+                );
+            }
+        }
+        if needs.is_empty() && review.is_empty() {
+            page = page.child(div().mt(px(40.)).text_size(px(15.)).font_weight(FontWeight::MEDIUM).text_color(rgb(look::GREEN)).child("✓ All clear. Nothing needs you."));
+        }
+        let all = || self.agents.read(cx).spaces.iter().flat_map(|s| s.agents.iter()).cloned().collect::<Vec<_>>();
+        let (working, idle) = (all().iter().filter(|a| a.state == agents::State::Working).count(), all().iter().filter(|a| a.state == agents::State::Idle && !a.shell).count());
+        if working + idle > 0 {
+            let words = [(working, "working"), (idle, "idle")].iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect::<Vec<_>>().join(" · ");
+            page = page.child(div().mt(px(26.)).text_size(px(12.5)).text_color(rgb(look::FAINT)).child(format!("{words}. They show up here when they need you.")));
+        }
+        page.into_any_element()
+    }
+
+    /// A run that waits, its tab at the step that waits and its question open.
+    fn open_run_waiting(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let runs = self.runs.read(cx);
-        let Some(id) = runs.snap.listing.needs.first().map(|r| r.id.clone()) else { return };
         let place = runs
             .snap
             .details
@@ -700,6 +870,7 @@ fn main() {
             KeyBinding::new("cmd-.", HaltRun, Some("Jaynes")),
             KeyBinding::new("cmd-w", CloseTab, Some("Jaynes")),
             KeyBinding::new("cmd-t", NewAgent, Some("Jaynes")),
+            KeyBinding::new("cmd-i", ShowInbox, Some("Jaynes")),
             KeyBinding::new("cmd-backspace", Deny, Some("Jaynes")),
             KeyBinding::new("alt-1", Pick1, Some("Jaynes")),
             KeyBinding::new("alt-2", Pick2, Some("Jaynes")),
@@ -801,12 +972,14 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             // the keys go where the person looks: the terminal on Claude Code's tab, else the window itself, or a
             // shortcut pressed over a run's story would reach nothing, the terminal being off the screen
             cx.observe_in(&tabs, window, move |this: &mut Root, tabs, window, cx| {
-                let (open, agent) = (tabs.read(cx).open.clone(), tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone()));
+                let (open, agent, inbox) = (tabs.read(cx).open.clone(), tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone()), tabs.read(cx).inbox);
                 let was_agent = this.agent_view.as_ref().map(|(a, _)| a.clone());
-                if open != this.was_open || agent != was_agent {
+                if open != this.was_open || agent != was_agent || inbox != this.was_inbox {
                     this.was_open = open.clone();
+                    this.was_inbox = inbox;
                     this.follow_agent(agent, cx);
                     let to = match (&this.agent_view, &open) {
+                        _ if inbox => this.focus.clone(),
                         (Some((_, v)), _) => v.read(cx).focus_handle().clone(),
                         (None, Some(_)) => this.focus.clone(),
                         (None, None) => terminal_focus.clone(),
@@ -835,7 +1008,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
         })
     })
     .map(|handle| {
