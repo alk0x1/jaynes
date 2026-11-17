@@ -32,6 +32,8 @@ pub struct Tabs {
     pub agent: Option<(String, String)>,
     /// Whether the Inbox shows in the middle (Command-I), over the rest.
     pub inbox: bool,
+    /// The Changes tab: how many files it stacks, while it shows in the middle over the agent it was opened from.
+    pub changes: Option<usize>,
     story: Vec<(String, Vec<String>)>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
     scroll: ScrollHandle,
@@ -60,7 +62,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -112,6 +114,21 @@ impl Tabs {
         cx.notify();
     }
 
+    /// Shows the Changes tab with its files; the agent open stays where it is, under it, and the folder stays its.
+    pub fn show_changes(&mut self, files: usize, cx: &mut Context<Self>) {
+        self.inbox = false;
+        self.changes = Some(files);
+        cx.notify();
+    }
+
+    /// The Changes tab now stacks this many files; it goes when none is left.
+    pub fn changes_count(&mut self, files: usize, cx: &mut Context<Self>) {
+        if self.changes.is_some() {
+            self.changes = (files > 0).then_some(files);
+            cx.notify();
+        }
+    }
+
     /// Shows one of the person's agents (from the column) in the middle.
     pub fn show_agent(&mut self, address: String, title: String, cx: &mut Context<Self>) {
         self.show(None, cx);
@@ -123,6 +140,7 @@ impl Tabs {
     pub fn show(&mut self, run: Option<String>, cx: &mut Context<Self>) {
         self.agent = None;
         self.inbox = false;
+        self.changes = None;
         if run != self.open {
             self.story.clear();
             self.seek = None;
@@ -148,7 +166,8 @@ impl Tabs {
     /// Command-W: closes the run's tab that shows and moves to its neighbour, as a browser does; it stays closed until
     /// the run moves on. Claude Code's tab never closes.
     pub fn close(&mut self, cx: &mut Context<Self>) {
-        if self.agent.take().is_some() || std::mem::take(&mut self.inbox) {
+        // the Changes tab first: under it, the agent it was opened from
+        if self.changes.take().is_some() || self.agent.take().is_some() || std::mem::take(&mut self.inbox) {
             cx.notify();
             return;
         }
@@ -373,7 +392,7 @@ impl Tabs {
         );
         row = row.child(div().w(px(1.)).h(px(16.)).mx(px(4.)).flex_none().bg(rgb(look::LINE_2)));
         for (n, a) in space.iter().enumerate() {
-            let on = open.as_deref() == Some(a.address.as_str());
+            let on = open.as_deref() == Some(a.address.as_str()) && self.changes.is_none();
             let (address, title) = (a.address.clone(), a.title.clone());
             row = row.child(
                 div()
@@ -397,6 +416,9 @@ impl Tabs {
                     .child(div().min_w_0().truncate().child(a.title.clone()))
                     .when(n < 9, |d| d.child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.5)).text_color(rgb(look::FAINT)).child(format!("⌘{}", n + 1)))),
             );
+        }
+        if let Some(n) = self.changes {
+            row = row.child(changes_tab(n, cx));
         }
         // a new agent in this space (Command-T)
         row.child(
@@ -454,6 +476,9 @@ impl Render for Tabs {
                     .child(div().truncate().child(title)),
             });
         }
+        if let Some(n) = self.changes {
+            row = row.child(div().flex().items_center().px(px(4.)).child(changes_tab(n, cx)));
+        }
         if self.inbox {
             row = row.child(tab("tab-inbox".into(), true, look::TEXT).child(look::icon(look::Icon::Inbox, 13., look::DIM)).child("Inbox"));
         }
@@ -467,6 +492,37 @@ impl Render for Tabs {
         }
         row
     }
+}
+
+/// The Changes tab, lit: its name, how many files it stacks, and × to close it.
+fn changes_tab(n: usize, cx: &mut Context<Tabs>) -> Stateful<Div> {
+    div()
+        .id("tab-changes")
+        .h(px(28.))
+        .flex_none()
+        .px(px(10.))
+        .rounded(px(7.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .text_size(px(12.5))
+        .text_color(rgb(look::TEXT))
+        .bg(rgb(look::SELECTED))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child("Changes")
+        .child(div().text_size(px(11.)).text_color(rgb(look::FAINT)).child(format!("{n} file{}", if n == 1 { "" } else { "s" })))
+        .child(
+            div()
+                .id("tab-changes-close")
+                .text_color(rgb(look::FAINT))
+                .hover(|d| d.text_color(rgb(look::TEXT)))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.changes = None;
+                    cx.notify();
+                }))
+                .child("×"),
+        )
 }
 
 /// The agents of the space that holds `open`, in the column's order; empty when no space holds it.

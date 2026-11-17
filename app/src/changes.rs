@@ -4,8 +4,12 @@
 //! staged, Commit takes every changed file git follows, never a new one. Shift-Command-G shows and hides it.
 //! The folder is read again every two seconds (main.rs), and at once after the panel changes something.
 
+use crate::diff::{self, FileDiff};
 use crate::git::{self, Entry, Status};
+use crate::tabs::Tabs;
+use std::collections::HashMap;
 use crate::look;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_base::input::{InputEvent, InputState};
 
@@ -19,10 +23,23 @@ pub struct Changes {
     message: Entity<InputState>,
     /// What git said when it refused the last change.
     error: Option<String>,
+    tabs: Entity<Tabs>,
+    /// The files stacked in the Changes tab, in the order the person clicked them.
+    pub shown: Vec<String>,
+    /// Their changes, read again with the folder.
+    pub diffs: HashMap<String, FileDiff>,
 }
 
 impl Changes {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(tabs: Entity<Tabs>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // the Changes tab closed: the stack starts empty next time
+        cx.observe(&tabs, |this: &mut Changes, tabs, cx| {
+            if tabs.read(cx).changes.is_none() && !this.shown.is_empty() {
+                this.shown.clear();
+                cx.notify();
+            }
+        })
+        .detach();
         let message = cx.new(|cx| InputState::new(window, cx).placeholder("Commit message"));
         cx.subscribe_in(&message, window, |this, _, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e {
@@ -30,7 +47,7 @@ impl Changes {
             }
         })
         .detach();
-        Changes { folder: String::new(), status: None, message, error: None }
+        Changes { folder: String::new(), status: None, message, error: None, tabs, shown: vec![], diffs: HashMap::new() }
     }
 
     /// The folder's status, read on the main loop's turn.
@@ -41,8 +58,61 @@ impl Changes {
             }
             self.folder = folder;
             self.status = status;
+            // a file committed or put back leaves the stack
+            let present: Vec<String> = self.status.iter().flat_map(|s| s.staged.iter().chain(s.changed.iter()).map(|e| e.path.clone()).chain(s.new.iter().cloned())).collect();
+            let before = self.shown.len();
+            self.shown.retain(|p| present.contains(p));
+            if self.shown.len() != before {
+                let n = self.shown.len();
+                self.tabs.update(cx, |t, cx| t.changes_count(n, cx));
+            }
+            self.read_diffs(self.shown.clone(), cx);
             cx.notify();
         }
+    }
+
+    /// Reads the changes of these files off the window's thread.
+    fn read_diffs(&self, paths: Vec<String>, cx: &mut Context<Self>) {
+        let Some(status) = self.status.clone() else { return };
+        if paths.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let read = cx.background_executor().spawn(async move { paths.iter().map(|p| (p.clone(), diff::read(&status.root, p, status.new.contains(p)))).collect::<Vec<_>>() });
+            let read = read.await;
+            let _ = this.update(cx, |c, cx| {
+                c.diffs.extend(read);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A click on a file: its changes go to the bottom of the Changes tab, which shows.
+    pub fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
+        if !self.shown.contains(&path) {
+            self.shown.push(path.clone());
+            self.read_diffs(vec![path], cx);
+        }
+        let n = self.shown.len();
+        self.tabs.update(cx, |t, cx| t.show_changes(n, cx));
+        cx.notify();
+    }
+
+    /// × on a file in the tab: it leaves the stack; the tab goes with the last one.
+    pub fn close_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.shown.retain(|p| p != path);
+        let n = self.shown.len();
+        self.tabs.update(cx, |t, cx| t.changes_count(n, cx));
+        cx.notify();
+    }
+
+    /// The lines a file gained and lost, staged and not.
+    pub fn entry(&self, path: &str) -> Option<Entry> {
+        let s = self.status.as_ref()?;
+        let mut found = s.staged.iter().chain(s.changed.iter()).filter(|e| e.path == path);
+        let first = found.next()?.clone();
+        Some(found.fold(first, |a, e| Entry { path: a.path, add: a.add.zip(e.add).map(|(x, y)| x + y), del: a.del.zip(e.del).map(|(x, y)| x + y) }))
     }
 
     /// Reads the folder again now, after the panel changed it.
@@ -148,8 +218,17 @@ fn section(text: &str) -> Div {
     div().px(px(16.)).pt(px(10.)).pb(px(4.)).text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::FAINT)).child(text.to_string())
 }
 
-fn row(name: String, dir: String) -> Div {
+/// A file's row: a click stacks its changes in the Changes tab; a blue dot while they show there.
+fn row(path: &str, shown: bool, cx: &mut Context<Changes>) -> Stateful<Div> {
+    let (name, dir) = split(path);
+    let open = path.to_owned();
     div()
+        .id(SharedString::from(format!("file-{path}")))
+        .relative()
+        .cursor_pointer()
+        .hover(|d| d.bg(rgba(0xffffff05)))
+        .when(shown, |d| d.bg(rgb(look::SELECTED)).child(div().absolute().left(px(6.)).top(px(11.)).size(px(6.)).rounded_full().bg(rgb(look::BLUE))))
+        .on_click(cx.listener(move |this, _, _, cx| this.open_file(open.clone(), cx)))
         .flex()
         .items_center()
         .gap(px(8.))
@@ -216,10 +295,10 @@ impl Render for Changes {
         if !status.staged.is_empty() {
             panel = panel.child(section("Staged"));
             for e in &status.staged {
-                let (name, dir) = split(&e.path);
                 let path = e.path.clone();
-                panel = panel.child(row(name, dir).child(counts(e)).child(
+                panel = panel.child(row(&e.path, self.shown.contains(&e.path), cx).child(counts(e)).child(
                     act_icon(SharedString::from(format!("unstage-{}", e.path)), look::Icon::Minus).on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
                         let path = path.clone();
                         this.act(move |root| git::unstage(root, &path), cx);
                     })),
@@ -229,10 +308,10 @@ impl Render for Changes {
         if !status.changed.is_empty() {
             panel = panel.child(section("Changes"));
             for e in &status.changed {
-                let (name, dir) = split(&e.path);
                 let path = e.path.clone();
-                panel = panel.child(row(name, dir).child(counts(e)).child(
+                panel = panel.child(row(&e.path, self.shown.contains(&e.path), cx).child(counts(e)).child(
                     act_icon(SharedString::from(format!("stage-{}", e.path)), look::Icon::Plus).on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
                         let path = path.clone();
                         this.act(move |root| git::stage(root, &path), cx);
                     })),
@@ -242,10 +321,10 @@ impl Render for Changes {
         if !status.new.is_empty() {
             panel = panel.child(section("New files, not in git yet"));
             for p in &status.new {
-                let (name, dir) = split(p);
                 let path = p.clone();
-                panel = panel.child(row(name, dir).child(div().flex_none().text_size(px(11.5)).text_color(rgb(look::AMBER)).child("new")).child(
+                panel = panel.child(row(p, self.shown.contains(p), cx).child(div().flex_none().text_size(px(11.5)).text_color(rgb(look::AMBER)).child("new")).child(
                     act_icon(SharedString::from(format!("add-{p}")), look::Icon::Plus).on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
                         let path = path.clone();
                         this.act(move |root| git::stage(root, &path), cx);
                     })),
@@ -271,6 +350,116 @@ impl Render for Changes {
             );
         }
         panel
+    }
+}
+
+/// The Changes tab in the middle: the files clicked in the panel, one under the other, each piece with Before and
+/// After side by side and only what changed lit.
+pub struct Stack {
+    changes: Entity<Changes>,
+}
+
+impl Stack {
+    pub fn new(changes: Entity<Changes>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&changes, |_, _, cx| cx.notify()).detach();
+        Stack { changes }
+    }
+}
+
+/// A line's text with its changed words lit in a colour on a soft fill of it.
+fn line_text(parts: &[(String, bool)], colour: u32) -> StyledText {
+    let mut text = String::new();
+    let mut lit = vec![];
+    for (s, on) in parts {
+        let at = text.len();
+        text.push_str(s);
+        if *on {
+            lit.push((at..text.len(), HighlightStyle { color: Some(rgb(colour).into()), background_color: Some(rgba((colour << 8) | 0x26).into()), ..Default::default() }));
+        }
+    }
+    StyledText::new(text).with_highlights(lit)
+}
+
+/// One side of a piece: its label, then its lines with their numbers; "(nothing here)" for a side with none.
+fn side(label: &'static str, lines: &[diff::Line], colour: u32) -> Div {
+    let mut col = div().flex_1().min_w_0().py(px(4.)).flex().flex_col().child(div().px(px(10.)).pb(px(2.)).font_family(look::UI_FONT).text_size(px(10.5)).text_color(rgb(look::FAINT)).child(label));
+    if lines.is_empty() {
+        col = col.child(div().pl(px(44.)).text_color(rgb(look::FAINT)).child("(nothing here)"));
+    }
+    for l in lines {
+        col = col.child(
+            div()
+                .flex()
+                .px(px(10.))
+                .child(div().w(px(34.)).flex_none().text_color(rgb(look::FAINT)).child(l.n.to_string()))
+                .child(div().flex_1().min_w_0().text_color(rgb(look::DIM)).child(line_text(&l.parts, colour))),
+        );
+    }
+    col
+}
+
+impl Render for Stack {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let changes = self.changes.read(cx);
+        let mut page = div().id("changes-stack").size_full().overflow_y_scroll().px(px(18.)).py(px(8.)).font_family(look::UI_FONT).flex().flex_col();
+        for (k, path) in changes.shown.iter().enumerate() {
+            let (name, dir) = split(path);
+            let d = changes.diffs.get(path);
+            let place = d.map(|d| if d.new { "a new file".to_string() } else { d.places() }).unwrap_or_default();
+            let close = {
+                let (changes, path) = (self.changes.clone(), path.clone());
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| changes.update(cx, |c, cx| c.close_file(&path, cx))
+            };
+            if k > 0 {
+                page = page.child(div().h(px(1.)).mt(px(14.)).bg(rgb(look::LINE)));
+            }
+            page = page.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .pt(px(12.))
+                    .pb(px(4.))
+                    .text_size(px(12.5))
+                    .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child(name))
+                    .child(div().flex_none().text_size(px(11.5)).text_color(rgb(look::FAINT)).child(dir))
+                    .child(div().ml(px(6.)).min_w_0().flex_1().truncate().text_size(px(12.)).text_color(rgb(look::DIM)).child(place))
+                    .children(changes.entry(path).map(|e| counts(&e)))
+                    .child(act_icon(SharedString::from(format!("close-{path}")), look::Icon::Close).on_click(close)),
+            );
+            let Some(d) = d else {
+                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("Reading…"));
+                continue;
+            };
+            if d.binary {
+                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("A binary file: git does not show its lines."));
+                continue;
+            }
+            if d.pieces.is_empty() {
+                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child(if d.new { "A new folder: add it with + to see its files." } else { "No changes left." }));
+                continue;
+            }
+            for p in &d.pieces {
+                page = page.child(
+                    div()
+                        .mt(px(6.))
+                        .flex()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(look::LINE_2))
+                        .font_family(look::MONO_FONT)
+                        .text_size(px(12.))
+                        .line_height(px(19.5))
+                        .child(side("Before", &p.before, look::RED))
+                        .child(div().w(px(1.)).flex_none().bg(rgb(look::LINE_2)))
+                        .child(side("After", &p.after, look::GREEN)),
+                );
+            }
+            if d.cut > 0 {
+                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child(format!("… {} more lines", d.cut)));
+            }
+        }
+        page.child(div().h(px(24.)))
     }
 }
 

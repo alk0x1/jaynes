@@ -17,6 +17,7 @@ mod bench;
 mod changes;
 mod compare;
 mod core_bin;
+mod diff;
 mod git;
 mod hc;
 mod island;
@@ -103,6 +104,10 @@ struct Root {
     /// What git says about the folder the middle works in, at the right (Shift-Command-G).
     changes: Entity<changes::Changes>,
     changes_on: bool,
+    /// The Changes tab's stacked files, in the middle.
+    stack: Entity<changes::Stack>,
+    /// Whether the Changes tab showed when the focus last followed the tabs.
+    was_changes: bool,
     island: Entity<island::Island>,
     compare: Entity<compare::Compare>,
     lightbox: Entity<lightbox::Lightbox>,
@@ -157,15 +162,16 @@ impl Render for Root {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .children(self.ask_bar(cx))
+                            .when(self.tabs.read(cx).changes.is_none(), |d| d.children(self.ask_bar(cx)))
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
+                                _ if self.tabs.read(cx).changes.is_some() => self.stack.clone().into_any_element(),
                                 _ if self.tabs.read(cx).inbox => self.inbox_view(cx),
                                 (Some((_, agent)), _) => agent.clone().into_any_element(),
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
                             }))
                             // a run's question, over Claude Code's terminal and the runs' tabs, not over an agent or the Inbox
-                            .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox, |d| d.child(self.island.clone())),
+                            .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox && self.tabs.read(cx).changes.is_none(), |d| d.child(self.island.clone())),
                     )
                     // at the right, Changes when it is on, else the run's steps
                     .when(self.changes_on, |d| d.child(self.changes.clone()))
@@ -1070,7 +1076,9 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let island = cx.new(|cx| island::Island::new(runs.clone(), key, lightbox.clone(), compare.clone(), cx));
         island.update(cx, |i, _| i.tabs = Some(tabs.clone()));
         let rail = cx.new(|cx| rail::Rail::new(runs.clone(), tabs.clone(), island.clone(), cx));
-        let changes = cx.new(|cx| changes::Changes::new(window, cx));
+        let changes = cx.new(|cx| changes::Changes::new(tabs.clone(), window, cx));
+        let stack = cx.new(|cx| changes::Stack::new(changes.clone(), cx));
+        island.update(cx, |i, _| i.changes = Some(changes.clone()));
         let terminal_focus = focus.clone();
         cx.new(|cx| {
             cx.observe(&runs, |_, _, cx| cx.notify()).detach();
@@ -1080,13 +1088,15 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             // shortcut pressed over a run's story would reach nothing, the terminal being off the screen
             cx.observe_in(&tabs, window, move |this: &mut Root, tabs, window, cx| {
                 let (open, agent, inbox) = (tabs.read(cx).open.clone(), tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone()), tabs.read(cx).inbox);
+                let changes = tabs.read(cx).changes.is_some();
                 let was_agent = this.agent_view.as_ref().map(|(a, _)| a.clone());
-                if open != this.was_open || agent != was_agent || inbox != this.was_inbox {
+                if open != this.was_open || agent != was_agent || inbox != this.was_inbox || changes != this.was_changes {
                     this.was_open = open.clone();
                     this.was_inbox = inbox;
+                    this.was_changes = changes;
                     this.follow_agent(agent, cx);
                     let to = match (&this.agent_view, &open) {
-                        _ if inbox => this.focus.clone(),
+                        _ if inbox || changes => this.focus.clone(),
                         (Some((_, v)), _) => v.read(cx).focus_handle().clone(),
                         (None, Some(_)) => this.focus.clone(),
                         (None, None) => terminal_focus.clone(),
@@ -1120,7 +1130,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
         })
     })
     .map(|handle| {

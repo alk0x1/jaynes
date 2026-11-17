@@ -41,6 +41,8 @@ pub struct Island {
     said: Option<String>,
     /// The tabs over the middle, so a test can open one (`tab <run>`, `tab main`).
     pub tabs: Option<Entity<crate::tabs::Tabs>>,
+    /// The Changes panel, for a test that clicks a file in it.
+    pub changes: Option<Entity<crate::changes::Changes>>,
 }
 
 /// A verdict that sends the item back takes the person's words.
@@ -138,6 +140,7 @@ impl Island {
             sending: false,
             said: None,
             tabs: None,
+            changes: None,
         }
     }
 
@@ -458,6 +461,12 @@ impl Island {
             "agent" => {
                 if let Some(tabs) = self.tabs.clone() {
                     tabs.update(cx, |t, cx| t.show_agent(rest.to_string(), rest.to_string(), cx));
+                }
+            }
+            // a file in the Changes panel, as a click on it stacks it in the Changes tab
+            "file" => {
+                if let Some(changes) = self.changes.clone() {
+                    changes.update(cx, |c, cx| c.open_file(rest.to_string(), cx));
                 }
             }
             "waits" => self.open_stop(window, cx),
