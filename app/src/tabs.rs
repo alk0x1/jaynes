@@ -23,29 +23,36 @@ impl Tabs {
         // the open run's story, read again each second while it is open
         let poll = cx.spawn(async move |this, cx| loop {
             let Ok(open) = this.update(cx, |t, _| t.open.clone()) else { break };
-            if let Some(id) = open {
-                let told = cx.background_executor().spawn(async move { jaynes_shell::listing::story(&jaynes_shell::home(), &id) }).await;
-                let gone = this
-                    .update(cx, |t, cx| {
-                        if t.story != told {
-                            t.story = told;
-                            cx.notify();
-                        }
-                    })
-                    .is_err();
-                if gone {
-                    break;
-                }
+            if let Some(id) = open
+                && Self::tell(this.clone(), id, cx).await.is_err()
+            {
+                break;
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
         Tabs { runs, open: None, story: Vec::new(), _poll: poll }
     }
 
+    /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
+    async fn tell(this: WeakEntity<Self>, id: String, cx: &mut AsyncApp) -> Result<()> {
+        let at = id.clone();
+        let told = cx.background_executor().spawn(async move { jaynes_shell::listing::story(&jaynes_shell::home(), &at) }).await;
+        this.update(cx, |t, cx| {
+            if t.open.as_deref() == Some(id.as_str()) && t.story != told {
+                t.story = told;
+                cx.notify();
+            }
+        })
+    }
+
     /// Shows a run's tab (and picks the run), or the person's terminal with None.
     pub fn show(&mut self, run: Option<String>, cx: &mut Context<Self>) {
         if run != self.open {
             self.story.clear();
+            // read at once, not at the poll's next turn: the tab would show nothing for up to a second
+            if let Some(id) = run.clone() {
+                cx.spawn(async move |this, cx| Self::tell(this, id, cx).await).detach();
+            }
         }
         if let Some(id) = &run {
             let id = id.clone();
