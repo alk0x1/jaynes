@@ -90,6 +90,17 @@ impl Changes {
         .detach();
     }
 
+    /// Puts back the files stacked before the person left for their editor, and shows the tab again.
+    pub fn restore(&mut self, shown: Vec<String>, cx: &mut Context<Self>) {
+        if shown.is_empty() {
+            return;
+        }
+        self.shown = shown;
+        self.read_diffs(self.shown.clone(), cx);
+        let n = self.shown.len();
+        self.tabs.update(cx, |t, cx| t.show_changes(n, cx));
+    }
+
     /// A click on a file: its changes go to the bottom of the Changes tab, which shows.
     pub fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
         if !self.shown.contains(&path) {
@@ -406,12 +417,14 @@ pub struct Stack {
     pub focus: FocusHandle,
     /// The piece the keys act on, counted across the files.
     cursor: usize,
+    /// The file and line the person asked to edit (e, or a file's open icon), for the window to open.
+    pub edit: Option<(String, u32)>,
 }
 
 impl Stack {
     pub fn new(changes: Entity<Changes>, cx: &mut Context<Self>) -> Self {
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();
-        Stack { changes, focus: cx.focus_handle(), cursor: 0 }
+        Stack { changes, focus: cx.focus_handle(), cursor: 0, edit: None }
     }
 
     /// Every piece in the stack, in order: its file and its place in it.
@@ -441,6 +454,13 @@ impl Stack {
                 }
             }
             ("c", false) => window.dispatch_action(Box::new(crate::CommitBox), cx),
+            ("e", false) => {
+                if let Some((path, i)) = at {
+                    let line = self.changes.read(cx).diffs.get(&path).and_then(|d| d.pieces.get(i)).map_or(1, |p| p.after.first().or(p.before.first()).map_or(1, |l| l.n));
+                    self.edit = Some((path, line));
+                    window.dispatch_action(Box::new(crate::OpenEditor), cx);
+                }
+            }
             ("p", true) => self.changes.update(cx, |c, cx| c.push(cx)),
             ("escape", _) => window.dispatch_action(Box::new(crate::CloseTab), cx),
             _ => return,
@@ -502,6 +522,7 @@ fn keys_line() -> Div {
         .child(key("n p", "next, previous piece"))
         .child(key("c", "commit"))
         .child(key("P", "push"))
+        .child(key("e", "edit in your editor"))
         .child(key("Esc", "close"))
 }
 
@@ -535,6 +556,13 @@ impl Render for Stack {
                     .child(div().flex_none().text_size(px(11.5)).text_color(rgb(look::FAINT)).child(dir))
                     .child(div().ml(px(6.)).min_w_0().flex_1().truncate().text_size(px(12.)).text_color(rgb(look::DIM)).child(place))
                     .children(changes.entry(path).map(|e| counts(&e)))
+                    .child(act_icon(SharedString::from(format!("edit-{path}")), look::Icon::Open).on_click(cx.listener({
+                        let path = path.clone();
+                        move |this, _, window, cx| {
+                            this.edit = Some((path.clone(), 1));
+                            window.dispatch_action(Box::new(crate::OpenEditor), cx);
+                        }
+                    })))
                     .child(act_icon(SharedString::from(format!("close-{path}")), look::Icon::Close).on_click(close)),
             );
             let Some(d) = d else {

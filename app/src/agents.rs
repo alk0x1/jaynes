@@ -174,10 +174,16 @@ pub fn with_tab(value: &Value, space: &str, tab: &str, block: &str, terminal: &s
 /// address. The document is written only if no one wrote it since it was read, else read again: Herdr writes it too.
 /// Without the tab, the agent still shows in the space here, by its labels.
 pub fn start_in(core: &hc::Core, space: &Space, display: Value) -> Result<String, String> {
-    let (tab, block) = (new_id("tb"), new_id("p"));
     let folder = Some(space.folder.clone()).filter(|f| std::path::Path::new(f).is_dir());
+    run_in(core, space, vec!["claude".into()], folder, display).map_err(|e| format!("cannot start Claude Code: {e}"))
+}
+
+/// Runs a program in a new tab of a space, in a folder: labelled with the space and the tab, and the tab added to
+/// Herdr's herdr-app document, as `start_in` does for Claude Code.
+pub fn run_in(core: &hc::Core, space: &Space, argv: Vec<String>, folder: Option<String>, display: Value) -> Result<String, String> {
+    let (tab, block) = (new_id("tb"), new_id("p"));
     let labels = json!({"herdr.space": space.id, "herdr.tab": tab});
-    let address = core.run(vec!["claude".into()], folder, labels, None, None, display).map_err(|e| format!("cannot start Claude Code: {e:#}"))?;
+    let address = core.run(argv, folder, labels, None, None, display).map_err(|e| format!("{e:#}"))?;
     for _ in 0..5 {
         let read = core.call("doc.get", json!({"name": "herdr-app"})).map_err(|e| format!("{e:#}"));
         let written = read.and_then(|doc| {

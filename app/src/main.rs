@@ -50,7 +50,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor
     ]
 );
 
@@ -108,6 +108,9 @@ struct Root {
     stack: Entity<changes::Stack>,
     /// Whether the Changes tab showed when the focus last followed the tabs.
     was_changes: bool,
+    /// The person's editor open from the Changes tab: its terminal, and where to go back when it ends (the agent that
+    /// was open, the files stacked).
+    editing: Option<(String, Option<(String, String)>, Vec<String>)>,
     island: Entity<island::Island>,
     compare: Entity<compare::Compare>,
     lightbox: Entity<lightbox::Lightbox>,
@@ -202,6 +205,7 @@ impl Render for Root {
                 this.changes.update(cx, |c, cx| c.focus_message(window, cx));
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &OpenEditor, window, cx| this.open_editor(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleRuns, _, cx| {
                 this.sidebar = !this.sidebar;
                 cx.notify();
@@ -450,6 +454,75 @@ impl Root {
                     let _ = tabs.update(cx, |t, cx| t.show_agent(address, "claude".into(), cx));
                 }
                 Err(e) => tracing::warn!("{e}"),
+            }
+        })
+        .detach();
+    }
+
+    /// e in the Changes tab, or a file's open icon: the person's own editor on that file at that line, in a terminal
+    /// tab (in the open agent's space, so Herdr shows it too), started by their login shell so it is the one they set
+    /// ($VISUAL, else $EDITOR) with all their configuration. When it ends, the Changes tab comes back as it was.
+    fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((path, line)) = self.stack.update(cx, |s, _| s.edit.take()) else { return };
+        let Some(root) = self.changes.read(cx).status.as_ref().map(|s| s.root.clone()) else { return };
+        let back = self.tabs.read(cx).agent.clone();
+        let space = back.as_ref().and_then(|(open, _)| self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|a| a.address == *open)).cloned());
+        let kept = self.changes.read(cx).shown.clone();
+        let argv = editor_argv(&path, line);
+        let title = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let (core, display) = (self.core.clone(), terminal::initial_display(window));
+        cx.spawn(async move |this, cx| {
+            let started = cx
+                .background_executor()
+                .spawn(async move {
+                    match space {
+                        Some(space) => agents::run_in(&core, &space, argv, Some(root), display),
+                        None => core.run(argv, Some(root), json!({"jaynes.editor": "1"}), None, None, display).map_err(|e| format!("{e:#}")),
+                    }
+                })
+                .await;
+            match started {
+                Ok(address) => {
+                    let _ = this.update(cx, |root: &mut Root, cx| {
+                        root.editing = Some((address.clone(), back, kept));
+                        root.tabs.update(cx, |t, cx| t.show_agent(address, title, cx));
+                        root.watch_editor(cx);
+                    });
+                }
+                Err(e) => tracing::warn!("cannot open the editor: {e}"),
+            }
+        })
+        .detach();
+    }
+
+    /// Waits for the editor to end, then goes back to where the person was, the Changes tab again.
+    fn watch_editor(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+            let going = this.update(cx, |root: &mut Root, cx| {
+                let Some((address, _, _)) = root.editing.clone() else { return false };
+                let ended = root.agent_view.as_ref().filter(|(a, _)| *a == address).is_some_and(|(_, v)| v.read(cx).ended.is_some());
+                // the person went elsewhere: the editor goes on in its tab, nothing to bring back
+                if root.agent_view.as_ref().is_none_or(|(a, _)| *a != address) {
+                    root.editing = None;
+                    return false;
+                }
+                if ended {
+                    let (address, back, kept) = root.editing.take().unwrap_or_default();
+                    // the editor's terminal is done with: it leaves herdr-core's list
+                    let core = root.core.clone();
+                    cx.background_executor().spawn(async move { core.call("terminal.rm", json!({"terminal": address})) }).detach();
+                    root.tabs.update(cx, |t, cx| match back {
+                        Some((a, title)) => t.show_agent(a, title, cx),
+                        None => t.show(None, cx),
+                    });
+                    root.changes.update(cx, |c, cx| c.restore(kept, cx));
+                    return false;
+                }
+                true
+            });
+            if !matches!(going, Ok(true)) {
+                break;
             }
         })
         .detach();
@@ -898,6 +971,15 @@ enum Answer {
     Deny,
 }
 
+/// The command that opens the person's editor on a file at a line: their login shell reads their settings, picks
+/// $VISUAL, else $EDITOR, else vi, and the editor replaces it (helix takes the line as file:line, the others as +line).
+fn editor_argv(path: &str, line: u32) -> Vec<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let file = format!("'{}'", path.replace('\'', "'\\''"));
+    let script = format!("e=\"${{VISUAL:-${{EDITOR:-vi}}}}\"; case \"${{e%% *}}\" in *hx|*helix) exec $e {file}:{line} ;; *) exec $e +{line} {file} ;; esac");
+    vec![shell, "-lic".into(), script]
+}
+
 /// A folder under the person's home, from the tilde.
 fn home_short(folder: &str, home: &str) -> String {
     match folder.strip_prefix(home) {
@@ -1137,7 +1219,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
         })
     })
     .map(|handle| {
@@ -1182,7 +1264,17 @@ fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::home_short;
+    use super::{editor_argv, home_short};
+
+    #[test]
+    fn the_editor_opens_at_the_line_through_the_login_shell() {
+        let argv = editor_argv("app/src/it's.rs", 218);
+        assert_eq!(argv[1], "-lic");
+        let out = std::process::Command::new("sh").arg("-c").arg(argv[2].replace("exec $e", "echo $e")).env("VISUAL", "nvim").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "nvim +218 app/src/it's.rs");
+        let out = std::process::Command::new("sh").arg("-c").arg(argv[2].replace("exec $e", "echo $e")).env("VISUAL", "hx").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hx app/src/it's.rs:218");
+    }
 
     #[test]
     fn a_folder_under_home_is_shown_from_the_tilde() {
