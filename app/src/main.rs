@@ -178,7 +178,7 @@ impl Render for Root {
                                 _ if self.tabs.read(cx).inbox => self.inbox_view(cx),
                                 (Some(_), _) => {
                                     let body = self.agent_body(cx);
-                                    self.covered(body)
+                                    self.covered(body, cx)
                                 }
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
@@ -334,31 +334,47 @@ fn own_press<E: InteractiveElement>(e: E) -> E {
 }
 
 struct Cover {
-    view: Entity<TerminalView>,
+    was: Shown,
     _painted: Subscription,
     _deadline: Task<()>,
+}
+
+/// What the middle showed before a switch to an agent.
+#[derive(Clone, PartialEq)]
+enum Shown {
+    Terminal(Entity<TerminalView>),
+    Inbox,
+    Changes,
 }
 
 /// The longest an agent's old screen stays over the next one: an attach that slow shows the empty terminal after all.
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
-    /// The terminal the middle shows now, if it shows one (not the Inbox, Changes or a run's story).
-    fn middle_terminal(&self) -> Option<Entity<TerminalView>> {
-        if self.was_changes || self.was_inbox {
-            return None;
+    /// What the middle shows now, if it can stay over an agent while it opens (a run's story cannot).
+    fn middle_shown(&self) -> Option<Shown> {
+        if self.was_changes {
+            return Some(Shown::Changes);
+        }
+        if self.was_inbox {
+            return Some(Shown::Inbox);
         }
         match &self.agent_view {
-            Some((_, v)) => Some(v.clone()),
-            None => self.was_open.is_none().then(|| self.terminal.clone()),
+            Some((_, v)) => Some(Shown::Terminal(v.clone())),
+            None => self.was_open.is_none().then(|| Shown::Terminal(self.terminal.clone())),
         }
     }
 
     /// After a switch to an agent whose screen has not come in yet, keeps `before` over it until it does.
-    fn cover_until_painted(&mut self, before: Option<Entity<TerminalView>>, cx: &mut Context<Self>) {
+    fn cover_until_painted(&mut self, before: Option<Shown>, cx: &mut Context<Self>) {
         self.cover = None;
         let Some((_, new)) = self.agent_view.clone() else { return };
-        let Some(old) = before.filter(|old| *old != new && !self.panes.iter().any(|(_, v)| v == old)) else { return };
+        let Some(was) = before.filter(|was| match was {
+            Shown::Terminal(old) => *old != new && !self.panes.iter().any(|(_, v)| v == old),
+            _ => true,
+        }) else {
+            return;
+        };
         if new.read(cx).has_screen() || self.was_inbox || self.was_changes {
             return;
         }
@@ -375,13 +391,18 @@ impl Root {
                 cx.notify();
             });
         });
-        self.cover = Some(Cover { view: old, _painted: painted, _deadline: deadline });
+        self.cover = Some(Cover { was, _painted: painted, _deadline: deadline });
     }
 
     /// The agent's body, under the screen shown before while the agent's own has not come in.
-    fn covered(&self, body: AnyElement) -> AnyElement {
+    fn covered(&self, body: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let Some(cover) = &self.cover else { return body };
-        div().relative().size_full().child(body).child(div().absolute().inset_0().child(cover.view.clone())).into_any_element()
+        let was = match cover.was.clone() {
+            Shown::Terminal(view) => view.into_any_element(),
+            Shown::Inbox => self.inbox_view(cx),
+            Shown::Changes => self.stack.clone().into_any_element(),
+        };
+        div().relative().size_full().child(body).child(div().absolute().inset_0().bg(rgb(look::PANEL)).child(was)).into_any_element()
     }
 
     /// The terminal in the middle: the agent open from the column, else the person's own Claude Code.
@@ -1363,7 +1384,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 let changes = tabs.read(cx).changes.is_some();
                 let was_agent = this.agent_view.as_ref().map(|(a, _)| a.clone());
                 if open != this.was_open || agent != was_agent || inbox != this.was_inbox || changes != this.was_changes {
-                    let before = this.middle_terminal();
+                    let before = this.middle_shown();
                     this.was_open = open.clone();
                     this.was_inbox = inbox;
                     this.was_changes = changes;
