@@ -685,6 +685,11 @@ impl TerminalView {
         self.send(&bytes);
     }
 
+    /// Presses keys as the keyboard would: the bytes go to the program as they are, not as a paste.
+    pub fn press(&self, bytes: &[u8]) {
+        self.send(bytes);
+    }
+
     fn send(&self, bytes: &[u8]) {
         self.typed_at.set(Some(Instant::now()));
         let mut g = self.grid.borrow_mut();

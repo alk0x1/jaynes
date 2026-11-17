@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod agents;
+mod ask;
 mod answer;
 mod bench;
 mod compare;
@@ -45,7 +46,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9
     ]
 );
 
@@ -53,6 +54,7 @@ actions!(
 const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Tabs", &[("⌘1 … ⌘8", "The tab at that place"), ("⌘9", "The last tab"), ("⇧⌘]  ⇧⌘[", "Next tab, previous tab"), ("⌘W", "Close a run's tab"), ("⌘T", "New agent in this space")]),
     ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"), ("⌘O", "Open what waits for you"), ("⌘↩", "Send your answer"), ("⌘.", "Halt the picked run"), ("⌘N", "New run")]),
+    ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
     ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⌘/", "This list")]),
 ];
 
@@ -146,6 +148,7 @@ impl Render for Root {
                             .flex_1()
                             .min_w_0()
                             .h_full()
+                            .children(self.ask_bar(cx))
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
                                 (Some((_, agent)), _) => agent.clone().into_any_element(),
                                 (None, Some(story)) => story,
@@ -188,7 +191,22 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &NextRun, _, cx| this.step_run(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousRun, _, cx| this.step_run(-1, cx)))
             .on_action(cx.listener(|this, _: &OpenWaiting, window, cx| this.open_waiting(window, cx)))
-            .on_action(cx.listener(|this, _: &SendAnswer, _, cx| this.island.update(cx, |i, cx| i.send_if_ready(cx))))
+            .on_action(cx.listener(|this, _: &SendAnswer, _, cx| {
+                // the open agent's first choice when it asks, else the run's answer
+                if !this.answer(Answer::Pick(1), cx) {
+                    this.island.update(cx, |i, cx| i.send_if_ready(cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Deny, _, cx| this.answer_or_pass(Answer::Deny, cx)))
+            .on_action(cx.listener(|this, _: &Pick1, _, cx| this.answer_or_pass(Answer::Pick(1), cx)))
+            .on_action(cx.listener(|this, _: &Pick2, _, cx| this.answer_or_pass(Answer::Pick(2), cx)))
+            .on_action(cx.listener(|this, _: &Pick3, _, cx| this.answer_or_pass(Answer::Pick(3), cx)))
+            .on_action(cx.listener(|this, _: &Pick4, _, cx| this.answer_or_pass(Answer::Pick(4), cx)))
+            .on_action(cx.listener(|this, _: &Pick5, _, cx| this.answer_or_pass(Answer::Pick(5), cx)))
+            .on_action(cx.listener(|this, _: &Pick6, _, cx| this.answer_or_pass(Answer::Pick(6), cx)))
+            .on_action(cx.listener(|this, _: &Pick7, _, cx| this.answer_or_pass(Answer::Pick(7), cx)))
+            .on_action(cx.listener(|this, _: &Pick8, _, cx| this.answer_or_pass(Answer::Pick(8), cx)))
+            .on_action(cx.listener(|this, _: &Pick9, _, cx| this.answer_or_pass(Answer::Pick(9), cx)))
             .on_action(cx.listener(|this, _: &HaltRun, _, cx| this.halt_picked(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.tabs.update(cx, |t, cx| t.close(cx))))
             .on_action(cx.listener(|this, _: &NewAgent, window, cx| this.new_agent(window, cx)))
@@ -277,6 +295,111 @@ impl Root {
         let core = self.core.clone();
         self.agent_view = address.clone().map(|a| (a.clone(), cx.new(|cx| TerminalView::attach(core, a, (120, 40), cx))));
         self.agents.update(cx, |agents, cx| agents.open(address, cx));
+    }
+
+    /// What the open agent asks, when it shows and waits.
+    fn open_ask(&self, cx: &App) -> Option<agents::Ask> {
+        let (open, _) = self.agent_view.as_ref()?;
+        self.agents.read(cx).ask.clone().filter(|a| a.address == *open)
+    }
+
+    /// Answers the open agent as its keys would: a choice's number, or Esc to deny. False when it asks nothing, or
+    /// has no such choice.
+    fn answer(&mut self, answer: Answer, cx: &mut Context<Self>) -> bool {
+        let Some(ask) = self.open_ask(cx) else { return false };
+        let key = match answer {
+            Answer::Pick(n) if n <= ask.choices.len() => vec![b'0' + n as u8],
+            Answer::Pick(_) => return false,
+            Answer::Deny => vec![0x1b],
+        };
+        if let Some((_, view)) = &self.agent_view {
+            view.read(cx).press(&key);
+        }
+        // answered: the bar goes until the agent asks again
+        self.agents.update(cx, |a, cx| {
+            a.ask = None;
+            cx.notify();
+        });
+        true
+    }
+
+    /// Option-1 to 9 and Command-Backspace answer the open agent when it asks; otherwise the keys go on as they were.
+    fn answer_or_pass(&mut self, answer: Answer, cx: &mut Context<Self>) {
+        if !self.answer(answer, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// The bar over a waiting agent's terminal, in the familiar look: what it asks, then its choices as buttons
+    /// with their keys, the first in amber (Command-Return), and Deny (Command-Backspace).
+    fn ask_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ask = self.open_ask(cx)?;
+        let button = |id: SharedString, text: String, key: String, main: bool| {
+            div()
+                .id(id)
+                .flex_none()
+                .max_w(px(260.))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .px(px(12.))
+                .py(px(6.))
+                .rounded(px(7.))
+                .border_1()
+                .border_color(rgb(if main { look::AMBER } else { look::LINE_2 }))
+                .bg(rgb(if main { look::AMBER } else { look::PANEL_2 }))
+                .text_size(px(12.5))
+                .text_color(rgb(if main { look::ON_FILL } else { look::TEXT }))
+                .when(main, |d| d.font_weight(FontWeight::SEMIBOLD))
+                .when(!main, |d| d.hover(|d| d.bg(rgb(look::SELECTED))))
+                .cursor_pointer()
+                .child(div().min_w_0().truncate().child(text))
+                .child(div().flex_none().text_size(px(11.)).opacity(0.6).child(key))
+        };
+        let mut acts = div().flex().flex_wrap().items_center().gap(px(8.));
+        acts = acts.child(
+            button("ask-deny".into(), "Deny".into(), "⌘⌫".into(), false)
+                .border_color(rgba(0))
+                .bg(rgba(0))
+                .text_color(rgb(look::DIM))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.answer(Answer::Deny, cx);
+                })),
+        );
+        for (i, choice) in ask.choices.iter().enumerate().take(9) {
+            let n = i + 1;
+            let key = if n == 1 { "⌘↩".to_string() } else { format!("⌥{n}") };
+            acts = acts.child(button(SharedString::from(format!("ask-{n}")), choice.clone(), key, n == 1).on_click(cx.listener(move |this, _, _, cx| {
+                this.answer(Answer::Pick(n), cx);
+            })));
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .gap(px(10.))
+                .px(px(18.))
+                .py(px(12.))
+                .relative()
+                .border_b_1()
+                .border_color(rgb(look::LINE))
+                .bg(rgba((look::AMBER << 8) | 0x0c))
+                // the amber edge at the left, as the familiar look marks what waits
+                .child(div().absolute().left_0().top_0().bottom_0().w(px(3.)).bg(rgb(look::AMBER)))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .gap(px(6.))
+                        .text_size(px(13.))
+                        .line_height(px(19.5))
+                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child(ask.title.clone()))
+                        .child(div().min_w_0().truncate().text_color(rgb(look::DIM)).child(ask.what.clone())),
+                )
+                .child(acts)
+                .into_any_element(),
+        )
     }
 
     /// Command-T or the + after a space's tabs: Claude Code in a new tab of the open agent's space, opened at once.
@@ -480,6 +603,13 @@ impl Root {
     }
 }
 
+/// How the person answers an agent that asks: one of its numbered choices, or no.
+#[derive(Clone, Copy)]
+enum Answer {
+    Pick(usize),
+    Deny,
+}
+
 /// The branch checked out where Claude Code works; empty when it is not a git folder.
 fn branch_of(folder: &str) -> String {
     spawn::command("git")
@@ -570,6 +700,16 @@ fn main() {
             KeyBinding::new("cmd-.", HaltRun, Some("Jaynes")),
             KeyBinding::new("cmd-w", CloseTab, Some("Jaynes")),
             KeyBinding::new("cmd-t", NewAgent, Some("Jaynes")),
+            KeyBinding::new("cmd-backspace", Deny, Some("Jaynes")),
+            KeyBinding::new("alt-1", Pick1, Some("Jaynes")),
+            KeyBinding::new("alt-2", Pick2, Some("Jaynes")),
+            KeyBinding::new("alt-3", Pick3, Some("Jaynes")),
+            KeyBinding::new("alt-4", Pick4, Some("Jaynes")),
+            KeyBinding::new("alt-5", Pick5, Some("Jaynes")),
+            KeyBinding::new("alt-6", Pick6, Some("Jaynes")),
+            KeyBinding::new("alt-7", Pick7, Some("Jaynes")),
+            KeyBinding::new("alt-8", Pick8, Some("Jaynes")),
+            KeyBinding::new("alt-9", Pick9, Some("Jaynes")),
             KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);

@@ -15,6 +15,8 @@ pub struct Agents {
     pub trouble: Option<String>,
     /// The agent open in the middle: the person looks at it, so what it finished is seen.
     pub open: Option<String>,
+    /// What the open agent asks, while it waits for the person.
+    pub ask: Option<Ask>,
     core: Arc<hc::Core>,
     _watch: Task<()>,
 }
@@ -36,6 +38,7 @@ impl Agents {
                             Err(e) => this.trouble = Some(e),
                         }
                         this.mark_seen();
+                        this.read_ask(cx);
                         cx.notify();
                     })
                     .is_err();
@@ -44,14 +47,42 @@ impl Agents {
                 }
             }
         });
-        Agents { spaces: Vec::new(), trouble: None, open: None, core, _watch: watch }
+        Agents { spaces: Vec::new(), trouble: None, open: None, ask: None, core, _watch: watch }
     }
 
     /// Opens an agent in the middle (None: none), marking at once what it finished as seen.
     pub fn open(&mut self, address: Option<String>, cx: &mut Context<Self>) {
         self.open = address;
         self.mark_seen();
+        self.read_ask(cx);
         cx.notify();
+    }
+
+    /// Reads what the open agent asks from its screen when it waits; nothing when it does not.
+    fn read_ask(&mut self, cx: &mut Context<Self>) {
+        let open = self.open.as_deref().and_then(|o| self.spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == o)).cloned();
+        let Some(a) = open.filter(|a| a.state == State::Waiting) else {
+            self.ask = None;
+            return;
+        };
+        let core = self.core.clone();
+        let at = a.address.clone();
+        cx.spawn(async move |this, cx| {
+            let screen = cx.background_executor().spawn(async move { core.call("terminal.read", json!({"terminal": at})) }).await;
+            let choices = screen.ok().and_then(|s| s["text"].as_str().map(crate::ask::choices)).unwrap_or_default();
+            let _ = this.update(cx, |this, cx| {
+                // still open and still waiting when the screen came back
+                let waits = this.spaces.iter().flat_map(|s| &s.agents).any(|x| x.address == a.address && x.state == State::Waiting);
+                if this.open.as_deref() == Some(a.address.as_str()) && waits {
+                    let ask = Some(Ask { address: a.address.clone(), title: a.title.clone(), what: crate::ask::what(a.kind.as_deref(), &a.msg), choices });
+                    if this.ask != ask {
+                        this.ask = ask;
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     /// Writes `herdr.seen` on the open agent when it finished a turn the person had not looked at, as Herdr does
@@ -183,6 +214,17 @@ impl State {
     }
 }
 
+/// What an agent waiting for the person asks, for the bar over its terminal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ask {
+    pub address: String,
+    pub title: String,
+    /// "wants to approve Bash: touch x"
+    pub what: String,
+    /// Its numbered choices, as its screen shows them; the first is the one Command-Return takes.
+    pub choices: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Agent {
     pub address: String,
@@ -194,6 +236,9 @@ pub struct Agent {
     pub shell: bool,
     /// How many turns it finished; `herdr.seen` holds the last one the person looked at.
     pub turn: u64,
+    /// While it waits: what kind of thing it asks (permission, question, auth) and its words.
+    pub kind: Option<String>,
+    pub msg: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -273,7 +318,7 @@ fn agent(t: &Value) -> Agent {
         .find(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| address.clone());
-    Agent { address, title, state, since_ms: t["status_ms"].as_u64().or_else(|| t["created_ms"].as_u64()).unwrap_or(0), shell, turn }
+    Agent { address, title, state, since_ms: t["status_ms"].as_u64().or_else(|| t["created_ms"].as_u64()).unwrap_or(0), shell, turn, kind: t["status"]["kind"].as_str().map(str::to_owned), msg: t["status"]["msg"].as_str().unwrap_or_default().to_owned() }
 }
 
 /// How long ago, shortly: now, 5m, 7h, 2d.
