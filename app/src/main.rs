@@ -104,6 +104,9 @@ struct Root {
     agent_view: Option<(String, Entity<TerminalView>)>,
     /// Every pane of the open agent's tab, attached while it shows; the open agent is the one with the keyboard.
     panes: Vec<(String, Entity<TerminalView>)>,
+    /// The terminal shown before a switch, kept over the agent just opened until the core paints its screen, so the
+    /// switch never flashes an empty terminal.
+    cover: Option<Cover>,
     rail: Entity<rail::Rail>,
     /// What git says about the folder the middle works in, at the right (Shift-Command-G).
     changes: Entity<changes::Changes>,
@@ -173,7 +176,10 @@ impl Render for Root {
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
                                 _ if self.tabs.read(cx).changes.is_some() => self.stack.clone().into_any_element(),
                                 _ if self.tabs.read(cx).inbox => self.inbox_view(cx),
-                                (Some(_), _) => self.agent_body(cx),
+                                (Some(_), _) => {
+                                    let body = self.agent_body(cx);
+                                    self.covered(body)
+                                }
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
                             }))
@@ -327,7 +333,57 @@ fn own_press<E: InteractiveElement>(e: E) -> E {
     e.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
+struct Cover {
+    view: Entity<TerminalView>,
+    _painted: Subscription,
+    _deadline: Task<()>,
+}
+
+/// The longest an agent's old screen stays over the next one: an attach that slow shows the empty terminal after all.
+const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
+
 impl Root {
+    /// The terminal the middle shows now, if it shows one (not the Inbox, Changes or a run's story).
+    fn middle_terminal(&self) -> Option<Entity<TerminalView>> {
+        if self.was_changes || self.was_inbox {
+            return None;
+        }
+        match &self.agent_view {
+            Some((_, v)) => Some(v.clone()),
+            None => self.was_open.is_none().then(|| self.terminal.clone()),
+        }
+    }
+
+    /// After a switch to an agent whose screen has not come in yet, keeps `before` over it until it does.
+    fn cover_until_painted(&mut self, before: Option<Entity<TerminalView>>, cx: &mut Context<Self>) {
+        self.cover = None;
+        let Some((_, new)) = self.agent_view.clone() else { return };
+        let Some(old) = before.filter(|old| *old != new && !self.panes.iter().any(|(_, v)| v == old)) else { return };
+        if new.read(cx).has_screen() || self.was_inbox || self.was_changes {
+            return;
+        }
+        let painted = cx.observe(&new, |this: &mut Root, new, cx| {
+            if new.read(cx).has_screen() && this.cover.is_some() {
+                this.cover = None;
+                cx.notify();
+            }
+        });
+        let deadline = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COVER_AT_MOST).await;
+            let _ = this.update(cx, |this, cx| {
+                this.cover = None;
+                cx.notify();
+            });
+        });
+        self.cover = Some(Cover { view: old, _painted: painted, _deadline: deadline });
+    }
+
+    /// The agent's body, under the screen shown before while the agent's own has not come in.
+    fn covered(&self, body: AnyElement) -> AnyElement {
+        let Some(cover) = &self.cover else { return body };
+        div().relative().size_full().child(body).child(div().absolute().inset_0().child(cover.view.clone())).into_any_element()
+    }
+
     /// The terminal in the middle: the agent open from the column, else the person's own Claude Code.
     fn shown_terminal(&self) -> Entity<TerminalView> {
         self.agent_view.as_ref().map(|(_, v)| v.clone()).unwrap_or_else(|| self.terminal.clone())
@@ -1307,10 +1363,12 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 let changes = tabs.read(cx).changes.is_some();
                 let was_agent = this.agent_view.as_ref().map(|(a, _)| a.clone());
                 if open != this.was_open || agent != was_agent || inbox != this.was_inbox || changes != this.was_changes {
+                    let before = this.middle_terminal();
                     this.was_open = open.clone();
                     this.was_inbox = inbox;
                     this.was_changes = changes;
                     this.follow_agent(agent, cx);
+                    this.cover_until_painted(before, cx);
                     let to = match (&this.agent_view, &open) {
                         _ if changes => this.stack.read(cx).focus.clone(),
                         _ if inbox => this.focus.clone(),
@@ -1347,7 +1405,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
         })
     })
     .map(|handle| {
@@ -1372,12 +1430,16 @@ fn the_key() -> Option<Arc<key::Key>> {
 
 /// With JAYNES_APP_SHOT=<file>, the window draws itself into that PNG every second, even when it is covered: how a
 /// test (or an agent) sees what the person would see without taking their screen.
+/// With JAYNES_APP_SHOT_MS=<ms> it draws that often instead, and a `{n}` in the file's name numbers the pictures, so
+/// a test can watch something that lasts less than a second.
 fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut App) {
+    let every = std::env::var("JAYNES_APP_SHOT_MS").ok().and_then(|ms| ms.parse().ok()).unwrap_or(1000);
     cx.spawn(async move |cx| {
         // The app quits with its window, so the loop ends with it.
-        loop {
-            cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+        for n in 0u64.. {
+            cx.background_executor().timer(std::time::Duration::from_millis(every)).await;
             cx.update(terminal::flush_output_clock);
+            let path = std::path::PathBuf::from(path.to_string_lossy().replace("{n}", &format!("{n:05}")));
             let shot = window.render_current_to_image(cx).and_then(|image| {
                 image.save_with_format(&path, image::ImageFormat::Png)?;
                 Ok(())

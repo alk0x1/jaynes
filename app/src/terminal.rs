@@ -155,6 +155,8 @@ pub struct TerminalView {
     pub ended: Option<String>,
     /// The core connection dropped; waiting to reattach.
     pub lost: bool,
+    /// The core's first paint of the screen has come in since the last attach.
+    screen: bool,
     /// A left-button selection drag is in progress.
     selecting: bool,
     published_selection: Option<vt::SelectionPositions>,
@@ -310,6 +312,7 @@ impl TerminalView {
             title: address.clone(),
             ended: None,
             lost: false,
+            screen: false,
             selecting: false,
             published_selection: None,
             scrollbar_grab: None,
@@ -381,6 +384,7 @@ impl TerminalView {
     /// take seconds, and the window must keep drawing meanwhile.
     fn connect(&mut self, core: Arc<Core>, cx: &mut Context<Self>) {
         self._render_hold = None;
+        self.screen = false;
         let fit_ready = {
             let mut g = self.grid.borrow_mut();
             let (cols, rows) = (g.vt.cols, g.vt.rows);
@@ -520,6 +524,11 @@ impl TerminalView {
         }
     }
 
+    /// Something to show: the screen the core painted on attach, or why there is none (it ended, the line dropped).
+    pub fn has_screen(&self) -> bool {
+        self.screen || self.ended.is_some() || self.lost
+    }
+
     #[cfg(test)]
     pub(crate) fn dimensions(&self) -> (u16, u16) {
         let grid = self.grid.borrow();
@@ -560,11 +569,13 @@ impl TerminalView {
     /// Feeds relayed bytes in; returns false once the stream is over.
     fn ingest(&mut self, batch: impl IntoIterator<Item = Stream>, cx: &mut Context<Self>) -> bool {
         let mut open = true;
+        let had_screen = self.screen;
         let title = {
             let mut g = self.grid.borrow_mut();
             for item in batch {
                 match item {
                     Stream::Data(bytes) => {
+                        self.screen = true;
                         g.vt.allow_clipboard_write(crate::settings::get().clipboard_write);
                         g.vt.write(&bytes);
                         let [clipboard, primary] = g.vt.take_clipboard();
@@ -604,6 +615,10 @@ impl TerminalView {
             self.set_title(&title, cx);
         }
         self.selection_changed(cx);
+        // whoever waits to show it (the agent shown before stays over it until then) hears at once
+        if self.screen && !had_screen {
+            cx.notify();
+        }
         if !open {
             cx.emit(TerminalEvent::Ended);
         }
