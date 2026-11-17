@@ -115,24 +115,12 @@ pub fn breathing(id: impl Into<ElementId>, size: f32, color: u32) -> impl IntoEl
         })
 }
 
-/// The app's mark, small: the J on its dark tile with the amber dot of what waits (icon 1 of the polish).
-pub fn mark_icon(size: f32) -> Div {
-    div()
-        .size(px(size))
-        .flex_none()
-        .relative()
-        .rounded(px(size * 0.24))
-        .bg(rgb(PANEL_2))
-        .border_1()
-        .border_color(rgb(LINE_2))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(size * 0.62))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(TEXT))
-        .child("J")
-        .child(div().absolute().top(px(size * 0.14)).right(px(size * 0.14)).size(px(size * 0.2)).rounded_full().bg(rgb(AMBER)))
+/// The app's mark in the top bar: the giraffe of its icon, whose neck is the J (assets/mark.svg, drawn into mark.png
+/// by assets/make-icon.sh at four times this size).
+pub fn mark_icon(height: f32) -> Img {
+    static MARK: std::sync::OnceLock<std::sync::Arc<Image>> = std::sync::OnceLock::new();
+    let mark = MARK.get_or_init(|| std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, include_bytes!("../assets/mark.png").to_vec())));
+    img(mark.clone()).h(px(height)).w(px(height * 67. / 88.)).flex_none()
 }
 
 /// A quiet button with its key, as the top bar shows them.

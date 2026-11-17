@@ -17,8 +17,9 @@ app="$out/Jaynes.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$target/$profile/jaynes-app" "$app/Contents/MacOS/Jaynes"
-# the icon, made from assets/icon.svg (see the comment in it)
-cp "$here/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+# the icon, made by assets/make-icon.sh: Assets.car holds its light and dark looks (macOS 26), AppIcon.icns the light
+# one for older systems
+cp "$here/assets/Assets.car" "$here/assets/AppIcon.icns" "$app/Contents/Resources/"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -30,6 +31,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Jaynes</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

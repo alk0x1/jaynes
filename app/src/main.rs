@@ -202,7 +202,7 @@ impl Root {
             .pl(px(82.))
             .pr(px(8.))
             .gap(px(8.))
-            .child(look::mark_icon(18.))
+            .child(look::mark_icon(22.))
             .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Jaynes"))
             .child(div().flex_1())
             .child(self.sidebar_switch(cx))
