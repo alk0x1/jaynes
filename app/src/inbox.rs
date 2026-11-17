@@ -69,8 +69,8 @@ mod tests {
     #[test]
     fn what_asks_comes_first_then_the_waiting_runs_then_what_finished_unseen() {
         let spaces = [
-            Space { id: "s1".into(), name: "jaynes".into(), folder: String::new(), agents: vec![agent("t1", State::ToReview), agent("t2", State::Waiting), agent("t3", State::Working)] },
-            Space { id: "s2".into(), name: "helm".into(), folder: String::new(), agents: vec![agent("t4", State::Error), agent("t5", State::Idle)] },
+            Space { id: "s1".into(), name: "jaynes".into(), folder: String::new(), agents: vec![agent("t1", State::ToReview), agent("t2", State::Waiting), agent("t3", State::Working)], tabs: vec![] },
+            Space { id: "s2".into(), name: "helm".into(), folder: String::new(), agents: vec![agent("t4", State::Error), agent("t5", State::Idle)], tabs: vec![] },
         ];
         let runs = Listing { needs: vec![Row { id: "r1".into(), title: "Run".into(), line: "Pick one".into(), mark: Mark::Needs }], projects: vec![] };
         let (needs, review) = gather(&spaces, &runs);

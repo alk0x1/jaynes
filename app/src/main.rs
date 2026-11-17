@@ -22,6 +22,7 @@ mod git;
 mod hc;
 mod island;
 mod key;
+mod layout;
 mod lightbox;
 mod links;
 mod look;
@@ -50,7 +51,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane
     ]
 );
 
@@ -60,6 +61,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"),  ("⌘↩", "Send your answer"), ("⌘.", "Stop the open agent, or halt the picked run"), ("⌘N", "New run")]),
     ("Inbox", &[("⌘I", "The Inbox: what needs you, in every space"), ("⌘O", "The next thing that needs you")]),
     ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
+    ("Panes", &[("⌘D", "Split right: your shell beside the agent"), ("⇧⌘D", "Split down"), ("⌘]  ⌘[", "Next pane, previous pane")]),
     ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⇧⌘G", "Changes panel"), ("⌘/", "This list")]),
 ];
 
@@ -100,6 +102,8 @@ struct Root {
     /// the person uses it here, and Herdr sets it again once they type there (herdr-core sizes for the viewer used
     /// last).
     agent_view: Option<(String, Entity<TerminalView>)>,
+    /// Every pane of the open agent's tab, attached while it shows; the open agent is the one with the keyboard.
+    panes: Vec<(String, Entity<TerminalView>)>,
     rail: Entity<rail::Rail>,
     /// What git says about the folder the middle works in, at the right (Shift-Command-G).
     changes: Entity<changes::Changes>,
@@ -169,7 +173,7 @@ impl Render for Root {
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
                                 _ if self.tabs.read(cx).changes.is_some() => self.stack.clone().into_any_element(),
                                 _ if self.tabs.read(cx).inbox => self.inbox_view(cx),
-                                (Some((_, agent)), _) => agent.clone().into_any_element(),
+                                (Some(_), _) => self.agent_body(cx),
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
                             }))
@@ -206,6 +210,10 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &OpenEditor, window, cx| this.open_editor(window, cx)))
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| this.split_pane(layout::Dir::Row, window, cx)))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| this.split_pane(layout::Dir::Column, window, cx)))
+            .on_action(cx.listener(|this, _: &NextPane, _, cx| this.step_pane(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviousPane, _, cx| this.step_pane(-1, cx)))
             .on_action(cx.listener(|this, _: &ToggleRuns, _, cx| {
                 this.sidebar = !this.sidebar;
                 cx.notify();
@@ -325,17 +333,118 @@ impl Root {
         self.agent_view.as_ref().map(|(_, v)| v.clone()).unwrap_or_else(|| self.terminal.clone())
     }
 
-    /// Attaches the agent the tabs show, letting go of the one shown before; the person looks at it from now on.
+    /// Attaches the agent the tabs show and the other panes of its tab, letting go of those no longer shown; the
+    /// person looks at the agent from now on, and it has the keyboard.
     fn follow_agent(&mut self, address: Option<String>, cx: &mut Context<Self>) {
-        if self.agent_view.as_ref().map(|(a, _)| a) == address.as_ref() {
-            return;
+        let same = self.agent_view.as_ref().map(|(a, _)| a) == address.as_ref();
+        self.sync_panes(address.as_deref(), cx);
+        self.agent_view = address.as_ref().and_then(|a| self.panes.iter().find(|(p, _)| p == a).cloned());
+        if !same {
+            self.agents.update(cx, |agents, cx| agents.open(address, cx));
         }
-        if let Some((_, old)) = self.agent_view.take() {
-            old.read(cx).detach();
+    }
+
+    /// The open agent's tab as Herdr splits it; None when it is alone, or in no tab of Herdr's.
+    fn open_layout(&self, cx: &App) -> Option<layout::Layout> {
+        let (open, _) = self.agent_view.as_ref()?;
+        agents::tab_of(&self.agents.read(cx).spaces, open).map(|(_, l)| l.clone()).filter(|l| l.panes().len() > 1)
+    }
+
+    /// Keeps a view attached for every pane of the open agent's tab, and only those: herdr-core sizes a terminal for
+    /// the viewer used last, so a pane that does not show here is let go.
+    fn sync_panes(&mut self, open: Option<&str>, cx: &mut Context<Self>) {
+        let wanted: Vec<String> = match open {
+            Some(a) => agents::tab_of(&self.agents.read(cx).spaces, a).map(|(_, l)| l.panes()).filter(|p| p.iter().any(|p| p == a)).unwrap_or_else(|| vec![a.to_owned()]),
+            None => vec![],
+        };
+        let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.panes).into_iter().partition(|(a, _)| wanted.contains(a));
+        for (_, v) in gone {
+            v.read(cx).detach();
         }
-        let core = self.core.clone();
-        self.agent_view = address.clone().map(|a| (a.clone(), cx.new(|cx| TerminalView::attach(core, a, (120, 40), cx))));
-        self.agents.update(cx, |agents, cx| agents.open(address, cx));
+        self.panes = keep;
+        for a in wanted {
+            if !self.panes.iter().any(|(p, _)| *p == a) {
+                let core = self.core.clone();
+                let view = cx.new(|cx| TerminalView::attach(core, a.clone(), (120, 40), cx));
+                self.panes.push((a, view));
+            }
+        }
+    }
+
+    /// The open agent in the middle: its terminal alone, or every pane of its tab as Herdr splits it, the one with the
+    /// keyboard ringed in blue; a click on a pane gives it the keyboard.
+    fn agent_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some((open, view)) = self.agent_view.clone() else { return div().into_any_element() };
+        let Some(l) = self.open_layout(cx) else { return view.into_any_element() };
+        self.layout_element(&l, &open, cx).into_any_element()
+    }
+
+    fn layout_element(&self, l: &layout::Layout, open: &str, cx: &mut Context<Self>) -> Div {
+        match l {
+            layout::Layout::Pane(a) => {
+                let view = self.panes.iter().find(|(p, _)| p == a).map(|(_, v)| v.clone());
+                let title = self.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|x| x.address == *a).map(|x| x.title.clone()).unwrap_or_else(|| a.clone());
+                let (address, on) = (a.clone(), a == open);
+                div()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(if on { look::BLUE } else { look::LINE_2 }))
+                    .overflow_hidden()
+                    .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
+                        if this.agent_view.as_ref().map(|(o, _)| o) != Some(&address) {
+                            let (address, title) = (address.clone(), title.clone());
+                            this.tabs.update(cx, |t, cx| t.show_agent(address, title, cx));
+                        }
+                    }))
+                    .children(view)
+            }
+            layout::Layout::Split(dir, kids) => {
+                let total: f32 = kids.iter().map(|(w, _)| *w).sum::<f32>().max(0.0001);
+                let mut d = div().size_full().min_w_0().min_h_0().flex().gap(px(6.));
+                if *dir == layout::Dir::Column {
+                    d = d.flex_col();
+                }
+                for (w, k) in kids {
+                    d = d.child(div().flex_basis(px(0.)).flex_grow(w / total).flex_shrink(1.).min_w_0().min_h_0().flex().child(self.layout_element(k, open, cx)));
+                }
+                d.p(px(if self.open_layout(cx).as_ref() == Some(l) { 6. } else { 0. }))
+            }
+        }
+    }
+
+    /// Command-D (right) or Shift-Command-D (down): the person's shell split beside the open agent, in its folder, in
+    /// its tab in Herdr too; it takes the keyboard.
+    fn split_pane(&mut self, dir: layout::Dir, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((open, _)) = self.agent_view.clone() else { return };
+        let agents = self.agents.read(cx);
+        let Some(space) = agents.spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)) else { return };
+        let Some((tab, _)) = agents::tab_of(&agents.spaces, &open) else { return };
+        let (space, tab) = (space.id.clone(), tab.clone());
+        let folder = agents.spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == open).map(|a| a.cwd.clone()).filter(|c| !c.is_empty());
+        let (core, tabs, display) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window));
+        cx.spawn(async move |_, cx| {
+            match cx.background_executor().spawn(async move { agents::split_beside(&core, &space, &tab, &open, folder, dir, display) }).await {
+                Ok(address) => {
+                    let _ = tabs.update(cx, |t, cx| t.show_agent(address, "zsh".into(), cx));
+                }
+                Err(e) => tracing::warn!("cannot split: {e}"),
+            }
+        })
+        .detach();
+    }
+
+    /// Command-] and Command-[: the keyboard goes to the next or the previous pane of the tab, round the end.
+    fn step_pane(&mut self, by: isize, cx: &mut Context<Self>) {
+        let Some((open, _)) = self.agent_view.clone() else { return };
+        let Some(l) = self.open_layout(cx) else { return };
+        let panes = l.panes();
+        let Some(at) = panes.iter().position(|p| *p == open) else { return };
+        let next = panes[(at as isize + by).rem_euclid(panes.len() as isize) as usize].clone();
+        let title = self.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == next).map(|a| a.title.clone()).unwrap_or_default();
+        self.tabs.update(cx, |t, cx| t.show_agent(next, title, cx));
     }
 
     /// What the open agent asks, when it shows and waits.
@@ -1078,6 +1187,10 @@ fn main() {
             KeyBinding::new("alt-8", Pick8, Some("Jaynes")),
             KeyBinding::new("alt-9", Pick9, Some("Jaynes")),
             KeyBinding::new("cmd-shift-g", ToggleChanges, Some("Jaynes")),
+            KeyBinding::new("cmd-d", SplitRight, Some("Jaynes")),
+            KeyBinding::new("cmd-shift-d", SplitDown, Some("Jaynes")),
+            KeyBinding::new("cmd-]", NextPane, Some("Jaynes")),
+            KeyBinding::new("cmd-[", PreviousPane, Some("Jaynes")),
             KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
@@ -1097,6 +1210,11 @@ fn main() {
                     MenuItem::action("Previous Tab", PreviousTab),
                     MenuItem::action("Close Tab", CloseTab),
                     MenuItem::action("New Agent", NewAgent),
+                    MenuItem::separator(),
+                    MenuItem::action("Split Right", SplitRight),
+                    MenuItem::action("Split Down", SplitDown),
+                    MenuItem::action("Next Pane", NextPane),
+                    MenuItem::action("Previous Pane", PreviousPane),
                 ],
             },
             Menu {
@@ -1170,6 +1288,16 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let terminal_focus = focus.clone();
         cx.new(|cx| {
             cx.observe(&runs, |_, _, cx| cx.notify()).detach();
+            // a tab split or a pane gone, here or in Herdr: the panes shown follow
+            cx.observe(&agents, |this: &mut Root, _, cx| {
+                let open = this.agent_view.as_ref().map(|(a, _)| a.clone());
+                let before: Vec<String> = this.panes.iter().map(|(a, _)| a.clone()).collect();
+                this.sync_panes(open.as_deref(), cx);
+                if this.panes.iter().map(|(a, _)| a.clone()).collect::<Vec<_>>() != before {
+                    cx.notify();
+                }
+            })
+            .detach();
             // the switch in the tabs bar counts the files Changes lists
             cx.observe(&changes, |_, _, cx| cx.notify()).detach();
             // the keys go where the person looks: the terminal on Claude Code's tab, else the window itself, or a
@@ -1219,7 +1347,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
         })
     })
     .map(|handle| {

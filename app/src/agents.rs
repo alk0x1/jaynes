@@ -184,23 +184,41 @@ pub fn run_in(core: &hc::Core, space: &Space, argv: Vec<String>, folder: Option<
     let (tab, block) = (new_id("tb"), new_id("p"));
     let labels = json!({"herdr.space": space.id, "herdr.tab": tab});
     let address = core.run(argv, folder, labels, None, None, display).map_err(|e| format!("{e:#}"))?;
+    if let Err(e) = change_doc(core, |v| with_tab(v, &space.id, &tab, &block, &address)) {
+        tracing::warn!("{address} has no tab in Herdr: {e}");
+    }
+    Ok(address)
+}
+
+/// Runs the person's shell split beside a pane of a tab (to its right or under it), in the pane's folder: labelled
+/// with the space and the tab, and the split written to Herdr's document, so Herdr shows it too.
+pub fn split_beside(core: &hc::Core, space: &str, tab: &str, target: &str, folder: Option<String>, dir: crate::layout::Dir, display: Value) -> Result<String, String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let labels = json!({"herdr.space": space, "herdr.tab": tab});
+    let address = core.run(vec![shell, "-l".into()], folder, labels, None, None, display).map_err(|e| format!("{e:#}"))?;
+    let (block, node) = (new_id("p"), new_id("n"));
+    if let Err(e) = change_doc(core, |v| crate::layout::split(v, tab, target, &address, &block, &node, dir)) {
+        tracing::warn!("{address} is not split in Herdr: {e}");
+    }
+    Ok(address)
+}
+
+/// Changes Herdr's herdr-app document: read it, change it, write it only if its version still matches, again when
+/// it does not (up to five times). `change` says None when what it changes is gone.
+fn change_doc(core: &hc::Core, change: impl Fn(&Value) -> Option<Value>) -> Result<(), String> {
     for _ in 0..5 {
         let read = core.call("doc.get", json!({"name": "herdr-app"})).map_err(|e| format!("{e:#}"));
         let written = read.and_then(|doc| {
-            let value = with_tab(&doc["value"], &space.id, &tab, &block, &address).ok_or("the space is gone")?;
+            let value = change(&doc["value"]).ok_or("what it changes is gone")?;
             core.call("doc.set", json!({"name": "herdr-app", "value": value, "version": doc["version"]})).map_err(|e| format!("{e:#}"))
         });
         match written {
-            Ok(_) => return Ok(address),
+            Ok(_) => return Ok(()),
             Err(e) if e.contains("conflict") => continue,
-            Err(e) => {
-                tracing::warn!("{address} has no tab in Herdr: {e}");
-                return Ok(address);
-            }
+            Err(e) => return Err(e),
         }
     }
-    tracing::warn!("{address} has no tab in Herdr: the document kept changing");
-    Ok(address)
+    Err("the document kept changing".into())
 }
 
 /// What is worth telling the person about their agents between two readings: one that starts to need them, one that
@@ -297,6 +315,13 @@ pub struct Space {
     pub name: String,
     pub folder: String,
     pub agents: Vec<Agent>,
+    /// Its tabs as Herdr splits them: each tab's id and how its live terminals share the room.
+    pub tabs: Vec<(String, crate::layout::Layout)>,
+}
+
+/// The tab that holds a terminal, in any space: its id and its layout.
+pub fn tab_of<'a>(spaces: &'a [Space], address: &str) -> Option<&'a (String, crate::layout::Layout)> {
+    spaces.iter().flat_map(|s| &s.tabs).find(|(_, l)| l.panes().iter().any(|p| p == address))
 }
 
 /// The spaces in Herdr's order, each with its live terminals: those its tabs hold first, in the tabs' order, then the
@@ -312,6 +337,13 @@ pub fn arrange(doc: &Value, list: &Value) -> Vec<Space> {
             for tab in space["tabs"].as_array().into_iter().flatten() {
                 blocks(&tab["root"], &mut order);
             }
+            let is_live = |a: &str| live.iter().any(|t| t["address"].as_str() == Some(a));
+            let tabs = space["tabs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| crate::layout::read(&t["root"], &is_live).map(|l| (t["id"].as_str().unwrap_or_default().to_owned(), l)))
+                .collect();
             let mine: Vec<&Value> = live.iter().copied().filter(|t| t["labels"]["herdr.space"].as_str() == Some(id.as_str())).collect();
             let mut agents: Vec<Agent> = order.iter().filter_map(|a| live.iter().find(|t| t["address"].as_str() == Some(a.as_str()))).map(|t| agent(t)).collect();
             for t in &mine {
@@ -325,7 +357,7 @@ pub fn arrange(doc: &Value, list: &Value) -> Vec<Space> {
                 // Herdr names an unnamed space where it shows its terminals ("helm / 1")
                 .or_else(|| mine.iter().find_map(|t| t["labels"]["where"].as_str().and_then(|w| w.rsplit_once(" / ")).map(|(n, _)| n.to_owned())))
                 .unwrap_or_else(|| folder.rsplit('/').find(|p| !p.is_empty()).unwrap_or("space").to_owned());
-            Space { id, name, folder, agents }
+            Space { id, name, folder, agents, tabs }
         })
         .collect()
 }
