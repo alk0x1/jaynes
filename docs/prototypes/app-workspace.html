@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jaynes workspace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --panel:#0b0c0f; --panel2:#131519; --sel:#181a20; --line:#1b1d23; --line2:#262931;
+  --text:#e9ecf1; --dim:#9298a5; --faint:#5d6370;
+  --amber:#ffb35c; --blue:#6fb4ff; --green:#69dba0; --red:#ff7a7a; --grey:#7d8899; --violet:#c49bff;
+  --mono:"IBM Plex Mono",ui-monospace,monospace; --ui:"Instrument Sans",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#050506;color:var(--text);font-family:var(--ui);padding:20px 16px 60px}
+.controls{max-width:1320px;margin:0 auto 10px;display:flex;gap:28px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--dim)}
+.seg{display:flex;gap:2px;background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:2px}
+.seg button{all:unset;cursor:pointer;padding:6px 12px;border-radius:6px;color:var(--dim)}
+.seg button.on{background:var(--sel);color:var(--text)}
+.reset{all:unset;cursor:pointer;color:var(--faint);font-size:12.5px}
+.reset:hover{color:var(--text)}
+.note{max-width:1320px;margin:0 auto 12px;font-size:13px;color:var(--dim);line-height:1.5}
+.note b{color:var(--text);font-weight:500}
+.win{max-width:1320px;height:max(560px,calc(100vh - 130px));margin:0 auto;background:var(--panel);border:1px solid var(--line2);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px #000a;position:relative}
+.lights{display:flex;gap:8px;padding-left:14px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#3a3d45;display:block}
+.k{font-family:var(--mono);font-size:11px;color:var(--text);border:1px solid var(--line2);border-radius:4px;padding:0 5px;background:var(--panel2)}
+.c-wait{color:var(--amber)} .c-work{color:var(--blue)} .c-done{color:var(--green)} .c-idle{color:var(--faint)} .c-revw{color:var(--violet)} .c-todo{color:var(--faint)}
+.add{color:var(--green)} .del{color:var(--red)}
+.spin{display:inline-block;width:9px;height:9px;border:1.5px solid #6fb4ff44;border-top-color:var(--blue);border-radius:50%;animation:s .9s linear infinite;vertical-align:-1px}
+@keyframes s{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.click{cursor:pointer}
+input.bare{all:unset;flex:1;color:var(--text);font:inherit;caret-color:var(--amber)}
+
+/* shared bits */
+.dft{font-family:var(--mono);display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line2);border-radius:6px;overflow:hidden;font-size:12px;line-height:1.7}
+.dft .col{padding:6px 0;min-width:0}
+.dft .col+.col{border-left:1px solid var(--line2)}
+.dft .ln{white-space:pre;padding:0 10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.dft .ln i{font-style:normal;color:var(--faint);display:inline-block;width:30px}
+.dft .r{color:var(--red);background:#ff7a7a22;border-radius:2px}
+.dft .g{color:var(--green);background:#69dba022;border-radius:2px}
+.term{font-family:var(--mono);font-size:12.5px;line-height:1.65;color:var(--dim);white-space:pre-wrap}
+.term .me{color:var(--text)} .term .tool{color:var(--blue)} .term .ok{color:var(--green)} .term .bad{color:var(--red)} .term .warn{color:var(--amber)} .term .work{color:var(--blue)}
+.prompt{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:8px 0;margin-top:10px;font-family:var(--mono);font-size:12.5px;color:var(--faint);cursor:text}
+.prompt.on{color:var(--text);border-color:var(--blue)}
+.palette{position:absolute;inset:0;background:#0009;display:flex;justify-content:center;align-items:flex-start;padding-top:110px;z-index:5}
+.palette .box{width:560px;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;overflow:hidden;font-family:var(--mono);font-size:12.5px}
+.palette .in{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line2);color:var(--faint)}
+.palette .it{display:flex;gap:10px;padding:7px 14px;color:var(--dim);cursor:pointer}
+.palette .it.on{background:var(--sel);color:var(--text)}
+.palette .it .sp{margin-left:auto;color:var(--faint)}
+.help{position:absolute;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;z-index:5}
+.help .box{width:640px;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:20px 24px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:6px 28px}
+.help h3{grid-column:1/-1;margin:0 0 8px;font-size:15px;font-weight:600}
+.help .r{display:flex;gap:12px;color:var(--dim)} .help .r .k{min-width:52px;text-align:center}
+.toast{position:absolute;right:16px;top:54px;background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--violet);border-radius:8px;padding:10px 14px;font-size:12.5px;color:var(--text);z-index:4;box-shadow:0 10px 30px #0008;max-width:360px}
+.toast div{color:var(--dim);font-size:12px;margin-top:2px}
+
+/* ============ A: Buffer ============ */
+.A{font-family:var(--mono);font-size:12.5px}
+.A .top{height:38px;display:flex;align-items:center;border-bottom:1px solid var(--line);flex:none}
+.A .top .side{width:300px;display:flex;align-items:center;gap:10px;height:100%;border-right:1px solid var(--line);flex:none}
+.A .tabline{display:flex;height:100%;align-items:stretch;padding-left:6px;flex:1;min-width:0;overflow:hidden}
+.A .tabline span.tb{display:flex;align-items:center;padding:0 14px;color:var(--faint);gap:8px;border-bottom:2px solid transparent;white-space:nowrap}
+.A .tabline span.tb:hover{color:var(--dim)}
+.A .tabline span.tb.on{color:var(--text);border-bottom-color:var(--blue)}
+.A .tabline .n{color:var(--faint);font-size:11px}
+.A .body{flex:1;display:flex;min-height:0}
+.A .outline{width:300px;border-right:1px solid var(--line);padding:10px 0;overflow-y:auto;flex:none}
+.A .o{display:flex;align-items:baseline;gap:8px;padding:2px 12px;white-space:nowrap;line-height:1.75;cursor:pointer}
+.A .o:hover{background:#ffffff05}
+.A .o.h{color:var(--text);font-weight:600;margin-top:8px}
+.A .o .tri{color:var(--faint);width:10px;flex:none}
+.A .o .cnt{margin-left:auto;color:var(--faint);font-weight:400}
+.A .o.it{padding-left:30px}
+.A .o.step{padding-left:48px;cursor:default}
+.A .o .t{overflow:hidden;text-overflow:ellipsis;flex:1;color:var(--text);min-width:0}
+.A .o.step .t{color:var(--dim)}
+.A .o .age{color:var(--faint);font-size:11.5px}
+.A .o.cur{background:var(--sel);box-shadow:inset 2px 0 var(--blue)}
+.A .kw{font-weight:600;width:44px;flex:none;font-size:11.5px;letter-spacing:.02em}
+.A .tag{color:var(--faint);font-size:11px;font-weight:400}
+.A .o.agenda .cnt{color:var(--amber);font-weight:500}
+.A .main{flex:1;min-width:0;padding:16px 22px;overflow-y:auto;line-height:1.7;display:flex;flex-direction:column}
+.A .hdr{color:var(--dim)} .A .hdr b{color:var(--text);font-weight:500}
+.A .sec{margin-top:14px}
+.A .st{color:var(--text);font-weight:600;cursor:pointer}
+.A .st .tri{color:var(--faint);display:inline-block;width:14px}
+.A .st .c{color:var(--faint);font-weight:400}
+.A .row{padding-left:14px;color:var(--dim);white-space:pre;cursor:pointer}
+.A .row:hover{background:#ffffff05}
+.A .row.hl{background:var(--sel);color:var(--text)}
+.A .bar{display:inline-block;height:8px;vertical-align:middle}
+.A .ask{margin-top:8px;border-left:2px solid var(--amber);padding:6px 0 6px 12px;background:#ffb35c0d}
+.A .ask .q{color:var(--text)} .A .ask .cmd{color:var(--amber)}
+.A .opts{display:flex;gap:10px;margin-top:6px}
+.A .opt{border:1px solid var(--line2);padding:6px 12px;border-radius:6px;cursor:pointer;color:var(--text)}
+.A .opt:hover{border-color:var(--amber)}
+.A .opt b{color:var(--amber);margin-right:6px}
+.A .dft{margin:6px 0 4px 14px}
+.A .shape{padding-left:14px;color:var(--faint)} .A .shape b{color:var(--dim);font-weight:500}
+.A .modeline{height:24px;flex:none;display:flex;align-items:center;gap:18px;padding:0 12px;background:var(--panel2);border-top:1px solid var(--line2);color:var(--dim);font-size:11.5px}
+.A .modeline b{color:var(--text);font-weight:500}
+.A .mini{flex:none;padding:6px 12px 8px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);line-height:1.9;min-height:36px;display:flex;align-items:center;flex-wrap:wrap}
+.A .mini .title{color:var(--amber);font-weight:600;margin-right:14px}
+.A .mini .grp{display:inline-flex;gap:16px;margin-right:30px}
+.A .mini .grp span{cursor:pointer}
+.A .mini .grp span b{color:var(--blue);font-weight:600;margin-right:5px}
+.A .mini .grp.hot span b{color:var(--amber)}
+.A .mini .msg{color:var(--text)}
+.A .mini .q{color:var(--amber);margin-right:8px}
+.A .ag-h{color:var(--text);font-weight:600;margin-top:14px}
+.A .ag-h .c{color:var(--faint);font-weight:400}
+.A .agr{display:grid;grid-template-columns:120px 44px 1fr 60px;gap:10px;padding:0 10px;white-space:nowrap;cursor:pointer}
+.A .agr:hover{background:#ffffff05}
+.A .agr .sp{color:var(--faint)} .A .agr .kw{width:auto}
+.A .agr .what{color:var(--text);overflow:hidden;text-overflow:ellipsis}
+.A .agr .what em{font-style:normal;color:var(--dim)}
+.A .agr .age{color:var(--faint);text-align:right}
+.A .agr.cur{background:var(--sel);box-shadow:inset 2px 0 var(--amber)}
+.A .termwrap{flex:1;display:flex;flex-direction:column;justify-content:flex-end}
+
+/* ============ B: Window ============ */
+.B{font-family:var(--ui);font-size:13px}
+.B .top{height:42px;display:flex;align-items:center;border-bottom:1px solid var(--line);flex:none}
+.B .top .side{width:272px;display:flex;align-items:center;height:100%;border-right:1px solid var(--line);flex:none}
+.B .tabs{display:flex;align-items:stretch;height:100%;padding-left:6px;flex:1;gap:2px;min-width:0;overflow:hidden}
+.B .tab{display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--faint);font-size:12.5px;margin:6px 0;border-radius:7px;cursor:pointer;white-space:nowrap}
+.B .tab:hover{color:var(--dim)}
+.B .tab.on{background:var(--sel);color:var(--text)}
+.B .tab .num{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.B .tr{display:flex;gap:4px;padding-right:10px;font-size:12.5px}
+.B .tr span{padding:5px 10px;border-radius:6px;color:var(--faint);cursor:pointer}
+.B .tr span.on{color:var(--text);background:var(--sel)}
+.B .body{flex:1;display:flex;min-height:0}
+.B .nav{width:272px;border-right:1px solid var(--line);padding:10px 8px;flex:none;overflow-y:auto}
+.B .navi{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;color:var(--dim);cursor:pointer}
+.B .navi.on{background:var(--sel);color:var(--text)}
+.B .navi .cnt{margin-left:auto;font-size:11.5px;color:var(--amber)}
+.B .grp{margin-top:12px}
+.B .gh{display:flex;align-items:center;gap:6px;padding:4px 10px;color:var(--faint);font-size:11.5px;font-weight:500;cursor:pointer}
+.B .gh:hover{color:var(--dim)}
+.B .gh .chev{width:10px}
+.B .gh .cnt{margin-left:auto}
+.B .ag{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:7px;cursor:pointer}
+.B .ag:hover{background:#ffffff06}
+.B .ag.on{background:var(--sel)}
+.B .ag .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.B .ag .age{color:var(--faint);font-size:11.5px}
+.B .ag.sub{padding-left:28px;cursor:default}
+.B .ag.sub .t{color:var(--dim);font-size:12.5px}
+.B .w{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;width:36px;flex:none}
+.B .center{flex:1;min-width:0;display:flex;flex-direction:column}
+.B .askbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:#ffb35c0d;flex:none}
+.B .askbar .lbl{color:var(--amber);font-weight:600;font-size:12px}
+.B .askbar code{font-family:var(--mono);font-size:12.5px;color:var(--text)}
+.B .askbar .q{color:var(--text)}
+.B .btn{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:7px;border:1px solid var(--line2);color:var(--text);font-size:12.5px;background:var(--panel2);cursor:pointer;white-space:nowrap}
+.B .btn:hover{border-color:var(--dim)}
+.B .btn.pri{background:var(--amber);color:#0b0e13;border-color:var(--amber);font-weight:600}
+.B .btn .k{background:transparent;border-color:#0002;color:inherit;opacity:.7}
+.B .termwrap{flex:1;padding:16px 22px;overflow-y:auto;display:flex;flex-direction:column;justify-content:flex-end}
+.B .changes{width:360px;border-left:1px solid var(--line);flex:none;padding:14px 0;overflow-y:auto}
+.B .ch-h{display:flex;align-items:center;justify-content:space-between;padding:0 16px 8px;color:var(--text);font-weight:600;font-size:12.5px}
+.B .ch-h span{color:var(--faint);font-weight:400}
+.B .file{display:flex;align-items:center;gap:8px;padding:5px 16px;font-family:var(--mono);font-size:12px;color:var(--dim);cursor:pointer}
+.B .file:hover{background:#ffffff05}
+.B .file.on{background:var(--sel);color:var(--text)}
+.B .file .n{margin-left:auto}
+.B .shapeB{margin:8px 16px;padding:10px 12px;border:1px solid var(--line2);border-radius:8px;font-size:12px;color:var(--dim);line-height:1.6}
+.B .shapeB b{color:var(--text);font-weight:500}
+.B .dft{margin:6px 16px 4px;grid-template-columns:1fr}
+.B .dft .col+.col{border-left:none;border-top:1px solid var(--line2)}
+.B .commit{padding:4px 16px;font-size:12px;color:var(--dim);display:flex;gap:10px}
+.B .commit code{font-family:var(--mono);color:var(--faint)}
+.B .step{display:flex;gap:10px;padding:5px 16px;font-size:12.5px;color:var(--dim)}
+.B .foot{height:32px;flex:none;display:flex;align-items:center;gap:20px;padding:0 14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim)}
+.B .foot .sp{flex:1}
+.B .foot .hint{cursor:pointer;margin-left:10px}
+.B .foot .msg{color:var(--text)}
+.B .foot input.bare{max-width:520px}
+.B .agenda{flex:1;padding:22px 30px;overflow-y:auto}
+.B .agenda h2{font-size:18px;font-weight:600;margin:0 0 4px}
+.B .agenda .sub{color:var(--faint);font-size:12.5px;margin-bottom:8px}
+.B .ah{color:var(--faint);font-size:11.5px;font-weight:500;margin:18px 0 6px}
+.B .ar{display:grid;grid-template-columns:44px 1fr 150px 110px;gap:14px;align-items:center;padding:9px 12px;border-radius:8px;cursor:pointer}
+.B .ar:hover{background:#ffffff05}
+.B .ar.on{background:var(--sel)}
+.B .ar .what{color:var(--text)}
+.B .ar .what div{color:var(--dim);font-size:12px;margin-top:2px}
+.B .ar .what code{font-family:var(--mono);font-size:12px;color:var(--amber)}
+.B .ar .sp{color:var(--faint);font-size:12px}
+.B .ar .age{color:var(--faint);font-size:12px;text-align:right}
+.B .ar .acts{display:flex;gap:6px;justify-content:flex-end}
+.B .opts{display:flex;gap:8px}
+
+/* ============ C: Familiar ============ */
+.C{font-family:var(--ui);font-size:13px}
+.C .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.C .d-wait{background:var(--amber);box-shadow:0 0 0 3px #ffb35c22}
+.C .d-revw{background:var(--violet)}
+.C .d-idle,.C .d-todo{border:1.5px solid #4a505c}
+.C .d-done{width:auto;height:auto;border-radius:0;color:var(--green);font-size:11px;line-height:1}
+.C .sh{font-family:var(--mono);font-size:10px;color:var(--faint);flex:none;width:12px}
+.C .top{height:40px;display:flex;align-items:center;border-bottom:1px solid var(--line);flex:none}
+.C .top .side{width:292px;display:flex;align-items:center;height:100%;border-right:1px solid var(--line);flex:none}
+.C .tabs{display:flex;align-items:center;height:100%;padding:0 6px;flex:1;gap:2px;min-width:0;overflow:hidden}
+.C .tab{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;color:var(--faint);font-size:12.5px;border-radius:7px;cursor:pointer;white-space:nowrap;max-width:210px;flex:none}
+.C .tab .tt{overflow:hidden;text-overflow:ellipsis}
+.C .tab:hover{color:var(--dim);background:#ffffff05}
+.C .tab.on{background:var(--sel);color:var(--text)}
+.C .tab .num{font-size:10.5px;color:var(--faint);font-family:var(--mono)}
+.C .tab.add{font-size:16px;padding:0 9px}
+.C .tr{display:flex;gap:4px;padding-right:10px}
+.C .tr span{display:flex;gap:6px;align-items:center;padding:5px 10px;border-radius:6px;color:var(--faint);cursor:pointer;font-size:12.5px}
+.C .tr span:hover{color:var(--dim)}
+.C .tr span.on{color:var(--text);background:var(--sel)}
+.C .body{flex:1;display:flex;min-height:0}
+.C .nav{width:292px;border-right:1px solid var(--line);padding:10px 8px;flex:none;overflow-y:auto}
+.C .inbox{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;color:var(--dim);cursor:pointer;font-weight:500}
+.C .inbox:hover{background:#ffffff06;color:var(--text)}
+.C .inbox.on{background:var(--sel);color:var(--text)}
+.C .pill{margin-left:auto;font-size:11px;font-weight:600;color:#0b0e13;background:var(--amber);border-radius:9px;padding:1px 7px}
+.C .pill.v{background:var(--violet)}
+.C .sec-h{font-size:11px;color:var(--faint);padding:16px 10px 2px;letter-spacing:.02em}
+.C .grp{margin-top:6px}
+.C .gh{display:flex;align-items:center;gap:6px;padding:5px 10px;color:var(--dim);font-size:12px;font-weight:500;cursor:pointer;border-radius:6px}
+.C .gh:hover{color:var(--text)}
+.C .gh .chev{width:10px;color:var(--faint)}
+.C .gh .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.C .gh .plus{opacity:0;color:var(--faint);padding:0 4px;font-size:15px;line-height:1}
+.C .gh:hover .plus{opacity:1}
+.C .gh .plus:hover{color:var(--text)}
+.C .ag{display:flex;align-items:center;gap:9px;padding:6px 10px 6px 26px;border-radius:7px;cursor:pointer}
+.C .ag:hover{background:#ffffff06}
+.C .ag.on{background:var(--sel)}
+.C .ag .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.C .ag .st{font-size:11.5px;flex:none}
+.C .ag .age{color:var(--faint)}
+.C .badge{font-size:10.5px;color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 5px;flex:none}
+.C .ag.sub{cursor:default;padding-left:44px}
+.C .ag.sub .t{color:var(--dim);font-size:12.5px}
+.C .newsp{display:flex;gap:8px;align-items:center;padding:8px 10px;margin-top:10px;color:var(--faint);font-size:12.5px;cursor:pointer;border-radius:7px}
+.C .newsp:hover{color:var(--text)}
+.C .center{flex:1;min-width:0;display:flex;flex-direction:column}
+.C .bar{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);flex:none}
+.C .bar.wait{background:#ffb35c0c;box-shadow:inset 3px 0 var(--amber)}
+.C .bar.revw{background:#c49bff0b;box-shadow:inset 3px 0 var(--violet)}
+.C .bar .bt{flex:1;min-width:0;color:var(--text);line-height:1.5}
+.C .bar .bt .why{color:var(--dim);font-size:12.5px}
+.C code{font-family:var(--mono);font-size:12.5px;color:var(--amber);background:#ffb35c14;padding:1px 6px;border-radius:4px}
+.C .acts{display:flex;gap:8px;align-items:center;flex:none}
+.C .btn{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px;border:1px solid var(--line2);color:var(--text);font-size:12.5px;background:var(--panel2);cursor:pointer;white-space:nowrap}
+.C .btn:hover{border-color:#3a3e48;background:#181a20}
+.C .btn.pri{background:var(--amber);color:#0b0e13;border-color:var(--amber);font-weight:600}
+.C .btn.pri.v{background:var(--violet);border-color:var(--violet)}
+.C .btn.ghost{background:none;border-color:transparent;color:var(--dim)}
+.C .btn.ghost:hover{color:var(--text)}
+.C .btn .k{background:transparent;border:none;color:inherit;opacity:.6;padding:0;font-size:11px}
+.C .termwrap{flex:1;padding:16px 22px;overflow-y:auto;display:flex;flex-direction:column}
+.C .termwrap .term{margin-top:auto}
+.C .prompt{font-family:var(--mono)}
+.C .changes{width:360px;border-left:1px solid var(--line);flex:none;padding:12px 0;overflow-y:auto}
+.C .ph{display:flex;align-items:center;justify-content:space-between;padding:4px 16px 8px;color:var(--text);font-weight:600;font-size:12.5px}
+.C .ph span{color:var(--faint);font-weight:400;font-size:12px}
+.C .cbox{display:flex;gap:8px;padding:0 16px 10px}
+.C .field{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:6px 10px;color:var(--text);font:inherit;font-size:12.5px;outline:none}
+.C .field:focus{border-color:var(--blue)}
+.C .file{display:flex;align-items:center;gap:8px;padding:5px 16px;font-size:12.5px;color:var(--text);cursor:pointer}
+.C .file .dir{color:var(--faint);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.C .file .n{margin-left:auto;font-family:var(--mono);font-size:11.5px;flex:none}
+.C .file:hover{background:#ffffff05}
+.C .file.on{background:var(--sel)}
+.C .shapeC{margin:6px 16px 4px;font-size:12px;color:var(--dim);line-height:1.55}
+.C .shapeC b{color:var(--text);font-weight:500}
+.C .dft{margin:6px 16px 10px;grid-template-columns:1fr}
+.C .dft .col+.col{border-left:none;border-top:1px solid var(--line2)}
+.C .dft .lab{font-family:var(--ui);font-size:10.5px;color:var(--faint);padding:0 10px 2px}
+.C .commit{padding:4px 16px;font-size:12px;color:var(--dim);display:flex;gap:10px}
+.C .commit code{color:var(--faint);background:none;padding:0;font-size:11.5px}
+.C .step{display:flex;align-items:center;gap:10px;padding:5px 16px;font-size:12.5px;color:var(--dim)}
+.C .step .w{margin-left:auto;font-size:11.5px}
+.C .inboxv{flex:1;padding:26px 34px;overflow-y:auto}
+.C .inboxv h2{font-size:19px;font-weight:600;margin:0 0 4px}
+.C .inboxv .sub{color:var(--faint);font-size:12.5px;margin-bottom:6px}
+.C .ah{color:var(--dim);font-size:12px;font-weight:600;margin:22px 0 6px;display:flex;gap:8px;align-items:center}
+.C .ah span{color:var(--faint);font-weight:400}
+.C .ar{display:flex;align-items:center;gap:14px;padding:11px 14px;border-radius:9px;cursor:pointer;border:1px solid transparent}
+.C .ar:hover{background:#ffffff05}
+.C .ar.on{border-color:var(--line2);background:#ffffff04}
+.C .ar .what{flex:1;min-width:0;color:var(--text)}
+.C .ar .what div{color:var(--faint);font-size:12px;margin-top:3px}
+.C .ar .age{color:var(--faint);font-size:12px;width:34px;text-align:right;flex:none}
+.C .clear{margin-top:40px;color:var(--green);font-size:15px;font-weight:500}
+.C .quiet{margin-top:26px;color:var(--faint);font-size:12.5px}
+.C .foot{height:28px;flex:none;display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim)}
+.C .foot .b{color:var(--text);font-weight:500}
+.C .foot .br{color:var(--blue);font-family:var(--mono);font-size:11px}
+.C .foot .sp{flex:1}
+.C .foot .msg{color:var(--text)}
+.C .foot .cnt,.C .foot .hint{display:flex;align-items:center;gap:6px;cursor:pointer}
+.C .foot .cnt:hover,.C .foot .hint:hover{color:var(--text)}
+.C .palette .box{font-family:var(--ui);font-size:13px}
+.C .palette .it{align-items:center}
+.C .palette .pc{color:var(--faint);width:12px}
+.C .help .box{font-family:var(--ui)}
+.C .help .r .k{min-width:64px}
+.C .help .foot-n{grid-column:1/-1;color:var(--faint);font-size:12px;margin-top:8px}
+.dlgwrap{position:absolute;inset:0;background:#0008;display:flex;justify-content:center;align-items:flex-start;padding-top:120px;z-index:6}
+.dlg{width:460px;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:16px;box-shadow:0 20px 60px #000a}
+.dlg .dt{font-weight:600;margin-bottom:10px}
+.dlg .field{width:100%}
+.dlg .da{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="controls">
+  <div style="display:flex;gap:10px;align-items:center">Direction
+    <div class="seg" id="dir"><button data-v="C" class="on">C · Familiar</button><button data-v="A">A · Buffer (Emacs)</button><button data-v="B">B · Window</button></div>
+  </div>
+  <span style="color:var(--faint)" id="keyhint"></span>
+  <button class="reset" id="reset">Start over</button>
+</div>
+<div class="note" id="note"></div>
+<div id="app"></div>
+
+<script>
+// ---------------------------------------------------------------- model
+const DIFF_RAIL={left:[[41,'fn row(&self, row: &Row, on: bool) -> Div {'],[42,'    div()'],[43,'        .px(px(8.))'],[44,'        .{-hover(|d| d.bg(SELECTED))-}']],
+  right:[[41,'fn row(&self, row: &Row, on: bool{+, place: Place+}) -> Div {'],[42,'    {+opens(&row.id, place,+} div()'],[43,'        .px(px(8.))'],[44,'        .{+when(on, |d| d.bg(SELECTED))+}{+)+}']]};
+const DIFF_TABS={left:[[88,'pub struct Tabs {'],[89,'    pub open: Option<String>,'],[90,'}']],
+  right:[[88,'pub struct Tabs {'],[89,'    pub open: Option<String>,'],[90,'    {+pub lit: Option<String>,+}'],[91,'    {+scroll: ScrollHandle,+}'],[92,'}']]};
+const DIFF_GO={left:[[200,'}']],right:[[200,'}'],[202,'{+func TestReadProposesHypothesesWithTheEarlierLooseNotes(t *testing.T) {+}'],[203,'{+    f := &fake{answers: []string{`{"reply":[]}`}}+}'],[205,'{+    in := input()+}']]};
+
+function fresh(){return {
+ spaces:[
+  {id:'s1',name:'jaynes/tenure',folder:'~/Projects/jaynes',open:true,items:[
+   {id:'a1',kind:'agent',title:'Steps panel not clickable',st:'wait',age:'1m',cwd:'~/Projects/jaynes',branch:'main',ahead:2,
+    ask:{kind:'permission',cmd:'git push origin main',why:'It wants to push the two commits below. Allowing sends them to GitHub.'},
+    files:[{p:'app/src/rail.rs',a:40,d:8,shape:'<b>fn row</b> takes a new <b>place</b> · its body is wrapped in <b>opens()</b> · nothing else moved',diff:DIFF_RAIL,open:true},
+           {p:'app/src/tabs.rs',a:44,d:4,shape:'<b>struct Tabs</b> gains <b>lit</b> and <b>scroll</b> · 3 new methods',diff:DIFF_TABS},
+           {p:'app/src/main.rs',a:0,d:0,mode:true}],
+    commits:[['ab48af1',"The steps panel opens the run's story where it points"],['e41b35b','Only the step whose question is open waits for the person']],
+    log:[['me','❯ commit it and ask me before pushing'],['',''],['tool','● Bash(git add app/src/rail.rs app/src/tabs.rs && git commit -m "The steps panel opens…")'],['',"  ⎿ [main ab48af1] The steps panel opens the run's story where it points"],['','     2 files changed, 84 insertions(+), 12 deletions(-)'],['',''],['tool','● Bash(cargo test -p jaynes-app)'],['ok','  ⎿ test result: ok. 22 passed; 0 failed'],['',''],['','Both commits are ready on main. Pushing them to GitHub.'],['',''],['tool','● Bash(git push origin main)'],['warn','  ⎿ Waiting for permission…']]},
+   {id:'a2',kind:'agent',title:'LLMs in Tenure',st:'work',age:'1m',cwd:'~/Projects/tenure-app',branch:'llm-notes',ahead:0,finishIn:28,
+    files:[{p:'internal/read/read_test.go',a:38,d:0,shape:'one new test: <b>TestReadProposesHypothesesWithTheEarlierLooseNotes</b>',diff:DIFF_GO}],commits:[],
+    log:[['me','❯ add a test: the prompt carries the earlier loose notes'],['',''],['tool','● Write(internal/read/read_test.go)'],['','  ⎿ Wrote 38 lines'],['',''],['work','✻ Creating… (1m 23s · ↓ 7.5k tokens · thinking with high effort)']]},
+   {id:'r1',kind:'run',title:'tenure hypotheses',st:'work',age:'12m',cwd:'~/Projects/tenure-app',branch:'jaynes/hypotheses',ahead:1,stepEvery:22,
+    steps:[['goal','done'],['plan','done'],['build','work'],['check','todo'],['deliver','todo']],files:[{p:'internal/hyp/hyp.go',a:120,d:6,shape:'new <b>Propose</b> · <b>Read</b> calls it after the loose notes'}],commits:[['9c1e2aa','Hypotheses from the loose notes']],
+    log:[['me','Run tenure hypotheses · role build-feature'],['',''],['ok','✓ goal     "the reader proposes hypotheses from loose notes"'],['ok','✓ plan     4 changes, 2 tests'],['work','● build    writing internal/hyp/hyp.go…']]},
+   {id:'a3',kind:'shell',title:'zsh',st:'idle',age:'',cwd:'~/Projects/jaynes',branch:'main',ahead:0,files:[],commits:[],log:[['','Last login: Tue Nov 17 05:12 on ttys004']]}
+  ]},
+  {id:'s2',name:'sockpuppet',folder:'~/Projects/sockpuppet',open:true,items:[
+   {id:'a4',kind:'agent',title:'Handoff cleansing 2026-11-16',st:'wait',age:'6m',cwd:'~/Projects/sockpuppet',branch:'main',ahead:0,
+    ask:{kind:'question',q:'Keep the old handoff files or delete them?'},files:[{p:'docs/handoffs/README.md',a:12,d:30,shape:'the index lists 4 handoffs instead of 11'}],commits:[],
+    log:[['me','❯ clean the handoffs folder, keep what still matters'],['',''],['tool','● Read(docs/handoffs/)'],['','  ⎿ 11 files'],['',''],['','7 handoffs are older than two weeks and every task in them is closed.'],['warn','Keep the old handoff files or delete them?']]},
+   {id:'a5',kind:'agent',title:'Research brain handoff',st:'revw',age:'2m',cwd:'~/Projects/sockpuppet',branch:'main',ahead:1,
+    files:[{p:'brain/handoff.md',a:180,d:22,shape:'new sections <b>Sources</b> and <b>Open questions</b>'},{p:'brain/index.md',a:30,d:18,shape:'links reordered by topic'}],commits:[['51af0de','Research brain handoff']],
+    log:[['me','❯ write the handoff for the research brain'],['',''],['ok','Done. brain/handoff.md has the sources and the 6 open questions.']]},
+   {id:'a6',kind:'agent',title:'Research brain architecture',st:'revw',age:'18m',cwd:'~/Projects/sockpuppet',branch:'main',ahead:0,
+    files:[{p:'docs/brain.md',a:96,d:0,shape:'a new document'}],commits:[],log:[['ok','Wrote docs/brain.md: three layers, how notes flow between them.']]},
+   {id:'a7',kind:'agent',title:'Handoff 2026-11-16 on the brain',st:'idle',age:'7h',cwd:'~/Projects/sockpuppet',branch:'main',ahead:0,files:[],commits:[],log:[['','(quiet for 7 hours)']]}
+  ]},
+  {id:'s3',name:'helm',folder:'~/Projects/helm',open:true,items:[
+   {id:'r2',kind:'run',title:'finance app identity',st:'wait',age:'4m',cwd:'~/Projects/helm',branch:'jaynes/identity',ahead:2,
+    ask:{kind:'choose',q:'Pick one of 3 identities',opts:['Ledger, ink on paper','Harbor, calm blues','Tally, bold numbers']},
+    steps:[['goal','done'],['research','done'],['sketches','done'],['identity','wait'],['tokens','todo'],['screens','todo'],['check','todo']],files:[],commits:[],
+    log:[['ok','✓ sketches  3 directions drawn'],['warn','● identity  waits for you: pick one of 3']]},
+   {id:'a8',kind:'agent',title:'Personal finance app',st:'idle',age:'15h',cwd:'~/Projects/helm',branch:'main',ahead:0,files:[],commits:[],log:[['','(quiet for 15 hours)']]}
+  ]},
+  {id:'s4',name:'showseeker',folder:'~/Projects/showseeker',open:false,items:[
+   {id:'a9',kind:'agent',title:'Task 2353 from another session',st:'work',age:'3m',cwd:'~/Projects/showseeker',branch:'task-2353',ahead:0,finishIn:45,
+    files:[{p:'src/schedule/grid.ts',a:22,d:9,shape:'<b>buildGrid</b> skips empty slots'}],commits:[],log:[['tool','● Bash(npm test)'],['work','  ⎿ running 214 tests…']]},
+   {id:'a10',kind:'agent',title:'Handoff 2026-11-13',st:'idle',age:'11h',cwd:'~/Projects/showseeker',branch:'main',ahead:0,files:[],commits:[],log:[['','(quiet for 11 hours)']]}
+  ]}
+ ],
+ sel:'agenda', cursor:0, view:{}, termFocus:false, palette:null, help:false, mini:null, msg:null, toast:null, panel:true, t:0
+};}
+let S=fresh(), dir=(new URLSearchParams(location.search).get('dir'))||'C';
+
+const all=()=>S.spaces.flatMap(s=>s.items.map(i=>{i.space=s;return i}));
+const byId=id=>all().find(i=>i.id===id);
+const cur=()=>S.sel==='agenda'?null:byId(S.sel);
+const KW={wait:'WAIT',work:'WORK',revw:'REVW',done:'DONE',idle:'IDLE',todo:'TODO'};
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const marks=s=>esc(s).replace(/\{\+(.*?)\+\}/g,'<span class="g">$1</span>').replace(/\{-(.*?)-\}/g,'<span class="r">$1</span>');
+const kwHtml=(st,cls='kw')=>`<span class="${cls} c-${st}">${KW[st]}</span>`;
+const sum=f=>f.reduce((a,x)=>[a[0]+x.a,a[1]+x.d],[0,0]);
+const ageOrSteps=i=>i.kind==='run'?`${i.steps.filter(s=>s[1]==='done').length}/${i.steps.length}`:i.age;
+const agendaGroups=()=>{const xs=all();if(dir==='C')return [['Needs you','wait',xs.filter(i=>i.st==='wait')],['Finished, to review','revw',xs.filter(i=>i.st==='revw')]];return [
+  ['Needs you','wait',xs.filter(i=>i.st==='wait')],
+  ['To review','revw',xs.filter(i=>i.st==='revw')],
+  ['Working','work',xs.filter(i=>i.st==='work')],
+  ['Quiet','idle',xs.filter(i=>i.st==='idle'&&i.kind!=='shell')]];};
+const agendaRows=()=>agendaGroups().flatMap(g=>g[2]);
+const askLine=i=>{const a=i.ask;if(!a)return '';
+  if(a.kind==='permission')return `permission  <span class="c-wait">${esc(a.cmd)}</span>`;
+  if(a.kind==='question')return `question  <em>"${esc(a.q)}"</em>`;
+  return esc(a.q);};
+const subline=i=>{if(i.st==='revw'){if(!i.files.length)return 'finished';const [a,d]=sum(i.files);return `${i.files.length} file${i.files.length>1?'s':''} +${a} −${d}`+(i.commits.length?` · ${i.commits.length} commit${i.commits.length>1?'s':''}`:'')}
+  if(i.st==='work'){if(i.kind==='run'){const k=i.steps.findIndex(s=>s[1]==='work');return k<0?'working…':`step ${k+1} of ${i.steps.length}, ${i.steps[k][0]}`}return 'working…'}
+  return ''};
+
+// ---------------------------------------------------------------- actions
+function say(m){S.msg=m;clearTimeout(say.t);say.t=setTimeout(()=>{S.msg=null;render()},4500)}
+function toast(title,line,id){S.toast={title,line,id};clearTimeout(toast.t);toast.t=setTimeout(()=>{S.toast=null;render()},6000)}
+function select(id){S.sel=id;S.termFocus=dir==='C'&&id!=='agenda';S.toast=null;if(id==='agenda')S.cursor=Math.min(S.cursor,Math.max(0,agendaRows().length-1));render()}
+function finish(i,line){i.st='revw';i.age='now';i.ask=null;if(line)i.log.push(['',''],['ok',line]);toast(`${i.title} finished`,`${i.space.name} · ${subline(i)}`,i.id);say(`${i.title} finished`+(dir==='C'?'':' · x marks it reviewed'))}
+function later(sec,f){setTimeout(()=>{f();render()},sec*1000)}
+function allow(i){if(!i||i.st!=='wait')return;const a=i.ask;
+  if(a.kind==='permission'){i.log.pop();i.log.push(['ok','  ⎿ allowed by you'],['','  ⎿ To github.com:alk0x1/jaynes.git  e41b35b..ab48af1  main -> main']);i.st='work';i.ask=null;i.age='now';say('Allowed: git push origin main');
+    later(3,()=>{i.ahead=0;i.commits=[];finish(i,'Pushed. main is up to date with origin.')})}
+  else if(a.kind==='question'){openMini(`Reply to "${a.q}"`,'',t=>reply(i,t));return}
+  else if(a.kind==='choose'){pick(i,0);return}
+  render()}
+function deny(i,why){if(!i||i.st!=='wait'||i.ask.kind!=='permission')return;i.log.pop();i.log.push(['bad','  ⎿ denied by you'+(why?`: ${why}`:'')]);i.ask=null;i.st='work';i.age='now';say('Denied'+(why?', saying why':''));
+  later(2.5,()=>{i.log.push(['',''],['','Understood, I will not push. The commits stay on main.']);i.st='idle';i.age='now'});render()}
+function reply(i,t){if(!t)return;i.log.push(['',''],['me','❯ '+t]);i.ask=null;i.st='work';i.age='now';say('Sent');render();later(4,()=>finish(i,'Done, as you said.'))}
+function pick(i,n){const a=i.ask;if(!a||a.kind!=='choose')return;i.log.push(['ok',`✓ identity  you picked ${a.opts[n]}`],['work','● tokens    working…']);
+  i.ask=null;i.st='work';i.age='now';i.stepEvery=15;const k=i.steps.findIndex(s=>s[1]==='wait');i.steps[k][1]='done';i.steps[k+1][1]='work';say(`Picked ${a.opts[n].split(',')[0]}; the run goes on`);render()}
+function halt(i){if(!i||i.st!=='work')return;i.st='idle';i.age='now';i.finishIn=null;i.stepEvery=null;i.log.push(['bad','■ halted by you']);say(`Halted ${i.title}`);render()}
+function reviewed(i){if(!i||i.st!=='revw')return;i.st='done';say(`${i.title}: reviewed`);
+  if(S.sel==='agenda')S.cursor=Math.min(S.cursor,Math.max(0,agendaRows().length-1));render()}
+function newAgent(spId){const sp=(spId&&S.spaces.find(x=>x.id===spId))||(cur()&&cur().space)||S.spaces[0];openMini(dir==='C'?`New agent in ${sp.name}. What should it do?`:`New agent in ${sp.name}, tell it what to do`,'',t=>{if(!t)return;
+  const id='n'+Date.now();sp.items.unshift({id,kind:'agent',title:t.slice(0,40),st:'work',age:'now',cwd:sp.folder,branch:'main',ahead:0,files:[],commits:[],finishIn:12,log:[['me','❯ '+t],['',''],['work','✻ Thinking…']]});sp.open=true;select(id)})}
+function newSpace(){openMini('New space, its folder','~/Projects/',t=>{if(!t)return;const name=t.replace(/\/$/,'').replace(/.*\//,'')||t;S.spaces.push({id:'s'+Date.now(),name,folder:t,open:true,items:[]});say(`Space ${name} added`);render()})}
+function commit(i){if(!i||!i.files.length)return;openMini('Commit message','',t=>{if(!t)return;i.commits.unshift([Math.random().toString(16).slice(2,9),t]);i.ahead++;say(`Committed ${i.files.length} file(s) on ${i.branch}`);render()})}
+function toggleView(i){if(!i)return;S.view[i.id]=S.view[i.id]==='status'?'term':'status';S.termFocus=false;render()}
+function openDiff(i){if(!i||!i.files.length)return;S.view[i.id]='status';S.panel=true;i.files.forEach((f,k)=>f.open=k===0);render()}
+function openMini(prompt,value,done){S.mini={prompt,value,done};render()}
+function move(by){
+  if(S.sel==='agenda'){const n=agendaRows().length;if(!n)return;S.cursor=(S.cursor+by+n)%n;render();return}
+  const vis=all().filter(i=>i.space.open);const k=vis.findIndex(i=>i.id===S.sel);if(k<0)return;select(vis[(k+by+vis.length)%vis.length].id)}
+function tick(){S.t++;let changed=false;
+  for(const i of all()){
+    if(i.st==='work'&&i.finishIn){i.finishIn--;if(i.finishIn<=0){i.finishIn=null;finish(i,'Done. Tests pass.');changed=true}}
+    if(i.st==='work'&&i.kind==='run'&&i.stepEvery&&S.t%i.stepEvery===0){const k=i.steps.findIndex(s=>s[1]==='work');
+      if(k>=0){i.steps[k][1]='done';i.log.push(['ok',`✓ ${i.steps[k][0]}`]);
+        if(k+1<i.steps.length){i.steps[k+1][1]='work';i.log.push(['work',`● ${i.steps[k+1][0]}  working…`])}else{i.stepEvery=null;finish(i,'Delivered: the branch is ready to merge.')}
+        changed=true}}}
+  if(changed)render()}
+setInterval(tick,1000);
+
+// ---------------------------------------------------------------- keys
+function transient(){const i=cur();
+  if(S.termFocus)return {title:'Terminal',groups:[{keys:[['Esc','back to the keys']]},{keys:[['','your typing goes to '+(i&&i.kind==='shell'?'zsh':'Claude Code')]]}]};
+  if(!i){const r=agendaRows()[S.cursor];const g=[];
+    if(r&&r.st==='wait'&&r.ask.kind==='permission')g.push({hot:1,keys:[['y','allow'],['n','deny'],['e','deny, saying why…']]});
+    if(r&&r.st==='wait'&&r.ask.kind==='question')g.push({hot:1,keys:[['r','reply…']]});
+    if(r&&r.st==='wait'&&r.ask.kind==='choose')g.push({hot:1,keys:[['1 2 3','pick']]});
+    if(r&&r.st==='revw')g.push({hot:1,keys:[['x','mark reviewed']]});
+    g.push({keys:[['↩','open'],['j k','move']]},{keys:[['N','new agent'],['⌘K','go to…'],['?','all keys']]});
+    const title=r&&r.st==='wait'?(r.ask.kind==='permission'?r.ask.cmd+'?':r.ask.q):'Agenda';
+    return {title,groups:g}}
+  const g=[];let title=i.title;
+  if(i.st==='wait'){const a=i.ask;title=a.kind==='permission'?'Permission':a.kind==='question'?'Question':'Pick';
+    g.push({hot:1,keys:a.kind==='permission'?[['y','allow'],['n','deny'],['e','deny, saying why…']]:a.kind==='question'?[['r','reply…']]:[['1 2 3','pick']]})}
+  if(i.st==='revw')g.push({hot:1,keys:[['x','mark reviewed']]});
+  const k=[['s',S.view[i.id]==='status'?'terminal':'status']];
+  if(i.files.length)k.push(['d','diff'],['c','commit…']);
+  if(i.st==='work')k.push(['h','halt']);
+  k.push(['i','type']);
+  g.push({keys:k},{keys:[['j k','next, previous'],['a','agenda'],['⌘K','go to…'],['?','all keys']]});
+  return {title,groups:g}}
+function keyAction(key){const i=cur(),r=S.sel==='agenda'?agendaRows()[S.cursor]:i;
+  switch(key){
+   case 'j':case 'ArrowDown':move(1);break;
+   case 'k':case 'ArrowUp':move(-1);break;
+   case 'Enter':case '↩':if(S.sel==='agenda'&&r)select(r.id);break;
+   case 'a':select('agenda');break;
+   case 'y':allow(r);break;
+   case 'n':deny(r);break;
+   case 'e':if(r&&r.st==='wait'&&r.ask.kind==='permission')openMini('Deny, saying why','',t=>deny(r,t));break;
+   case 'r':if(r&&r.st==='wait'&&r.ask.kind==='question')openMini(`Reply to "${r.ask.q}"`,'',t=>reply(r,t));break;
+   case '1':case '2':case '3':if(r&&r.st==='wait'&&r.ask.kind==='choose')pick(r,+key-1);break;
+   case '1 2 3':if(r&&r.st==='wait'&&r.ask.kind==='choose')pick(r,0);break;
+   case 'x':reviewed(r);break;
+   case 'h':halt(r);break;
+   case 's':toggleView(i);break;
+   case 'd':openDiff(i);break;
+   case 'c':commit(i);break;
+   case 'i':if(i){S.view[i.id]='term';S.termFocus=true;render()}break;
+   case 'N':newAgent();break;
+   case '⌘K':case '/':S.palette={q:'',k:0};render();break;
+   case '?':S.help=!S.help;render();break;
+   case 'Tab':if(i){i.space.open=!i.space.open;if(!i.space.open)select('agenda');else render()}break;
+   case 'Esc':S.help=false;S.palette=null;S.termFocus=false;render();break;
+  }}
+document.addEventListener('keydown',e=>{
+  const id=e.target.id;
+  if(dir==='C'&&keyC(e))return;
+  if(id==='mini-in'){if(e.key==='Enter'){const m=S.mini;S.mini=null;m.done(e.target.value.trim());render()}else if(e.key==='Escape'){S.mini=null;say('Quit');render()}return}
+  if(id==='pal-in'){const list=palList();
+    if(e.key==='Escape'){S.palette=null;render()}
+    else if(e.key==='ArrowDown'){e.preventDefault();S.palette.k=Math.min(S.palette.k+1,list.length-1);render()}
+    else if(e.key==='ArrowUp'){e.preventDefault();S.palette.k=Math.max(S.palette.k-1,0);render()}
+    else if(e.key==='Enter'){palGo(S.palette.k)}return}
+  if(id==='term-in'){if(e.key==='Escape'){S.termFocus=false;render()}else if(e.key==='Enter'){const i=cur();const t=e.target.value;e.target.value='';
+    if(i&&t.trim()){i.log.push(['',''],['me',(i.kind==='shell'?'% ':'❯ ')+t]);if(i.kind==='shell'){i.log.push(['',`(ran ${t.split(' ')[0]})`])}else{i.ask=null;i.st='work';i.age='now';i.finishIn=6;i.log.push(['work','✻ Thinking…'])}render()}}return}
+  if(id==='commit-in'){if(e.key==='Enter'){e.preventDefault();commitC(cur())}return}
+  if(dir==='C'){if(e.key==='Escape'){S.help=false;S.palette=null;render()}return}
+  if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();keyAction('⌘K');return}
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  const k=e.key==='Escape'?'Esc':e.key;
+  if(['j','k','a','y','n','e','r','1','2','3','x','h','s','d','c','i','N','/','?','Tab','Enter','ArrowDown','ArrowUp','Esc'].includes(k)){e.preventDefault();keyAction(k)}
+});
+function palList(){const q=(S.palette.q||'').toLowerCase();
+  const items=[{label:dir==='C'?'Inbox':'Agenda',sp:'',kw:'',go:()=>select('agenda')}].concat(all().map(i=>({label:(i.kind==='run'?'run ':'')+i.title,sp:i.space.name,kw:i.st,shell:i.kind==='shell',go:()=>{i.space.open=true;select(i.id)}})));
+  if(dir==='C'){const sp=(cur()&&cur().space)||S.spaces[0];items.push(
+    {cmd:1,label:`New agent in ${sp.name}`,key:'⌘T',go:()=>newAgent()},{cmd:1,label:'New space',key:'⇧⌘N',go:newSpace},
+    {cmd:1,label:'Open the next thing that needs you',key:'⌘O',go:nextNeeding},{cmd:1,label:'Show or hide Changes',key:'⇧⌘G',go:()=>{S.panel=!S.panel;render()}},
+    {cmd:1,label:'Keyboard shortcuts',key:'⌘/',go:()=>{S.help=true;render()}})}
+  return items.filter(x=>!q||fuzzy(q,(x.label+' '+x.sp).toLowerCase()))}
+function fuzzy(q,s){let k=0;for(const c of s){if(c===q[k])k++;if(k===q.length)return true}return false}
+function palGo(k){const it=palList()[k];S.palette=null;if(it)it.go();else render()}
+
+// ---------------------------------------------------------------- shared renders
+function termHtml(i){return `<div class="term">${i.log.map(([c,s])=>`<span class="${c}">${esc(s)}</span>`).join('\n')}</div>
+  <div class="prompt ${S.termFocus?'on':''}" onclick="if(!S.termFocus){S.termFocus=true;render()}"><span>${i.kind==='shell'?'%':'❯'}</span>${S.termFocus?`<input class="bare" id="term-in" autocomplete="off" placeholder="${dir==='C'?(cur()&&cur().st==='wait'&&cur().ask.kind==='question'?'Type your answer · Return sends':'Type to '+(cur()&&cur().kind==='shell'?'zsh':cur()?who(cur()):'Claude Code')+' · Return sends'):'type and press Return · Esc leaves'}">`:`<span>${dir==='C'?'click to type':'press i or click to type'}</span>`}</div>`}
+function diffHtml(f){if(!f.diff)return '';const col=side=>`<div class="col">${dir==='C'?`<div class="lab">${side==='left'?'Before':'After'}</div>`:''}${f.diff[side].map(([n,s])=>`<div class="ln"><i>${n}</i>${marks(s)}</div>`).join('')}</div>`;return `<div class="dft">${col('left')}${col('right')}</div>`}
+function overlays(){let h='';
+  if(S.palette){const list=palList();S.palette.k=Math.min(S.palette.k,Math.max(0,list.length-1));
+    h+=`<div class="palette" onclick="if(event.target===this){S.palette=null;render()}"><div class="box"><div class="in">${dir==='C'?'⌕':'Go to'} <input class="bare" id="pal-in" placeholder="${dir==='C'?'Search agents, spaces and commands':''}" value="${esc(S.palette.q)}" oninput="S.palette.q=this.value;S.palette.k=0;render()" autocomplete="off"></div>
+    ${dir==='C'?list.slice(0,10).map((x,k)=>`<div class="it ${k===S.palette.k?'on':''}" onclick="palGo(${k})">${x.cmd?'<span class="pc">›</span>':x.shell?'<span class="sh">›_</span>':x.kw?dotC(x.kw):INBOX_SVG}${esc(x.label)}<span class="sp">${x.cmd?`<span class="k">${x.key}</span>`:esc(x.sp)}</span></div>`).join(''):list.slice(0,9).map((x,k)=>`<div class="it ${k===S.palette.k?'on':''}" onclick="palGo(${k})">${x.kw?`<span class="c-${x.kw}" style="width:40px">${KW[x.kw]}</span>`:'<span style="width:40px"></span>'}${esc(x.label)}<span class="sp">${esc(x.sp)}</span></div>`).join('')}</div></div>`}
+  if(S.help&&dir==='C'){const rows=[['⌘K','search agents and commands'],['⌘O','open the next thing that needs you'],['⌘I','inbox'],['⌘↩','the coloured button (Allow, Reply, Mark reviewed)'],['⌘⌫','deny'],['⌥1 2 3','pick an option'],['⌘.','stop the agent'],['⌘T','new agent in this space'],['⇧⌘N','new space'],['⌘1…9','tab at that place'],['⇧⌘] [','next, previous tab'],['⌥⌘↓ ↑','next, previous agent'],['⇧⌘G','show or hide Changes'],['⌘/','this list']];
+    h+=`<div class="help" onclick="S.help=false;render()"><div class="box"><h3>Keyboard shortcuts</h3>${rows.map(([k,w])=>`<div class="r"><span class="k">${k}</span>${w}</div>`).join('')}<div class="foot-n">Everything else you type goes to the agent's terminal. In this browser preview, Chrome keeps ⌘T and ⌘1…9; use Ctrl there.</div></div></div>`}
+  else if(S.help){const rows=[['j k','next, previous'],['↩','open (agenda)'],['a','agenda'],['Tab','fold the space'],['y n','allow, deny'],['e','deny, saying why'],['r','reply to a question'],['1 2 3','pick a design'],['s','status page or terminal'],['d','diff'],['c','commit'],['x','mark reviewed'],['h','halt'],['i','type in the terminal'],['Esc','leave the terminal'],['N','new agent'],['⌘K  /','go to any agent'],['?','this list']];
+    h+=`<div class="help" onclick="S.help=false;render()"><div class="box"><h3>Keys</h3>${rows.map(([k,w])=>`<div class="r"><span class="k">${k}</span>${w}</div>`).join('')}</div></div>`}
+  if(S.mini&&dir==='C')h+=`<div class="dlgwrap" onclick="if(event.target===this){S.mini=null;render()}"><div class="dlg"><div class="dt">${esc(S.mini.prompt)}</div><input class="field" id="mini-in" value="${esc(S.mini.value)}" autocomplete="off"><div class="da"><span class="btn" onclick="S.mini=null;render()">Cancel</span><span class="btn pri" onclick="miniOk()">OK <span class="k">↩</span></span></div></div></div>`;
+  if(S.toast&&dir!=='A')h+=`<div class="toast click" onclick="select('${S.toast.id}')">${esc(S.toast.title)}<div>${esc(S.toast.line)} · click to open</div></div>`;
+  return h}
+function counts(){const xs=all();return {wait:xs.filter(i=>i.st==='wait').length,work:xs.filter(i=>i.st==='work').length,revw:xs.filter(i=>i.st==='revw').length}}
+function foldSpace(id){const sp=S.spaces.find(x=>x.id===id);sp.open=!sp.open;if(!sp.open&&cur()&&cur().space===sp)S.sel='agenda';render()}
+function toggleFile(id,k){const f=byId(id).files[k];f.open=!f.open;render()}
+
+// ---------------------------------------------------------------- A
+function renderA(){const i=cur(),c=counts();
+  let out=`<div class="o agenda h ${S.sel==='agenda'?'cur':''}" onclick="select('agenda')" style="margin-top:0">Agenda <span class="cnt">${c.wait?c.wait+' need you':''}</span></div>`;
+  for(const sp of S.spaces){out+=`<div class="o h" onclick="foldSpace('${sp.id}')"><span class="tri">${sp.open?'▾':'▸'}</span>${esc(sp.name)}<span class="cnt">${sp.items.length}</span></div>`;
+    if(!sp.open)continue;
+    for(const it of sp.items){out+=`<div class="o it ${S.sel===it.id?'cur':''}" onclick="select('${it.id}')">${kwHtml(it.st)}<span class="t">${it.kind==='run'?'<span class="tag">run </span>':''}${esc(it.title)}</span><span class="age">${ageOrSteps(it)}</span></div>`;
+      if(it.kind==='run'&&S.sel===it.id)for(const [n,s] of it.steps)out+=`<div class="o step">${kwHtml(s)}<span class="t">${n}</span></div>`}}
+  out+=`<div class="o h" style="color:var(--faint);font-weight:400" onclick="newSpace()"><span class="tri">+</span>New space</div>`;
+  const tabs=i?i.space.items.map((t,k)=>`<span class="tb click ${t.id===S.sel?'on':''}" onclick="select('${t.id}')">${t.st==='wait'?'<span class="c-wait">●</span>':t.st==='work'?'<span class="spin"></span>':''}${esc(t.title)} <span class="n">${k+1}</span></span>`).join('')+`<span class="tb click" onclick="newAgent()">+</span>`:'<span class="tb on">Agenda</span>';
+  let main='';
+  if(!i){main=`<div class="hdr"><b>Agenda</b>   Tuesday 17 November · ${all().length} agents in ${S.spaces.length} spaces · ↩ or double-click opens</div>`;let n=0;
+    for(const [name,st,xs] of agendaGroups()){if(!xs.length)continue;main+=`<div class="ag-h">${name} <span class="c">(${xs.length})${st==='revw'?' finished since you last looked':st==='idle'?' idle for hours':''}</span></div>`;
+      for(const r of xs){const k=n++;main+=`<div class="agr ${k===S.cursor?'cur':''}" onclick="S.cursor=${k};render()" ondblclick="select('${r.id}')"><span class="sp">${esc(r.space.name)}</span>${kwHtml(r.st)}<span class="what">${r.st==='wait'?askLine(r)+'  <em>· '+esc(r.title)+'</em>':esc((r.kind==='run'?'run ':'')+r.title)+(subline(r)?'  <em>· '+subline(r)+'</em>':'')}</span><span class="age">${ageOrSteps(r)}</span></div>`}}
+    if(!agendaRows().length)main+='<div class="ag-h" style="color:var(--green)">Nothing needs you.</div>';
+  } else if(S.view[i.id]!=='status'){
+    main=`<div class="hdr"><b>${esc(i.title)}</b>   ${i.kind==='shell'?'zsh':i.kind==='run'?'Jaynes run':'Claude Code'} in ${esc(i.cwd)}   <span class="c-idle">${i.kind==='shell'?'':'s: status page'}</span></div>`+askA(i)+`<div class="termwrap">${termHtml(i)}</div>`;
+  } else {
+    const [a,d]=sum(i.files);
+    main=`<div class="hdr"><b>${esc(i.title)}</b>   ${i.kind==='run'?'Jaynes run':'Claude Code'} in ${esc(i.cwd)}   <span class="c-idle">s: terminal</span></div>
+      <div class="hdr">Head:     <span style="color:var(--blue)">${esc(i.branch)}</span>  ${i.ahead?`↑${i.ahead} ahead of origin`:'up to date with origin'} · ${i.files.length} file${i.files.length===1?"":"s"} changed</div>`+askA(i);
+    if(i.kind==='run')main+=`<div class="sec"><div class="st"><span class="tri">▾</span>Steps <span class="c">(${ageOrSteps(i)})</span></div>${i.steps.map(([n,s])=>`<div class="row">${kwHtml(s,'c')}  ${n}</div>`).join('')}</div>`;
+    if(i.files.length){main+=`<div class="sec"><div class="st"><span class="tri">▾</span>Changed <span class="c">(${i.files.length})</span>   <span class="add">+${a}</span> <span class="del">−${d}</span></div>`;
+      i.files.forEach((f,k)=>{const w=Math.min(96,(f.a+f.d)*1.6);main+=`<div class="row ${f.open?'hl':''}" onclick="toggleFile('${i.id}',${k})"><span style="color:var(--faint)">${f.open?'▾':'▸'} </span>${esc(f.p.padEnd(28))} ${f.mode?'<span style="color:var(--faint)">mode only</span>':`<span class="add">+${String(f.a).padEnd(3)}</span> <span class="del">−${String(f.d).padEnd(3)}</span>  <span class="bar" style="width:${w*f.a/(f.a+f.d)}px;background:var(--green)"></span><span class="bar" style="width:${w*f.d/(f.a+f.d)}px;background:var(--red)"></span>`}</div>`;
+        if(f.open){if(f.shape)main+=`<div class="shape">shape: ${f.shape}</div>`;main+=diffHtml(f)}});main+='</div>'}
+    main+=`<div class="sec"><div class="st"><span class="tri">▾</span>${i.commits.length?`Unpushed to origin/${esc(i.branch)} <span class="c">(${i.commits.length})</span>`:'Unpushed <span class="c">(none)</span>'}</div>${i.commits.map(([h,m])=>`<div class="row"><span style="color:var(--faint)">${h}</span>  ${esc(m)}</div>`).join('')}</div>
+      <div class="sec"><div class="st" onclick="toggleView(byId('${i.id}'))"><span class="tri">▸</span>Conversation <span class="c">(last: "${esc((i.log.filter(l=>l[1].trim()).slice(-1)[0]||['',''])[1].trim().slice(0,60))}")</span></div></div>`}
+  const tr=transient();
+  const mini=S.mini?`<span class="q">${esc(S.mini.prompt)}:</span><input class="bare" id="mini-in" value="${esc(S.mini.value)}" autocomplete="off"><span style="color:var(--faint)">↩ send · Esc quit</span>`:
+    S.msg?`<span class="msg">${esc(S.msg)}</span>`:
+    `<span class="title">${esc(tr.title)}</span>`+tr.groups.map(g=>`<span class="grp ${g.hot?'hot':''}">${g.keys.map(([k,w])=>k?`<span onclick="keyAction('${k}')"><b>${k}</b>${w}</span>`:`<span>${w}</span>`).join('')}</span>`).join('');
+  return `<div class="win A">
+  <div class="top"><div class="side"><div class="lights"><i></i><i></i><i></i></div><span style="color:var(--dim);margin-left:8px">jaynes</span></div><div class="tabline">${tabs}</div></div>
+  <div class="body"><div class="outline">${out}</div><div class="main" id="main">${main}</div></div>
+  <div class="modeline"><b>${esc(i?i.space.name:'Agenda')}</b>${i?`<span>${i.kind==='shell'?'zsh':i.kind==='run'?'Jaynes run':'Claude Code · auto mode'}</span><span style="color:var(--blue)">${esc(i.branch)}${i.ahead?' ↑'+i.ahead:''}</span>`:''}<span style="flex:1"></span>${c.work?`<span><span class="spin"></span> ${c.work} working</span>`:''}${c.wait?`<span class="c-wait">${c.wait} waiting</span>`:''}${c.revw?`<span class="c-revw">${c.revw} to review</span>`:''}<span>Jaynes</span></div>
+  <div class="mini">${mini}</div>${overlays()}</div>`}
+function askA(i){if(i.st!=='wait'||!i.ask)return '';const a=i.ask;
+  if(a.kind==='permission')return `<div class="ask"><div class="c-wait" style="font-weight:600">Waits for you · permission</div><div class="q">Run <span class="cmd">${esc(a.cmd)}</span> ?</div><div style="color:var(--faint)">${esc(a.why)}</div></div>`;
+  if(a.kind==='question')return `<div class="ask"><div class="c-wait" style="font-weight:600">Waits for you · question</div><div class="q">${esc(a.q)}</div><div style="color:var(--faint)">r to reply</div></div>`;
+  return `<div class="ask"><div class="c-wait" style="font-weight:600">Waits for you · ${esc(a.q)}</div><div class="opts">${a.opts.map((o,k)=>`<div class="opt" onclick="pick(byId('${i.id}'),${k})"><b>${k+1}</b>${esc(o)}</div>`).join('')}</div></div>`}
+
+// ---------------------------------------------------------------- B
+function renderB(){const i=cur(),c=counts();
+  let nav=`<div class="navi ${S.sel==='agenda'?'on':''}" onclick="select('agenda')"><span>◎</span>Agenda<span class="cnt">${c.wait||''}</span></div>`;
+  for(const sp of S.spaces){nav+=`<div class="grp"><div class="gh" onclick="foldSpace('${sp.id}')"><span class="chev">${sp.open?'▾':'▸'}</span>${esc(sp.name)}<span class="cnt">${sp.items.length}</span></div>`;
+    if(sp.open)for(const it of sp.items){nav+=`<div class="ag ${S.sel===it.id?'on':''}" onclick="select('${it.id}')">${kwHtml(it.st,'w')}<span class="t">${esc(it.title)}</span><span class="age">${ageOrSteps(it)}</span></div>`;
+      if(it.kind==='run'&&S.sel===it.id){const w=it.steps.find(s=>s[1]==='work'||s[1]==='wait');if(w)nav+=`<div class="ag sub"><span class="w c-${w[1]}">●</span><span class="t">${w[0]}</span></div>`}}
+    nav+='</div>'}
+  nav+=`<div class="grp"><div class="gh" onclick="newSpace()"><span class="chev">+</span>New space</div></div>`;
+  const tabs=i?i.space.items.map((t,k)=>`<div class="tab ${t.id===S.sel?'on':''}" onclick="select('${t.id}')">${t.st==='wait'?'<span class="w c-wait" style="width:auto">WAIT</span>':t.st==='work'?'<span class="spin"></span>':''}${t.kind==='run'?'<span class="w" style="width:auto;color:var(--dim)">RUN</span>':''}${esc(t.title)}<span class="num">⌘${k+1}</span></div>`).join('')+`<div class="tab" onclick="newAgent()">+</div>`:'<div class="tab on">◎ Agenda</div>';
+  let center='';
+  if(!i){let rows='';let n=0;
+    for(const [name,st,xs] of agendaGroups()){if(!xs.length)continue;rows+=`<div class="ah" ${st==='wait'?'style="color:var(--amber)"':''}>${name}${st==='revw'?' · finished since you last looked':''}</div>`;
+      for(const r of xs){const k=n++;const what=r.st==='wait'?(r.ask.kind==='permission'?`Run <code>${esc(r.ask.cmd)}</code>?`:esc(r.ask.kind==='question'?`"${r.ask.q}"`:r.ask.q)):esc(r.title);
+        const sub=r.st==='wait'?`${esc(r.title)} · ${r.ask.kind}`:subline(r);
+        let acts=`<span class="age">${ageOrSteps(r)}</span>`;
+        if(r.st==='wait'&&r.ask.kind==='permission')acts=`<div class="acts"><span class="btn" onclick="event.stopPropagation();deny(byId('${r.id}'))">n</span><span class="btn pri" onclick="event.stopPropagation();allow(byId('${r.id}'))">y</span></div>`;
+        if(r.st==='revw')acts=`<div class="acts"><span class="btn" onclick="event.stopPropagation();reviewed(byId('${r.id}'))">Reviewed <span class="k">x</span></span></div>`;
+        rows+=`<div class="ar ${k===S.cursor?'on':''}" onclick="S.cursor=${k};render()" ondblclick="select('${r.id}')">${kwHtml(r.st,'w')}<div class="what">${what}<div>${sub}</div></div><span class="sp">${esc(r.space.name)}</span>${acts}</div>`}}
+    if(!agendaRows().length)rows='<div class="ah" style="color:var(--green)">Nothing needs you.</div>';
+    center=`<div class="agenda"><h2>Agenda</h2><div class="sub">${c.wait} need you · ${c.revw} to review · ${c.work} working · ${all().length} agents in ${S.spaces.length} spaces · double-click opens</div>${rows}</div>`;
+  } else {
+    let ask='';if(i.st==='wait'&&i.ask){const a=i.ask;
+      if(a.kind==='permission')ask=`<div class="askbar"><span class="lbl">Permission</span><code>${esc(a.cmd)}</code><span style="flex:1"></span><span class="btn" onclick="keyAction('e')">Deny, saying why… <span class="k">e</span></span><span class="btn" onclick="deny(byId('${i.id}'))">Deny <span class="k">n</span></span><span class="btn pri" onclick="allow(byId('${i.id}'))">Allow <span class="k">y</span></span></div>`;
+      else if(a.kind==='question')ask=`<div class="askbar"><span class="lbl">Question</span><span class="q">${esc(a.q)}</span><span style="flex:1"></span><span class="btn pri" onclick="keyAction('r')">Reply <span class="k">r</span></span></div>`;
+      else ask=`<div class="askbar"><span class="lbl">${esc(a.q)}</span><span style="flex:1"></span><div class="opts">${a.opts.map((o,k)=>`<span class="btn" onclick="pick(byId('${i.id}'),${k})"><span class="k">${k+1}</span>${esc(o)}</span>`).join('')}</div></div>`}
+    center=ask+`<div class="termwrap" id="main">${termHtml(i)}</div>`}
+  let right='';
+  if(i&&S.panel&&(i.files.length||i.kind==='run')){const [a,d]=sum(i.files);
+    if(i.kind==='run')right+=`<div class="ch-h">Steps <span>${ageOrSteps(i)}</span></div>${i.steps.map(([n,s])=>`<div class="step">${kwHtml(s,'w')}${n}</div>`).join('')}<div style="height:14px"></div>`;
+    if(i.files.length){right+=`<div class="ch-h">Changes <span>${esc(i.branch)}${i.ahead?' ↑'+i.ahead:''} · +${a} −${d}</span></div>`;
+      i.files.forEach((f,k)=>{right+=`<div class="file ${f.open?'on':''}" onclick="toggleFile('${i.id}',${k})"><span style="color:var(--faint)">${f.open?'▾':'▸'}</span>${esc(f.p)}<span class="n">${f.mode?'<span style="color:var(--faint)">mode</span>':`<span class="add">+${f.a}</span> <span class="del">−${f.d}</span>`}</span></div>`;
+        if(f.open){if(f.shape)right+=`<div class="shapeB">${f.shape}</div>`;right+=diffHtml(f)}});
+      right+=`<div style="padding:10px 16px"><span class="btn" onclick="commit(byId('${i.id}'))">Commit… <span class="k">c</span></span></div>`}
+    right+=`<div class="ch-h" style="margin-top:8px">Unpushed <span>${i.commits.length||'none'}</span></div>${i.commits.map(([h,m])=>`<div class="commit"><code>${h}</code>${esc(m)}</div>`).join('')}`;
+    right=`<div class="changes">${right}</div>`}
+  const tr=transient();
+  const foot=S.mini?`<span style="color:var(--amber)">${esc(S.mini.prompt)}:</span><input class="bare" id="mini-in" value="${esc(S.mini.value)}" autocomplete="off"><span class="sp"></span><span>↩ send · Esc cancel</span>`:
+    `<span>${i?esc(i.cwd):'Agenda'}</span>${i?`<span style="color:var(--blue)">${esc(i.branch)}${i.ahead?' ↑'+i.ahead:''}</span>`:''}${S.msg?`<span class="msg">${esc(S.msg)}</span>`:''}<span class="sp"></span><span>${tr.groups.flatMap(g=>g.keys).filter(k=>k[0]).filter(k=>!['y','n','e','r','1 2 3','x'].includes(k[0])||true).slice(0,8).map(([k,w])=>`<span class="hint" onclick="keyAction('${k}')"><span class="k">${k}</span> ${w}</span>`).join('')}</span>`;
+  const panelSwitch=i&&(i.files.length||i.kind==='run')?`<div class="tr"><span class="${S.panel?'on':''}" onclick="S.panel=!S.panel;render()">${i.kind==='run'?'Steps':'Changes'} ${i.files.length||''}</span></div>`:'';
+  return `<div class="win B">
+  <div class="top"><div class="side"><div class="lights"><i></i><i></i><i></i></div></div><div class="tabs">${tabs}</div>${panelSwitch}</div>
+  <div class="body"><div class="nav">${nav}</div><div class="center">${center}</div>${right}</div>
+  <div class="foot">${foot}</div>${overlays()}</div>`}
+
+// ---------------------------------------------------------------- C
+const WORD={wait:'waiting',work:'working',revw:'to review',done:'reviewed',idle:'idle',todo:'next'};
+const INBOX_SVG='<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" style="flex:none"><path d="M2 9.5h3.2l1 1.8h3.6l1-1.8H14"/><path d="M3.6 3h8.8L14 9.5V13H2V9.5z"/></svg>';
+const dotC=st=>st==='work'?'<span class="spin"></span>':st==='done'?'<span class="dot d-done">✓</span>':`<span class="dot d-${st}"></span>`;
+const iconC=i=>i.kind==='shell'?'<span class="sh">›_</span>':dotC(i.st);
+const who=i=>i.kind==='run'?'Jaynes':'Claude Code';
+function miniOk(){const el=document.getElementById('mini-in');const m=S.mini;S.mini=null;m.done(el?el.value.trim():'');render()}
+function replyTo(id){select(id)}
+function reviewChanges(i){if(!i)return;S.panel=true;i.files.forEach((f,k)=>f.open=k===0);render()}
+function primary(r){if(!r)return;
+  if(r.st==='wait'){if(r.ask.kind==='permission')allow(r);else select(r.id)}
+  else if(r.st==='revw')reviewed(r)}
+function nextNeeding(){const xs=[...all().filter(i=>i.st==='wait'),...all().filter(i=>i.st==='revw')];
+  if(!xs.length){say('Nothing needs you');render();return}
+  const k=xs.findIndex(i=>i.id===S.sel);const n=xs[(k+1)%xs.length];n.space.open=true;select(n.id)}
+function tabAt(n){const i=cur();if(!i)return;const xs=i.space.items;const t=n===9?xs[xs.length-1]:xs[n-1];if(t)select(t.id)}
+function tabStep(by){const i=cur();if(!i)return;const xs=i.space.items;const k=xs.findIndex(x=>x.id===i.id);select(xs[(k+by+xs.length)%xs.length].id)}
+function commitC(i){if(!i)return;const el=document.getElementById('commit-in');const t=el?el.value.trim():'';
+  if(!t){say('Write a commit message first');render();return}
+  const n=i.files.length;i.commits.unshift([Math.random().toString(16).slice(2,9),t]);i.ahead++;i.files=[];if(el)el.value='';
+  say(`Committed ${n} file${n===1?'':'s'} on ${i.branch}`);render()}
+function keyC(e){
+  const m=e.metaKey||e.ctrlKey,sh=e.shiftKey,al=e.altKey,code=e.code,i=cur();
+  const r=S.sel==='agenda'?agendaRows()[S.cursor]:i;
+  const go=f=>{e.preventDefault();f();return true};
+  if(m&&!sh&&!al&&code==='KeyK')return go(()=>{S.palette={q:'',k:0};render()});
+  if(m&&code==='Slash')return go(()=>{S.help=!S.help;render()});
+  if(S.palette||S.mini)return false;
+  if(m&&!sh&&(code==='Enter'||code==='NumpadEnter'))return go(()=>primary(r));
+  if(m&&code==='Backspace'&&r&&r.st==='wait'&&r.ask.kind==='permission')return go(()=>deny(r));
+  if(m&&!sh&&code==='KeyO')return go(nextNeeding);
+  if(m&&!sh&&code==='KeyI')return go(()=>select('agenda'));
+  if(m&&code==='Period')return go(()=>halt(r));
+  if(m&&!sh&&code==='KeyT')return go(()=>newAgent());
+  if(m&&sh&&code==='KeyN')return go(newSpace);
+  if(m&&sh&&code==='KeyG')return go(()=>{S.panel=!S.panel;render()});
+  if(m&&sh&&(code==='BracketRight'||code==='BracketLeft'))return go(()=>tabStep(code==='BracketRight'?1:-1));
+  if(m&&al&&(code==='ArrowDown'||code==='ArrowUp'))return go(()=>move(code==='ArrowDown'?1:-1));
+  if(m&&!sh&&!al&&/^Digit[1-9]$/.test(code))return go(()=>tabAt(+code.slice(5)));
+  if(al&&!m&&/^Digit[1-3]$/.test(code)&&r&&r.st==='wait'&&r.ask.kind==='choose')return go(()=>pick(r,+code.slice(5)-1));
+  if(S.sel==='agenda'&&!m&&!e.target.id){
+    if(e.key==='ArrowDown')return go(()=>move(1));
+    if(e.key==='ArrowUp')return go(()=>move(-1));
+    if(e.key==='Enter'&&r)return go(()=>select(r.id))}
+  return false}
+function barC(i){
+  if(i.st==='wait'&&i.ask){const a=i.ask;
+    if(a.kind==='permission')return `<div class="bar wait"><div class="bt"><b>${who(i)}</b> wants to run <code>${esc(a.cmd)}</code><div class="why">${esc(a.why)}</div></div><div class="acts"><span class="btn ghost" onclick="openMini('Deny, and tell ${who(i)} why','',t=>deny(byId('${i.id}'),t))">Deny with a reason…</span><span class="btn" onclick="deny(byId('${i.id}'))">Deny <span class="k">⌘⌫</span></span><span class="btn pri" onclick="allow(byId('${i.id}'))">Allow <span class="k">⌘↩</span></span></div></div>`;
+    if(a.kind==='question')return `<div class="bar wait"><div class="bt"><b>${who(i)}</b> asks: ${esc(a.q)}<div class="why">Type your answer in the terminal below.</div></div></div>`;
+    return `<div class="bar wait"><div class="bt"><b>${who(i)}</b> asks you to ${esc(a.q.toLowerCase())}</div><div class="acts">${a.opts.map((o,k)=>`<span class="btn${k===0?' pri':''}" onclick="pick(byId('${i.id}'),${k})">${esc(o)} <span class="k">⌥${k+1}</span></span>`).join('')}</div></div>`}
+  if(i.st==='revw'){const [a,d]=sum(i.files);
+    const what=i.files.length?`${i.files.length} file${i.files.length===1?'':'s'} changed <span class="add">+${a}</span> <span class="del">−${d}</span>`+(i.commits.length?` · ${i.commits.length} commit${i.commits.length===1?'':'s'} not pushed`:''):i.commits.length?`${i.commits.length} commit${i.commits.length===1?'':'s'} not pushed`:'Nothing changed in the files.';
+    return `<div class="bar revw"><div class="bt"><b>Finished</b> ${i.age==='now'?'just now':i.age+' ago'}<div class="why">${what}</div></div><div class="acts">${i.files.length?`<span class="btn" onclick="reviewChanges(byId('${i.id}'))">Review changes <span class="k">⇧⌘G</span></span>`:''}<span class="btn pri v" onclick="reviewed(byId('${i.id}'))">Mark reviewed <span class="k">⌘↩</span></span></div></div>`}
+  return ''}
+function inboxC(){const c=counts();let rows='';let n=0;
+  for(const [name,st,xs] of agendaGroups()){if(!xs.length)continue;rows+=`<div class="ah">${name} <span>${xs.length}</span></div>`;
+    for(const r of xs){const k=n++,on=k===S.cursor,kk=s=>on?` <span class="k">${s}</span>`:'';let what,sub,acts;
+      if(r.st==='wait'){const a=r.ask;sub=`${esc(r.title)} · ${esc(r.space.name)}`;
+        if(a.kind==='permission'){what=`<b>${who(r)}</b> wants to run <code>${esc(a.cmd)}</code>`;acts=`<span class="btn" onclick="event.stopPropagation();deny(byId('${r.id}'))">Deny${kk('⌘⌫')}</span><span class="btn pri" onclick="event.stopPropagation();allow(byId('${r.id}'))">Allow${kk('⌘↩')}</span>`}
+        else if(a.kind==='question'){what=`<b>${who(r)}</b> asks: ${esc(a.q)}`;acts=`<span class="btn pri" onclick="event.stopPropagation();replyTo('${r.id}')">Reply${kk('⌘↩')}</span>`}
+        else{what=`<b>${who(r)}</b> asks you to ${esc(a.q.toLowerCase())}`;acts=`<span class="btn pri" onclick="event.stopPropagation();select('${r.id}')">Choose${kk('⌘↩')}</span>`}}
+      else{what=`${esc(r.title)} finished`;sub=`${esc(r.space.name)} · ${subline(r)}`;
+        acts=`${r.files.length?`<span class="btn" onclick="event.stopPropagation();select('${r.id}');reviewChanges(byId('${r.id}'))">Review</span>`:''}<span class="btn" onclick="event.stopPropagation();reviewed(byId('${r.id}'))">Mark reviewed${kk('⌘↩')}</span>`}
+      rows+=`<div class="ar ${on?'on':''}" onclick="select('${r.id}')" onmouseenter="if(S.cursor!==${k}){S.cursor=${k};render()}">${dotC(r.st)}<div class="what">${what}<div>${sub}</div></div><div class="acts">${acts}</div><span class="age">${ageOrSteps(r)}</span></div>`}}
+  if(!n)rows=`<div class="clear">✓ All clear. Nothing needs you.</div>`;
+  const idle=all().filter(i=>i.st==='idle'&&i.kind!=='shell').length;
+  return `<div class="inboxv" id="inboxv"><h2>Inbox</h2><div class="sub">What needs you, across all ${S.spaces.length} spaces. Agents land here when they ask something or finish.</div>${rows}
+    <div class="quiet">${c.work?`<span class="spin"></span> ${c.work} working`:''}${c.work&&idle?' · ':''}${idle?`${idle} idle`:''}${c.work||idle?'. They show up here when they need you.':''}</div></div>`}
+function renderC(){const i=cur(),c=counts(),need=c.wait+c.revw;
+  let nav=`<div class="inbox ${S.sel==='agenda'?'on':''}" onclick="select('agenda')">${INBOX_SVG}Inbox${need?`<span class="pill ${c.wait?'':'v'}">${need}</span>`:''}</div><div class="sec-h">Spaces</div>`;
+  for(const sp of S.spaces){const w=sp.items.filter(x=>x.st==='wait').length;
+    nav+=`<div class="grp"><div class="gh" onclick="foldSpace('${sp.id}')"><span class="chev">${sp.open?'▾':'▸'}</span><span class="nm">${esc(sp.name)}</span>${!sp.open&&w?dotC('wait'):''}<span class="plus" title="New agent in ${esc(sp.name)}" onclick="event.stopPropagation();newAgent('${sp.id}')">+</span></div>`;
+    if(sp.open)for(const it of sp.items){
+      const right=it.kind==='shell'||it.st==='idle'?`<span class="st age">${it.age}</span>`:`<span class="st c-${it.st}">${WORD[it.st]}</span>`;
+      nav+=`<div class="ag ${S.sel===it.id?'on':''}" onclick="select('${it.id}')">${iconC(it)}<span class="t">${esc(it.title)}</span>${it.kind==='run'?`<span class="badge">run ${ageOrSteps(it)}</span>`:''}${right}</div>`;
+      if(it.kind==='run'&&S.sel===it.id){const s=it.steps.find(s=>s[1]==='work'||s[1]==='wait');if(s)nav+=`<div class="ag sub">${dotC(s[1])}<span class="t">${s[0]}</span></div>`}}
+    nav+='</div>'}
+  nav+=`<div class="newsp" onclick="newSpace()">+ New space</div>`;
+  const tabs=i?i.space.items.map((t,k)=>`<div class="tab ${t.id===S.sel?'on':''}" onclick="select('${t.id}')">${iconC(t)}<span class="tt">${esc(t.title)}</span>${k<9?`<span class="num">⌘${k+1}</span>`:''}</div>`).join('')+`<div class="tab add" title="New agent ⌘T" onclick="newAgent()">+</div>`:`<div class="tab on">${INBOX_SVG}Inbox</div>`;
+  const center=i?barC(i)+`<div class="termwrap" id="main">${termHtml(i)}</div>`:inboxC();
+  let right='';const hasPanel=i&&(i.files.length||i.kind==='run'||i.commits.length);
+  if(hasPanel&&S.panel){const [a,d]=sum(i.files);
+    if(i.kind==='run')right+=`<div class="ph">Steps <span>${ageOrSteps(i)} done</span></div>${i.steps.map(([n,s])=>`<div class="step">${dotC(s)}${n}<span class="w c-${s}">${({done:'done',work:'working',wait:'waiting'})[s]||''}</span></div>`).join('')}<div style="height:16px"></div>`;
+    if(i.files.length){right+=`<div class="ph">Changes <span>${i.files.length} file${i.files.length===1?'':'s'} · <span class="add">+${a}</span> <span class="del">−${d}</span></span></div>
+      <div class="cbox"><input class="field" id="commit-in" placeholder="Commit message" autocomplete="off"><span class="btn" onclick="commitC(byId('${i.id}'))">Commit</span></div>`;
+      i.files.forEach((f,k)=>{const base=f.p.replace(/.*\//,''),dirn=f.p.includes('/')?f.p.replace(/\/[^/]*$/,''):'';
+        right+=`<div class="file ${f.open?'on':''}" onclick="toggleFile('${i.id}',${k})"><span style="color:var(--faint);width:10px">${f.open?'▾':'▸'}</span>${esc(base)}<span class="dir">${esc(dirn)}</span><span class="n">${f.mode?'<span style="color:var(--faint)">mode</span>':`<span class="add">+${f.a}</span> <span class="del">−${f.d}</span>`}</span></div>`;
+        if(f.open){if(f.shape)right+=`<div class="shapeC">${f.shape}</div>`;right+=diffHtml(f)}})}
+    else if(i.kind!=='run')right+=`<div class="ph">Changes <span>none</span></div>`;
+    right+=`<div class="ph" style="margin-top:10px">Not pushed <span>${esc(i.branch)}${i.commits.length?'':' · none'}</span></div>${i.commits.map(([h,m])=>`<div class="commit"><code>${h}</code>${esc(m)}</div>`).join('')}`;
+    right=`<div class="changes" id="changes">${right}</div>`}
+  const panelSwitch=hasPanel?`<div class="tr"><span class="${S.panel?'on':''}" onclick="S.panel=!S.panel;render()">${i.kind==='run'?'Steps and changes':'Changes'}${i.files.length?` <span style="color:var(--faint)">${i.files.length}</span>`:''}</span></div>`:'';
+  const foot=(i?`<span class="b">${esc(i.space.name)}</span><span class="br">⎇ ${esc(i.branch)}${i.ahead?' ↑'+i.ahead:''}</span><span>${esc(i.cwd)}</span>${i.st==='work'?`<span class="hint" onclick="halt(cur())">Stop <span class="k">⌘.</span></span>`:''}`:'<span class="b">Inbox</span>')
+    +(S.msg?`<span class="msg">${esc(S.msg)}</span>`:'')+`<span class="sp"></span>`
+    +(c.wait?`<span class="cnt" onclick="select('agenda')">${dotC('wait')} ${c.wait} waiting</span>`:'')
+    +(c.revw?`<span class="cnt" onclick="select('agenda')">${dotC('revw')} ${c.revw} to review</span>`:'')
+    +(c.work?`<span class="cnt" onclick="select('agenda')"><span class="spin"></span> ${c.work} working</span>`:'')
+    +`<span class="hint" onclick="S.palette={q:'',k:0};render()">Search <span class="k">⌘K</span></span><span class="hint" onclick="S.help=true;render()"><span class="k">⌘/</span></span>`;
+  return `<div class="win C">
+  <div class="top"><div class="side"><div class="lights"><i></i><i></i><i></i></div></div><div class="tabs">${tabs}</div>${panelSwitch}</div>
+  <div class="body"><div class="nav" id="nav">${nav}</div><div class="center">${center}</div>${right}</div>
+  <div class="foot">${foot}</div>${overlays()}</div>`}
+
+// ---------------------------------------------------------------- page
+const notes={
+  C:'<b>C · Familiar.</b> Looks like the apps people already use: it opens on an agent with the terminal ready, spaces and agents on the left with a coloured dot and a short word, the question on a bar with buttons, Changes at the right with a commit box. From Emacs it keeps the <b>Inbox</b> (everything that needs you, across spaces), the word beside each dot, and the diff that marks only the changed piece. Keys are ⌘ shortcuts shown on the buttons; <span class="k">⌘K</span> finds anything.',
+  A:'<b>A · Buffer.</b> Text in one monospace face, like an Emacs frame. Left: an org outline (spaces fold, each agent has a state word, a run shows its steps when picked). Middle: the terminal by default; <span class="k">s</span> flips to a magit status page (the ask, the changed files with a difftastic-style diff, what is unpushed). Bottom: a mode line and a transient with the keys that work right now. Agents finish while you watch, and the echo line tells you.',
+  B:'<b>B · Window.</b> The same model in a quieter Mac app: proportional type, the terminal in the middle, the question on a bar above it with buttons, Changes (or a run\'s Steps) as a panel at the right, a notification when an agent finishes. Same keys.'
+};
+function render(){
+  // what the person was typing survives a redraw (agents finish while they type)
+  const typing={};for(const id of ['term-in','mini-in','pal-in','commit-in']){const el=document.getElementById(id);if(el)typing[id]=el.value}
+  const was=document.activeElement&&document.activeElement.id;
+  const scroll={};for(const id of ['nav','changes','inboxv']){const el=document.getElementById(id);if(el)scroll[id]=el.scrollTop}
+  if(S.mini&&typing['mini-in']!==undefined)S.mini.value=typing['mini-in'];
+  document.getElementById('app').innerHTML=dir==='A'?renderA():dir==='B'?renderB():renderC();document.getElementById('note').innerHTML=notes[dir];
+  document.getElementById('keyhint').innerHTML=dir==='C'?'Click anything. <span class="k">⌘/</span> lists the shortcuts.':'Click anything, or use the keys at the bottom of the window. <span class="k">?</span> lists them all.';
+  for(const id in scroll){const el=document.getElementById(id);if(el)el.scrollTop=scroll[id]}
+  if(typing['commit-in']&&document.getElementById('commit-in'))document.getElementById('commit-in').value=typing['commit-in'];
+  document.querySelectorAll('#dir button').forEach(x=>x.classList.toggle('on',x.dataset.v===dir));
+  const focus=S.palette?'pal-in':S.mini?'mini-in':(was==='commit-in'&&document.getElementById('commit-in'))?'commit-in':S.termFocus?'term-in':null;
+  if(typing['term-in']&&document.getElementById('term-in'))document.getElementById('term-in').value=typing['term-in'];
+  if(focus){const el=document.getElementById(focus);if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length)}}
+  const m=document.getElementById('main');if(m&&cur()&&S.view[S.sel]!=='status')m.scrollTop=m.scrollHeight;
+}
+function startC(){if(dir!=='C')return;if(S.sel==='agenda')S.sel='a1';S.termFocus=true}
+document.getElementById('dir').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;dir=b.dataset.v;S.termFocus=dir==='C'&&S.sel!=='agenda';render()});
+document.getElementById('reset').addEventListener('click',()=>{S=fresh();startC();render()});
+const q=new URLSearchParams(location.search);if(q.get('sel'))S.sel=q.get('sel');if(q.get('view')&&S.sel!=='agenda')S.view[S.sel]=q.get('view');
+if(q.get('sel'))S.termFocus=dir==='C'&&S.sel!=='agenda';else startC();
+render();
+</script>
+</body>
+</html>
