@@ -1,8 +1,11 @@
 //! The steps panel, at the window's right: the run picked in the list, what its agent does now, and each of its
-//! steps with how it stands, moving as the run goes. Command-E folds it away and back.
+//! steps with how it stands, moving as the run goes. A click opens the run's tab: the head at the top of its story,
+//! "Now" at its end, a step at what the agent told there, lit there and here; "Waits for you" also opens the question
+//! that waits. Command-E folds it away and back.
 
 use crate::look;
 use crate::model::{Detail, Runs};
+use crate::tabs::{Place, Tabs};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::{Mark, Stage};
@@ -11,12 +14,15 @@ pub const WIDTH: f32 = 300.;
 
 pub struct Rail {
     runs: Entity<Runs>,
+    tabs: Entity<Tabs>,
+    island: Entity<crate::island::Island>,
 }
 
 impl Rail {
-    pub fn new(runs: Entity<Runs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, tabs: Entity<Tabs>, island: Entity<crate::island::Island>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
-        Rail { runs }
+        cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
+        Rail { runs, tabs, island }
     }
 }
 
@@ -32,9 +38,24 @@ fn circle(class: &str, name: &str) -> Div {
     }
 }
 
-fn step(s: &Stage) -> impl IntoElement {
-    let todo = s.class == "todo";
+/// Something that opens the run's tab at a place in its story when clicked.
+fn opens(id: String, run: &str, place: Place, tabs: &Entity<Tabs>) -> Stateful<Div> {
+    let (run, tabs) = (run.to_string(), tabs.clone());
     div()
+        .id(SharedString::from(id))
+        .cursor_pointer()
+        .on_click(move |_, _, cx| tabs.update(cx, |t, cx| t.show_at(run.clone(), place.clone(), cx)))
+}
+
+/// A step's row: lit under the mouse, and while it is the step lit in the story.
+fn step(run: &str, s: &Stage, lit: bool, tabs: &Entity<Tabs>) -> impl IntoElement {
+    let todo = s.class == "todo";
+    opens(format!("step-{}", s.name), run, Place::Step(s.name.clone()), tabs)
+        .mx(px(-8.))
+        .px(px(8.))
+        .rounded(px(7.))
+        .hover(|d| d.bg(rgb(look::SELECTED)))
+        .when(lit, |d| d.bg(rgb(look::SELECTED)))
         .flex()
         .gap(px(10.))
         .items_start()
@@ -52,8 +73,9 @@ fn step(s: &Stage) -> impl IntoElement {
         )
 }
 
-fn now(text: &str) -> impl IntoElement {
-    div()
+fn now(run: &str, text: &str, tabs: &Entity<Tabs>) -> impl IntoElement {
+    opens("now".into(), run, Place::End, tabs)
+        .hover(|d| d.border_color(rgb(look::LINE_2)))
         .flex()
         .gap(px(10.))
         .items_center()
@@ -67,8 +89,9 @@ fn now(text: &str) -> impl IntoElement {
         .child(div().min_w_0().flex_1().truncate().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::DIM)).child(text.to_string()))
 }
 
-fn panel(d: &Detail) -> impl IntoElement {
-    let head = div()
+fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<crate::island::Island>) -> impl IntoElement {
+    // the head is no card: it opens the story at its top, its look unchanged
+    let head = opens("head".into(), &d.id, Place::Top, tabs)
         .px(px(16.))
         .pt(px(14.))
         .pb(px(12.))
@@ -89,13 +112,30 @@ fn panel(d: &Detail) -> impl IntoElement {
         .child(div().text_size(px(12.5)).text_color(rgb(look::DIM)).child(d.project.clone()));
     let mut body = div().id("steps").flex().flex_col().flex_1().overflow_y_scroll().px(px(16.)).py(px(14.)).gap(px(16.));
     if d.mark == Mark::Working {
-        body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Now", look::FAINT)).child(now(d.now.as_deref().unwrap_or("starting"))));
+        body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Now", look::FAINT)).child(now(&d.id, d.now.as_deref().unwrap_or("starting"), tabs)));
     } else if d.mark == Mark::Needs {
-        body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Waits for you", look::AMBER)).child(div().text_size(px(13.)).text_color(rgb(look::TEXT)).child(d.line.clone())));
+        // the step that waits, where the agent last spoke; the story's end when none says it waits
+        let waits = d.stages.iter().find(|s| s.class == "waiting").map(|s| Place::Step(s.name.clone())).unwrap_or(Place::End);
+        let island = island.clone();
+        body = body.child(
+            opens("waits".into(), &d.id, waits, tabs)
+                // and the question itself: the stop risen, or the compare mode for one that chooses among designs
+                .on_click(move |_, window, cx| island.update(cx, |i, cx| i.open_stop(window, cx)))
+                .hover(|d| d.bg(rgb(look::SELECTED)))
+                .mx(px(-8.))
+                .px(px(8.))
+                .py(px(5.))
+                .rounded(px(7.))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(look::label("Waits for you", look::AMBER))
+                .child(div().text_size(px(13.)).text_color(rgb(look::TEXT)).child(d.line.clone())),
+        );
     }
     let mut steps = div().flex().flex_col();
     for s in &d.stages {
-        steps = steps.child(step(s));
+        steps = steps.child(step(&d.id, s, lit == Some(s.name.as_str()), tabs));
     }
     body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Steps", look::FAINT)).child(steps));
     div().flex().flex_col().size_full().child(head).child(body)
@@ -104,6 +144,9 @@ fn panel(d: &Detail) -> impl IntoElement {
 impl Render for Rail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let chosen = self.runs.read(cx).chosen().cloned();
+        let tabs = self.tabs.read(cx);
+        // lit only while the story shown is this run's
+        let lit = chosen.as_ref().filter(|d| tabs.open.as_deref() == Some(d.id.as_str())).and(tabs.lit.clone());
         let frame = div()
             .w(px(WIDTH))
             .h_full()
@@ -115,7 +158,7 @@ impl Render for Rail {
             .border_l_1()
             .border_color(rgb(look::LINE));
         match chosen {
-            Some(d) => frame.child(panel(&d)),
+            Some(d) => frame.child(panel(&d, lit.as_deref(), &self.tabs, &self.island)),
             None => frame.child(div().p(px(16.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("Pick a run to see its steps.")),
         }
     }

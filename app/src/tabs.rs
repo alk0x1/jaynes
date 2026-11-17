@@ -5,15 +5,32 @@
 
 use crate::look;
 use crate::model::Runs;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::Mark;
 use std::time::Duration;
+
+/// Where a click in the steps panel takes a run's story.
+#[derive(Clone, PartialEq)]
+pub enum Place {
+    Top,
+    /// Where the agent is now: the story's end.
+    End,
+    /// The latest time the agent worked at that step.
+    Step(String),
+}
 
 pub struct Tabs {
     runs: Entity<Runs>,
     /// The run whose tab shows; None for the person's own terminal.
     pub open: Option<String>,
     story: Vec<(String, Vec<String>)>,
+    /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
+    scroll: ScrollHandle,
+    /// Where a click in the steps panel asked the story to go, until the story is read and the tab scrolls there.
+    seek: Option<Place>,
+    /// The step lit in the story and in the steps panel: the one the person last clicked there.
+    pub lit: Option<String>,
     _poll: Task<()>,
 }
 
@@ -30,7 +47,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, open: None, story: Vec::new(), _poll: poll }
+        Tabs { runs, open: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -40,15 +57,48 @@ impl Tabs {
         this.update(cx, |t, cx| {
             if t.open.as_deref() == Some(id.as_str()) && t.story != told {
                 t.story = told;
+                t.go_to_seek();
                 cx.notify();
             }
         })
+    }
+
+    /// Shows a run's tab scrolled to a place in its story.
+    pub fn show_at(&mut self, run: String, place: Place, cx: &mut Context<Self>) {
+        self.show(Some(run), cx);
+        self.lit = match &place {
+            Place::Step(step) => Some(step.clone()),
+            _ => None,
+        };
+        self.seek = Some(place);
+        self.go_to_seek();
+        cx.notify();
+    }
+
+    /// Scrolls where the click asked once the story is read; a step the agent has not spoken in goes to the top.
+    fn go_to_seek(&mut self) {
+        if self.story.is_empty() && self.seek != Some(Place::Top) {
+            return;
+        }
+        let top = || point(px(0.), px(0.));
+        match self.seek.take() {
+            None => {}
+            Some(Place::Top) => self.scroll.set_offset(top()),
+            Some(Place::End) => self.scroll.scroll_to_bottom(),
+            Some(Place::Step(step)) => match self.story.iter().rposition(|(s, _)| *s == step) {
+                Some(i) => self.scroll.scroll_to_top_of_item(i),
+                None => self.scroll.set_offset(top()),
+            },
+        }
     }
 
     /// Shows a run's tab (and picks the run), or the person's terminal with None.
     pub fn show(&mut self, run: Option<String>, cx: &mut Context<Self>) {
         if run != self.open {
             self.story.clear();
+            self.seek = None;
+            self.lit = None;
+            self.scroll.set_offset(point(px(0.), px(0.)));
             // read at once, not at the poll's next turn: the tab would show nothing for up to a second
             if let Some(id) = run.clone() {
                 cx.spawn(async move |this, cx| Self::tell(this, id, cx).await).detach();
@@ -85,16 +135,45 @@ impl Tabs {
         let detail = runs.snap.details.get(open);
         let working = detail.is_some_and(|d| d.mark == Mark::Working);
         let order: Vec<String> = detail.map(|d| d.stages.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
-        let mut lines = div().flex().flex_col().gap(px(3.));
+        // one child per step told, so the steps panel can scroll the story to one of them
+        let mut lines = div()
+            .id("story")
+            .track_scroll(&self.scroll)
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(20.))
+            .py(px(10.))
+            .font_family(look::MONO_FONT)
+            .text_size(px(13.))
+            .line_height(px(21.))
+            .text_color(rgb(0xc9ced8))
+            .flex()
+            .flex_col();
         if self.story.is_empty() {
             lines = lines.child(div().text_color(rgb(look::FAINT)).child(if working { "The agent is starting…" } else { "No agent has spoken in this run yet." }));
         }
         for (step, said) in &self.story {
             let at = order.iter().position(|s| s == step).map(|i| format!("Step {} of {} · {step}", i + 1, order.len())).unwrap_or_else(|| step.clone());
-            lines = lines.child(div().pt(px(10.)).text_color(rgb(look::BLUE)).child(format!("── {at}")));
+            // the step clicked in the steps panel stands out: a bar at its left and a ground under it
+            let lit = self.lit.as_deref() == Some(step.as_str());
+            let mut told = div()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .mx(px(-10.))
+                .pl(px(8.))
+                .pr(px(10.))
+                .pb(px(6.))
+                .rounded(px(6.))
+                .border_l_2()
+                .border_color(if lit { rgb(look::BLUE) } else { rgba(0) })
+                .when(lit, |d| d.bg(rgb(look::PANEL_2)))
+                .child(div().pt(px(10.)).text_color(rgb(look::BLUE)).child(format!("── {at}")));
             for s in said {
-                lines = lines.child(div().flex().gap(px(8.)).child(div().flex_none().text_color(rgb(look::FAINT)).child("●")).child(div().min_w_0().child(s.clone())));
+                told = told.child(div().flex().gap(px(8.)).child(div().flex_none().text_color(rgb(look::FAINT)).child("●")).child(div().min_w_0().child(s.clone())));
             }
+            lines = lines.child(told);
         }
         if working {
             lines = lines.child(div().pt(px(6.)).flex().gap(px(8.)).items_center().child(look::spinner("story-spin", 11., look::BLUE)).child(div().text_color(rgb(look::FAINT)).child("working")));
@@ -104,20 +183,7 @@ impl Tabs {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(
-                    div()
-                        .id("story")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .px(px(20.))
-                        .py(px(10.))
-                        .font_family(look::MONO_FONT)
-                        .text_size(px(13.))
-                        .line_height(px(21.))
-                        .text_color(rgb(0xc9ced8))
-                        .child(lines),
-                )
+                .child(lines)
                 .child(
                     div()
                         .mx(px(14.))

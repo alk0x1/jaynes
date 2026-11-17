@@ -408,12 +408,12 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let runs = cx.new(model::Runs::new);
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), cx));
         let side = cx.new(|cx| side::Side::new(runs.clone(), tabs.clone(), cx));
-        let rail = cx.new(|cx| rail::Rail::new(runs.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
         let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));
         let island = cx.new(|cx| island::Island::new(runs.clone(), key, lightbox.clone(), compare.clone(), cx));
         island.update(cx, |i, _| i.tabs = Some(tabs.clone()));
+        let rail = cx.new(|cx| rail::Rail::new(runs.clone(), tabs.clone(), island.clone(), cx));
         cx.new(|cx| {
             cx.observe(&runs, |_, _, cx| cx.notify()).detach();
             cx.observe(&tabs, |_, _, cx| cx.notify()).detach();

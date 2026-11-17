@@ -158,6 +158,16 @@ impl Island {
         }
     }
 
+    /// Brings the picked run's question up: out of its pill, and into the compare mode when it chooses among designs.
+    pub fn open_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(stop) = self.stop(cx) else { return };
+        self.shrunk.remove(&stop.question);
+        if stop.choose {
+            self.compare.update(cx, |c, cx| c.open(stop, window, cx));
+        }
+        cx.notify();
+    }
+
     fn stop(&self, cx: &App) -> Option<Stop> {
         self.runs.read(cx).stop().cloned()
     }
@@ -363,7 +373,7 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `at <run> top|end|<step>`, `waits`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -426,6 +436,19 @@ impl Island {
                 let run = (rest != "main").then(|| rest.to_string());
                 if let Some(tabs) = self.tabs.clone() {
                     tabs.update(cx, |t, cx| t.show(run, cx));
+                }
+            }
+            "waits" => self.open_stop(window, cx),
+            "at" => {
+                let (run, at) = rest.split_once(' ').unwrap_or((rest, "top"));
+                let place = match at {
+                    "top" => crate::tabs::Place::Top,
+                    "end" => crate::tabs::Place::End,
+                    step => crate::tabs::Place::Step(step.to_string()),
+                };
+                let run = run.to_string();
+                if let Some(tabs) = self.tabs.clone() {
+                    tabs.update(cx, |t, cx| t.show_at(run, place, cx));
                 }
             }
             "diff" => {
