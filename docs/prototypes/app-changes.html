@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changes panel options</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --panel:#0b0c0f; --panel2:#131519; --sel:#181a20; --line:#1b1d23; --line2:#262931;
+  --text:#e9ecf1; --dim:#9298a5; --faint:#5d6370;
+  --amber:#ffb35c; --blue:#6fb4ff; --green:#69dba0; --red:#ff7a7a; --violet:#c49bff;
+  --mono:"IBM Plex Mono",ui-monospace,monospace; --ui:"Instrument Sans",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#050506;color:var(--text);font-family:var(--ui);padding:28px 24px 80px}
+h1{font-size:15px;font-weight:600;margin:0 0 4px}
+.q{font-size:13px;color:var(--dim);margin:0 0 16px}
+section{margin:0 auto 54px;max-width:1500px}
+.row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.opt{display:flex;flex-direction:column;gap:10px}
+.num{display:flex;align-items:baseline;gap:10px;font-size:13px;color:var(--dim)}
+.num b{font-size:22px;color:var(--text);font-weight:600;width:22px}
+.num .pick{color:var(--amber);font-size:12px;border:1px solid #ffb35c55;border-radius:5px;padding:1px 6px}
+.win{align-self:flex-start;background:var(--panel);border:1px solid var(--line2);border-radius:10px;overflow:hidden;display:flex;box-shadow:0 20px 60px #0009}
+.term{width:150px;flex:none;padding:14px 12px;font-family:var(--mono);font-size:11px;color:var(--faint);line-height:1.7;border-right:1px solid var(--line);white-space:pre;overflow:hidden}
+.changes{padding:12px 0 14px;font-size:12.5px}
+.w360{width:360px}.w560{width:560px}
+.ph{display:flex;align-items:center;justify-content:space-between;padding:4px 16px 8px;font-weight:600}
+.ph span{color:var(--faint);font-weight:400;font-size:12px}
+.add{color:var(--green)} .del{color:var(--red)}
+.cbox{display:flex;gap:8px;padding:0 16px 10px}
+.field{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:6px 10px;color:var(--faint)}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px;border:1px solid var(--line2);background:var(--panel2);white-space:nowrap}
+.btn.sm{padding:2px 8px;font-size:11.5px;color:var(--dim)}
+.file{display:flex;align-items:center;gap:8px;padding:5px 16px}
+.file .dir{color:var(--faint);font-size:11.5px}
+.file .n{margin-left:auto;font-family:var(--mono);font-size:11.5px}
+.file.on{background:var(--sel)}
+.file.hv{background:#ffffff08}
+.tri{color:var(--faint);width:10px}
+.box{width:13px;height:13px;border:1px solid var(--line2);border-radius:3px;flex:none;display:grid;place-items:center;font-size:10px}
+.box.on{background:var(--blue);border-color:var(--blue);color:#0b0e13}
+.shape{margin:6px 16px 4px;font-size:12px;color:var(--dim);line-height:1.55}
+.shape b{color:var(--text);font-weight:500}
+.sub{padding:10px 16px 4px;color:var(--faint);font-size:11.5px;font-weight:600}
+.warn{color:var(--amber)}
+.commit{padding:4px 16px;font-size:12px;color:var(--dim);display:flex;gap:10px;white-space:nowrap;overflow:hidden}
+.commit code{color:var(--faint);font-family:var(--mono);font-size:11.5px}
+.dft{margin:6px 16px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.65;border:1px solid var(--line2);border-radius:6px;overflow:hidden}
+.dft + .dft{margin-top:4px}
+.hd{font-family:var(--ui);font-size:10.5px;color:var(--faint);padding:4px 10px 2px}
+.ln{white-space:pre-wrap;word-break:break-word;padding:0 10px 0 44px;text-indent:-34px;color:var(--dim)}
+.ln i{font-style:normal;color:var(--faint);display:inline-block;width:34px;text-indent:0}
+.r{color:var(--red);background:#ff7a7a26;border-radius:2px}
+.g{color:var(--green);background:#69dba026;border-radius:2px}
+.stack .part+.part{border-top:1px solid var(--line2)}
+.stack .part{padding:2px 0 4px}
+.uni{padding:4px 0}
+.uni .m{background:#ff7a7a10;color:#d9a3a3}
+.uni .p{background:#69dba010;color:#a9d9bf}
+.uni .ctx{color:var(--faint)}
+.side{display:grid;grid-template-columns:1fr 1fr}
+.side .col{padding:2px 0 4px;min-width:0}
+.side .col+.col{border-left:1px solid var(--line2)}
+.cap{font-size:12px;color:var(--faint);max-width:560px;line-height:1.5}
+.pm{width:22px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--dim);flex:none}
+.pm svg{width:16px;height:16px}
+.pm.hov{background:#ffffff14;color:var(--text)}
+.trans{border-top:1px solid var(--line2);margin-top:12px;padding:8px 16px 0;font-size:11.5px;color:var(--faint);display:flex;flex-wrap:wrap;gap:4px 12px}
+.trans b{font-family:var(--mono);color:var(--text);font-weight:500;margin-right:4px}
+.trans.big{background:#6fb4ff08;padding:10px 16px 2px}
+.cur{box-shadow:inset 2px 0 var(--blue);background:#6fb4ff0d}
+.ring{box-shadow:inset 0 0 0 1px #6fb4ff66}
+.tag{font-size:10.5px;color:var(--blue);border:1px solid #6fb4ff55;border-radius:4px;padding:0 5px;font-weight:500}
+</style>
+</head>
+<body>
+
+<script>
+// real hunks from commit 6219917, app/src/main.rs
+const H1={at:'SHORTCUTS',
+  before:[[57,'("Runs", &[… ("⌘.", "<span class=r>Halt the picked run</span>"), ("⌘N", "New run")]),']],
+  after:[[57,'("Runs", &[… ("⌘.", "<span class=g>Stop the open agent, or halt the picked run</span>"), ("⌘N", "New run")]),']]};
+const H2={at:'impl Render for Root',
+  before:[[216,'.on_action(cx.listener(|this, _: &HaltRun, _, cx| <span class=r>this.halt_picked(cx))</span>)']],
+  after:[[217,'.on_action(cx.listener(|this, _: &HaltRun, _, cx| <span class=g>{</span>'],
+         [218,'<span class=g>    // over an agent, it stops the agent; else the picked run</span>'],
+         [219,'<span class=g>    if this.agent_view.is_some() {</span>'],
+         [220,'<span class=g>        this.stop_agent(cx);</span>'],
+         [221,'<span class=g>    } else {</span>'],
+         [222,'<span class=g>        this.halt_picked(cx);</span>'],
+         [223,'<span class=g>    }</span>'],
+         [224,'<span class=g>}))</span>']]};
+const H2S={at:'impl Render for Root',
+  before:[[216,'.on_action(cx.listener(|this, _: &HaltRun, _, cx| this.halt_picked(cx)))']],
+  after:[[217,'.on_action(cx.listener(|this, _: &HaltRun, _, cx| <span class=g>{</span>'],
+         [218,'    <span class=g>// over an agent, it stops the agent; else the picked run</span>'],
+         [219,'    <span class=g>if this.agent_view.is_some() {</span>'],
+         [220,'        <span class=g>this.stop_agent(cx);</span>'],
+         [221,'    <span class=g>} else {</span>'],
+         [222,'        this.halt_picked(cx)<span class=g>;</span>'],
+         [223,'    <span class=g>}</span>'],
+         [224,'<span class=g>}</span>))']]};
+const ln=([n,s])=>`<div class="ln"><i>${n}</i>${s}</div>`;
+const stacked=h=>`<div class="dft stack"><div class="part"><div class="hd">Before</div>${h.before.map(ln).join('')}</div><div class="part"><div class="hd">After</div>${h.after.map(ln).join('')}</div></div>`;
+const unified=h=>`<div class="dft uni"><div class="hd">${h.at}</div>${h.before.map(([n,s])=>`<div class="ln m"><i>−</i>${s}</div>`).join('')}${h.after.map(([n,s])=>`<div class="ln p"><i>+</i>${s}</div>`).join('')}</div>`;
+const sideBy=h=>`<div class="dft side"><div class="col"><div class="hd">Before</div>${h.before.map(ln).join('')}</div><div class="col"><div class="hd">After</div>${h.after.map(ln).join('')}</div></div>`;
+
+const TERM='❯ make ⌘. stop the\n  open agent\n\n● Update(main.rs)\n  ⎿ +118 −34\n\n● Bash(cargo test)\n  ⎿ 43 passed\n\nDone.';
+const head=`<div class="ph">Changes <span>~/Projects/jaynes · 4 files · <span class="add">+135</span> <span class="del">−38</span></span></div>`;
+const cbox=`<div class="cbox"><div class="field">Commit message</div><span class="btn">Commit</span></div>`;
+const files=(mark)=>[['main.rs','app/src','+118','−34',1],['agents.rs','app/src','+9','−2'],['inbox.rs','app/src','+1','−1'],['tabs.rs','app/src','+1','−1']]
+  .map(([f,d,a,r,on])=>`<div class="file ${on?'on':''}">${mark?mark(true):`<span class="tri">${on?'▾':'▸'}</span>`}${f}<span class="dir">${d}</span><span class="n"><span class="add">${a}</span> <span class="del">${r}</span></span></div>`);
+const shape=`<div class="shape">changed in <b>SHORTCUTS</b> · <b>impl Render for Root</b> · <b>impl Root</b> (9 places)</div>`;
+const pushed=`<div class="ph" style="margin-top:10px">Not pushed <span>main · 3</span></div>
+<div class="commit"><code>6219917</code>The window's frame in the familiar look…</div>
+<div class="commit"><code>4f00a49</code>A notice tells the person when one…</div>
+<div class="commit"><code>40c8c5c</code>The Inbox, in the familiar look…</div>`;
+const win=(w,inner,term=true)=>`<div class="win">${term?`<div class="term">${TERM}</div>`:''}<div class="changes ${w}">${inner}</div></div>`;
+
+function diffOpt(fn,w,h2=H2){const f=files();return win(w,head+cbox+f[0]+shape+fn(H1)+fn(h2)+f.slice(1).join('')+pushed)}
+
+const S1=`<section><h1>A · How the diff shows what changed</h1><p class="q">The same two real pieces of main.rs from the last commit, three ways.</p><div class="row">
+<div class="opt"><div class="num"><b>1</b>Before above After, only the changed words coloured</div>${diffOpt(stacked,'w360')}<div class="cap">As in the C prototype. Panel stays 360px.</div></div>
+<div class="opt"><div class="num"><b>2</b>One column, − and + lines, as on GitHub</div>${diffOpt(unified,'w360')}<div class="cap">Familiar from GitHub and VS Code. Panel stays 360px.</div></div>
+<div class="opt"><div class="num"><b>3</b>Before and After side by side</div>${diffOpt(sideBy,'w560')}<div class="cap">Easier to compare, but the panel takes 560px from the terminal.</div></div>
+<div class="opt"><div class="num"><b>4</b>Like difftastic: it reads the code, not the words <span class="pick">my pick</span></div>${diffOpt(stacked,'w360',H2S)}<div class="cap">Look at line 222: <b style="color:var(--text)">this.halt_picked(cx)</b> stays white, because it was not changed, only moved inside the if. Before has nothing red at all. A reindent or a line break would not show either.</div></div>
+</div></section>`;
+
+const newfiles=(btn)=>`<div class="sub">New files, not in git yet</div>
+<div class="file">${btn('research.org')}research.org<span class="dir"></span></div>
+<div class="file">${btn('docs/audits/')}audits<span class="dir">docs</span></div>`;
+const c1=win('w360',head+cbox+files().join('')+newfiles(()=>'')
+  .replace(/<\/span><\/div>/g,'</span><span class="n"><span class="btn sm">Add</span></span></div>')+pushed,false);
+const box=on=>`<span class="box ${on?'on':''}">${on?'✓':''}</span>`;
+const c2=win('w360',head.replace('4 files','4 of 6 files')+cbox+files(box).join('')+`<div class="file">${box(false)}research.org<span class="dir">new</span></div><div class="file">${box(false)}audits<span class="dir">docs · new</span></div>`+pushed,false);
+const c3=win('w360',head.replace('4 files','6 files')+cbox+files().join('')+`<div class="file"><span class="tri">▸</span>research.org<span class="dir">new</span><span class="n warn">new</span></div><div class="file"><span class="tri">▸</span>audits<span class="dir">docs</span><span class="n warn">new</span></div>`+pushed,false);
+
+const hunk=(h,staged)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin:8px 16px 0;font-size:11.5px;color:var(--faint)"><span>${h.at}</span><span class="btn sm" style="${staged?'color:var(--green);border-color:#69dba055':''}">${staged?'✓ Staged · Unstage':'Stage'}</span></div>`+stacked(h).replace('class="dft','style="margin-top:4px" class="dft');
+const c4=win('w360',`<div class="ph">Changes <span>~/Projects/jaynes · 1 piece staged</span></div><div class="cbox"><div class="field">Commit message</div><span class="btn">Commit 1 piece</span></div>`
+  +`<div class="sub">Staged</div>`+files()[0].replace('+118','+2').replace('−34','−1')+hunk(H1,true)
+  +`<div class="sub">Not staged</div>`+files()[0].replace('+118','+116').replace('−34','−33')+hunk(H2,false)+`<div style="height:6px"></div>`+files().slice(1).join('')
+  +newfiles(()=>'').replace(/<\/span><\/div>/g,'</span><span class="n"><span class="btn sm">Add</span></span></div>')+pushed,false);
+
+const ICON={'+':'<path d="M8 3v10M3 8h10"/>','−':'<path d="M3 8h10"/>'};
+const pm=(t,hov)=>`<span class="pm ${hov?'hov':''}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">${ICON[t]}</svg></span>`;
+const frow=(f,d,a,r,btn,cls='')=>`<div class="file ${cls} ${btn&&btn.endsWith('hov')?'hv':''}"><span class="tri">▸</span>${f}<span class="dir">${d}</span><span class="n"><span class="add">${a}</span> <span class="del">${r}</span></span>${btn?pm(btn[0],btn.endsWith('hov')):''}</div>`;
+const nrow=(f,d,cls='')=>`<div class="file ${cls}"><span class="tri"></span>${f}<span class="dir">${d}</span><span class="n" style="color:var(--amber)">new</span>${pm('+')}</div>`;
+const OPEN='<path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/>';
+const ico=(path,hov)=>`<span class="pm ${hov?'hov':''}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">${path}</svg></span>`;
+const piece=(fn,h,staged,extra='')=>fn(h).replace('class="dft','style="position:relative;'+extra+'" class="dft').replace(/<div class="(part|col)">/,'<div class="$1"><span style="position:absolute;top:3px;right:4px">'+pm(staged?'−':'+')+'</span>');
+const openRow=`<div class="file on"><span class="tri">▾</span>main.rs<span class="dir">app/src</span><span class="n"><span class="add">+118</span> <span class="del">−34</span></span>${ico(OPEN,true)}${pm('+')}</div>`;
+const simple=win('w360',`<div class="ph">Changes <span>~/Projects/jaynes · 4 files · <span class="add">+135</span> <span class="del">−38</span></span></div>`+cbox
+ +`<div class="sub">Staged</div>`+frow('tabs.rs','app/src','+1','−1','−')
+ +`<div class="sub">Changes</div>`+openRow+shape+stacked(H1)+stacked(H2S)
+ +frow('agents.rs','app/src','+9','−2','+')+frow('inbox.rs','app/src','+1','−1','+')
+ +`<div class="sub">New files, not in git yet</div>`+nrow('research.org','')+nrow('audits','docs')+pushed,false);
+const A1={at:'pub struct Agent',before:[],after:[[284,'<span class=g>    /// The folder it works in.</span>'],[285,'<span class=g>    pub cwd: String,</span>']]};
+const A2={at:'fn agent',before:[[363,'Agent { address, title, state, … msg: t["status"]["msg"].as_str().unwrap_or_default().to_owned() }']],
+  after:[[365,'Agent { address, title, state, … msg: t["status"]["msg"].as_str().unwrap_or_default().to_owned()<span class=g>, cwd: t["cwd"].as_str().unwrap_or_default().to_owned()</span> }']]};
+const sideNew=h=>`<div class="dft side"><div class="col"><div class="hd">Before</div><div class="ln" style="color:var(--faint)"><i></i>(nothing here)</div></div><div class="col"><div class="hd">After</div>${h.after.map(ln).join('')}</div></div>`;
+const fileHead=(name,dir,a,r,where)=>`<div style="display:flex;align-items:center;gap:8px;padding:12px 16px 2px;font-size:12.5px"><span class="tri">▾</span><b style="font-weight:600">${name}</b><span class="dir" style="color:var(--faint);font-size:11.5px">${dir}</span><span style="color:var(--dim);font-size:12px;margin-left:6px">${where}</span><span style="margin-left:auto;font-family:var(--mono);font-size:11.5px"><span class="add">${a}</span> <span class="del">${r}</span></span>${ico(OPEN)}${ico('<path d="M4 4l8 8M12 4l-8 8"/>')}</div>`;
+const tabsBar=`<div style="display:flex;align-items:center;gap:2px;height:42px;padding:0 8px;border-bottom:1px solid var(--line);font-size:12.5px">
+ <div style="padding:5px 10px;color:var(--faint)">Changes panel</div><div style="padding:5px 10px;color:var(--faint)">Handoff 2026-11-17</div>
+ <div style="padding:5px 10px;border-radius:7px;background:var(--sel);color:var(--text);display:flex;gap:8px;align-items:center">Changes <span style="color:var(--faint);font-size:11px">2 files</span><span style="color:var(--faint)">×</span></div></div>`;
+const editor=`<div style="flex:1;min-width:0;display:flex;flex-direction:column">${tabsBar}
+ <div style="padding:2px 6px 0;flex:1">
+ ${fileHead('main.rs','app/src','+118','−34','changed in <b style="color:var(--text);font-weight:500">SHORTCUTS</b> · <b style="color:var(--text);font-weight:500">impl Render for Root</b> · 9 places')}
+ ${piece(sideBy,H1,true)}${piece(sideBy,H2S,false,'border-color:var(--blue);')}
+ <div style="border-top:1px solid var(--line);margin:10px 16px 0"></div>
+ ${fileHead('agents.rs','app/src','+9','−2','changed in <b style="color:var(--text);font-weight:500">pub struct Agent</b> · <b style="color:var(--text);font-weight:500">fn agent</b> · 3 places')}
+ ${piece(sideNew,A1,false)}${piece(sideBy,A2,false)}</div>
+ <div class="trans big" style="margin-top:0"><span><b>s</b>stage</span><span><b>u</b>unstage</span><span><b>x</b>discard</span><span><b>n p</b>next, previous piece</span><span><b>c</b>commit</span><span><b>P</b>push</span><span><b>l</b>log</span><span><b>e</b>open in your editor (nvim, emacs…) at this line</span><span><b>Esc</b>close</span></div><div style="height:10px"></div></div>`;
+const panelSmall=`<div class="changes w360" style="border-left:1px solid var(--line)"><div class="ph">Changes <span>4 files</span></div>`+cbox.replace('>Commit<','>Commit 1 piece<')
+ +`<div class="sub">Staged</div>`+frow('main.rs','app/src','+2','−1','−')
+ +`<div class="sub">Changes</div><div class="file on"><span class="tri" style="color:var(--blue)">●</span>main.rs<span class="dir">app/src</span><span class="n"><span class="add">+116</span> <span class="del">−33</span></span>${pm('+')}</div>`
+ +frow('agents.rs','app/src','+9','−2','+','on').replace('▸','<span style="color:var(--blue)">●</span>')+frow('inbox.rs','app/src','+1','−1','+')+frow('tabs.rs','app/src','+1','−1','+')
+ +`<div class="sub">New files, not in git yet</div>`+nrow('research.org','')+nrow('audits','docs')+`</div>`;
+const power=`<div class="win" style="width:1180px">${editor}${panelSmall}</div>`;
+const S2b=`<section><h1>B · Your mix: the panel stays simple, the power lives in the file</h1><p class="q">a is the panel. Its open icon (↗) opens the file in the middle, as b.</p><div class="row">
+<div class="opt"><div class="num"><b>a</b>The panel: click a file, its diff opens under it</div>${simple}<div class="cap">No keys to learn. + stages a file, − takes it back. Nothing staged: Commit takes every changed file git follows.</div></div>
+</div><div class="row" style="margin-top:30px">
+<div class="opt"><div class="num"><b>b</b>Click files in the panel: they stack in the middle <span class="pick">your pick</span></div>${power}<div class="cap">A tab beside the agents. The middle is wide, so Before and After sit side by side. Each piece has its own + and −, the blue border is the piece the keys act on, and the keys show at the bottom. main.rs was clicked first, then agents.rs, which opened under it; the blue dots in the panel mark the files shown. × takes a file out. e opens your own terminal editor at that line, in a tab, with all your config.</div></div>
+</div></section>`;
+const S2=`<section><h1>B · What Commit takes</h1><p class="q">Your folder has new files git does not follow yet (research.org, docs/audits).</p><div class="row">
+<div class="opt"><div class="num"><b>1</b>Only files git follows; new ones apart, each with Add</div>${c1}<div class="cap">research.org never goes in by accident.</div></div>
+<div class="opt"><div class="num"><b>2</b>A checkbox per file, new ones unticked</div>${c2}<div class="cap">As in GitHub Desktop. Lets you commit a part, one more click per file.</div></div>
+<div class="opt"><div class="num"><b>3</b>Everything goes in</div>${c3}<div class="cap">Simplest, but it would have committed research.org and docs/audits.</div></div>
+<div class="opt"><div class="num"><b>4</b>Like magit: Stage a piece, Commit takes only what is staged <span class="pick">my pick</span></div>${c4}<div class="cap">The SHORTCUTS piece is staged, the HaltRun piece is not, so main.rs shows in both: Commit takes only the staged piece. New files stay apart, as in 1.</div></div>
+</div></section>`;
+
+const sh=(t)=>win('w360',head+files()[0]+t+stacked(H1),false);
+const S3=`<section><h1>C · The line under an open file</h1><p class="q">A short line that says where the file changed, before the diff.</p><div class="row">
+<div class="opt"><div class="num"><b>1</b>Where, from git (free, instant) <span class="pick">my pick</span></div>${sh(shape)}</div>
+<div class="opt"><div class="num"><b>2</b>What, written by Claude (costs a call, a few seconds)</div>${sh(`<div class="shape"><b>⌘.</b> now stops the open agent; the shortcut list says so</div>`)}</div>
+<div class="opt"><div class="num"><b>3</b>No line</div>${sh('')}</div>
+</div></section>`;
+
+document.body.insertAdjacentHTML('beforeend',S2b+S1+S2+S3);
+</script>
+</body>
+</html>

@@ -14,8 +14,10 @@ mod ask;
 mod inbox;
 mod answer;
 mod bench;
+mod changes;
 mod compare;
 mod core_bin;
+mod git;
 mod hc;
 mod island;
 mod key;
@@ -47,7 +49,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges
     ]
 );
 
@@ -57,7 +59,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"),  ("⌘↩", "Send your answer"), ("⌘.", "Stop the open agent, or halt the picked run"), ("⌘N", "New run")]),
     ("Inbox", &[("⌘I", "The Inbox: what needs you, in every space"), ("⌘O", "The next thing that needs you")]),
     ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
-    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⌘/", "This list")]),
+    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⇧⌘G", "Changes panel"), ("⌘/", "This list")]),
 ];
 
 /// The top bar's height; the macOS window buttons sit inside it, in the runs column's header.
@@ -98,6 +100,9 @@ struct Root {
     /// last).
     agent_view: Option<(String, Entity<TerminalView>)>,
     rail: Entity<rail::Rail>,
+    /// What git says about the folder the middle works in, at the right (Shift-Command-G).
+    changes: Entity<changes::Changes>,
+    changes_on: bool,
     island: Entity<island::Island>,
     compare: Entity<compare::Compare>,
     lightbox: Entity<lightbox::Lightbox>,
@@ -162,7 +167,9 @@ impl Render for Root {
                             // a run's question, over Claude Code's terminal and the runs' tabs, not over an agent or the Inbox
                             .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox, |d| d.child(self.island.clone())),
                     )
-                    .children(self.steps.then(|| self.rail.clone())),
+                    // at the right, Changes when it is on, else the run's steps
+                    .when(self.changes_on, |d| d.child(self.changes.clone()))
+                    .when(!self.changes_on && self.steps, |d| d.child(self.rail.clone())),
             );
         div()
             .size_full()
@@ -179,6 +186,10 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
+            .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
+                this.changes_on = !this.changes_on;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ToggleRuns, _, cx| {
                 this.sidebar = !this.sidebar;
                 cx.notify();
@@ -465,6 +476,7 @@ impl Root {
                     .flex()
                     .items_center()
                     .gap(px(4.))
+                    .child(self.changes_switch(cx))
                     .child(own_press(look::icon_button("new-run", look::Icon::Plus, false)).on_click(cx.listener(|this, _, window, cx| {
                         new_run(&this.terminal, window, cx);
                     })))
@@ -473,6 +485,32 @@ impl Root {
                         cx.notify();
                     }))),
             )
+    }
+
+    /// The Changes panel's switch, as the familiar look has it: its name and how many files differ, bright while on.
+    fn changes_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let n = self.changes.read(cx).count();
+        own_press(
+            div()
+                .id("changes-switch")
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(10.))
+                .py(px(5.))
+                .rounded(px(6.))
+                .text_size(px(12.5))
+                .cursor_pointer()
+                .text_color(rgb(if self.changes_on { look::TEXT } else { look::FAINT }))
+                .when(self.changes_on, |d| d.bg(rgb(look::SELECTED)))
+                .hover(|d| d.text_color(rgb(look::DIM)))
+                .child("Changes")
+                .when(n > 0, |d| d.child(div().text_color(rgb(look::FAINT)).child(n.to_string()))),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.changes_on = !this.changes_on;
+            cx.notify();
+        }))
     }
 
     /// The runs as the column lists them, top to bottom.
@@ -856,18 +894,6 @@ fn home_short(folder: &str, home: &str) -> String {
     }
 }
 
-/// The branch checked out where Claude Code works; empty when it is not a git folder.
-fn branch_of(folder: &str) -> String {
-    spawn::command("git")
-        .args(["-C", folder, "branch", "--show-current"])
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
 /// "+ New run": asks Claude Code in the terminal for a run through Jaynes, the person finishing the sentence.
 fn new_run(terminal: &Entity<TerminalView>, window: &mut Window, cx: &mut App) {
     terminal.update(cx, |t, cx| {
@@ -957,6 +983,7 @@ fn main() {
             KeyBinding::new("alt-7", Pick7, Some("Jaynes")),
             KeyBinding::new("alt-8", Pick8, Some("Jaynes")),
             KeyBinding::new("alt-9", Pick9, Some("Jaynes")),
+            KeyBinding::new("cmd-shift-g", ToggleChanges, Some("Jaynes")),
             KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
@@ -970,6 +997,7 @@ fn main() {
                 items: vec![
                     MenuItem::action("Runs Column", ToggleRuns),
                     MenuItem::action("Steps Panel", ToggleSteps),
+                    MenuItem::action("Changes Panel", ToggleChanges),
                     MenuItem::separator(),
                     MenuItem::action("Next Tab", NextTab),
                     MenuItem::action("Previous Tab", PreviousTab),
@@ -1042,9 +1070,12 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let island = cx.new(|cx| island::Island::new(runs.clone(), key, lightbox.clone(), compare.clone(), cx));
         island.update(cx, |i, _| i.tabs = Some(tabs.clone()));
         let rail = cx.new(|cx| rail::Rail::new(runs.clone(), tabs.clone(), island.clone(), cx));
+        let changes = cx.new(|cx| changes::Changes::new(window, cx));
         let terminal_focus = focus.clone();
         cx.new(|cx| {
             cx.observe(&runs, |_, _, cx| cx.notify()).detach();
+            // the switch in the tabs bar counts the files Changes lists
+            cx.observe(&changes, |_, _, cx| cx.notify()).detach();
             // the keys go where the person looks: the terminal on Claude Code's tab, else the window itself, or a
             // shortcut pressed over a run's story would reach nothing, the terminal being off the screen
             cx.observe_in(&tabs, window, move |this: &mut Root, tabs, window, cx| {
@@ -1065,12 +1096,18 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.notify();
             })
             .detach();
-            // the branch, read again every few seconds: the person may switch it in the terminal
+            // the branch and the changes, read again every few seconds: the person or an agent changes them
             let branch = cx.spawn(async move |this, cx| loop {
                 let Ok(at) = this.update(cx, |root: &mut Root, cx| root.place(cx).1) else { break };
-                let now = cx.background_executor().spawn(async move { branch_of(&at) }).await;
+                let status = cx.background_executor().spawn({
+                    let at = at.clone();
+                    async move { git::read(&at) }
+                });
+                let status = status.await;
+                let now = status.as_ref().map(|s| s.branch.clone()).unwrap_or_default();
                 let gone = this
                     .update(cx, |root: &mut Root, cx| {
+                        root.changes.update(cx, |c, cx| c.set(at, status, cx));
                         if root.branch != now {
                             root.branch = now;
                             cx.notify();
@@ -1083,7 +1120,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
         })
     })
     .map(|handle| {

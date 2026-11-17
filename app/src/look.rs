@@ -162,6 +162,10 @@ pub enum Icon {
     Branch,
     Stop,
     Inbox,
+    /// Takes a file out of the next commit.
+    Minus,
+    /// Opens a file elsewhere: an arrow out of a box.
+    Open,
 }
 
 impl Icon {
@@ -173,6 +177,8 @@ impl Icon {
             Icon::Folder => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linejoin="round"><path d="M1.7 4.5a1 1 0 0 1 1-1h3.4l1.5 1.5h5.7a1 1 0 0 1 1 1v6.3a1 1 0 0 1-1 1H2.7a1 1 0 0 1-1-1z"/></svg>"##,
             Icon::Branch => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round"><circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 6.6c0 3-7 2-7 4.3"/></svg>"##,
             Icon::Inbox => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linejoin="round"><path d="M2 9.5h3.2l1 1.8h3.6l1-1.8H14"/><path d="M3.6 3h8.8L14 9.5V13H2V9.5z"/></svg>"##,
+            Icon::Minus => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"><path d="M3 8h10"/></svg>"##,
+            Icon::Open => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>"##,
             Icon::Stop => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.5" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.6"/></svg>"##,
         }
     }
