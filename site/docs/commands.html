@@ -29,7 +29,7 @@
 <tr><td><code>jaynes page [--port N]</code></td><td>The page, on 127.0.0.1 (port 8750)</td></tr>
 <tr><td><code>jaynes answer RUN QUESTION [ITEM=keep|change:TEXT|redo:TEXT|drop|skip] [--context TEXT] [--send]</code></td><td>Says what an answer will do, and sends it with <code>--send</code>; from a terminal it is yours, from a program an agent's</td></tr>
 <tr><td><code>jaynes continue RUN</code></td><td>Goes on after a block, or after the process stopped</td></tr>
-<tr><td><code>jaynes halt RUN</code>, <code>jaynes resume RUN</code></td><td>Halts a run before its next step; only you resume it</td></tr>
+<tr><td><code>jaynes halt RUN</code>, <code>jaynes resume RUN</code></td><td>Halts a run at once, its agent where it is; only you resume it, and the step under way runs again</td></tr>
 <tr><td><code>jaynes raise RUN high</code>, <code>jaynes raise RUN --seconds N --tokens N</code></td><td>Raises a run's risk or its ceiling</td></tr>
 <tr><td><code>jaynes abandon RUN</code>, <code>jaynes undo RUN</code></td><td>Ends a run with nothing delivered; reverts what it merged</td></tr>
 <tr><td><code>jaynes correct RUN --note TEXT [--step STEP]</code></td><td>Records that a delivery was wrong, so the rework counts</td></tr>

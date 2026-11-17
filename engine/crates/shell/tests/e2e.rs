@@ -216,11 +216,55 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     assert!(ok && out.contains("recorded for the process that drives the run"), "{out}");
     let done = child.wait_with_output().expect("wait");
     let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
-    // the attempt under way finished; the halt was taken before the delivery
+    // the halt stopped the attempt under way; nothing was delivered
     assert!(said.contains("(halted)"), "{said}");
     let t = types(&events(&s, "inbox"));
     assert!(t.contains(&"Halted".to_string()), "{t:?}");
     assert!(!t.contains(&"Delivered".to_string()), "nothing is delivered while halted: {t:?}");
+}
+
+#[test]
+fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
+    let s = scratch("halt-now");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    // the first turn would work for a minute; the one after the resume is quick
+    let once = s.home.parent().expect("base").join("once");
+    let agent = format!("if [ -e {o} ]; then sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}; else touch {o}; sleep 60; fi", o = once.display());
+    let child = Command::new(BIN)
+        .args(["start", "--run", "halt-now", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start");
+    while !once.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let asked = std::time::Instant::now();
+    let (ok, out) = engine(&s, &["halt", "halt-now"]);
+    assert!(ok, "{out}");
+    let done = child.wait_with_output().expect("wait");
+    let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    assert!(asked.elapsed() < std::time::Duration::from_secs(10), "the agent went on after the halt: {:?}\n{said}", asked.elapsed());
+    assert!(said.contains("(halted)"), "{said}");
+    let t = types(&events(&s, "halt-now"));
+    assert!(t.contains(&"Halted".to_string()) && t.contains(&"AttemptInterrupted".to_string()), "{t:?}");
+    assert!(!t.contains(&"AttemptFailed".to_string()), "a halt spends no attempt: {t:?}");
+    // the person resumes, at a terminal (script gives the command one), and the step runs again from where it was
+    let out = Command::new("script")
+        .args(["-q", "/dev/null", BIN, "resume", "halt-now"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .output()
+        .expect("resume");
+    let out = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.contains("finished: delivered"), "{out}");
+    let t = types(&events(&s, "halt-now"));
+    assert!(t.contains(&"Resumed".to_string()) && !t.contains(&"AttemptFailed".to_string()), "{t:?}");
 }
 
 fn bug_project(name: &str) -> Scratch {

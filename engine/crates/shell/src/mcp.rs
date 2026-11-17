@@ -24,7 +24,7 @@ fn tools() -> Value {
         {"name": "run", "description": "Where a run is: its steps, what it waits for, what it spent.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
         {"name": "answer", "description": "Let a result go on as it is, at a stop the role marks as a release. Only that: everything else is the person's.",
          "inputSchema": obj(json!({"run": {"type": "string"}, "question": {"type": "string"}}), &["run", "question"])},
-        {"name": "halt", "description": "Halt a run before its next step. Only the person resumes it.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
+        {"name": "halt", "description": "Halt a run at once: its agent stops where it is, the step under way runs again on resume, and only the person resumes it.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
         {"name": "correct", "description": "Record that a delivered run was wrong, and in which step if known, so the rework counts.",
          "inputSchema": obj(json!({"run": {"type": "string"}, "note": {"type": "string"}, "step": {"type": "string"}}), &["run", "note"])},
     ])
@@ -106,7 +106,7 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
         "halt" => {
             let run = state(home, text(args, "run")?)?;
             drive::submit(home, &exe, &run, Input::Halt { by: agent() })?;
-            Ok(format!("Run {} halts before its next step. Only the person resumes it.", run.id))
+            Ok(format!("Run {} halts now: its agent stops, and the step under way runs again when the person resumes it.", run.id))
         }
         "correct" => {
             let run = state(home, text(args, "run")?)?;

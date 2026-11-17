@@ -120,9 +120,6 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
             return Ok("now");
         }
     let dir = home.join("runs").join(&run.id);
-    // Abandoning a run stops its agent at once: nothing it would do from here is wanted, and it costs tokens. The
-    // abandon is recorded or left for the run's process first, so that process starts no other turn.
-    let abandon = matches!(input, Input::Abandon { .. });
     let lock = File::create(dir.join("lock")).map_err(|e| e.to_string())?;
     if lock.try_lock().is_ok() {
         // An input that starts work is left to the process carried on here, which recovers first and then takes it:
@@ -147,10 +144,30 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         Ok("now")
     } else {
         store.inbox_put(&run.id, &input)?;
-        if abandon {
+        stop_agent_for(&dir, &input);
+        Ok("inbox")
+    }
+}
+
+/// What the run's process finds when the agent it waits for was stopped by a halt: the turn it gets back is
+/// then interrupted, not an attempt that failed.
+const HALTED_AGENT: &str = "agent-halted";
+
+/// Stop the agent of a run left an abandon or a halt, once that input is in its inbox, so its process starts
+/// no other turn: nothing the agent would do from here is wanted, and it costs tokens.
+pub fn stop_agent_for(dir: &Path, input: &Input) {
+    match input {
+        Input::Abandon { .. } => {
             agent::stop_left(&dir.join("agent.pid"));
         }
-        Ok("inbox")
+        Input::Halt { .. } => {
+            // the mark goes first: the process may get the turn back as soon as the agent is gone
+            let _marked = std::fs::write(dir.join(HALTED_AGENT), "");
+            if !agent::stop_left(&dir.join("agent.pid")) {
+                let _gone = std::fs::remove_file(dir.join(HALTED_AGENT));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -379,7 +396,11 @@ impl<'a> Driver<'a> {
             for input in came.into_iter().rev() {
                 queue.push_front(input);
             }
-            let Some(input) = queue.pop_front() else { break };
+            let Some(mut input) = queue.pop_front() else { break };
+            // A turn whose agent a halt stopped is interrupted, so it spends no attempt and runs again on resume.
+            if matches!(input, Input::AttemptEnded { .. }) && std::fs::remove_file(self.setup.dir.join(HALTED_AGENT)).is_ok() {
+                input = Input::Recovered;
+            }
             let (state, events, commands) = match decide_and_record(self.store, &self.setup.run, &input) {
                 Ok(x) => x,
                 Err(why) => {
