@@ -9,6 +9,7 @@
 // theme switching); the later steps use them.
 #![allow(dead_code)]
 
+mod agents;
 mod answer;
 mod bench;
 mod compare;
@@ -601,7 +602,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         window.focus(&focus, cx);
         let runs = cx.new(model::Runs::new);
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), cx));
-        let side = cx.new(|cx| side::Side::new(runs.clone(), tabs.clone(), cx));
+        let agents = cx.new(|cx| agents::Agents::new(core.clone(), cx));
+        let side = cx.new(|cx| side::Side::new(runs.clone(), agents, tabs.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
         let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));

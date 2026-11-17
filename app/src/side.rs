@@ -1,23 +1,135 @@
-//! The runs beside the terminal: what waits for the person first, then each project's runs, newest first. The list
-//! is the engine's own (`jaynes_shell::listing`), read from the record, so it says what `jaynes runs` and the page say.
+//! The column at the left, in the app's familiar look: the Inbox with how many things need the person, then the
+//! person's spaces with their agents (read from herdr-core, as Herdr arranges them), each with its dot and a short word,
+//! then the Jaynes runs. The runs' list is the engine's own (`jaynes_shell::listing`), read from the record, so it says
+//! what `jaynes runs` and the page say.
 
+use crate::agents::{self, Agent, Agents, State};
 use crate::look;
 use crate::model::Runs;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::{Mark, Row};
+use std::collections::HashSet;
 
-pub const WIDTH: f32 = 250.;
+pub const WIDTH: f32 = 292.;
 
 pub struct Side {
     runs: Entity<Runs>,
+    agents: Entity<Agents>,
     tabs: Entity<crate::tabs::Tabs>,
+    /// The spaces the person folded.
+    folded: HashSet<String>,
+}
+
+/// An agent's state as the column colours it.
+fn colour(state: State) -> u32 {
+    match state {
+        State::Waiting => look::AMBER,
+        State::Error => look::RED,
+        State::Working => look::BLUE,
+        State::ToReview => look::VIOLET,
+        State::Idle => look::FAINT,
+    }
+}
+
+fn dot(color: u32) -> Div {
+    div().size(px(8.)).rounded_full().flex_none().bg(rgb(color))
 }
 
 impl Side {
-    pub fn new(runs: Entity<Runs>, tabs: Entity<crate::tabs::Tabs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
-        Side { runs, tabs }
+        cx.observe(&agents, |_, _, cx| cx.notify()).detach();
+        Side { runs, agents, tabs, folded: HashSet::new() }
+    }
+
+    fn inbox(&self, waiting: usize, review: usize) -> impl IntoElement {
+        let need = waiting + review;
+        div()
+            .mx(px(8.))
+            .mt(px(8.))
+            .px(px(10.))
+            .py(px(7.))
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(look::DIM))
+            .child(look::icon(look::Icon::Inbox, 14., look::DIM))
+            .child("Inbox")
+            .child(div().flex_1())
+            .when(need > 0, |d| {
+                d.child(
+                    div()
+                        .px(px(7.))
+                        .rounded(px(9.))
+                        .bg(rgb(if waiting > 0 { look::AMBER } else { look::VIOLET }))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(look::ON_FILL))
+                        .child(need.to_string()),
+                )
+            })
+    }
+
+    fn space_head(&self, id: &str, name: &str, folded: bool, waits: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let key = id.to_owned();
+        div()
+            .id(SharedString::from(format!("space-{id}")))
+            .mx(px(8.))
+            .mt(px(6.))
+            .px(px(10.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(look::DIM))
+            .hover(|d| d.text_color(rgb(look::TEXT)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.folded.remove(&key) {
+                    this.folded.insert(key.clone());
+                }
+                cx.notify();
+            }))
+            .child(div().w(px(10.)).text_color(rgb(look::FAINT)).child(if folded { "▸" } else { "▾" }))
+            .child(div().flex_1().min_w_0().truncate().child(name.to_owned()))
+            // a folded space still says that something in it waits
+            .when(folded && waits, |d| d.child(dot(look::AMBER)))
+    }
+
+    fn agent(&self, a: &Agent, now: u64) -> impl IntoElement {
+        let icon = if a.shell {
+            div().flex_none().whitespace_nowrap().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_").into_any_element()
+        } else if a.state == State::Working {
+            look::spinner(SharedString::from(format!("agent-spin-{}", a.address)), 11., look::BLUE).into_any_element()
+        } else if a.state == State::Idle {
+            div().size(px(8.)).rounded_full().flex_none().border(px(1.5)).border_color(rgb(0x4a505c)).into_any_element()
+        } else {
+            dot(colour(a.state)).into_any_element()
+        };
+        let right = if a.shell || a.state == State::Idle {
+            div().text_color(rgb(look::FAINT)).child(agents::age(a.since_ms, now))
+        } else {
+            div().text_color(rgb(colour(a.state))).child(a.state.word())
+        };
+        div()
+            .mx(px(8.))
+            .pl(px(26.))
+            .pr(px(10.))
+            .py(px(6.))
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .gap(px(9.))
+            .child(div().w(px(14.)).flex_none().flex().items_center().justify_center().child(icon))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::TEXT)).child(a.title.clone()))
+            .child(right.flex_none().text_size(px(11.5)))
     }
 
     fn row(&self, row: &Row, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -25,8 +137,8 @@ impl Side {
         let tabs = self.tabs.clone();
         div()
             .id(SharedString::from(format!("run-{}", row.id)))
-            .mx(px(6.))
-            .px(px(8.))
+            .mx(px(8.))
+            .px(px(10.))
             .py(px(7.))
             .rounded(px(7.))
             .flex()
@@ -39,7 +151,7 @@ impl Side {
             .child(div().mt(px(3.)).size(px(12.)).flex_none().flex().items_center().justify_center().child(if row.mark == Mark::Working {
                 look::spinner(SharedString::from(format!("spin-{}", row.id)), 11., look::BLUE).into_any_element()
             } else {
-                div().size(px(8.)).rounded_full().bg(rgb(look::colour(row.mark))).into_any_element()
+                dot(look::colour(row.mark)).into_any_element()
             }))
             .child(
                 div()
@@ -57,9 +169,9 @@ fn section(name: &str, count: Option<usize>, color: u32) -> impl IntoElement {
     div()
         .flex()
         .justify_between()
-        .px(px(12.))
-        .pt(px(14.))
-        .pb(px(6.))
+        .px(px(18.))
+        .pt(px(16.))
+        .pb(px(4.))
         .child(look::label(name, color))
         .children(count.map(|n| div().text_size(px(11.)).text_color(rgb(look::FAINT)).child(n.to_string())))
 }
@@ -68,14 +180,38 @@ impl Render for Side {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let runs = self.runs.read(cx);
         let (listing, selected, trouble) = (runs.snap.listing.clone(), runs.selected.clone(), runs.trouble.clone());
-        let mut list = div().id("runs").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
+        let agents = self.agents.read(cx);
+        let (spaces, core_trouble) = (agents.spaces.clone(), agents.trouble.clone());
+        let (waiting, review) = agents.counts();
+        let now = agents::now_ms();
+        let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
+        list = list.child(self.inbox(waiting + listing.needs.len(), review));
+
+        list = list.child(section("Spaces", None, look::FAINT));
+        if let Some(trouble) = core_trouble {
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::RED)).child(format!("herdr-core cannot be read: {trouble}")));
+        } else if spaces.is_empty() {
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("No spaces yet."));
+        }
+        for space in &spaces {
+            let folded = self.folded.contains(&space.id);
+            let waits = space.agents.iter().any(|a| matches!(a.state, State::Waiting | State::Error));
+            list = list.child(self.space_head(&space.id, &space.name, folded, waits, cx));
+            if !folded {
+                for a in &space.agents {
+                    list = list.child(self.agent(a, now));
+                }
+            }
+        }
+
+        list = list.child(section("Runs", None, look::FAINT));
         if let Some(trouble) = trouble {
-            list = list.child(div().p(px(12.)).text_size(px(12.)).text_color(rgb(look::RED)).child(format!("The record cannot be read: {trouble}")));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::RED)).child(format!("The record cannot be read: {trouble}")));
         } else if listing.needs.is_empty() && listing.projects.is_empty() {
-            list = list.child(div().p(px(12.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("No runs yet."));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("No runs yet."));
         }
         if !listing.needs.is_empty() {
-            list = list.child(section("Needs you", Some(listing.needs.len()), look::AMBER));
+            list = list.child(section("Waits for you", Some(listing.needs.len()), look::AMBER));
             for row in &listing.needs {
                 list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), cx));
             }
