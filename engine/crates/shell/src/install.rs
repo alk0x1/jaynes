@@ -414,13 +414,21 @@ pub fn release(manifest: &str, target: &str, have: &str) -> Release {
     if parts(version) > parts(have) { Release::Newer(version.to_string()) } else { Release::Current(version.to_string()) }
 }
 
+/// Whether the app is where install.sh or the person put it.
+pub fn has_app(home_dir: &Path) -> bool {
+    home_dir.join("Applications/Jaynes.app").is_dir() || Path::new("/Applications/Jaynes.app").is_dir()
+}
+
 pub fn update(home: &Path) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
     let manifest = Command::new("curl").args(["-fsSL", &format!("{}/latest.json", releases())]).stderr(Stdio::null()).output();
     let manifest = manifest.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    // a program updated from source, as 0.1.0 updated itself, came without the app: the release brings it
+    let home_dir = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let app_missing = target() == "macos-aarch64" && !has_app(&home_dir);
     match release(&manifest, &target(), env!("CARGO_PKG_VERSION")) {
-        Release::Current(v) => said.push(format!("Jaynes {v} is the newest")),
-        Release::Newer(v) => {
+        Release::Current(v) if !app_missing => said.push(format!("Jaynes {v} is the newest")),
+        Release::Newer(v) | Release::Current(v) => {
             // the release's own installer, as the person ran it: the app and the program together
             let status = Command::new("sh")
                 .args(["-c", &format!("curl -fsSL '{}' | sh", installer())])
