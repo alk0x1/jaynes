@@ -56,6 +56,14 @@ impl Agents {
     }
 
     /// Opens an agent in the middle (None: none), marking at once what it finished as seen.
+    /// Spaces read just now, by whoever changed them (a split, a new agent): shown at once, not at the next reading.
+    pub fn read_now(&mut self, spaces: Vec<Space>, cx: &mut Context<Self>) {
+        self.spaces = spaces;
+        self.mark_seen();
+        self.read_ask(cx);
+        cx.notify();
+    }
+
     pub fn open(&mut self, address: Option<String>, cx: &mut Context<Self>) {
         self.open = address;
         self.mark_seen();
@@ -126,13 +134,18 @@ impl Agents {
 }
 
 /// Sends the spaces at once, then whenever they change. A core without Herdr's document has no spaces yet.
+/// The spaces and their agents, read now from the core and Herdr's document.
+pub fn read_spaces(core: &hc::Core) -> Result<Vec<Space>, String> {
+    core.call("terminal.list", json!({})).map_err(|e| format!("{e:#}")).map(|list| {
+        let doc = core.call("doc.get", json!({"name": "herdr-app"})).unwrap_or(Value::Null);
+        arrange(&doc, &list)
+    })
+}
+
 fn watch(core: &hc::Core, tx: async_channel::Sender<Result<Vec<Space>, String>>) {
     let mut last: Option<Result<Vec<Space>, String>> = None;
     loop {
-        let read = core.call("terminal.list", json!({})).map_err(|e| format!("{e:#}")).map(|list| {
-            let doc = core.call("doc.get", json!({"name": "herdr-app"})).unwrap_or(Value::Null);
-            arrange(&doc, &list)
-        });
+        let read = read_spaces(core);
         if last.as_ref() != Some(&read) {
             if tx.send_blocking(read.clone()).is_err() {
                 return;
@@ -198,10 +211,12 @@ pub fn run_in(core: &hc::Core, space: &Space, argv: Vec<String>, folder: Option<
 
 /// Runs the person's shell split beside a pane of a tab (to its right or under it), in the pane's folder: labelled
 /// with the space and the tab, and the split written to Herdr's document, so Herdr shows it too.
-pub fn split_beside(core: &hc::Core, space: &str, tab: &str, target: &str, folder: Option<String>, dir: crate::layout::Dir, display: Value) -> Result<String, String> {
+/// `size`: the pane's, so the shell starts at the size it shows at.
+#[allow(clippy::too_many_arguments)]
+pub fn split_beside(core: &hc::Core, space: &str, tab: &str, target: &str, folder: Option<String>, dir: crate::layout::Dir, size: Option<(u16, u16)>, display: Value) -> Result<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let labels = json!({"herdr.space": space, "herdr.tab": tab});
-    let address = core.run(vec![shell, "-l".into()], folder, labels, None, None, display).map_err(|e| format!("{e:#}"))?;
+    let address = core.run(vec![shell, "-l".into()], folder, labels, None, size, display).map_err(|e| format!("{e:#}"))?;
     let (block, node) = (new_id("p"), new_id("n"));
     if let Err(e) = change_doc(core, |v| crate::layout::split(v, tab, target, &address, &block, &node, dir)) {
         tracing::warn!("{address} is not split in Herdr: {e}");

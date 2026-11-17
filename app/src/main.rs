@@ -489,14 +489,14 @@ impl Root {
             }
             layout::Layout::Split(dir, kids) => {
                 let total: f32 = kids.iter().map(|(w, _)| *w).sum::<f32>().max(0.0001);
-                let mut d = div().size_full().min_w_0().min_h_0().flex().gap(px(6.));
+                let mut d = div().size_full().min_w_0().min_h_0().flex().gap(px(terminal::PANE_GAP));
                 if *dir == layout::Dir::Column {
                     d = d.flex_col();
                 }
                 for (w, k) in kids {
                     d = d.child(div().flex_basis(px(0.)).flex_grow(w / total).flex_shrink(1.).min_w_0().min_h_0().flex().child(self.layout_element(k, open, panes, false, cx)));
                 }
-                d.p(px(if top { 6. } else { 0. }))
+                d.p(px(if top { terminal::PANE_GAP } else { 0. }))
             }
         }
     }
@@ -504,16 +504,22 @@ impl Root {
     /// Command-D (right) or Shift-Command-D (down): the person's shell split beside the open agent, in its folder, in
     /// its tab in Herdr too; it takes the keyboard.
     fn split_pane(&mut self, dir: layout::Dir, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((open, _)) = self.agent_view.clone() else { return };
+        let Some((open, view)) = self.agent_view.clone() else { return };
+        let size = view.read(cx).split_size(dir == layout::Dir::Column, self.open_layout(cx).is_none());
         let agents = self.agents.read(cx);
         let Some(space) = agents.spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)) else { return };
         let Some((tab, _)) = agents::tab_of(&agents.spaces, &open) else { return };
         let (space, tab) = (space.id.clone(), tab.clone());
         let folder = agents.spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == open).map(|a| a.cwd.clone()).filter(|c| !c.is_empty());
-        let (core, tabs, display) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window));
+        let (core, tabs, display, agents) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window), self.agents.clone());
         cx.spawn(async move |_, cx| {
-            match cx.background_executor().spawn(async move { agents::split_beside(&core, &space, &tab, &open, folder, dir, display) }).await {
-                Ok(address) => {
+            // the tab as split, read before the shell shows: shown alone first, it would fill the room, then shrink
+            let split = cx.background_executor().spawn(async move { agents::split_beside(&core, &space, &tab, &open, folder, dir, size, display).map(|a| (a, agents::read_spaces(&core))) }).await;
+            match split {
+                Ok((address, spaces)) => {
+                    if let Ok(spaces) = spaces {
+                        let _ = agents.update(cx, |a, cx| a.read_now(spaces, cx));
+                    }
                     let _ = tabs.update(cx, |t, cx| t.show_agent(address, "zsh".into(), cx));
                 }
                 Err(e) => tracing::warn!("cannot split: {e}"),
@@ -644,10 +650,14 @@ impl Root {
         let Some((open, _)) = self.tabs.read(cx).agent.clone() else { return };
         let Some(space) = self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).cloned() else { return };
         let folder = agents::new_agent_folder(&space, &open);
-        let (core, tabs, display) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window));
+        let (core, tabs, display, agents) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window), self.agents.clone());
         cx.spawn(async move |_, cx| {
-            match cx.background_executor().spawn(async move { agents::start_in(&core, &space, folder, display) }).await {
-                Ok(address) => {
+            // its tab, read before it shows, so the tab bar has it at once
+            match cx.background_executor().spawn(async move { agents::start_in(&core, &space, folder, display).map(|a| (a, agents::read_spaces(&core))) }).await {
+                Ok((address, spaces)) => {
+                    if let Ok(spaces) = spaces {
+                        let _ = agents.update(cx, |a, cx| a.read_now(spaces, cx));
+                    }
                     let _ = tabs.update(cx, |t, cx| t.show_agent(address, "claude".into(), cx));
                 }
                 Err(e) => tracing::warn!("{e}"),

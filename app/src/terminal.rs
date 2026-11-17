@@ -53,6 +53,20 @@ fn pad() -> (f32, f32) {
     (p[0] * zoom, p[1] * zoom)
 }
 
+/// The room of each of two panes, as the middle lays out a pane split in two: a tab split in panes has a margin of
+/// PANE_GAP round them and between them, and each pane a border of 1 (a pane already split has its border, not the
+/// margin).
+fn split_room(room: Size<Pixels>, down: bool, alone: bool) -> Size<Pixels> {
+    let (gap, border) = (PANE_GAP, 1.0);
+    // the room the two panes share, borders included
+    let (w, h) = if alone { (f32::from(room.width) - 2.0 * gap, f32::from(room.height) - 2.0 * gap) } else { (f32::from(room.width) + 2.0 * border, f32::from(room.height) + 2.0 * border) };
+    let (w, h) = if down { (w, (h - gap) / 2.0) } else { ((w - gap) / 2.0, h) };
+    size(px(w - 2.0 * border), px(h - 2.0 * border))
+}
+
+/// The margin round and between the panes of a split tab.
+pub const PANE_GAP: f32 = 6.0;
+
 pub(crate) fn grid_size(bounds: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
     let (px_, py_) = pad();
     let cols = ((f32::from(bounds.width) - 2.0 * px_) / f32::from(cell.width)).floor().max(2.0) as u16;
@@ -116,6 +130,8 @@ struct Grid {
     channel: Option<u32>,
     /// Keys typed into a terminal just opened, before its attach is done: they go to the program once it is.
     held_input: Vec<u8>,
+    /// The room it was last laid out in.
+    room: Size<Pixels>,
     attach_ready: bool,
     fit_ready: Option<async_channel::Sender<()>>,
     cell: Size<Pixels>,
@@ -332,6 +348,7 @@ impl TerminalView {
                 core: core.clone(),
                 channel: None,
                 held_input: Vec::new(),
+                room: Size::default(),
                 attach_ready: false,
                 fit_ready: None,
                 cell: size(px(9.0), px(18.0)),
@@ -532,6 +549,14 @@ impl TerminalView {
             self.title = shown.into_owned();
             cx.emit(TerminalEvent::TitleChanged);
         }
+    }
+
+    /// The size, in cells, of a pane split beside this one (`down`: under it), so the program split in starts at the
+    /// size it is shown at and is not resized at once (a shell would print its prompt again). `alone`: this terminal
+    /// fills the room by itself, not yet a pane of a split. None before it was laid out.
+    pub fn split_size(&self, down: bool, alone: bool) -> Option<(u16, u16)> {
+        let g = self.grid.borrow();
+        (g.room.width > px(0.)).then(|| grid_size(split_room(g.room, down, alone), g.cell))
     }
 
     /// Something to show: the screen the core painted on attach, or why there is none (it ended, the line dropped).
@@ -2591,6 +2616,7 @@ impl Render for TerminalView {
                 canvas(
                     move |bounds, window, _cx| {
                         let (cols, rows) = grid_size(bounds.size, cell);
+                        grid.borrow_mut().room = bounds.size;
                         grid.borrow_mut().fit(cols, rows, cell, window.scale_factor());
                     },
                     move |bounds, _, window, cx| {
