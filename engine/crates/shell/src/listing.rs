@@ -157,6 +157,10 @@ pub fn stages(r: &Run) -> Vec<Stage> {
         Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
         _ => None,
     };
+    // a question a step asked and the person has not answered: that step is the one that waits, and the step the
+    // engine names as waiting is only the next to run, once the answer comes; once the run is over, nothing waits
+    let asks = |i: usize| matches!(r.steps[i].status, Status::AwaitingInput { .. }) || (r.fresh(i) && r.open_question(i).is_some());
+    let someone_asks = (0..r.steps.len()).any(asks);
     r.manifest
         .steps
         .iter()
@@ -174,8 +178,8 @@ pub fn stages(r: &Run) -> Vec<Stage> {
                 match &s.status {
                     Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running, attempt {attempt}{round}")),
                     Status::Probing if !r.finished() => ("running", "testing what it reaches".to_string()),
-                    Status::AwaitingInput { .. } => ("waiting", format!("waiting for you{round}")),
-                    Status::Done if r.fresh(i) && r.open_question(i).is_some() => ("waiting", format!("waiting for you{round}")),
+                    _ if asks(i) && r.finished() => ("todo", "left unanswered".to_string()),
+                    _ if asks(i) => ("waiting", format!("waiting for you{round}")),
                     Status::Done if r.fresh(i) && s.skipped == Some(s.round) => ("sampled", "not asked, sampled".to_string()),
                     Status::Done if r.fresh(i) => match (&answer, d.executor) {
                         (Some(a), _) if matches!(a.by, By::Agent { .. }) => ("checked", "an agent let it go on".to_string()),
@@ -184,7 +188,9 @@ pub fn stages(r: &Run) -> Vec<Stage> {
                         (None, Executor::Role) => ("jaynes", "by jaynes".to_string()),
                         (None, _) => ("checked", format!("checked, {tries}{round}")),
                     },
-                    _ if matches!(&r.phase, Phase::Waiting { step: Some(w), .. } if *w == d.name) => ("waiting", "waiting for you".to_string()),
+                    _ if matches!(&r.phase, Phase::Waiting { step: Some(w), .. } if *w == d.name) => {
+                        if someone_asks { ("todo", "next, after your answer".to_string()) } else { ("waiting", "waiting for you".to_string()) }
+                    }
                     _ if s.done.is_some() => ("todo", format!("to run again{round}")),
                     _ => ("todo", String::new()),
                 }
@@ -368,6 +374,22 @@ mod tests {
         let stages = stages(&r);
         let seen: Vec<(&str, &str, &str)> = stages.iter().map(|s| (s.name.as_str(), s.class, s.detail.as_str())).collect();
         assert_eq!(seen, [("plan", "running", "running, attempt 2"), ("change", "todo", "")]);
+    }
+
+    #[test]
+    fn only_the_step_whose_question_is_open_waits_and_nothing_waits_once_the_run_is_over() {
+        use jaynes_core::run::Status;
+        let mut r = run("w", "x");
+        r.steps[0].status = Status::AwaitingInput { question: "q1".into() };
+        // the engine names the next step as the one that waits: it runs once the person answers plan's question
+        r.phase = Phase::Waiting { step: Some("change".into()), on: vec!["q1".into()], why: "waits for your answer about plan".into() };
+        let seen: Vec<(String, &str)> = stages(&r).into_iter().map(|s| (s.name, s.class)).collect();
+        assert_eq!(seen, [("plan".to_string(), "waiting"), ("change".to_string(), "todo")]);
+        assert_eq!(stages(&r)[1].detail, "next, after your answer");
+
+        r.phase = Phase::Finished { outcome: Outcome::Abandoned };
+        let seen: Vec<(String, &str, String)> = stages(&r).into_iter().map(|s| (s.name, s.class, s.detail)).collect();
+        assert_eq!(seen, [("plan".to_string(), "todo", "left unanswered".to_string()), ("change".to_string(), "todo", String::new())]);
     }
 
     #[test]
