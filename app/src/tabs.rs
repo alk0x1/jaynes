@@ -525,9 +525,25 @@ fn changes_tab(n: usize, cx: &mut Context<Tabs>) -> Stateful<Div> {
         )
 }
 
-/// The agents of the space that holds `open`, in the column's order; empty when no space holds it.
+/// The tabs of the space that holds `open`, in the column's order, each as one of its agents; empty when no space
+/// holds it. A tab Herdr splits in panes is one tab, shown as the pane with the keyboard when it is one of them, else
+/// as its first agent that is not a shell.
 fn space_tabs(spaces: &[Space], open: &str) -> Vec<Agent> {
-    spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).map(|s| s.agents.clone()).unwrap_or_default()
+    let Some(s) = spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)) else { return Vec::new() };
+    let tab = |a: &Agent| s.tabs.iter().position(|(_, l)| l.panes().contains(&a.address));
+    let mut out: Vec<(Option<usize>, Agent)> = Vec::new();
+    for a in &s.agents {
+        let t = tab(a);
+        match out.iter_mut().find(|(o, _)| t.is_some() && *o == t) {
+            Some((_, shown)) => {
+                if shown.address != open && (a.address == open || (shown.shell && !a.shell)) {
+                    *shown = a.clone();
+                }
+            }
+            None => out.push((t, a.clone())),
+        }
+    }
+    out.into_iter().map(|(_, a)| a).collect()
 }
 
 /// The place Command-1 to 8 (`n` 0 to 7) take among `len` tabs; Command-9 (8) the last.
@@ -631,6 +647,26 @@ mod tests {
         assert_eq!(ids("t1"), ["t1", "t2"]);
         // an agent no space holds (gone, or opened by address) stands alone
         assert!(ids("t9").is_empty());
+    }
+
+    #[test]
+    fn a_tab_split_in_panes_is_one_tab() {
+        use crate::layout::{Dir, Layout};
+        let mut s = space("s1", &["t1", "t2", "t3", "t4"]);
+        s.agents[1].shell = true;
+        // t2 (a shell) and t3 share a tab, split; t1 and t4 have one each
+        s.tabs = vec![
+            ("tb1".into(), Layout::Pane("t1".into())),
+            ("tb2".into(), Layout::Split(Dir::Row, vec![(1.0, Layout::Pane("t2".into())), (1.0, Layout::Pane("t3".into()))])),
+            ("tb3".into(), Layout::Pane("t4".into())),
+        ];
+        let spaces = [s];
+        let ids = |open| space_tabs(&spaces, open).iter().map(|a| a.address.clone()).collect::<Vec<_>>();
+        // the split tab shows as its agent, not its shell
+        assert_eq!(ids("t1"), ["t1", "t3", "t4"]);
+        // as the pane with the keyboard, when it is one of the tab's
+        assert_eq!(ids("t2"), ["t1", "t2", "t4"]);
+        assert_eq!(ids("t3"), ["t1", "t3", "t4"]);
     }
 
     #[test]
