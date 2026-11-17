@@ -263,6 +263,22 @@ impl Island {
         .detach();
     }
 
+    /// Whether the answer as marked may go: every item judged (or something brought back), nothing refused, not
+    /// already on its way.
+    fn can_send(&self, stop: &Stop) -> bool {
+        let judged = stop.items.iter().filter(|i| self.marks.contains_key(&i.id)).count();
+        (judged == stop.items.len() || !self.bring.is_empty()) && !self.sending && self.reckoned.refused.is_none()
+    }
+
+    /// Command-Return: sends the answer, when the question shows open and the answer may go.
+    pub fn send_if_ready(&mut self, cx: &mut Context<Self>) {
+        let Some(stop) = self.stop(cx) else { return };
+        if stop.choose || self.compare.read(cx).is_open() || self.shrunk.contains(&stop.question) || !self.can_send(&stop) {
+            return;
+        }
+        self.send(cx);
+    }
+
     fn send(&mut self, cx: &mut Context<Self>) {
         let Some(stop) = self.stop(cx) else { return };
         let body = self.body(&stop, cx);
@@ -373,7 +389,7 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `at <run> top|end|<step>`, `waits`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -439,6 +455,33 @@ impl Island {
                 }
             }
             "waits" => self.open_stop(window, cx),
+            // an action the window takes, by its name: what a shortcut or a menu does
+            "do" => match cx.build_action(&format!("jaynes::{rest}"), None) {
+                Ok(action) => window.dispatch_action(action, cx),
+                Err(e) => tracing::warn!("no action {rest}: {e}"),
+            },
+            // a key pressed, through the window's keys as a press on the keyboard goes: `key cmd-w`
+            "key" => match Keystroke::parse(rest) {
+                // after this line is done, as a key comes from the keyboard: not inside the island's own update
+                Ok(k) => window.defer(cx, move |window, cx| {
+                    window.dispatch_keystroke(k, cx);
+                }),
+                Err(e) => tracing::warn!("no key {rest}: {e}"),
+            },
+            // the window in front and active, so real events from Jaynes Input (app/tools/input) reach it
+            "front" => {
+                cx.activate(true);
+                window.activate_window();
+            }
+            // the window filling the screen, where a test knows its place
+            "zoom" => window.zoom_window(),
+            "move-tab" => {
+                let (key, to) = rest.split_once(' ').unwrap_or((rest, "0"));
+                let key = (key != "main").then(|| key.to_string());
+                if let (Some(tabs), Ok(to)) = (self.tabs.clone(), to.parse()) {
+                    tabs.update(cx, |t, cx| t.move_tab(&key, to, cx));
+                }
+            }
             "at" => {
                 let (run, at) = rest.split_once(' ').unwrap_or((rest, "top"));
                 let place = match at {
@@ -516,7 +559,7 @@ impl Render for Island {
         }
         let words = self.words.clone().expect("made above");
         let judged = stop.items.iter().filter(|i| self.marks.contains_key(&i.id)).count();
-        let can = (judged == stop.items.len() || !self.bring.is_empty()) && !self.sending && self.reckoned.refused.is_none();
+        let can = self.can_send(&stop);
         let mut items = div().flex().flex_col().gap(px(10.));
         for it in &stop.items {
             items = items.child(self.item_view(it, &stop, false, cx));

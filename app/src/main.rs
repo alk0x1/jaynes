@@ -40,7 +40,20 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use terminal::TerminalView;
 
-actions!(jaynes, [Copy, Paste, Quit, ToggleSteps, NewRun]);
+actions!(
+    jaynes,
+    [
+        Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts
+    ]
+);
+
+/// Every shortcut, as the list over the window (Command-/) shows it.
+const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
+    ("Tabs", &[("⌘1 … ⌘8", "The tab at that place"), ("⌘9", "The last tab"), ("⇧⌘]  ⇧⌘[", "Next tab, previous tab"), ("⌘W", "Close a run's tab")]),
+    ("Runs", &[("⌥⌘↓  ⌥⌘↑", "Next run, previous run"), ("⌘O", "Open what waits for you"), ("⌘↩", "Send your answer"), ("⌘.", "Halt the picked run"), ("⌘N", "New run")]),
+    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⌘/", "This list")]),
+];
 
 /// The top bar's height; the macOS window buttons sit inside it, in the runs column's header.
 const TOP: f32 = 42.;
@@ -83,6 +96,12 @@ struct Root {
     sidebar: bool,
     /// The branch of the folder Claude Code works in, read every few seconds; empty outside git.
     branch: String,
+    /// Whether the list of shortcuts shows over the window (Command-/).
+    help: bool,
+    /// The window's own focus, where the keys go while a run's story shows instead of the terminal.
+    focus: FocusHandle,
+    /// The tab that showed when the focus last followed it.
+    was_open: Option<String>,
     _branch: Task<()>,
 }
 
@@ -133,6 +152,7 @@ impl Render for Root {
             .flex_col()
             .bg(rgb(look::PANEL))
             .font_family(look::UI_FONT)
+            .track_focus(&self.focus)
             .key_context("Jaynes")
             .on_action(copy_into(&self.terminal))
             .on_action(paste_into(&self.terminal))
@@ -141,6 +161,41 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
+            .on_action(cx.listener(|this, _: &ToggleRuns, _, cx| {
+                this.sidebar = !this.sidebar;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Tab1, _, cx| this.tabs.update(cx, |t, cx| t.go(0, cx))))
+            .on_action(cx.listener(|this, _: &Tab2, _, cx| this.tabs.update(cx, |t, cx| t.go(1, cx))))
+            .on_action(cx.listener(|this, _: &Tab3, _, cx| this.tabs.update(cx, |t, cx| t.go(2, cx))))
+            .on_action(cx.listener(|this, _: &Tab4, _, cx| this.tabs.update(cx, |t, cx| t.go(3, cx))))
+            .on_action(cx.listener(|this, _: &Tab5, _, cx| this.tabs.update(cx, |t, cx| t.go(4, cx))))
+            .on_action(cx.listener(|this, _: &Tab6, _, cx| this.tabs.update(cx, |t, cx| t.go(5, cx))))
+            .on_action(cx.listener(|this, _: &Tab7, _, cx| this.tabs.update(cx, |t, cx| t.go(6, cx))))
+            .on_action(cx.listener(|this, _: &Tab8, _, cx| this.tabs.update(cx, |t, cx| t.go(7, cx))))
+            .on_action(cx.listener(|this, _: &Tab9, _, cx| this.tabs.update(cx, |t, cx| t.go(8, cx))))
+            .on_action(cx.listener(|this, _: &NextTab, _, cx| this.tabs.update(cx, |t, cx| t.step_by(1, cx))))
+            .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.tabs.update(cx, |t, cx| t.step_by(-1, cx))))
+            .on_action(cx.listener(|this, _: &NextRun, _, cx| this.step_run(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviousRun, _, cx| this.step_run(-1, cx)))
+            .on_action(cx.listener(|this, _: &OpenWaiting, window, cx| this.open_waiting(window, cx)))
+            .on_action(cx.listener(|this, _: &SendAnswer, _, cx| this.island.update(cx, |i, cx| i.send_if_ready(cx))))
+            .on_action(cx.listener(|this, _: &HaltRun, _, cx| this.halt_picked(cx)))
+            .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.tabs.update(cx, |t, cx| t.close(cx))))
+            .on_action(cx.listener(|this, _: &Shortcuts, _, cx| {
+                this.help = !this.help;
+                cx.notify();
+            }))
+            // Esc puts the list of shortcuts away before the terminal sees it
+            .when(self.help, |d| {
+                d.capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                    if e.keystroke.key == "escape" {
+                        this.help = false;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }))
+            })
             .relative()
             .child(
                 div()
@@ -167,6 +222,7 @@ impl Render for Root {
             // over everything: the compare mode, then a picture or a diff at full size
             .child(self.compare.clone())
             .child(self.lightbox.clone())
+            .when(self.help, |d| d.child(self.shortcuts(cx)))
     }
 }
 
@@ -239,6 +295,92 @@ impl Root {
                         cx.notify();
                     }))),
             )
+    }
+
+    /// The runs as the column lists them, top to bottom.
+    fn run_ids(&self, cx: &App) -> Vec<String> {
+        let listing = &self.runs.read(cx).snap.listing;
+        listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).map(|r| r.id.clone()).collect()
+    }
+
+    /// The next run in the column (1) or the one before (-1), opened as a click on it opens it.
+    fn step_run(&mut self, by: isize, cx: &mut Context<Self>) {
+        let ids = self.run_ids(cx);
+        if ids.is_empty() {
+            return;
+        }
+        let here = self.runs.read(cx).selected.as_ref().and_then(|s| ids.iter().position(|i| i == s));
+        let n = ids.len() as isize;
+        let at = match here {
+            Some(h) => (h as isize + by).clamp(0, n - 1) as usize,
+            None => 0,
+        };
+        let id = ids[at].clone();
+        self.tabs.update(cx, |t, cx| t.show(Some(id), cx));
+    }
+
+    /// Command-O: the first run that waits, its tab at the step that waits and its question open.
+    fn open_waiting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let runs = self.runs.read(cx);
+        let Some(id) = runs.snap.listing.needs.first().map(|r| r.id.clone()) else { return };
+        let place = runs
+            .snap
+            .details
+            .get(&id)
+            .and_then(|d| d.stages.iter().find(|s| s.class == "waiting"))
+            .map(|s| tabs::Place::Step(s.name.clone()))
+            .unwrap_or(tabs::Place::End);
+        self.tabs.update(cx, |t, cx| t.show_at(id, place, cx));
+        self.island.update(cx, |i, cx| i.open_stop(window, cx));
+    }
+
+    /// Command-.: halts the picked run when it works; a run that waits or ended has nothing to halt.
+    fn halt_picked(&self, cx: &App) {
+        if let Some(d) = self.runs.read(cx).chosen().filter(|d| d.mark == jaynes_shell::listing::Mark::Working) {
+            halt(std::slice::from_ref(&d.id));
+        }
+    }
+
+    /// The list of shortcuts over the window; a click or Esc puts it away.
+    fn shortcuts(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut panel = div()
+            .id("shortcuts-panel")
+            .w(px(440.))
+            .p(px(20.))
+            .rounded(px(12.))
+            .bg(rgb(look::PANEL_2))
+            .border_1()
+            .border_color(rgb(look::LINE_2))
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Shortcuts"));
+        for (group, keys) in SHORTCUTS {
+            let mut list = div().flex().flex_col().gap(px(6.)).child(look::label(group, look::FAINT));
+            for (key, what) in keys.iter() {
+                list = list.child(
+                    div()
+                        .flex()
+                        .gap(px(12.))
+                        .child(div().w(px(110.)).flex_none().font_family(look::MONO_FONT).text_size(px(12.5)).text_color(rgb(look::TEXT)).child(*key))
+                        .child(div().text_size(px(13.)).text_color(rgb(look::DIM)).child(*what)),
+                );
+            }
+            panel = panel.child(list);
+        }
+        div()
+            .id("shortcuts")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x0000_0099))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.help = false;
+                cx.notify();
+            }))
+            .child(panel)
     }
 
     /// The status bar, after herdr: where Claude Code works, how many runs work and wait, and "Halt all".
@@ -365,7 +507,56 @@ fn main() {
             KeyBinding::new("cmd-v", Paste, Some("Jaynes")),
             KeyBinding::new("cmd-e", ToggleSteps, Some("Jaynes")),
             KeyBinding::new("cmd-n", NewRun, Some("Jaynes")),
+            KeyBinding::new("cmd-0", ToggleRuns, Some("Jaynes")),
+            KeyBinding::new("cmd-1", Tab1, Some("Jaynes")),
+            KeyBinding::new("cmd-2", Tab2, Some("Jaynes")),
+            KeyBinding::new("cmd-3", Tab3, Some("Jaynes")),
+            KeyBinding::new("cmd-4", Tab4, Some("Jaynes")),
+            KeyBinding::new("cmd-5", Tab5, Some("Jaynes")),
+            KeyBinding::new("cmd-6", Tab6, Some("Jaynes")),
+            KeyBinding::new("cmd-7", Tab7, Some("Jaynes")),
+            KeyBinding::new("cmd-8", Tab8, Some("Jaynes")),
+            KeyBinding::new("cmd-9", Tab9, Some("Jaynes")),
+            KeyBinding::new("cmd-}", NextTab, Some("Jaynes")),
+            KeyBinding::new("cmd-{", PreviousTab, Some("Jaynes")),
+            KeyBinding::new("cmd-alt-down", NextRun, Some("Jaynes")),
+            KeyBinding::new("cmd-alt-up", PreviousRun, Some("Jaynes")),
+            KeyBinding::new("cmd-o", OpenWaiting, Some("Jaynes")),
+            KeyBinding::new("cmd-enter", SendAnswer, Some("Jaynes")),
+            KeyBinding::new("cmd-.", HaltRun, Some("Jaynes")),
+            KeyBinding::new("cmd-w", CloseTab, Some("Jaynes")),
+            KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
             KeyBinding::new("cmd-q", Quit, None),
+        ]);
+        // the menu bar's menus, where a Mac app shows what it does and its keys
+        cx.set_menus(vec![
+            Menu { name: "Jaynes".into(), disabled: false, items: vec![MenuItem::action("Shortcuts", Shortcuts), MenuItem::separator(), MenuItem::action("Quit Jaynes", Quit)] },
+            Menu { name: "Edit".into(), disabled: false, items: vec![MenuItem::action("Copy", Copy), MenuItem::action("Paste", Paste)] },
+            Menu {
+                name: "View".into(),
+                disabled: false,
+                items: vec![
+                    MenuItem::action("Runs Column", ToggleRuns),
+                    MenuItem::action("Steps Panel", ToggleSteps),
+                    MenuItem::separator(),
+                    MenuItem::action("Next Tab", NextTab),
+                    MenuItem::action("Previous Tab", PreviousTab),
+                    MenuItem::action("Close Tab", CloseTab),
+                ],
+            },
+            Menu {
+                name: "Run".into(),
+                disabled: false,
+                items: vec![
+                    MenuItem::action("New Run", NewRun),
+                    MenuItem::action("Open What Waits", OpenWaiting),
+                    MenuItem::action("Send Answer", SendAnswer),
+                    MenuItem::action("Halt", HaltRun),
+                    MenuItem::separator(),
+                    MenuItem::action("Next Run", NextRun),
+                    MenuItem::action("Previous Run", PreviousRun),
+                ],
+            },
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         // The terminal stays in herdr-core when the window closes; the app has nothing else to show.
@@ -391,6 +582,9 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         app_id: Some("jaynes-app".into()),
         focus: std::env::var_os("JAYNES_APP_SHOT").is_none(),
+        // the top bar is the app's own: a tab dragged there moves the tab, not the window, which the bar's empty
+        // parts move themselves (start_window_move); otherwise AppKit drags the window from the whole titlebar strip
+        app_owns_titlebar_drag: true,
         ..Default::default()
     };
     cx.open_window(options, move |window, cx| {
@@ -414,9 +608,20 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let island = cx.new(|cx| island::Island::new(runs.clone(), key, lightbox.clone(), compare.clone(), cx));
         island.update(cx, |i, _| i.tabs = Some(tabs.clone()));
         let rail = cx.new(|cx| rail::Rail::new(runs.clone(), tabs.clone(), island.clone(), cx));
+        let terminal_focus = focus.clone();
         cx.new(|cx| {
             cx.observe(&runs, |_, _, cx| cx.notify()).detach();
-            cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
+            // the keys go where the person looks: the terminal on Claude Code's tab, else the window itself, or a
+            // shortcut pressed over a run's story would reach nothing, the terminal being off the screen
+            cx.observe_in(&tabs, window, move |this: &mut Root, tabs, window, cx| {
+                let open = tabs.read(cx).open.clone();
+                if open != this.was_open {
+                    this.was_open = open.clone();
+                    window.focus(if open.is_some() { &this.focus } else { &terminal_focus }, cx);
+                }
+                cx.notify();
+            })
+            .detach();
             // the branch, read again every few seconds: the person may switch it in the terminal
             let place = folder();
             let branch = cx.spawn(async move |this, cx| loop {
@@ -436,7 +641,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), _branch: branch }
+            Root { runs, tabs, side, terminal: view, rail, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, _branch: branch }
         })
     })
     .map(|handle| {
