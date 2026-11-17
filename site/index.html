@@ -506,12 +506,11 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
   </div>
   <div class="start">
     <div style="display:grid;gap:22px">
-<pre class="code"><span class="c"># in Claude Code, once</span>
-/plugin install jaynes --marketplace alk0x1/jaynes
+<pre class="code"><span class="c"># on a Mac with Apple silicon: the app, the command and the plugin</span>
+curl -fsSL https://jaynes.dev/install.sh | sh
 
-<span class="c"># or from a terminal, with Rust's cargo</span>
-cargo install --locked --git https://github.com/alk0x1/jaynes jaynes-shell --root ~/.local
-jaynes guide</pre>
+<span class="c"># or only the plugin, in Claude Code</span>
+/plugin install jaynes --marketplace alk0x1/jaynes</pre>
       <ol class="steps">
         <li>
           <h3>Work as usual</h3>

@@ -1,0 +1,76 @@
+name: release
+
+# A tag vX.Y.Z builds the program and the app for Macs with Apple silicon and publishes them as that GitHub release,
+# with the latest.json that install.sh and `jaynes update` read. Run by hand, it builds and keeps the files as the
+# run's artifact, publishing nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+            app/target
+          key: release-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'app/Cargo.lock') }}
+      # libghostty-vt, inside the app, builds with Zig 0.16
+      - run: brew install zig@0.16
+      - name: One version for the tag, the program and the app
+        id: version
+        run: |
+          engine=$(sed -n 's/^version = "\(.*\)"/\1/p' engine/Cargo.toml | head -1)
+          app=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -1)
+          [ "$engine" = "$app" ] || { echo "engine $engine and app $app differ"; exit 1; }
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "${GITHUB_REF_NAME}" != "v$engine" ]; then
+            echo "tag ${GITHUB_REF_NAME} is not v$engine"; exit 1
+          fi
+          echo "version=$engine" >> "$GITHUB_OUTPUT"
+      - name: The program
+        working-directory: engine
+        run: cargo build --release --locked -p jaynes-shell
+      - name: The app
+        working-directory: app
+        env:
+          ZIG: /opt/homebrew/opt/zig@0.16/bin/zig
+          PROFILE: release
+        run: ./bundle.sh "$RUNNER_TEMP/dist"
+      - name: Package
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out" "$RUNNER_TEMP/pkg"
+          cp engine/target/release/jaynes "$RUNNER_TEMP/pkg/"
+          cp -R "$RUNNER_TEMP/dist/Jaynes.app" "$RUNNER_TEMP/pkg/"
+          "$RUNNER_TEMP/pkg/jaynes" guide > /dev/null
+          codesign --verify --deep --strict "$RUNNER_TEMP/pkg/Jaynes.app"
+          tar -czf "$out/jaynes-macos-aarch64.tar.gz" -C "$RUNNER_TEMP/pkg" jaynes Jaynes.app
+          sum=$(shasum -a 256 "$out/jaynes-macos-aarch64.tar.gz" | cut -d' ' -f1)
+          version=${{ steps.version.outputs.version }}
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v$version/jaynes-macos-aarch64.tar.gz"
+          printf '{\n  "version": "%s",\n  "targets": {\n    "macos-aarch64": {"url": "%s", "sha256": "%s"}\n  }\n}\n' "$version" "$url" "$sum" > "$out/latest.json"
+          cat "$out/latest.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jaynes-macos-aarch64
+          path: ${{ runner.temp }}/out
+      - name: Publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/out/jaynes-macos-aarch64.tar.gz" "$RUNNER_TEMP/out/latest.json" \
+            --title "Jaynes ${{ steps.version.outputs.version }}" \
+            --notes "Install or update: \`curl -fsSL https://jaynes.dev/install.sh | sh\` (Macs with Apple silicon). The app is signed ad hoc; the source is open to read and build."

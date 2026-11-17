@@ -22,7 +22,11 @@
 <h1>Get started</h1>
 <p class="lede">Jaynes runs your agent through a method one step at a time, checks each step by code, and asks you only where your judgment is still needed. You install it once; after that you work in Claude Code as usual and answer on a page on your computer.</p>
 <h2 id="install">Install</h2>
-<p>Type this in Claude Code, answer <code>y</code> to add the marketplace, and press Enter to install it for your user:</p>
+<p>On a Mac with Apple silicon, in a terminal:</p>
+<pre><code class="language-sh">curl -fsSL https://jaynes.dev/install.sh | sh
+</code></pre>
+<p>It installs the Jaynes app in <code>~/Applications</code>, the <code>jaynes</code> command in <code>~/.local/bin</code>, <a href="https://github.com/herdrdev/herdr-core">herdr-core</a> (which keeps the app's terminals alive) when you have none, and the plugin in Claude Code. <code>jaynes update</code> installs the next release the same way. The app is signed ad hoc rather than by an Apple developer account, so macOS asks you once after each update before it reads its key in your keychain; <a href="https://github.com/alk0x1/jaynes">the source</a> is open, to read or to build yourself.</p>
+<p>Only the plugin: type this in Claude Code, answer <code>y</code> to add the marketplace, and press Enter to install it for your user:</p>
 <pre><code class="language-text">/plugin install jaynes --marketplace alk0x1/jaynes
 </code></pre>
 <p>The first time your agent uses it, the agent installs the <code>jaynes</code> command, built with Rust's <code>cargo</code> (install Rust with <a href="https://rustup.rs">rustup</a> if you have none). Roles written in Python need <code>python3</code>. Jaynes runs on macOS; Linux is next.</p>

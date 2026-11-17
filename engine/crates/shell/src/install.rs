@@ -377,18 +377,75 @@ pub fn set_guard(on: bool, owners: &[String]) -> Result<(), String> {
 }
 
 /// Build and install the newest Jaynes from where it is published, and update the roles that came from git.
+/// Where the newest release's files are: GitHub's latest release, unless `JAYNES_RELEASES` names another place.
+fn releases() -> String {
+    std::env::var("JAYNES_RELEASES").unwrap_or_else(|_| format!("{SOURCE}/releases/latest/download"))
+}
+
+/// The script that installs a release: the app, the program, herdr-core when missing, and the plugin.
+fn installer() -> String {
+    std::env::var("JAYNES_INSTALLER").unwrap_or_else(|_| "https://jaynes.dev/install.sh".to_string())
+}
+
+/// The machine this program was built for, as the releases name their builds.
+fn target() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH).replace("macos-arm64", "macos-aarch64")
+}
+
+/// What the newest release offers this machine.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Release {
+    /// A newer version, built for this machine.
+    Newer(String),
+    /// The installed program is that version, or ahead of it.
+    Current(String),
+    /// No build for this machine, or no release could be read.
+    None,
+}
+
+/// What the release manifest (`latest.json`) offers a machine of `target` whose program is version `have`.
+pub fn release(manifest: &str, target: &str, have: &str) -> Release {
+    let Ok(m) = serde_json::from_str::<serde_json::Value>(manifest) else { return Release::None };
+    let Some(version) = m["version"].as_str() else { return Release::None };
+    if m["targets"][target]["url"].as_str().is_none() {
+        return Release::None;
+    }
+    let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    if parts(version) > parts(have) { Release::Newer(version.to_string()) } else { Release::Current(version.to_string()) }
+}
+
 pub fn update(home: &Path) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
-    let root = install_root()?;
-    let status = Command::new("cargo")
-        .args(["install", "--locked", "--quiet", "--git", SOURCE, "jaynes-shell", "--root"])
-        .arg(&root)
-        .status()
-        .map_err(|e| format!("cargo is needed to install Jaynes: {e}"))?;
-    if !status.success() {
-        return Err("cargo could not build the newest Jaynes".into());
+    let manifest = Command::new("curl").args(["-fsSL", &format!("{}/latest.json", releases())]).stderr(Stdio::null()).output();
+    let manifest = manifest.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    match release(&manifest, &target(), env!("CARGO_PKG_VERSION")) {
+        Release::Current(v) => said.push(format!("Jaynes {v} is the newest")),
+        Release::Newer(v) => {
+            // the release's own installer, as the person ran it: the app and the program together
+            let status = Command::new("sh")
+                .args(["-c", &format!("curl -fsSL '{}' | sh", installer())])
+                .env("JAYNES_RELEASES", releases())
+                .status()
+                .map_err(|e| format!("the installer could not run: {e}"))?;
+            if !status.success() {
+                return Err(format!("Jaynes {v} could not be installed"));
+            }
+            said.push(format!("Jaynes {v} installed"));
+        }
+        // no build for this machine: cargo builds the newest source
+        Release::None => {
+            let root = install_root()?;
+            let status = Command::new("cargo")
+                .args(["install", "--locked", "--quiet", "--git", SOURCE, "jaynes-shell", "--root"])
+                .arg(&root)
+                .status()
+                .map_err(|e| format!("cargo is needed to install Jaynes: {e}"))?;
+            if !status.success() {
+                return Err("cargo could not build the newest Jaynes".into());
+            }
+            said.push(format!("Jaynes installed in {}", root.join("bin").display()));
+        }
     }
-    said.push(format!("Jaynes installed in {}", root.join("bin").display()));
     // The plugin, through Claude Code's own commands, so the skill, the guard and this server match the program.
     let plugin = ["marketplace update jaynes", "update jaynes@jaynes"];
     for args in plugin {
@@ -416,6 +473,16 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).status().expect("git").success();
         assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn a_release_is_installed_only_when_it_is_newer_and_built_for_this_machine() {
+        let manifest = r#"{"version":"0.2.0","targets":{"macos-aarch64":{"url":"https://x/jaynes-macos-aarch64.tar.gz","sha256":"ab"}}}"#;
+        assert_eq!(release(manifest, "macos-aarch64", "0.1.9"), Release::Newer("0.2.0".into()));
+        assert_eq!(release(manifest, "macos-aarch64", "0.2.0"), Release::Current("0.2.0".into()));
+        assert_eq!(release(manifest, "macos-aarch64", "0.10.0"), Release::Current("0.2.0".into()), "a build from source ahead of the release stays");
+        assert_eq!(release(manifest, "linux-x86_64", "0.1.0"), Release::None, "no build for this machine: cargo builds it");
+        assert_eq!(release("not json", "macos-aarch64", "0.1.0"), Release::None);
     }
 
     #[test]

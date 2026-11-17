@@ -52,17 +52,30 @@ compares with the code on every state of those runs
 
 ## Get started
 
-Type this in Claude Code, answer `y` to add the marketplace, and press Enter
-to install it for your user:
+On a Mac with Apple silicon, in a terminal:
+
+```sh
+curl -fsSL https://jaynes.dev/install.sh | sh
+```
+
+It installs the Jaynes app in `~/Applications`, the `jaynes` command in
+`~/.local/bin`, [herdr-core](https://github.com/herdrdev/herdr-core) (which
+keeps the app's terminals alive) when you have none, and the plugin in Claude
+Code. `jaynes update` installs the next release the same way. The app is signed
+ad hoc rather than by an Apple developer account, so macOS asks you once after
+each update before it reads its key in your keychain; the source is all here, to
+read or to build yourself.
+
+Only the plugin, from Claude Code (the `jaynes` command is then built with Rust's
+`cargo` the first time):
 
 ```text
 /plugin install jaynes --marketplace alk0x1/jaynes
 ```
 
 Then work as usual: approve a plan ("go ahead", "do it") and your agent hands
-it to Jaynes, installing it the first time (it is built with Rust's `cargo`).
-Where a run needs you, you answer on the page, at http://127.0.0.1:8750, which
-Jaynes opens in your browser.
+it to Jaynes. Where a run needs you, you answer in the app, or on the page at
+http://127.0.0.1:8750, which Jaynes opens in your browser.
 
 The plugin also brings a guard: before a git or GitHub action that cannot be
 undone, such as a push, it asks you.
