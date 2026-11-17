@@ -627,8 +627,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let focus = view.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
         let runs = cx.new(model::Runs::new);
-        let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), cx));
         let agents = cx.new(|cx| agents::Agents::new(core.clone(), cx));
+        let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), agents.clone(), cx));
         let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);

@@ -219,7 +219,7 @@ fn agent(t: &Value) -> Agent {
         .find(|s| !s.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| address.clone());
-    Agent { address, title, state, since_ms: t["status_ms"].as_u64().unwrap_or(0), shell, turn }
+    Agent { address, title, state, since_ms: t["status_ms"].as_u64().or_else(|| t["created_ms"].as_u64()).unwrap_or(0), shell, turn }
 }
 
 /// How long ago, shortly: now, 5m, 7h, 2d.
@@ -354,6 +354,14 @@ mod tests {
         assert_eq!(seen_now(&spaces, Some("t3")), None);
         assert_eq!(seen_now(&spaces, None), None);
         assert_eq!(seen_now(&spaces, Some("t9")), None);
+    }
+
+    #[test]
+    fn a_terminal_that_never_reported_a_state_is_as_old_as_its_start() {
+        let mut shell = term("t3", "s1", None, 0, 0);
+        shell.as_object_mut().unwrap().remove("status_ms");
+        shell["created_ms"] = json!(5000);
+        assert_eq!(arrange(&doc(), &json!({"terminals": [shell]}))[0].agents[0].since_ms, 5000);
     }
 
     #[test]

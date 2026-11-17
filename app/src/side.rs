@@ -105,15 +105,7 @@ impl Side {
     }
 
     fn agent(&self, a: &Agent, on: bool, now: u64, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon = if a.shell {
-            div().flex_none().whitespace_nowrap().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_").into_any_element()
-        } else if a.state == State::Working {
-            look::spinner(SharedString::from(format!("agent-spin-{}", a.address)), 11., look::BLUE).into_any_element()
-        } else if a.state == State::Idle {
-            div().size(px(8.)).rounded_full().flex_none().border(px(1.5)).border_color(rgb(0x4a505c)).into_any_element()
-        } else {
-            dot(colour(a.state)).into_any_element()
-        };
+        let icon = agent_icon(a, "agent");
         let right = if a.shell || a.state == State::Idle {
             div().text_color(rgb(look::FAINT)).child(agents::age(a.since_ms, now))
         } else {
@@ -170,6 +162,20 @@ impl Side {
                     .child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::AMBER } else { look::DIM })).child(row.line.clone())),
             )
     }
+}
+
+/// An agent's mark, in the column and in its tab: a prompt for a shell, a spinner while it works, a ring when idle,
+/// else a dot in its state's colour. `at` keeps the spinners of the column and the tabs apart.
+pub fn agent_icon(a: &Agent, at: &str) -> AnyElement {
+    if a.shell {
+        div().flex_none().whitespace_nowrap().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_").into_any_element()
+        } else if a.state == State::Working {
+            look::spinner(SharedString::from(format!("{at}-spin-{}", a.address)), 11., look::BLUE).into_any_element()
+        } else if a.state == State::Idle {
+            div().size(px(8.)).rounded_full().flex_none().border(px(1.5)).border_color(rgb(0x4a505c)).into_any_element()
+        } else {
+            dot(colour(a.state)).into_any_element()
+        }
 }
 
 fn section(name: &str, count: Option<usize>, color: u32) -> impl IntoElement {

@@ -4,6 +4,7 @@
 //! Jaynes, and the person answers it at its stops. The person drags the tabs into the order they like, Claude Code's
 //! among them, and Command-1 to 9 follow that order.
 
+use crate::agents::{Agent, Agents, Space};
 use crate::look;
 use crate::model::Runs;
 use gpui::prelude::FluentBuilder as _;
@@ -24,6 +25,7 @@ pub enum Place {
 
 pub struct Tabs {
     runs: Entity<Runs>,
+    agents: Entity<Agents>,
     /// The run whose tab shows; None for the person's own terminal.
     pub open: Option<String>,
     /// The agent from the column that shows in the middle, over the rest: its address and title.
@@ -43,8 +45,9 @@ pub struct Tabs {
 }
 
 impl Tabs {
-    pub fn new(runs: Entity<Runs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
+        cx.observe(&agents, |_, _, cx| cx.notify()).detach();
         // the open run's story, read again each second while it is open
         let poll = cx.spawn(async move |this, cx| loop {
             let Ok(open) = this.update(cx, |t, _| t.open.clone()) else { break };
@@ -55,7 +58,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, open: None, agent: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -166,17 +169,41 @@ impl Tabs {
             .collect()
     }
 
-    /// Command-1 to 8: the tab at that place; Command-9: the last, as in a browser.
+    /// The agents of the open agent's space, its tabs while it shows; empty when no agent shows or no space holds it.
+    fn space_tabs(&self, cx: &App) -> Vec<Agent> {
+        match &self.agent {
+            Some((open, _)) => space_tabs(&self.agents.read(cx).spaces, open),
+            None => Vec::new(),
+        }
+    }
+
+    /// Command-1 to 8: the tab at that place; Command-9: the last, as in a browser. With an agent open, the tabs of
+    /// its space.
     pub fn go(&mut self, n: usize, cx: &mut Context<Self>) {
+        let space = self.space_tabs(cx);
+        if !space.is_empty() {
+            if let Some(a) = at(n, space.len()).map(|i| &space[i]) {
+                self.show_agent(a.address.clone(), a.title.clone(), cx);
+            }
+            return;
+        }
         let keys: Vec<Option<String>> = self.shown(cx).into_iter().map(|(k, _, _)| k).collect();
-        let at = if n >= 8 { keys.len().saturating_sub(1) } else { n };
-        if let Some(key) = keys.get(at).cloned() {
+        if let Some(key) = at(n, keys.len()).map(|i| keys[i].clone()) {
             self.show(key, cx);
         }
     }
 
     /// The next tab (1) or the one before (-1), round the ends.
     pub fn step_by(&mut self, by: isize, cx: &mut Context<Self>) {
+        let space = self.space_tabs(cx);
+        if let Some((open, _)) = &self.agent
+            && let Some(here) = space.iter().position(|a| a.address == *open)
+        {
+            let n = space.len() as isize;
+            let a = &space[((here as isize + by) % n + n) as usize % space.len()];
+            self.show_agent(a.address.clone(), a.title.clone(), cx);
+            return;
+        }
         let keys: Vec<Option<String>> = self.shown(cx).into_iter().map(|(k, _, _)| k).collect();
         let n = keys.len() as isize;
         // the agent's tab stands after the rest: the next is the first, the one before the last
@@ -312,8 +339,65 @@ impl Render for Dragged {
     }
 }
 
+impl Tabs {
+    /// The tabs of the open agent's space, as the familiar look draws them: a pill for the one that shows, each with
+    /// its mark and its Command key.
+    fn render_space(&self, space: Vec<Agent>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let open = self.agent.as_ref().map(|(a, _)| a.clone());
+        let mut row = div().id("tabs").h_full().min_w_0().flex().items_center().gap(px(2.)).px(px(4.)).overflow_x_scroll().font_family(look::UI_FONT);
+        // the way back to the person's own Claude Code, whose tab the space's tabs replace
+        row = row.child(
+            div()
+                .id("tab-main")
+                .h(px(28.))
+                .flex_none()
+                .px(px(8.))
+                .rounded(px(7.))
+                .flex()
+                .items_center()
+                .hover(|d| d.bg(rgb(look::SELECTED)))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| this.show(None, cx)))
+                .child(look::claude_icon()),
+        );
+        row = row.child(div().w(px(1.)).h(px(16.)).mx(px(4.)).flex_none().bg(rgb(look::LINE_2)));
+        for (n, a) in space.iter().enumerate() {
+            let on = open.as_deref() == Some(a.address.as_str());
+            let (address, title) = (a.address.clone(), a.title.clone());
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("tab-agent-{}", a.address)))
+                    .h(px(28.))
+                    .flex_none()
+                    .max_w(px(210.))
+                    .px(px(10.))
+                    .rounded(px(7.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(12.5))
+                    .text_color(rgb(if on { look::TEXT } else { look::FAINT }))
+                    .when(on, |d| d.bg(rgb(look::SELECTED)))
+                    .hover(|d| d.text_color(rgb(look::DIM)))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_agent(address.clone(), title.clone(), cx)))
+                    .child(div().w(px(12.)).flex_none().flex().items_center().justify_center().child(crate::side::agent_icon(a, "tab")))
+                    .child(div().min_w_0().truncate().child(a.title.clone()))
+                    .when(n < 9, |d| d.child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.5)).text_color(rgb(look::FAINT)).child(format!("⌘{}", n + 1)))),
+            );
+        }
+        row
+    }
+}
+
 impl Render for Tabs {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let space = self.space_tabs(cx);
+        if !space.is_empty() {
+            return self.render_space(space, cx);
+        }
         let shown = self.shown(cx);
         // what the bar shows is the order from now on, so a tab that comes keeps its place among the rest
         self.order = shown.iter().map(|(k, _, _)| k.clone()).collect();
@@ -355,6 +439,20 @@ impl Render for Tabs {
     }
 }
 
+/// The agents of the space that holds `open`, in the column's order; empty when no space holds it.
+fn space_tabs(spaces: &[Space], open: &str) -> Vec<Agent> {
+    spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).map(|s| s.agents.clone()).unwrap_or_default()
+}
+
+/// The place Command-1 to 8 (`n` 0 to 7) take among `len` tabs; Command-9 (8) the last.
+fn at(n: usize, len: usize) -> Option<usize> {
+    match n {
+        _ if len == 0 => None,
+        n if n >= 8 => Some(len - 1),
+        n => (n < len).then_some(n),
+    }
+}
+
 /// The runs that get a tab: what waits, then what works, unless the person closed it and it stands as it stood
 /// then; and the one open, whatever it is.
 fn tabbed(listing: &Listing, closed: &HashMap<String, (Mark, String)>, open: Option<&str>) -> Vec<(String, String, Mark)> {
@@ -393,7 +491,8 @@ fn moved(order: &[Option<String>], key: &Option<String>, to: usize) -> Vec<Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{arrange, moved, tabbed};
+    use super::{arrange, at, moved, space_tabs, tabbed};
+    use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
     use std::collections::HashMap;
 
@@ -431,6 +530,31 @@ mod tests {
         assert_eq!(arrange(&[], &keys(&["main", "a", "b"])), keys(&["main", "a", "b"]));
         assert_eq!(arrange(&keys(&["b", "main", "a"]), &keys(&["main", "a", "b", "c"])), keys(&["b", "main", "a", "c"]));
         assert_eq!(arrange(&keys(&["b", "main", "a"]), &keys(&["main", "b"])), keys(&["b", "main"]));
+    }
+
+    fn space(id: &str, agents: &[&str]) -> Space {
+        let agent = |a: &&str| Agent { address: a.to_string(), title: a.to_uppercase(), state: State::Idle, since_ms: 0, shell: false, turn: 0 };
+        Space { id: id.into(), name: id.into(), folder: String::new(), agents: agents.iter().map(agent).collect() }
+    }
+
+    #[test]
+    fn an_open_agent_brings_the_tabs_of_its_space() {
+        let spaces = [space("s1", &["t1", "t2"]), space("s2", &["t3", "t4", "t5"])];
+        let ids = |open| space_tabs(&spaces, open).iter().map(|a| a.address.clone()).collect::<Vec<_>>();
+        assert_eq!(ids("t4"), ["t3", "t4", "t5"]);
+        assert_eq!(ids("t1"), ["t1", "t2"]);
+        // an agent no space holds (gone, or opened by address) stands alone
+        assert!(ids("t9").is_empty());
+    }
+
+    #[test]
+    fn command_1_to_8_take_that_place_and_command_9_the_last() {
+        assert_eq!(at(0, 3), Some(0));
+        assert_eq!(at(2, 3), Some(2));
+        assert_eq!(at(5, 3), None);
+        assert_eq!(at(8, 3), Some(2));
+        assert_eq!(at(8, 12), Some(11));
+        assert_eq!(at(8, 0), None);
     }
 
     #[test]
