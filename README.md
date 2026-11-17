@@ -58,7 +58,7 @@ On a Mac with Apple silicon, in a terminal:
 curl -fsSL https://jaynes.dev/install.sh | sh
 ```
 
-It installs the Jaynes app in `~/Applications`, the `jaynes` command in
+It installs the Jaynes app in `/Applications` (`~/Applications` when you cannot write there), the `jaynes` command in
 `~/.local/bin`, [herdr-core](https://github.com/herdrdev/herdr-core) (which
 keeps the app's terminals alive) when you have none, and the plugin in Claude
 Code. `jaynes update` installs the next release the same way. The app is signed

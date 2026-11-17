@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://jaynes.dev/install.sh | sh
 #
-# The app into ~/Applications/Jaynes.app, the program into ~/.local/bin/jaynes, herdr-core (the terminals the app keeps
+# The app into /Applications/Jaynes.app (~/Applications when that is not yours to write), the program into ~/.local/bin/jaynes, herdr-core (the terminals the app keeps
 # alive) with Herdr's own installer when there is none yet, and the plugin into Claude Code. Running it again updates
 # them; `jaynes update` does that for you.
 #
@@ -14,7 +14,9 @@ set -eu
 
 releases=${JAYNES_RELEASES:-https://github.com/alk0x1/jaynes/releases/latest/download}
 bin="$HOME/.local/bin"
-apps="$HOME/Applications"
+# /Applications, where Finder and Launchpad look, is open to an admin without sudo; ~/Applications otherwise
+apps=/Applications
+[ -w "$apps" ] || apps="$HOME/Applications"
 
 say() { printf '%s\n' "$*"; }
 fail() { say "jaynes: $*" >&2; exit 1; }
@@ -59,6 +61,8 @@ mv -f "$bin/jaynes.new" "$bin/jaynes"
 xattr -dr com.apple.quarantine "$tmp/Jaynes.app" 2>/dev/null || true
 rm -rf "$apps/Jaynes.app"
 mv "$tmp/Jaynes.app" "$apps/Jaynes.app"
+# a copy an earlier install left in ~/Applications goes, so there is one Jaynes to open
+[ "$apps" = "$HOME/Applications" ] || rm -rf "$HOME/Applications/Jaynes.app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$apps/Jaynes.app" 2>/dev/null || true
 
 # herdr-core: installed only when there is none; one already there (yours, or Herdr's) is left alone
@@ -79,7 +83,7 @@ elif [ -z "${JAYNES_NO_PLUGIN:-}" ]; then
   say "Claude Code is not on your PATH; once it is, type in it: /plugin install jaynes --marketplace alk0x1/jaynes"
 fi
 
-say "Jaynes ${version} is installed. Open it from your apps."
+say "Jaynes ${version} is installed in $apps. Open it from your apps."
 case ":$PATH:" in
   *":$bin:"*) ;;
   *) say "Add $bin to your PATH to use jaynes from a terminal." ;;
