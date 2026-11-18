@@ -56,14 +56,27 @@ pub fn next(order: &[Key], open: Option<&Key>) -> Option<Key> {
     Some(order[at].clone())
 }
 
+/// The line under the Inbox's name: "across all N spaces" only where there is more than one to be across.
+pub fn subtitle(spaces: usize) -> String {
+    let across = if spaces > 1 { format!(", across all {spaces} spaces") } else { String::new() };
+    format!("What needs you{across}. Agents land here when they ask something or finish.")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Key, gather, next};
+    use super::{Key, gather, next, subtitle};
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
 
     fn agent(address: &str, state: State) -> Agent {
         Agent { address: address.into(), title: address.to_uppercase(), state, since_ms: 0, shell: false, turn: 0, kind: Some("permission".into()), msg: "approve Bash: ls".into(), cwd: String::new() }
+    }
+
+    #[test]
+    fn the_inbox_says_across_all_spaces_only_when_there_are_two_or_more() {
+        assert_eq!(subtitle(0), "What needs you. Agents land here when they ask something or finish.");
+        assert_eq!(subtitle(1), "What needs you. Agents land here when they ask something or finish.");
+        assert_eq!(subtitle(3), "What needs you, across all 3 spaces. Agents land here when they ask something or finish.");
     }
 
     #[test]

@@ -1306,7 +1306,7 @@ impl Root {
                     .mt(px(4.))
                     .text_size(px(12.5))
                     .text_color(rgb(look::faint()))
-                    .child(format!("What needs you, across all {spaces} spaces. Agents land here when they ask something or finish.")),
+                    .child(inbox::subtitle(spaces)),
             );
         let button = |id: SharedString, text: &'static str| {
             div()
