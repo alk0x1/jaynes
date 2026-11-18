@@ -61,8 +61,8 @@ structure Step where
   irreversible : Bool
   /-- it cannot be undone, already acted, and the person is asked about the act (keep it, or act again) -/
   held : Bool
-  /-- it acts on something real, is not safe to repeat, and acted in this intent without being done: its checks did
-      not pass after the act -/
+  /-- it acts on something real, is not safe to repeat, and acted, or may have, in this intent without being done:
+      its checks did not pass after the act, or the attempt's outcome was never recorded -/
   actedPending : Bool
   /-- Jaynes tested what it reaches -/
   probed : Bool

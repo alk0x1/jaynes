@@ -109,6 +109,9 @@ pub struct StepState {
     /// checks say after; nothing but the person's order of a second act starts it again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub acted: bool,
+    /// An attempt of this step, which acts, ended with no outcome recorded: it may have acted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub maybe_acted: bool,
     /// Acts the person ordered again: part of the act's key, so a second act is a new intent.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub repeat: u32,
@@ -419,6 +422,11 @@ impl Run {
                     q.superseded = true;
                 }
             }
+            Event::MayHaveActed { step, .. } => {
+                if let Some(s) = self.step_mut(step) {
+                    s.maybe_acted = true;
+                }
+            }
             Event::ActKept { step, reads } => {
                 if let Some(s) = self.step_mut(step)
                     && let Some(d) = s.done.as_mut() {
@@ -435,7 +443,10 @@ impl Run {
                     let again = answer.verdict(&step).sends_back();
                     if let Some(s) = self.step_mut(&step) {
                         s.held = None;
-                        if again {
+                        if again && s.maybe_acted {
+                            // the same intent again, with its own key: the outcome of the first was never known
+                            s.maybe_acted = false;
+                        } else if again {
                             s.repeat += 1;
                             s.acted = false;
                         }

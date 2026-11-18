@@ -406,6 +406,12 @@ impl Ctx {
         if *executor == Executor::Person {
             return self.ask_person(i);
         }
+        // G14: a step that may have acted is started again only when the person says so, knowing it repeats with the
+        // same key; never on a bare continue
+        if self.run.steps[i].maybe_acted {
+            self.hold_act(i, &[format!("its outcome was not recorded, so it may have acted; acting again repeats it with the same key {}", self.act_key(i))]);
+            return false;
+        }
         // G14: a step that acted in this intent is not started again on its own, whatever its checks said after
         if self.run.acted_unfinished(i) {
             self.hold_act(i, &["its checks did not pass after it acted".to_string()]);
@@ -458,9 +464,7 @@ impl Ctx {
             return false;
         }
         let attempt = s.attempt + 1;
-        // The act's key is its intent: the run, the step, what it acts on, and how many second acts the person ordered.
-        // The same on every attempt and recovery of that intent; never the round, which other steps' changes move.
-        let key = decl.effect.irreversible().then(|| Digest::of_json(&(&self.run.id, &name, self.run.reads(i), s.repeat)).0);
+        let key = decl.effect.irreversible().then(|| self.act_key(i));
         // after the person answered the agent's "it cannot be done", it goes on in that session
         let answered = decl.executor == Executor::Agent && !s.inputs.is_empty() && s.session.is_some();
         let session = match decl.session {
@@ -690,7 +694,8 @@ impl Ctx {
                 });
                 // G4: the fault is Jaynes's either way; an act may have happened, and the person is told to look first
                 if self.may_have_acted(i) {
-                    let reason = format!("a fault of Jaynes or of the machine stopped {step}: {reason}. No attempt was spent. {step} acts on something real and its outcome is not known, so it may have acted: look before you continue, which starts it again with the same key");
+                    self.emit(Event::MayHaveActed { step: step.to_string(), attempt });
+                    let reason = format!("a fault of Jaynes or of the machine stopped {step}: {reason}. No attempt was spent. {step} acts on something real and its outcome is not known, so it may have acted: continuing asks you whether to act again");
                     self.block(Some(step.to_string()), Fault::Jaynes, reason);
                 } else {
                     let reason = format!("a fault of Jaynes or of the machine stopped {step}: {reason}. No attempt was spent");
@@ -700,6 +705,7 @@ impl Ctx {
             AttemptOutcome::Interrupted { reason } => {
                 self.emit(Event::AttemptInterrupted { step: step.to_string(), attempt, reason: reason.clone() });
                 if self.may_have_acted(i) {
+                    self.emit(Event::MayHaveActed { step: step.to_string(), attempt });
                     self.block(Some(step.to_string()), Fault::MayHaveActed, format!("{step}, which acts on something real, was stopped from outside before its outcome was known: it may have acted ({reason}). Look, then continue or abandon the run"));
                 } else {
                     self.block(Some(step.to_string()), Fault::Paused, format!("{step} was stopped from outside: {reason}"));
@@ -933,8 +939,9 @@ impl Ctx {
                     // G14: an act with no recorded outcome may have happened: never started again on its own, unless
                     // repeating it does no harm, and then with the same key
                     if decl.effect.acts() && !decl.repeats_safely() {
+                        self.emit(Event::MayHaveActed { step: name.clone(), attempt });
                         let reason = format!(
-                            "{name} acts on something real and was under way when Jaynes stopped, so it may have acted. Look, then continue or abandon the run"
+                            "{name} acts on something real and was under way when Jaynes stopped, so it may have acted. Look, then continue (which asks you whether to act again) or abandon the run"
                         );
                         self.block(Some(name), Fault::MayHaveActed, reason);
                     } else {
@@ -1154,6 +1161,12 @@ impl Ctx {
         Ok(())
     }
 
+    /// The key of step `i`'s act, its intent: the run, the step, what it acts on, and how many second acts the person
+    /// ordered. The same on every attempt and recovery of that intent; never the round, which other steps' changes move.
+    fn act_key(&self, i: usize) -> String {
+        Digest::of_json(&(&self.run.id, &self.name(i), self.run.reads(i), self.run.steps[i].repeat)).0
+    }
+
     /// Hold the run at step `i`, which cannot be undone and already acted, and ask the person about the act: keep it as
     /// it is, or act again, a second act they order as such. Asked once while open.
     fn hold_act(&mut self, i: usize, because: &[String]) {
@@ -1209,6 +1222,7 @@ impl Ctx {
             return refuse("that is not offered here: keep the act as it is when it is done, or act again");
         }
         let i = self.index(&step)?;
+        let unknown = self.run.steps[i].maybe_acted;
         let effects = effects(&self.run, &q.question, answer);
         self.emit(Event::AnswerRecorded { answer: answer.clone(), effects });
         if v == Verdict::Keep {
@@ -1217,6 +1231,9 @@ impl Ctx {
                 let reads = self.run.reads(i);
                 self.emit(Event::ActKept { step: step.clone(), reads });
             }
+        } else if unknown {
+            // it may have acted: the person said to act again, the same intent with the same key; the answer, folded,
+            // let it start
         } else {
             self.again = Some(i);
             self.invalidate(i, vec![format!("it is being done again: you ordered a second act of {step}")], notes(&q.question, answer));
@@ -1360,6 +1377,10 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     let Some(i) = run.manifest.index(&q.step) else { return Effects::default() };
     if q.kind == QuestionKind::Acted {
         let again = answer.verdict(&q.step).sends_back();
+        if again && run.manifest.index(&q.step).is_some_and(|k| run.steps[k].maybe_acted) {
+            sentences.push(format!("{} acts again, the same intent with the same key: if its first attempt acted, it is done twice, unless the far side knows the key.", q.step));
+            return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
+        }
         sentences.push(if again {
             format!("{} acts again: a second act, with its own key, which you order now as such.", q.step)
         } else {

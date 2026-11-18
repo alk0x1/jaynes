@@ -203,6 +203,12 @@ pub enum Event {
         reads: Vec<Read>,
         changed: Vec<Changed>,
     },
+    /// An attempt of a step that acts on something real ended with no outcome recorded: it may have acted. Nothing
+    /// starts it again on its own; the person is asked, and acting again repeats it with the same key.
+    MayHaveActed {
+        step: String,
+        attempt: u32,
+    },
     /// The person kept an act that cannot be undone as it was, though what it rested on changed: it stands on what
     /// holds now, as it acted, and is not done again.
     ActKept {
@@ -307,6 +313,7 @@ impl Event {
             Event::ChecksJudged { .. } => "ChecksJudged",
             Event::StepDone { .. } => "StepDone",
             Event::ActKept { .. } => "ActKept",
+            Event::MayHaveActed { .. } => "MayHaveActed",
             Event::StepInvalidated { .. } => "StepInvalidated",
             Event::QuestionOpened { .. } => "QuestionOpened",
             Event::QuestionSuperseded { .. } => "QuestionSuperseded",

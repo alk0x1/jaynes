@@ -729,7 +729,8 @@ impl World {
                 };
                 // an answer that sends back an act already done holds the run at it, which the model of effects
                 // leaves out: the core's own check of G11 covers it, just below
-                let held_target = q.kind != QuestionKind::Acted && answer.sends_back() && (run.acted(back_to)
+                // and acting again where the act may have happened is the same intent, which runs nothing again
+                let held_target = (q.kind == QuestionKind::Acted && run.steps[i].maybe_acted) || q.kind != QuestionKind::Acted && answer.sends_back() && (run.acted(back_to)
                     || (person && q.items.iter().any(|x| answer.verdict(&x.id).sends_back() && run.manifest.index(&x.id).is_some_and(|j| run.acted(j)))));
                 let case = serde_json::json!({
                     "step": back_to, "personStep": person, "input": run.steps[i].inputs.contains(&q.id),
@@ -1266,23 +1267,40 @@ fn acting(effect: Effect, idempotent: bool) -> (Run, String) {
 
 #[test]
 fn g14_an_act_whose_outcome_was_not_recorded_is_not_started_again_on_its_own() {
+    type Ending = Box<dyn Fn(&mut Run) -> Vec<Command>>;
+    let outcomes: Vec<(&str, Ending)> = vec![
+        ("Jaynes stopped", Box::new(|run: &mut Run| feed(run, Input::Recovered))),
+        ("stopped from outside", Box::new(|run: &mut Run| {
+            let attempt = run.steps[0].attempt;
+            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { reason: "halted".to_string() } })
+        })),
+        ("a fault", Box::new(|run: &mut Run| {
+            let attempt = run.steps[0].attempt;
+            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the box died".to_string() } })
+        })),
+    ];
     for effect in [Effect::Irreversible { idempotent: false }, Effect::Compensable { undo: "revert".to_string() }] {
-        // Jaynes stopped while it ran
-        let (mut run, _) = acting(effect.clone(), false);
-        let c = feed(&mut run, Input::Recovered);
-        assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })), "{effect:?} started again after a stop: {c:?}");
-        assert!(matches!(run.phase, Phase::Blocked { fault: Fault::MayHaveActed, .. }), "{effect:?}: {:?}", run.phase);
-        // stopped from outside
-        let (mut run, _) = acting(effect.clone(), false);
-        let attempt = run.steps[0].attempt;
-        let c = feed(&mut run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { reason: "halted".to_string() } });
-        assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })));
-        assert!(matches!(run.phase, Phase::Blocked { fault: Fault::MayHaveActed, .. }), "{effect:?}: {:?}", run.phase);
-        // a fault: Jaynes's, and the person is told the act may have happened
-        let (mut run, _) = acting(effect.clone(), false);
-        let attempt = run.steps[0].attempt;
-        feed(&mut run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the box died".to_string() } });
-        assert!(matches!(&run.phase, Phase::Blocked { fault: Fault::Jaynes, reason, .. } if reason.contains("may have acted")), "{effect:?}: {:?}", run.phase);
+        for (how, end) in &outcomes {
+            let (mut run, key) = acting(effect.clone(), false);
+            let c = end(&mut run);
+            assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })), "{effect:?}, {how}: started again: {c:?}");
+            assert!(matches!(run.phase, Phase::Blocked { .. }), "{effect:?}, {how}: {:?}", run.phase);
+            // a bare continue does not act again: it asks, saying it repeats with the same key
+            let c = feed(&mut run, Input::Continue { by: By::Person });
+            let c = probe_ok(&mut run, c);
+            assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })), "{effect:?}, {how}: continue acted again: {c:?}");
+            let q = asked_in(&c).filter(|q| q.kind == QuestionKind::Acted).unwrap_or_else(|| panic!("{effect:?}, {how}: asked nothing: {c:?}"));
+            assert!(q.about.contains("may have acted") && q.about.contains("same key"), "{}", q.about);
+            assert_eq!(q.offered, vec![VerdictKind::Redo]);
+            // the person says to act again: the same intent, with the same key
+            let c = feed(&mut run, answer_to(&q, &[("send", redo("go on"))]));
+            let c = probe_ok(&mut run, c);
+            let again: Vec<Option<String>> = c.iter().filter_map(|c| if let Command::RunRole { key, .. } = c { Some(key.clone()) } else { None }).collect();
+            assert_eq!(again.len(), 1, "{effect:?}, {how}: {c:?}");
+            if effect.irreversible() {
+                assert_eq!(again[0].as_deref(), Some(key.as_str()), "{how}: the same intent keeps its key");
+            }
+        }
     }
 }
 
@@ -2008,7 +2026,7 @@ fn model_case(run: &Run) -> String {
                 "skipped": s.skipped == Some(s.round),
                 "irreversible": d.effect.irreversible(),
                 "held": run.held(i).is_some(),
-                "actedPending": run.acted_unfinished(i),
+                "actedPending": run.acted_unfinished(i) || s.maybe_acted,
                 "probed": s.probed,
                 "attemptsLeft": s.spent < d.attempts,
                 "certified": run.attention.get(&d.name).is_some_and(|c| {
