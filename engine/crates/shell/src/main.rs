@@ -19,6 +19,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
   start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
         [--task ID] [--arm NAME]   in an evaluation: the task's id in your own list and the arm, letters, digits and hyphens
+        [--never-merge]   in an evaluation: deliver the run's branch only, whatever is answered
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you
@@ -34,6 +35,11 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   verify-summary FILE     make a --json summary again from the record and name every field the file says otherwise
   export --numbers [--since YYYY-MM-DD]   each finished run's numbers as JSON lines, and no word of the record: task, arm,
                           minutes of presence, stops, result, the agents' minutes and tokens (the day in UTC)
+  export --evaluation RUN  the defects planted in a run, as JSON: who planted each, where, the note, the patch, who took
+                          it out, and the answer at the stop that showed it. For the evaluator, never the person who reviews
+  plant RUN --step STEP --patch FILE --note TEXT --by NAME   in an evaluation, at a terminal: plant a defect into a
+                          done step's change while its stop waits; nothing is delivered while it is in
+  unplant RUN ID --by NAME   take a planted defect out, at a terminal: the step's change is again the one it was
   page [--port N]         the page where you answer, at http://localhost:8750 (or the port given; 0: one the system gives, said in its first line)
   add NAME|SOURCE | remove NAME | roles   install a role (by name from the index, a folder, or URL#path), remove one, list them
   index check DIR [--write]   check an index: every role's content and promises, proved again
@@ -336,8 +342,16 @@ fn run(args: &[String]) -> Result<(), String> {
             Err(format!("{} field{} of the file {} not what the record says", differ.len(), if differ.len() == 1 { "" } else { "s" }, if differ.len() == 1 { "is" } else { "are" }))
         }
         "export" => {
+            if let Some(id) = flag(rest, "--evaluation") {
+                let events = store()?.events(&id)?;
+                if events.is_empty() {
+                    return Err(format!("there is no run {id}"));
+                }
+                println!("{}", jaynes_shell::planted::export(&home().join("runs").join(&id), &events));
+                return Ok(());
+            }
             if !rest.iter().any(|a| a == "--numbers") {
-                return Err("export what? --numbers: each finished run's numbers, as JSON lines, with no word of the record".into());
+                return Err("export what? --numbers: each finished run's numbers, as JSON lines, with no word of the record; --evaluation RUN: the defects planted in a run".into());
             }
             let since = flag(rest, "--since").map(|d| export::day(&d)).transpose()?;
             let (lines, unfinished) = export::export(&home(), since)?;
@@ -362,9 +376,35 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "log" => {
             let id = rest.first().ok_or("which run?")?;
-            for e in store()?.events(id)? {
+            // an evaluation's planted defects are never read by the person who reviews: the export has them
+            for e in store()?.events(id)?.iter().filter(|e| !jaynes_shell::planted::hidden(e)) {
                 println!("{}", serde_json::to_string(&e).map_err(|e| e.to_string())?);
             }
+            Ok(())
+        }
+        "plant" => {
+            let id = rest.first().ok_or("which run?")?;
+            let step = flag(rest, "--step").ok_or("--step STEP: the done step whose change the defect goes into")?;
+            let patch = flag(rest, "--patch").ok_or("--patch FILE: the defect, as a patch of the project")?;
+            let note = flag(rest, "--note").ok_or("--note TEXT: what the defect is, for the evaluator")?;
+            let planter = flag(rest, "--by").ok_or("--by NAME: who plants it")?;
+            let mut s = store()?;
+            let setup = Setup::load(&s, &home(), id)?;
+            let mut d = Driver::take(&mut s, setup)?;
+            let defect = d.plant(&step, Path::new(&patch), &note, &planter, who())?;
+            say(&format!("planted {defect} in {step}: nothing is delivered until `jaynes unplant {id} {defect} --by NAME`"));
+            Ok(())
+        }
+        "unplant" => {
+            let id = rest.first().ok_or("which run?")?;
+            let defect = rest.get(1).filter(|a| !a.starts_with("--")).ok_or("which defect? its id, from jaynes export --evaluation")?;
+            let remover = flag(rest, "--by").ok_or("--by NAME: who takes it out")?;
+            let mut s = store()?;
+            let setup = Setup::load(&s, &home(), id)?;
+            let mut d = Driver::take(&mut s, setup)?;
+            let end = d.unplant(defect, &remover, who())?;
+            say(&format!("{defect} taken out"));
+            print_state(&end);
             Ok(())
         }
         "conformance" => {
@@ -487,6 +527,7 @@ fn start(args: &[String]) -> Result<(), String> {
     // anything of a run exists
     let task = label(args, "--task")?;
     let arm = label(args, "--arm")?;
+    let never_merge = args.iter().any(|a| a == "--never-merge");
     let id = flag(args, "--run").unwrap_or_else(|| {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         format!("r{t}-{}", std::process::id() % 1000)
@@ -562,7 +603,7 @@ fn start(args: &[String]) -> Result<(), String> {
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
-    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm })?;
+    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm, never_merge })?;
     print_state(&end);
     Ok(())
 }

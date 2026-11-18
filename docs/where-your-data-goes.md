@@ -17,6 +17,10 @@ is said at the end, so nobody reads more into it.
   minutes on the stops' screens, stops, what became of the run, and the agents' minutes and tokens. No request,
   note, name of a step or a file, path or run id is in it. A run started with no task's id is named by a fingerprint
   of its id and a random salt kept in `~/.jaynes/engine/export.salt`, readable by you alone.
+- **A defect planted in an evaluation.** `jaynes plant` keeps who planted it, the note and the patch in
+  `runs/<run>/evaluation.json`, beside the run and out of its record, and `jaynes export --evaluation RUN` prints
+  them to your terminal, with what became of the defect and the answer at the stop that showed it. Nothing is sent;
+  the log, the run's screen and its summary never show them.
 - **The roles and their proofs.** Installed roles live in `~/.jaynes/engine/roles`; the promises proved of each role
   are kept in `~/.jaynes/engine/proofs`.
 - **The page.** The page where you answer is a server on `127.0.0.1`, on this machine only. It counts an answer as

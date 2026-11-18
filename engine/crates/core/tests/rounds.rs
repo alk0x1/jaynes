@@ -107,7 +107,7 @@ fn started(choose: bool, redo: bool) -> (Run, Question) {
         role_fingerprint: Digest("f".into()),
         agent: "claude:m1".into(),
         raise: None,
-        attention: BTreeMap::new(), task: None, arm: None
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");
@@ -225,7 +225,7 @@ fn agents_redoing_without_the_person_stop_at_their_ceiling_and_call_the_person_w
         role_fingerprint: Digest("f".into()),
         agent: "claude:m1".into(),
         raise: None,
-        attention: BTreeMap::new(), task: None, arm: None
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");

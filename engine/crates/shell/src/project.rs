@@ -201,6 +201,11 @@ pub trait Workspace {
     fn drifted(&self) -> Result<Vec<String>, String>;
     /// Put the copy back as Jaynes last measured it or put it there.
     fn put_back(&self) -> Result<(), String>;
+    /// `change` with an evaluation's `patch` in it, as a change of its own on the same parent, and the files the
+    /// patch changes; the copy untouched until it is composed.
+    fn plant(&self, _change: &str, _patch: &Path, _message: &str) -> Result<(String, Vec<String>), String> {
+        Err("a defect is planted only into a repository's change".into())
+    }
 }
 
 /// A state of the copy laid out for its checks ([`Workspace::lay_out`]), removed when dropped.
@@ -302,6 +307,9 @@ impl Workspace for Copy {
     }
     fn put_back(&self) -> Result<(), String> {
         Copy::put_back(self)
+    }
+    fn plant(&self, change: &str, patch: &Path, message: &str) -> Result<(String, Vec<String>), String> {
+        self.with_patch(change, patch, message)
     }
 }
 
@@ -479,6 +487,35 @@ impl Copy {
             return Ok(None);
         }
         self.g(&["commit-tree", tree, "-p", parent, "-m", message]).map(Some)
+    }
+
+    /// `commit` with `patch` applied, as a commit of its own on `commit`'s parent, and the files the patch changes.
+    /// Applied in an index of its own, beside the engine's repository: the copy, its files and its index are
+    /// untouched, so only a compose puts the copy where the commit is. An error, saying why, when it does not apply.
+    pub fn with_patch(&self, commit: &str, patch: &Path, message: &str) -> Result<(String, Vec<String>), String> {
+        let index = self.git.join(format!("jaynes-plant-index-{}", std::process::id()));
+        let _gone = std::fs::remove_file(&index);
+        let on = |args: &[&str]| {
+            let mut c = git_command();
+            c.arg("--git-dir").arg(&self.git).arg("--work-tree").arg(&self.dir);
+            c.args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]);
+            c.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_INDEX_FILE", &index);
+            run(c, args)
+        };
+        let patch = patch.display().to_string();
+        let made = (|| {
+            on(&["read-tree", commit])?;
+            let files: Vec<String> = on(&["apply", "--cached", "--numstat", &patch])?
+                .lines()
+                .filter_map(|l| l.splitn(3, '\t').nth(2).map(str::to_string))
+                .collect();
+            on(&["apply", "--cached", &patch]).map_err(|e| format!("the patch does not apply to the step's change: {e}"))?;
+            let tree = on(&["write-tree"])?;
+            let parent = self.g(&["rev-parse", &format!("{commit}^")])?;
+            Ok::<_, String>((self.g(&["commit-tree", &tree, "-p", &parent, "-m", message])?, files))
+        })();
+        let _gone = std::fs::remove_file(&index);
+        made
     }
 
     /// The tree of a commit.

@@ -88,6 +88,8 @@ pub struct Summary {
     pub abandoned: bool,
     /// A person reverted what the run merged.
     pub undone: bool,
+    /// The run was started never to merge: it delivered its branch only, whatever was answered.
+    pub never_merge: bool,
     /// The target, in words ("a repository"), and whether it is one: what a change's size is counted in.
     pub target: &'static str,
     pub repository: bool,
@@ -268,6 +270,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         delivered: reference.map(str::to_string),
         abandoned: *outcome == Outcome::Abandoned,
         undone: r.undone,
+        never_merge: r.never_merge,
         target: r.manifest.target.noun(),
         repository: r.manifest.target.is_repository(),
         changed,
@@ -392,6 +395,9 @@ impl Summary {
                 out.push_str(&format!("{what}, in {}.", self.target));
                 if self.undone {
                     out.push_str(" A person then reverted the merge.");
+                }
+                if self.never_merge {
+                    out.push_str(" The run was started never to merge, so it delivered its branch only.");
                 }
                 if self.changed.is_empty() {
                     out.push_str(" Jaynes measured no change.\n");
@@ -671,7 +677,7 @@ mod tests {
         .expect("manifest");
         let start = Input::Start {
             run: "r1".into(), request: "Make the login redirect keep the page the person came from".into(), manifest,
-            role_fingerprint: Digest("6ab163606a8e72693cddc7a260cd34f5".into()), agent: "claude:some-model".into(), raise: None, attention: Default::default(), task: None, arm: None,
+            role_fingerprint: Digest("6ab163606a8e72693cddc7a260cd34f5".into()), agent: "claude:some-model".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false,
         };
         jaynes_core::decide(None, &start).expect("start").events.into_iter().map(|e| (at, e)).collect()
     }

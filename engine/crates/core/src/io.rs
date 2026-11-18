@@ -34,6 +34,10 @@ pub enum Input {
         /// The arm of the evaluation the run is in, a label too. None: none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arm: Option<String>,
+        /// The run never merges, whatever its role delivers and whatever is answered in it: an evaluation's run
+        /// delivers its branch only.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        never_merge: bool,
     },
     /// Go on as far as the run can without anything from outside.
     Tick,
@@ -112,6 +116,18 @@ pub enum Input {
         by: By,
         #[serde(default)]
         step: Option<String>,
+    },
+    /// A defect an evaluation plants into the change of a done step, before its stop shows it, to see whether the
+    /// person who reviews looks. The shell keeps what was planted; the core keeps that one is in, by its id.
+    Plant {
+        id: String,
+        step: String,
+        by: By,
+    },
+    /// The planted defect `id` taken out, its step's change as it was.
+    Unplant {
+        id: String,
+        by: By,
     },
 }
 

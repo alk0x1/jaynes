@@ -110,6 +110,9 @@ pub enum Event {
         /// The arm of the evaluation the run is in, a label.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arm: Option<String>,
+        /// The run never merges: it delivers its branch only, whatever is answered.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        never_merge: bool,
     },
     RiskRaised {
         to: Risk,
@@ -203,6 +206,18 @@ pub enum Event {
         reason: String,
         usage: Usage,
         session: Option<String>,
+    },
+    /// A defect an evaluation planted into the change of `step`; nothing is delivered while one is in. Never shown
+    /// to the person who reviews: not in the log, the run's screen or its summary.
+    DefectPlanted {
+        id: String,
+        step: String,
+        by: By,
+    },
+    /// The planted defect `id` taken out, its step's change as it was before.
+    DefectRemoved {
+        id: String,
+        by: By,
     },
     StepDone {
         step: String,
@@ -321,6 +336,8 @@ impl Event {
             Event::SessionStarted { .. } => "SessionStarted",
             Event::ChecksJudged { .. } => "ChecksJudged",
             Event::StepDone { .. } => "StepDone",
+            Event::DefectPlanted { .. } => "DefectPlanted",
+            Event::DefectRemoved { .. } => "DefectRemoved",
             Event::ActKept { .. } => "ActKept",
             Event::MayHaveActed { .. } => "MayHaveActed",
             Event::StepInvalidated { .. } => "StepInvalidated",

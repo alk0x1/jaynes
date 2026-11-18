@@ -48,7 +48,7 @@ pub const PAUSE_OVER: &str = "pause-over";
 const MAX_MOVES: usize = 10_000;
 
 pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
-    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm } = input {
+    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm, never_merge } = input {
         if run.is_some() {
             return refuse("the run already started");
         }
@@ -88,6 +88,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 .collect(),
             task: task.clone(),
             arm: arm.clone(),
+            never_merge: *never_merge,
         };
         let Some(state) = Run::started(&start) else { return refuse("the run could not start") };
         let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() }, again: None };
@@ -96,6 +97,14 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
     }
     let Some(run) = run else { return refuse("there is no such run") };
     let mut c = Ctx { run: run.clone(), out: Decided::default(), again: None };
+    if let Input::Plant { by, .. } = input
+        && !by.person() {
+            return refuse("only you plant a defect: at a terminal, in the evaluation you run");
+        }
+    if let Input::Unplant { id, .. } = input
+        && c.run.unplanted.contains(id) {
+            return refuse(format!("the defect {id} was already taken out"));
+        }
     if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. }) {
         return refuse("the run is finished");
     }
@@ -218,6 +227,32 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 c.index(s)?;
             }
             c.emit(Event::DeliveryCorrected { note: note.clone(), by: by.clone(), step: step.clone() });
+        }
+        Input::Plant { id, step, by } => {
+            let i = c.index(step)?;
+            // the stop that will show it waits for its answer: what the person who reviews sees there is what is measured
+            let waits = c.run.questions.values().any(|q| q.question.step == *step && q.question.kind == QuestionKind::Decision && !q.superseded && q.answer.is_none());
+            if c.run.steps[i].status != Status::Done || !waits {
+                return refuse(format!("a defect is planted into {step}'s change while its stop waits for an answer, and it does not"));
+            }
+            // a delivery asked for before it would go out with it, whatever is held after
+            if c.run.delivering.is_some() {
+                return refuse("a delivery is under way: plant once it has gone out");
+            }
+            if id.trim().is_empty() || c.run.planted.contains_key(id) || c.run.unplanted.contains(id) {
+                return refuse(format!("this run already has a defect {id}"));
+            }
+            c.emit(Event::DefectPlanted { id: id.clone(), step: step.clone(), by: by.clone() });
+        }
+        Input::Unplant { id, by } => {
+            if !by.person() {
+                return refuse("only you take a planted defect out: at a terminal, in the evaluation you run");
+            }
+            if !c.run.planted.contains_key(id) {
+                return refuse(format!("there is no planted defect {id} in this run"));
+            }
+            c.emit(Event::DefectRemoved { id: id.clone(), by: by.clone() });
+            c.advance();
         }
     }
     Ok(c.out)
@@ -629,7 +664,7 @@ impl Ctx {
 
     /// Whether the delivery `digest` merges into the person's branch: none while G19 waits for the person.
     fn lands(&self, digest: &Digest) -> Option<bool> {
-        if !(self.run.manifest.lands() && !self.run.undone) {
+        if !(self.run.manifest.lands() && !self.run.undone && !self.run.never_merge) {
             return Some(false);
         }
         if self.run.merge_holds().is_empty() {
@@ -692,6 +727,19 @@ impl Ctx {
 
     fn deliver(&mut self) -> bool {
         let (digest, given) = self.run.delivery();
+        // an evaluation's planted defect is in what a stop shows: nothing more goes out, by merge or as a branch, and
+        // the run does not end, until it is taken out. While the person who reviews has answers to give, the run waits
+        // on them as any run does, so nothing they read says a defect is in.
+        if !self.run.planted.is_empty() {
+            let open: Vec<String> = self.run.open_questions().iter().map(|q| q.question.id.clone()).collect();
+            let delivered = self.run.delivered.as_ref() == Some(&digest);
+            if open.is_empty() {
+                self.wait(None, open, "a planted defect is still in: nothing is delivered, and the run does not end, until it is taken out".to_string());
+            } else {
+                self.wait(None, open, if delivered { "delivered; your answers can still correct it" } else { "your answers are awaited" }.to_string());
+            }
+            return false;
+        }
         if self.run.delivered.as_ref() != Some(&digest) {
             let Some(merge) = self.lands(&digest) else {
                 self.ask_merge(&digest);

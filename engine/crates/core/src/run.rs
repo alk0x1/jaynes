@@ -45,6 +45,16 @@ pub struct Run {
     /// G19: each question that held a merge, with the delivery it was asked about: an answer counts only for it.
     #[serde(default)]
     pub merges: BTreeMap<String, Digest>,
+    /// The run never merges: it was started so, and nothing answered in it lifts that.
+    #[serde(default)]
+    pub never_merge: bool,
+    /// The defects an evaluation planted and has not taken out, each by its id with its step: nothing is delivered
+    /// while one is in.
+    #[serde(default)]
+    pub planted: BTreeMap<String, String>,
+    /// The defects planted and taken out since, by id.
+    #[serde(default)]
+    pub unplanted: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -214,7 +224,7 @@ impl Run {
     }
 
     pub fn started(e: &Event) -> Option<Run> {
-        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, ceilings, ceiling, attention, .. } = e else {
+        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, ceilings, ceiling, attention, never_merge, .. } = e else {
             return None;
         };
         Some(Run {
@@ -243,6 +253,9 @@ impl Run {
             told: Default::default(),
             seq: 1,
             merges: BTreeMap::new(),
+            never_merge: *never_merge,
+            planted: BTreeMap::new(),
+            unplanted: Default::default(),
         })
     }
 
@@ -261,6 +274,13 @@ impl Run {
         self.seq += 1;
         match e {
             Event::RunStarted { .. } => {}
+            Event::DefectPlanted { id, step, .. } => {
+                self.planted.insert(id.clone(), step.clone());
+            }
+            Event::DefectRemoved { id, .. } => {
+                self.planted.remove(id);
+                self.unplanted.insert(id.clone());
+            }
             Event::RiskRaised { to, ceiling, .. } => {
                 self.risk = *to;
                 self.ceiling = *ceiling;

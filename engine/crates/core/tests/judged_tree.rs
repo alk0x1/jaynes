@@ -45,6 +45,7 @@ fn checking(tree: Option<&str>) -> (Run, u32) {
         attention: Default::default(),
         task: None,
         arm: None,
+        never_merge: false,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("fold");

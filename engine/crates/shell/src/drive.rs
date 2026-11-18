@@ -719,6 +719,10 @@ impl<'a> Driver<'a> {
             {
                 std::process::exit(9);
             }
+            // and once the record holds a defect taken out, before anything is said of it beside the run
+            if std::env::var_os("JAYNES_DIE_AFTER_UNPLANT").is_some() && events.iter().any(|e| matches!(e, Event::DefectRemoved { .. })) {
+                std::process::exit(9);
+            }
             self.follow_project(&state, &events)?;
             if events.iter().any(|e| matches!(e, Event::RunFinished { .. })) {
                 clear_caches(&self.setup.dir);
@@ -793,6 +797,96 @@ impl<'a> Driver<'a> {
         names.iter().filter_map(|n| l.get(n).map(|c| (n.clone(), c.clone()))).collect()
     }
 
+    /// The change of `step` as the record holds it: `change`, or, when it is one with an evaluation's defect in it,
+    /// the change as it was before.
+    fn unplanted(&self, step: &str, change: &str) -> String {
+        match crate::planted::active(&self.setup.dir, step) {
+            Some(d) if d.planted == change => d.original,
+            _ => change.to_string(),
+        }
+    }
+
+    /// [`Driver::changes`], each as the record holds it: no step works from a planted defect.
+    fn unplanted_changes(&self, names: &[String]) -> Vec<(String, String)> {
+        self.changes(names).into_iter().map(|(n, c)| { let c = self.unplanted(&n, &c); (n, c) }).collect()
+    }
+
+    /// The steps whose changes the delivery takes, in order.
+    fn writers(run: &Run) -> Vec<String> {
+        run.path()
+            .into_iter()
+            .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
+            .map(|j| run.manifest.steps[j].name.clone())
+            .collect()
+    }
+
+    /// Plant an evaluation's `patch` into the change of `step` while its stop waits: the step's change becomes one
+    /// with the defect in it, shown at its stop as the step's, and the copy is composed with it. The core says
+    /// first whether it may, so nothing of the copy changes on a refusal; the record then holds that a defect is
+    /// in, and the core holds the delivery while it is. Who planted it, the note and the patch are kept beside the
+    /// run, never in the record. The id of the defect.
+    pub fn plant(&mut self, step: &str, patch: &Path, note: &str, planter: &str, by: jaynes_core::question::By) -> Result<String, String> {
+        let run = self.store.state(&self.setup.run)?.ok_or("no such run")?;
+        let id = crate::planted::next_id(&self.setup.dir);
+        let input = Input::Plant { id: id.clone(), step: step.to_string(), by };
+        jaynes_core::decide(Some(&run), &input).map_err(|r| format!("refused: {r}"))?;
+        let copy = self.setup.copy.as_ref().ok_or("the run has no copy of a project to plant a defect into")?;
+        let original = self.ledger().get(step).cloned().ok_or_else(|| format!("{step} changed nothing in the project: a defect is planted into a change"))?;
+        let text = std::fs::read_to_string(patch).map_err(|e| format!("{}: {e}", patch.display()))?;
+        let round = run.manifest.index(step).map(|i| run.steps[i].round).unwrap_or(0);
+        let (planted, files) = copy.plant(&original, patch, &format!("{step}, round {round}"))?;
+        let mut defects = crate::planted::read(&self.setup.dir);
+        defects.push(crate::planted::Defect {
+            id: id.clone(), step: step.to_string(), planter: planter.to_string(), note: note.to_string(), patch: text, files,
+            at: crate::store::now(), original: original.clone(), planted: planted.clone(), removed: None,
+        });
+        crate::planted::write(&self.setup.dir, &defects)?;
+        let mut l = self.ledger();
+        l.insert(step.to_string(), planted);
+        self.keep_ledger(&l)?;
+        // the copy as the stop shows it: the changes of the run over the base, the defect in its step's
+        copy.compose(&self.changes(&Self::writers(&run)))?;
+        self.drive(input)?;
+        Ok(id)
+    }
+
+    /// Take the planted defect `id` out: its step's change is again exactly the one it was, the copy composed from
+    /// it, and the delivery goes on when no other defect is in. Verified when the step's change is the tree its
+    /// checks judged, recorded with its output.
+    pub fn unplant(&mut self, id: &str, remover: &str, by: jaynes_core::question::By) -> Result<Run, String> {
+        let run = self.store.state(&self.setup.run)?.ok_or("no such run")?;
+        let input = Input::Unplant { id: id.to_string(), by };
+        // taken out in the record by a process that died before it said so beside the run: say so now, and go on
+        let finishing = run.unplanted.contains(id) && crate::planted::read(&self.setup.dir).iter().any(|d| d.id == id && d.removed.is_none());
+        if !finishing {
+            jaynes_core::decide(Some(&run), &input).map_err(|r| format!("refused: {r}"))?;
+        }
+        let mut defects = crate::planted::read(&self.setup.dir);
+        let d = defects.iter_mut().find(|d| d.id == id && d.removed.is_none()).ok_or_else(|| format!("there is no planted defect {id} in this run"))?;
+        let mut l = self.ledger();
+        // a step sent back since has a change of its own, from the change as it was: the defect is in no change now
+        if l.get(&d.step) == Some(&d.planted) {
+            l.insert(d.step.clone(), d.original.clone());
+            self.keep_ledger(&l)?;
+        }
+        let verified = match (&self.setup.copy, run.manifest.index(&d.step).and_then(|i| run.steps[i].done.as_ref())) {
+            (Some(copy), Some(done)) => {
+                let judged = self.store.get(&done.output)?["tree"].as_str().map(str::to_string);
+                l.get(&d.step).map(|c| copy.state_of(c)).transpose()? == judged
+            }
+            _ => false,
+        };
+        if let Some(copy) = &self.setup.copy {
+            copy.compose(&self.changes(&Self::writers(&run)))?;
+        }
+        // the record first: a process that dies after it leaves the defect out for the core, and a second unplant
+        // says so beside the run; one that dies before leaves it in for both, and a second unplant takes it out
+        let end = self.drive(if finishing { Input::Recovered } else { input });
+        d.removed = Some(crate::planted::Removed { by: remover.to_string(), at: crate::store::now(), verified });
+        crate::planted::write(&self.setup.dir, &defects)?;
+        end
+    }
+
     /// Put the copy where step `i` works: the base with the changes of the earlier steps it uses, and, when it
     /// runs again, its own previous change on top.
     fn prepare(&self, run: &Run, i: usize) -> Result<(), String> {
@@ -806,14 +900,14 @@ impl<'a> Driver<'a> {
             .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
             .map(|j| run.manifest.steps[j].name.clone())
             .collect();
-        let parent = copy.compose(&self.changes(&writers))?;
+        let parent = copy.compose(&self.unplanted_changes(&writers))?;
         let name = run.manifest.steps[i].name.clone();
         let mut parents = self.parents();
         parents.insert(name.clone(), parent);
         std::fs::write(self.setup.dir.join("project-parents.json"), serde_json::to_string(&parents).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         if run.manifest.steps[i].reach.project == ProjectAccess::Write && run.steps[i].round > 0 {
-            let own = self.changes(std::slice::from_ref(&name));
-            let mut all = self.changes(&writers);
+            let own = self.unplanted_changes(std::slice::from_ref(&name));
+            let mut all = self.unplanted_changes(&writers);
             all.extend(own);
             copy.compose(&all).map(|_| ())?;
         }
@@ -873,7 +967,9 @@ impl<'a> Driver<'a> {
             let decl = &run.manifest.steps[i];
             let Some(done) = s.done.as_ref().filter(|_| s.status == jaynes_core::run::Status::Done && decl.reach.project == ProjectAccess::Write) else { continue };
             let Some(tree) = self.store.get(&done.output)?["tree"].as_str().map(str::to_string) else { continue };
-            let have = ledger.get(&decl.name).map(|c| copy.state_of(c)).transpose()?;
+            // a change with an evaluation's defect in it is not the record's: the change as it was is
+            let kept = ledger.get(&decl.name).map(|c| self.unplanted(&decl.name, c));
+            let have = kept.as_ref().map(|c| copy.state_of(c)).transpose()?;
             let parent_tree = self.parents().get(&decl.name).map(|p| copy.state_of(p)).transpose()?;
             let current = match &have {
                 Some(t) => *t == tree,
@@ -1701,7 +1797,7 @@ mod tests {
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
-        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
         let out = jaynes_core::decide(None, &start).expect("start");
         let events: Vec<Event> = out
             .events
@@ -1827,7 +1923,7 @@ mod tests {
         });
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![first, look], target: Default::default(), delivery: Default::default() };
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
-        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
         store.decide("w", &start).expect("start");
         let run = store.state("w").expect("state").expect("run");
         let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };

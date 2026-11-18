@@ -128,7 +128,7 @@ impl World {
             role_fingerprint: Digest("f".into()),
             agent: "claude:m1".into(),
             raise: None,
-            attention: BTreeMap::new(), task: None, arm: None
+            attention: BTreeMap::new(), task: None, arm: None, never_merge: false
         })
         .expect("start");
         let run = Run::fold(&out.events).expect("run");

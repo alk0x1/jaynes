@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod page;
 pub mod permit;
 pub mod person;
+pub mod planted;
 pub mod presence;
 pub mod project;
 pub mod project_prefs;

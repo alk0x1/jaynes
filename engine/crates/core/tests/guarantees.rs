@@ -918,7 +918,7 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         role_fingerprint: fingerprint,
         agent: "claude:m1".to_string(),
         raise,
-        attention, task: None, arm: None
+        attention, task: None, arm: None, never_merge: false
     });
     (manifest, started)
 }
@@ -936,7 +936,7 @@ fn simulate(seed: u64) {
         manifest,
         role_fingerprint: Digest("other".to_string()),
         agent: "claude:m1".to_string(), raise: None,
-        attention: BTreeMap::new(), task: None, arm: None
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
     })
     .is_err());
     for _ in 0..400 {
@@ -948,12 +948,82 @@ fn simulate(seed: u64) {
     w.check_ends();
 }
 
+/// An evaluation's planted defects on random runs: planted into a done step whose stop waits, by the person or by an
+/// agent (refused), and taken out, at random beside everything else the world does. Nothing is asked to be delivered,
+/// delivered or finished while one is in. Not in the Lean model yet: its random runs plant nothing.
+fn simulate_planting(seed: u64) -> (usize, usize) {
+    let mut w = World::new(seed);
+    let (_, started) = start_random(&mut w, seed);
+    assert!(started, "seed {seed}: a valid role did not start");
+    let (mut n, mut held) = (0, 0);
+    for _ in 0..400 {
+        let run = w.run().clone();
+        let roll = w.rng.below(100);
+        if roll < 10 {
+            let step = run.manifest.steps[w.rng.below(run.manifest.steps.len())].name.clone();
+            let by = if w.rng.chance(85) { By::Person } else { By::Agent { who: "agent".to_string() } };
+            let agent = !by.person();
+            n += 1;
+            let planted = w.send(Input::Plant { id: format!("d{n}"), step, by });
+            assert!(!(agent && planted), "seed {seed}: an agent planted a defect");
+        } else if roll < 16 && !run.planted.is_empty() {
+            let ids: Vec<String> = run.planted.keys().cloned().collect();
+            let id = ids[w.rng.below(ids.len())].clone();
+            let by = if w.rng.chance(85) { By::Person } else { By::Agent { who: "agent".to_string() } };
+            let agent = !by.person();
+            let out = w.send(Input::Unplant { id, by });
+            assert!(!(agent && out), "seed {seed}: an agent took a defect out");
+        } else {
+            w.act();
+        }
+        if matches!(w.run().phase, Phase::Waiting { ref on, .. } if on.is_empty()) && !w.run().planted.is_empty() {
+            held += 1;
+        }
+        if w.run().finished() {
+            break;
+        }
+    }
+    let mut planted = BTreeSet::new();
+    for e in &w.log {
+        match e {
+            Event::DefectPlanted { id, .. } => {
+                planted.insert(id.clone());
+            }
+            Event::DefectRemoved { id, .. } => {
+                assert!(planted.remove(id), "seed {seed}: a defect taken out that was not in");
+            }
+            Event::DeliveryAsked { .. } | Event::Delivered { .. } | Event::RunFinished { .. } => {
+                assert!(planted.is_empty(), "seed {seed}: {e:?} while a planted defect was in");
+            }
+            _ => {}
+        }
+    }
+    (w.log.iter().filter(|e| matches!(e, Event::DefectPlanted { .. })).count(), held)
+}
+
+#[test]
+fn the_random_runs_plant_defects_and_hold_on_them() {
+    let (mut planted, mut held) = (0, 0);
+    for seed in 0..400u64 {
+        let (p, h) = simulate_planting(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        planted += p;
+        held += h;
+    }
+    assert!(planted > 50 && held > 10, "the random runs planted {planted} defects and held on one {held} times");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 3000, failure_persistence: None, ..ProptestConfig::default() })]
 
     #[test]
     fn every_guarantee_holds_on_random_runs(seed in any::<u64>()) {
         simulate(seed);
+    }
+
+    /// Nothing is delivered, nor does the run end, while an evaluation's planted defect is in.
+    #[test]
+    fn nothing_goes_out_while_a_planted_defect_is_in(seed in any::<u64>()) {
+        simulate_planting(seed);
     }
 
     /// G8: a riskier run takes every step a less risky one takes.
@@ -1042,7 +1112,7 @@ fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
         manifest,
         role_fingerprint: Digest("f".to_string()),
         agent: "claude:m1".to_string(), raise: None,
-        attention: BTreeMap::new(), task: None, arm: None
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
     })
     .expect("start");
     (Run::fold(&out.events).expect("run"), out.commands)
@@ -1441,7 +1511,7 @@ fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
     let mut change = step("change", Executor::Agent);
     change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: jaynes_core::manifest::DeliveryKind::Merge };
-    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None }).expect("start");
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false }).expect("start");
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
@@ -1657,7 +1727,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
     let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], target: Default::default(), delivery: Default::default() };
-    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None });
+    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false });
     assert!(refused.is_err());
 }
 
@@ -1740,7 +1810,7 @@ fn simulate_logged(seed: u64) {
     let manifest = role(&mut w.rng);
     eprintln!("{}", serde_json::to_string_pretty(&manifest).expect("json"));
     let raise = if w.rng.chance(20) { Some(Risk::High) } else { None };
-    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new(), task: None, arm: None });
+    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new(), task: None, arm: None, never_merge: false });
 
     let mut printed = 0;
     for _ in 0..400 {
@@ -1841,7 +1911,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
         (at, r.clone(), Event::RunStarted {
             run: r.clone(), request: String::new(), manifest: manifest.clone(), role_fingerprint: Digest("f".to_string()),
             agent: "claude:m1".to_string(), engine: String::new(), protocol: 1, format: 1, risk: Risk::Low, reasons: Vec::new(), ceilings: c, ceiling: c.low,
-            attention: BTreeMap::new(), task: None, arm: None,
+            attention: BTreeMap::new(), task: None, arm: None, never_merge: false,
         }),
         (at, r.clone(), Event::QuestionOpened { question }),
         (at, r.clone(), Event::AnswerRecorded { answer, effects: Effects::default() }),
@@ -2010,7 +2080,7 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let key = stop_key(&manifest, &f, 0);
     let run_with = |id: &str, braked: bool| {
         let attention = [("change".to_string(), Count { key: key.clone(), n: 40, k: 0, pending: 0, braked })].into_iter().collect();
-        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention, task: None, arm: None }).expect("start");
+        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention, task: None, arm: None, never_merge: false }).expect("start");
         let mut run = Run::fold(&out.events).expect("run");
         let c = probe_ok(&mut run, out.commands);
         let _ = c;

@@ -672,7 +672,7 @@ fn starts(m: &Manifest) -> Vec<(Input, String)> {
         for raise in [None, Some(Risk::High)] {
             let says = format!("{} risk{note}", if raise.is_some() { "high" } else { "low" });
             out.push((
-                Input::Start { run: id.clone(), request: "a request".into(), manifest: m.clone(), role_fingerprint: fingerprint.clone(), agent: "agent".into(), raise, attention: attention.clone(), task: None, arm: None },
+                Input::Start { run: id.clone(), request: "a request".into(), manifest: m.clone(), role_fingerprint: fingerprint.clone(), agent: "agent".into(), raise, attention: attention.clone(), task: None, arm: None, never_merge: false },
                 says,
             ));
         }

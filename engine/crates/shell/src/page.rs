@@ -2173,7 +2173,7 @@ mod tests {
             "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
         }))
         .expect("manifest");
-        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
         let mut events = decide(None, &start).expect("start").events;
         let question = Question {
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
@@ -2197,7 +2197,7 @@ mod tests {
                 "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
             }))
             .expect("manifest");
-            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
             let mut events = decide(None, &start).expect("start").events;
             let question = Question {
                 id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
@@ -2260,7 +2260,7 @@ mod tests {
     fn a_halted_run_s_step_under_way_is_drawn_halted_not_running() {
         use jaynes_core::run::Status;
         let manifest: jaynes_core::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "plan", "executor": "agent"}]})).expect("manifest");
-        let start = Input::Start { run: "h".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let start = Input::Start { run: "h".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
         let mut r = Run::fold(&decide(None, &start).expect("start").events).expect("run");
         for status in [Status::Running { attempt: 1, fix: 0 }, Status::Checking { attempt: 1, fix: 0 }, Status::Probing] {
             r.steps[0].status = status;
