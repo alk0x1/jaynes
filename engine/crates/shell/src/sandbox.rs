@@ -14,6 +14,7 @@
 //! | reads everything but where secrets live and the hidden    | Landlock: read rights on every path but those, found  |
 //! | folders                                                   | by walking down to them (symbolic links not followed) |
 //! | reads its own folders even inside hidden ones             | Landlock: full rights beneath its folders             |
+//! | reads what it is shown inside the hidden (the run's copy) | Landlock: read rights beneath each, besides the rest  |
 //! | no network but local ports                                | where the machine allows, a network of the box's own: |
 //! |                                                           | a user and network namespace with only its loopback,  |
 //! |                                                           | any port there; elsewhere Landlock's port rules for   |
@@ -64,6 +65,8 @@ pub struct Spec {
     pub writable: Vec<PathBuf>,
     /// Folders it may not read, apart from its writable folders inside them.
     pub hidden: Vec<PathBuf>,
+    /// Folders it may read even inside hidden ones, as the run's own copy inside the hidden runs.
+    pub show: Vec<PathBuf>,
     /// Local ports it may bind and connect to.
     pub ports: Vec<u16>,
     /// It runs local servers, as a test suite does: it gets a network of its own where the machine allows one,
@@ -413,6 +416,12 @@ mod imp {
             // a file is granted what a file can be granted; a folder all the reading rights
             let rights = if p.is_dir() { reads } else { reads & AccessFs::from_file(abi) };
             let Ok(fd) = PathFd::new(&p) else { continue };
+            ruleset = ruleset.add_rule(PathBeneath::new(fd, rights)).map_err(|e| fail(&e))?;
+        }
+        // what is read again inside the hidden: Landlock only adds, so these are granted besides
+        for p in &spec.show {
+            let Ok(fd) = PathFd::new(p) else { continue };
+            let rights = if p.is_dir() { reads } else { reads & AccessFs::from_file(abi) };
             ruleset = ruleset.add_rule(PathBeneath::new(fd, rights)).map_err(|e| fail(&e))?;
         }
         // the terminal and the null devices a command writes to, as the macOS box lets it

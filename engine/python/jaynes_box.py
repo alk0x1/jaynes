@@ -46,6 +46,8 @@ macOS changes): a sample program does its work and tries twelve escapes in it, a
 try (lsopen, Apple events, the last denial of secrets) is read in the profile; the macOS, the box (this file's
 sha256) and the interpreter it held with are kept in the engine's home. With another of the three the proof is made
 again first; when it does not hold, no role's program runs, and the refusal says what got through.
+On Linux the box is ``jaynes box`` (Landlock and seccomp, set by the program on itself): the same Box, the same
+hidden list, and a network of its own for a suite's servers where the machine allows one.
 Elsewhere there is no box yet, and a project's commands do not run there. Nothing opens them unboxed but the person,
 with a proof only they can give, by starting the run unboxed (G18); never a variable.
 """
@@ -85,6 +87,8 @@ SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".n
 # What the engine keeps under its home that no project command reads: the page's key and log, the record. The runs'
 # folders are hidden as well, but for the run's own copy of the project, whose installed dependencies the box links.
 ENGINE_SECRETS = ("page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm")
+# The Jaynes page's port: an answer through it counts as the person's, so no box reaches it.
+PAGE_PORT = 8750
 # What the Python engine that came before kept in ~/.jaynes.
 # The Jaynes page: an answer through it counts as the person's, so no box ever reaches it.
 PAGE_PORT = 8750
@@ -146,8 +150,47 @@ def engine_home() -> Path:
 
 
 def available() -> bool:
-    """Jaynes can open its box here."""
+    """Jaynes can open its box here: sandbox-exec on macOS, the jaynes box on Linux."""
+    if sys.platform.startswith("linux"):
+        return linux_box() is not None
     return sys.platform == "darwin" and SANDBOX_EXEC.exists() and not inside()
+
+
+@functools.cache
+def linux_box() -> str | None:
+    """On Linux, the jaynes program that opens the box (``jaynes box``): the one this library runs under, its parent
+    process, when its box opens on this machine. None elsewhere, or when it does not open."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        exe = os.readlink(f"/proc/{os.getppid()}/exe")
+    except OSError:
+        return None
+    if not os.path.basename(exe).startswith("jaynes") or not os.access(exe, os.X_OK):
+        return None
+    try:
+        check = subprocess.run([exe, "box", "--check"], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return exe if check.returncode == 0 else None
+
+
+def linux_argv(exe: str, script: str, box: Box) -> list[str]:
+    """The argv that runs ``script`` in the Linux box: what may be written, what is hidden (the one list,
+    hidden_paths), what is read again inside it, and the network."""
+    argv = [exe, "box"]
+    for w in box.writable:
+        argv += ["--write", str(w)]
+    for h in hidden_paths(box):
+        argv += ["--hide", str(h)]
+    for r in box.readable:
+        argv += ["--show", str(r)]
+    for p in box.ports:
+        argv += ["--port", str(int(p))]
+    if box.local:
+        argv.append("--local")
+    argv += ["--never-port", str(PAGE_PORT)]
+    return argv + ["--", "/bin/sh", "-c", script]
 
 
 @functools.cache
@@ -634,6 +677,8 @@ def command_in_box(script: str, box: Box) -> list[str]:
     """The argv that runs the shell ``script`` inside ``box``. Inside another program's sandbox it refuses."""
     if inside():
         raise Unavailable(INSIDE)
+    if sys.platform.startswith("linux") and (exe := linux_box()):
+        return linux_argv(exe, script, box)
     if available():
         return [str(SANDBOX_EXEC), "-p", profile(box), "/bin/sh", "-c", script]
     raise Unavailable("Jaynes has no box for project commands on this system yet, so it runs none of them: run Jaynes "
