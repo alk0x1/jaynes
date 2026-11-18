@@ -167,7 +167,7 @@ fn started(thread: &str) -> String {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn codex_delivers_a_change_and_jaynes_reads_its_tokens_and_its_session_from_its_format() {
     let s = scratch("delivers");
     let body = format!(
@@ -202,7 +202,7 @@ fn codex_delivers_a_change_and_jaynes_reads_its_tokens_and_its_session_from_its_
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn codex_runs_in_jaynes_s_box_and_reads_nothing_the_engine_keeps_nor_reaches_a_port() {
     let s = scratch("boxed");
     let port = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
@@ -229,7 +229,7 @@ fn codex_runs_in_jaynes_s_box_and_reads_nothing_the_engine_keeps_nor_reaches_a_p
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn a_fix_goes_on_in_codex_s_session() {
     let s = scratch("fix");
     // first it writes "hey" (the suite wants "hi"); asked to fix, resumed in its thread, it writes "hi"
@@ -251,7 +251,7 @@ fn a_fix_goes_on_in_codex_s_session() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn a_codex_turn_that_fails_spends_the_attempt_and_says_why() {
     let s = scratch("fails");
     let body = format!(
@@ -270,7 +270,7 @@ fn a_codex_turn_that_fails_spends_the_attempt_and_says_why() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn codex_output_that_does_not_follow_its_format_is_refused_and_spends_no_attempt() {
     for (run, body) in [
         // not its events at all
@@ -289,7 +289,7 @@ fn codex_output_that_does_not_follow_its_format_is_refused_and_spends_no_attempt
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn codex_out_of_its_usage_is_an_interruption_not_the_agent_s_failure() {
     let s = scratch("quota");
     let body = format!(
@@ -305,7 +305,7 @@ fn codex_out_of_its_usage_is_an_interruption_not_the_agent_s_failure() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn a_command_codex_declined_is_told_to_the_person() {
     // Codex run with approvals never cannot ask the person: what it would have asked comes back as a command it
     // declined. The adapter says it where the person reads the run, with the command; the signed record does not
@@ -340,7 +340,7 @@ const TRIES: &str = "{ printf 'hi\\n' > greeting.txt 2>/dev/null && echo wrote >
     { /usr/bin/touch .jaynes/made-by-a-command 2>/dev/null && echo ran >> .jaynes/notes || echo refused-the-command >> .jaynes/notes; }";
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn a_step_that_only_reads_the_project_keeps_codex_from_writing_it() {
     let s = scratch("reads");
     let role = one_step_role(&s, "{ project = \"read\", commands = true }");
@@ -354,7 +354,7 @@ fn a_step_that_only_reads_the_project_keeps_codex_from_writing_it() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn a_step_without_commands_lets_codex_run_nothing_but_itself() {
     let s = scratch("no-commands");
     let role = one_step_role(&s, "{ project = \"write\", write = [\"**\"], commands = false }");
@@ -369,7 +369,7 @@ fn a_step_without_commands_lets_codex_run_nothing_but_itself() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+#[cfg_attr(not(target_os = "macos"), ignore = "an agent program runs only in the macOS box yet: the Linux box has no list of the programs it may start")]
 fn a_write_the_box_refused_that_the_step_may_make_is_jaynes_s_fault_and_spends_no_attempt() {
     let failed = |path: &str| say(&format!(r#"{{"type":"item.completed","item":{{"id":"item_0","type":"file_change","changes":[{{"path":"{path}","kind":"update"}}],"status":"failed"}}}}"#));
     // the step may write greeting.txt: the box refusing it is the guards Jaynes set being wrong
