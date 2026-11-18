@@ -655,8 +655,9 @@ fn jaynes_check_reads_a_role_of_scripts_and_says_its_runs_start_at_high_risk() {
     // what the role claims of each delivery, and what proves each claim in a run
     assert!(out.contains("  claim \"The registry lists the version\": proved in a run when the check announced of read-registry passes"), "{out}");
     assert!(out.contains("  claim \"The entry's words are the ones the release needs\": nothing checks it: the role writes the request as it came, and no person is asked"), "{out}");
-    // the check that judges the reading comes with no cases until its rejects are written by someone else: untested
-    assert!(out.contains("! check announced of read-registry has no cases: untested."), "{out}");
+    // the check that judges the reading is held to its cases: the rejects were written by someone other than its author
+    assert!(out.contains("✔ check announced of read-registry: rejected 16 of 16, accepted 2 of 2"), "{out}");
+    assert!(!out.contains("untested"), "{out}");
 }
 
 #[test]
@@ -689,6 +690,10 @@ fn jaynes_check_runs_a_check_of_the_role_s_own_on_its_cases_in_the_box() {
     assert!(ok, "{out}");
     assert!(out.contains("✔ check files-exist of make: rejected 2 of 2, accepted 2 of 2"), "{out}");
     assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts"), "{out}");
+    // the same from the role's own folder, as an author runs it: jaynes check .
+    let here = Command::new(BIN).args(["check", "."]).current_dir(&dir).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").output().expect("check");
+    let said = format!("{}{}", String::from_utf8_lossy(&here.stdout), String::from_utf8_lossy(&here.stderr));
+    assert!(here.status.success() && said.contains("✔ check files-exist of make: rejected 2 of 2, accepted 2 of 2"), "{said}");
     // a check that accepts everything is refused, with the hole it left open
     std::fs::write(dir.join("checks/files-exist.sh"), "#!/bin/sh\nexit 0\n").expect("write");
     let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);

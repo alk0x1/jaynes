@@ -1,0 +1,457 @@
+[
+ {
+  "id": "nothing-listed",
+  "hole": "an empty reading proves nothing was announced",
+  "expect": "reject",
+  "output": {
+   "listed": [],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "version-under-another-id",
+  "hole": "the version is listed, but under an id that is not the announcement's",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a1",
+     "version": "1.4.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "id-with-another-version",
+  "hole": "the announcement's id is listed with another version",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2",
+     "version": "1.3.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "split-across-entries",
+  "hole": "the version and the id are listed, but in two different entries",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2",
+     "version": "1.3.0"
+    },
+    {
+     "id": "a9",
+     "version": "1.4.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "version-prefix",
+  "hole": "1.4 is not 1.4.0",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2",
+     "version": "1.4"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "version-longer",
+  "hole": "1.4.0-rc1 is not 1.4.0",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2",
+     "version": "1.4.0-rc1"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "version-with-v",
+  "hole": "v1.4.0 is not 1.4.0 as the project wrote it",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2",
+     "version": "v1.4.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "id-case",
+  "hole": "A2 is not a2",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "A2",
+     "version": "1.4.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "id-padded",
+  "hole": "an id with a space is not the id",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2 ",
+     "version": "1.4.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "number-not-string",
+  "hole": "a version as a number is not the version written",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "a2",
+     "version": 1.4
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "listed-not-a-list",
+  "hole": "a reading that is not a list proves nothing",
+  "expect": "reject",
+  "output": {
+   "listed": {
+    "a2": "1.4.0"
+   },
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "listed-as-text",
+  "hole": "a reading that is text proves nothing",
+  "expect": "reject",
+  "output": {
+   "listed": "a2 1.4.0",
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "entries-not-objects",
+  "hole": "entries that are not objects prove nothing",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    [
+     "a2",
+     "1.4.0"
+    ]
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "other-keys",
+  "hole": "an entry with the values under other names is not the entry",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "name": "a2",
+     "tag": "1.4.0"
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "1.4.0",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": "a2"
+    }
+   }
+  ]
+ },
+ {
+  "id": "null-version-and-id",
+  "hole": "nothing matches nothing",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": null,
+     "version": null
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": null,
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": null
+    }
+   }
+  ]
+ },
+ {
+  "id": "empty-version-and-id",
+  "hole": "an empty version or an empty id proves nothing, even when the registry lists the same emptiness",
+  "expect": "reject",
+  "output": {
+   "listed": [
+    {
+     "id": "",
+     "version": ""
+    }
+   ],
+   "read_at": "2026-11-18T00:00:00Z"
+  },
+  "given": [
+   {
+    "step": "survey",
+    "output": {
+     "version": "",
+     "registry": "http://127.0.0.1:1"
+    }
+   },
+   {
+    "step": "announce",
+    "output": {
+     "id": ""
+    }
+   }
+  ]
+ }
+]

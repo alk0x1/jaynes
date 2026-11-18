@@ -18,6 +18,9 @@ except (KeyError, TypeError, ValueError) as e:
     print(f"the check was not given what it judges: {e}")
     sys.exit(3)
 
+if not (isinstance(version, str) and version.strip() and isinstance(announced, str) and announced.strip()):
+    print(f"the version ({version!r}) and the announcement's id ({announced!r}) are not both text: nothing can be found listed under them")
+    sys.exit(1)
 if not isinstance(listed, list):
     print("the reading has no list of what the registry listed")
     sys.exit(1)

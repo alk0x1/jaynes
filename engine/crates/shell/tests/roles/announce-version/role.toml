@@ -59,7 +59,7 @@ effect = "none"
 about = "Reads what the registry lists, and when."
 checks = [
   "output-follows-schema",
-  { script = "checks/announced.py", kind = "open", about = "the reading of the registry lists the version under the id the announcement got" },
+  { script = "checks/announced.py", kind = "open", about = "the reading of the registry lists the version under the id the announcement got", cases = "cases/announced" },
 ]
 
 [step.output]

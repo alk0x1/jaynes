@@ -997,6 +997,9 @@ fn instructions_text(dir: &Path, value: &str) -> Result<String, String> {
 impl TomlRole {
     /// Read the role in `dir`, or every error found, each with its line.
     pub fn load(dir: &Path) -> Result<TomlRole, Vec<String>> {
+        // the folder as an absolute path: its scripts run from other folders, a check's case in one of its own
+        let absolute = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let dir = absolute.as_path();
         let path = dir.join(FILE);
         let text = std::fs::read_to_string(&path).map_err(|e| vec![format!("{FILE} does not read: {e}")])?;
         let file: RoleFile = toml::from_str(&text).map_err(|e| {
