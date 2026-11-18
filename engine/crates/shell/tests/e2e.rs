@@ -1642,3 +1642,25 @@ sys.exit(1 if holes else 0)
     // the tests leave, so this test leaves none
     let _gone = std::fs::remove_dir_all(s.home.parent().expect("base"));
 }
+
+/// Inside another program's sandbox (Claude Code's Bash with its sandbox on: measured) macOS opens no box: the
+/// project's commands are refused, saying how to start the run outside it, never run under that sandbox.
+#[test]
+fn inside_another_program_s_sandbox_the_project_s_commands_are_refused() {
+    let script = r#"
+import jaynes_box as b
+from pathlib import Path
+b.inside = lambda: True
+b.available = lambda: True
+try:
+    b.command_in_box("true", b.Box((Path("/tmp"),)))
+    print("ran under the other sandbox")
+except b.Unavailable as e:
+    print("refused:", e)
+"#;
+    let out = Command::new(python()).args(["-c", script]).env("PYTHONPATH", root().join("python")).env("JAYNES_UNBOXED", "1").output().expect("python");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!said.contains("ran under the other sandbox"), "{said}");
+    assert!(said.contains("refused: Jaynes was started inside another program's sandbox and cannot put its own box around your project's commands"), "{said}");
+    assert!(said.contains("mcp__plugin_jaynes_jaynes__start") && said.contains("in an ordinary terminal"), "both ways out, each named: {said}");
+}

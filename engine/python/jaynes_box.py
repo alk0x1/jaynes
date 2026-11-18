@@ -103,7 +103,7 @@ def available() -> bool:
 
 @functools.cache
 def inside() -> bool:
-    """Already in a box that macOS opens no other box inside, so what runs here is confined by it."""
+    """Already in a box that macOS opens no other box inside: then the project's commands are refused (INSIDE)."""
     if sys.platform != "darwin" or not SANDBOX_EXEC.exists():
         return False
     try:
@@ -175,11 +175,20 @@ def profile(box: Box) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Inside another program's sandbox (the shell of an agent whose box is on, as Claude Code's Bash) macOS opens no box,
+# and that sandbox may be looser than Jaynes's: the project's commands are refused, never run under it.
+INSIDE = ("Jaynes was started inside another program's sandbox and cannot put its own box around your project's "
+          "commands. Start the run outside it: with the Jaynes plugin's MCP tool \"start\" "
+          "(mcp__plugin_jaynes_jaynes__start), or by running \"jaynes start\" in an ordinary terminal")
+
+
 def command_in_box(script: str, box: Box) -> list[str]:
-    """The argv that runs the shell ``script`` inside ``box``."""
+    """The argv that runs the shell ``script`` inside ``box``. Inside another program's sandbox it refuses."""
+    if inside():
+        raise Unavailable(INSIDE)
     if available():
         return [str(SANDBOX_EXEC), "-p", profile(box), "/bin/sh", "-c", script]
-    if inside() or os.environ.get("JAYNES_UNBOXED") == "1":
+    if os.environ.get("JAYNES_UNBOXED") == "1":
         return ["/bin/sh", "-c", script]
     raise Unavailable("Jaynes has no box for project commands on this system yet; set JAYNES_UNBOXED=1 to run "
                       "them unboxed, with the agent's changes, on your machine")
