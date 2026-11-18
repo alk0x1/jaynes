@@ -1810,8 +1810,8 @@ impl Root {
         let halt_all_armed = self.halt_all_at.is_some_and(|at| at.elapsed() < run_actions::ARMED_FOR);
         let working_runs = self.working_runs(cx);
         let runs = self.runs.read(cx);
-        // a blocked run waits for the person too, as the column and the Inbox say
-        let blocked_runs = runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == jaynes_shell::listing::Mark::Blocked).count();
+        // a blocked or halted run waits for the person too, as the column and the Inbox say
+        let blocked_runs = runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| matches!(r.mark, jaynes_shell::listing::Mark::Blocked | jaynes_shell::listing::Mark::Halted)).count();
         let waiting_runs = runs.snap.listing.needs.len() + blocked_runs;
         let agents = self.agents.read(cx);
         let (waiting, review) = agents.counts();

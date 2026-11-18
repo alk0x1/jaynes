@@ -1,5 +1,5 @@
-//! The Inbox: what needs the person across every space. Agents that ask something or failed, Jaynes runs that wait
-//! and blocked runs come first ("Needs you"), then agents that finished a turn the person has not looked at
+//! The Inbox: what needs the person across every space. Agents that ask something or failed, Jaynes runs that wait,
+//! blocked runs and halted runs come first ("Needs you"), then agents that finished a turn the person has not looked at
 //! ("Finished", neutral: nothing is expected of them there). Command-I shows it in the middle; Command-O goes to the
 //! next thing that needs the person.
 
@@ -26,7 +26,8 @@ pub struct Item {
     pub since_ms: u64,
 }
 
-/// What needs the person, then what finished unseen. A blocked run needs them: to continue it or abandon it.
+/// What needs the person, then what finished unseen. A blocked run needs them, to continue it or abandon it, and a
+/// halted one, to resume it or abandon it.
 pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
     let agents = || spaces.iter().flat_map(|s| s.agents.iter().map(move |a| (s, a)));
     let item = |s: &Space, a: &crate::agents::Agent, what: String| Item {
@@ -45,13 +46,14 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
         })
         .collect();
     needs.extend(runs.needs.iter().map(|r| Item { key: Key::Run(r.id.clone()), title: r.title.clone(), place: "Jaynes run".into(), what: r.line.clone(), state: State::Waiting, since_ms: 0 }));
-    let blocked = runs.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == Mark::Blocked);
-    needs.extend(blocked.map(|r| Item {
+    // blocked, then halted: the person decides what comes next
+    let stopped = |m: Mark| runs.projects.iter().flat_map(|(_, rows)| rows).filter(move |r| r.mark == m);
+    needs.extend(stopped(Mark::Blocked).chain(stopped(Mark::Halted)).map(|r| Item {
         key: Key::Run(r.id.clone()),
         title: r.title.clone(),
         place: format!("Jaynes run · {}", r.line),
-        what: "blocked · open it".into(),
-        state: State::Error,
+        what: if r.mark == Mark::Halted { "halted · open it" } else { "blocked · open it" }.into(),
+        state: if r.mark == Mark::Halted { State::Waiting } else { State::Error },
         since_ms: 0,
     }));
     let review = agents().filter(|(_, a)| a.state == State::ToReview).map(|(s, a)| item(s, a, "finished".into())).collect();
@@ -165,10 +167,12 @@ mod tests {
         let (needs, review) = gather(&spaces, &runs);
         assert_eq!(
             needs.iter().map(|i| i.key.clone()).collect::<Vec<_>>(),
-            [Key::Agent("t2".into()), Key::Agent("t4".into()), Key::Run("r1".into()), Key::Run("r2".into())]
+            [Key::Agent("t2".into()), Key::Agent("t4".into()), Key::Run("r1".into()), Key::Run("r2".into()), Key::Run("r4".into())]
         );
         assert_eq!(needs[3].what, "blocked · open it");
         assert_eq!(needs[3].place, "Jaynes run · step 2 of 3, blocked: no room");
+        assert_eq!(needs[4].what, "halted · open it");
+        assert_eq!(needs[4].place, "Jaynes run · step 1 of 3, halted");
         assert_eq!(needs[0].what, "wants to approve Bash: ls");
         assert_eq!(needs[0].place, "jaynes");
         assert_eq!(needs[1].what, "stopped with an error");

@@ -47,14 +47,14 @@ impl EventEmitter<Cleared> for Side {}
 /// The column in the order the person chose ("Needs you first"): what waits for them, runs and agents in one list;
 /// then the runs at work; then the finished runs, folded to a count; then the spaces with the agents that do not
 /// wait for them. Each label says what is expected of the person, or nothing: an agent done is "done · 5m", grey,
-/// and out of the Inbox's number; a blocked run waits for them ("blocked · open it").
+/// and out of the Inbox's number; a blocked or halted run waits for them ("blocked · open it", "halted · open it").
 #[derive(Debug, Default, PartialEq)]
 struct Order {
-    /// The runs whose question is open, then the blocked ones; then the agents that ask or failed, with their
+    /// The runs whose question is open, then the blocked and the halted ones; then the agents that ask or failed, with their
     /// space's name.
     needs: Vec<Row>,
     asking: Vec<(String, Agent)>,
-    /// The runs not finished that wait on nothing: working, halted.
+    /// The runs not finished that wait on nothing: working.
     at_work: Vec<Row>,
     /// The finished runs (delivered, merged, undone, abandoned), by project as the record lists them, but the
     /// cleared ones, which are apart: a run that waits for the person or works is never cleared.
@@ -98,8 +98,9 @@ fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space], cle
     let mut o = Order { needs: listing.needs.clone(), ..Order::default() };
     for (project, rows) in &listing.projects {
         let (done, open): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|r| finished(r.mark));
-        let (blocked, open): (Vec<&Row>, Vec<&Row>) = open.into_iter().partition(|r| r.mark == Mark::Blocked);
-        o.needs.extend(blocked.into_iter().cloned());
+        // blocked or halted: the person decides what comes next
+        let (stopped, open): (Vec<&Row>, Vec<&Row>) = open.into_iter().partition(|r| matches!(r.mark, Mark::Blocked | Mark::Halted));
+        o.needs.extend(stopped.into_iter().cloned());
         o.at_work.extend(open.into_iter().cloned());
         let (gone, done): (Vec<&Row>, Vec<&Row>) = done.into_iter().partition(|r| cleared.contains(&r.id));
         o.cleared.extend(gone.into_iter().cloned());
@@ -126,25 +127,30 @@ fn kept_cleared(cleared: &HashSet<String>, listing: Option<&jaynes_shell::listin
     kept
 }
 
-/// What a run at work says at the right of its name: where it is ("step 2 of 4"), or who halted it (`halted`, from
-/// the record: "halted by you" only when the person did).
-fn at_work_tag(row: &Row, halted: Option<&String>) -> String {
+/// What a run at work says at the right of its name: where it is ("step 2 of 4").
+fn at_work_tag(row: &Row) -> String {
+    row.line.split(", ").next().unwrap_or_default().to_owned()
+}
+
+/// What a run in "Needs you" says at the right of its name: a blocked or halted one, what the person can do, as an agent
+/// that failed says it; one that asks, nothing (its question is under it).
+fn needs_tag(row: &Row) -> Option<(String, u32)> {
     match row.mark {
-        Mark::Halted => halted.cloned().unwrap_or_else(|| "halted".into()),
-        _ => row.line.split(", ").next().unwrap_or_default().to_owned(),
+        Mark::Blocked => Some(("blocked · open it".into(), look::red())),
+        Mark::Halted => Some(("halted · open it".into(), look::amber())),
+        _ => None,
     }
 }
 
-/// What a run in "Needs you" says at the right of its name: a blocked one, what the person can do, as an agent that
-/// failed says it; one that asks, nothing (its question is under it).
-fn needs_tag(row: &Row) -> Option<(String, u32)> {
-    (row.mark == Mark::Blocked).then(|| ("blocked · open it".to_string(), look::red()))
-}
-
-/// The line under a run in "Needs you": its question, or, for one already delivered, that the person can still
-/// correct it.
-fn needs_line(row: &Row, delivered: bool) -> String {
-    if delivered { "delivered · you can still correct it".into() } else { row.line.clone() }
+/// The line under a run in "Needs you": a halted one, who halted it (`halted`, from the record: "halted by you" only
+/// when the person did) and where it is; one already delivered, that the person can still correct it; the others,
+/// their own line (the question, or why it is blocked).
+fn needs_line(row: &Row, delivered: bool, halted: Option<&String>) -> String {
+    match row.mark {
+        Mark::Halted => format!("{} · {}", halted.map(String::as_str).unwrap_or("halted"), at_work_tag(row)),
+        _ if delivered => "delivered · you can still correct it".into(),
+        _ => row.line.clone(),
+    }
 }
 
 /// What a finished run says at the right of its name: a delivered or merged one, how many files it changed, as the
@@ -162,6 +168,7 @@ fn finished_tag(row: &Row, files: Option<usize>) -> Option<String> {
 /// it stands otherwise; one done says since when, neutral.
 fn agent_word(a: &Agent, now: u64) -> (String, u32) {
     match a.state {
+        State::Waiting => ("asks you · open it".into(), look::amber()),
         State::Error => ("failed · open it".into(), look::red()),
         State::ToReview => (format!("done · {}", agents::age(a.since_ms, now)), look::faint()),
         s => (s.word().into(), colour(s)),
@@ -724,8 +731,8 @@ impl Render for Side {
             list = list.child(self.section("§needs", "Needs you", Some(needs), look::amber(), cx));
             if !self.folded.contains("§needs") {
                 for row in &o.needs {
-                    let row = &Row { line: needs_line(row, delivered.contains(&row.id)), ..row.clone() };
-                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), needs_tag(row), true, None, cx));
+                    let shown = Row { line: needs_line(row, delivered.contains(&row.id), halted.get(&row.id)), ..row.clone() };
+                    list = list.child(self.row(&shown, selected.as_deref() == Some(row.id.as_str()), needs_tag(row), true, None, cx));
                 }
                 for (space, a) in &o.asking {
                     list = list.child(self.asking(space, a, open.as_deref() == Some(a.address.as_str()), now, cx));
@@ -746,7 +753,7 @@ impl Render for Side {
             }
             if !self.folded.contains("§work") {
                 for row in &o.at_work {
-                    let tag = (at_work_tag(row, halted.get(&row.id)), if row.mark == Mark::Working { look::blue() } else { look::faint() });
+                    let tag = (at_work_tag(row), if row.mark == Mark::Working { look::blue() } else { look::faint() });
                     list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(tag), false, None, cx));
                 }
             }
@@ -857,8 +864,8 @@ mod tests {
     #[test]
     fn a_run_delivered_while_its_stop_is_open_says_in_the_column_it_can_still_be_corrected() {
         let row = Row { id: "r".into(), title: "Tighten the site's copy".into(), line: "Which of these copy changes go in?".into(), mark: Mark::Needs };
-        assert_eq!(needs_line(&row, false), "Which of these copy changes go in?");
-        assert_eq!(needs_line(&row, true), "delivered · you can still correct it");
+        assert_eq!(needs_line(&row, false, None), "Which of these copy changes go in?");
+        assert_eq!(needs_line(&row, true, None), "delivered · you can still correct it");
     }
 
     fn agent(address: &str, state: State) -> Agent {
@@ -897,13 +904,18 @@ mod tests {
             ],
         };
         let o = order(&listing, &[], &HashSet::new());
-        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+        // a halted run is not at work: it waits for the person, in Needs you
+        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["c", "e"]);
         let finished: Vec<(String, Vec<String>)> = o.finished.iter().map(|(p, rows)| (p.clone(), rows.iter().map(|r| r.id.clone()).collect())).collect();
         assert_eq!(finished, [("my-app".to_string(), vec!["b".to_string()]), ("api".into(), vec!["d".into()]), ("notes".into(), vec!["f".into(), "g".into()])]);
         assert_eq!(o.finished_count(), 4);
-        assert_eq!(at_work_tag(&o.at_work[0], None), "step 2 of 4");
-        assert_eq!(at_work_tag(&o.at_work[1], Some(&"halted by you".to_string())), "halted by you");
-        assert_eq!(at_work_tag(&o.at_work[1], None), "halted");
+        assert_eq!(at_work_tag(&o.at_work[0]), "step 2 of 4");
+        // halted by anyone: the person decides what comes next, and the line under says who halted it and where
+        assert_eq!(needs_tag(&o.needs[0]).map(|t| t.0).as_deref(), Some("halted · open it"));
+        assert_eq!(needs_line(&o.needs[0], false, Some(&"halted by an agent".to_string())), "halted by an agent · step 1 of 3");
+        assert_eq!(needs_line(&o.needs[0], false, None), "halted · step 1 of 3");
+        assert_eq!(needs_line(&o.needs[1], false, None), "step 3 of 3, blocked: no room");
     }
 
     #[test]
@@ -936,7 +948,7 @@ mod tests {
         done.since_ms = 5 * 60_000;
         assert_eq!(agent_word(&done, now).0, "done · 5m");
         assert_eq!(agent_word(&agent("t", State::Error), now).0, "failed · open it");
-        assert_eq!(agent_word(&agent("t", State::Waiting), now).0, "waiting");
+        assert_eq!(agent_word(&agent("t", State::Waiting), now).0, "asks you · open it");
         assert_eq!(agent_word(&agent("t", State::Working), now).0, "working");
     }
 
