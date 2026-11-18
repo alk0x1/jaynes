@@ -3,12 +3,12 @@
 //! people wait in the inbox until that process takes them.
 
 use crate::agent::{self, Agent, Ended};
-use crate::project::{Copy, EXCHANGE};
+use crate::project::{Workspace, EXCHANGE};
 use crate::protocol::{Body, Call, Given};
 use crate::role::RoleProgram;
 use crate::store::Store;
 use jaynes_core::event::{Event, Read};
-use jaynes_core::manifest::{ProjectAccess, Target};
+use jaynes_core::manifest::ProjectAccess;
 use jaynes_core::question::{Answer, Question};
 use jaynes_core::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
 use serde_json::{json, Value};
@@ -21,7 +21,8 @@ pub struct Setup {
     pub run: String,
     pub dir: PathBuf,
     pub role: RoleProgram,
-    pub copy: Option<Copy>,
+    /// The run's copy of its target, when it has one.
+    pub copy: Option<Box<dyn Workspace>>,
     pub agent: Box<dyn Agent>,
 }
 
@@ -31,8 +32,13 @@ impl Setup {
         let dir = home.join("runs").join(run);
         let mut role = RoleProgram::new(&dir.join("role"), &dir.join("library"));
         role.pidfile = Some(dir.join("role.pid"));
+        // a run started before targets names none: it works on a repository
+        let target = match s.get("target") {
+            Some(t) => serde_json::from_value(t.clone()).map_err(|e| format!("the run's target is not one this engine knows: {e}"))?,
+            None => jaynes_core::manifest::Target::Repository,
+        };
         let copy = match (s["project"].as_str(), s["branch"].as_str()) {
-            (Some(p), Some(b)) => Some(Copy { source: PathBuf::from(p), dir: dir.join("project"), branch: b.to_string() }),
+            (Some(p), Some(b)) => Some(crate::project::open(target, Path::new(p), &dir.join("project"), b)),
             _ => None,
         };
         let agent = agent_named(s["agent"].as_str().unwrap_or("claude"));
@@ -90,25 +96,11 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
     let input = Input::Undo { note, by };
     jaynes_core::decide(Some(&state), &input).map_err(|r| r.0)?;
     let setup = Setup::load(store, home, run)?;
-    let reference = match state.manifest.target {
-        Target::Repository => undo_repository(&setup, run)?,
-    };
+    let copy = setup.copy.as_ref().ok_or("the run has no project")?;
+    let landed = merges(&setup.dir);
+    let reference = if landed.is_empty() { "nothing had been merged".to_string() } else { copy.undo(&landed, run)? };
     store.decide(run, &input)?;
     Ok(reference)
-}
-
-/// Revert a repository run's merges on the branch they landed on.
-fn undo_repository(setup: &Setup, run: &str) -> Result<String, String> {
-    let copy = setup.copy.as_ref().ok_or("the run has no project")?;
-    if !copy.dir.join(".git").exists() {
-        let merges = merges(&setup.dir);
-        return Err(format!(
-            "the run's copy of the project was cleared a week after it finished; revert its merge in your repository with git revert -m 1 {}",
-            merges.last().map(String::as_str).unwrap_or("<the merge>")
-        ));
-    }
-    let merges = merges(&setup.dir);
-    if merges.is_empty() { Ok("nothing had been merged".to_string()) } else { copy.undo(&merges, run) }
 }
 
 /// Give a run an input from outside its process (the page, an agent): recorded now and carried on in a process
@@ -599,10 +591,7 @@ impl<'a> Driver<'a> {
         let Some(copy) = &self.setup.copy else { return Ok(()) };
         let parent = self.parents().get(step).cloned().unwrap_or(copy.base()?);
         let message = format!("{step}, round {round}");
-        let commit = match self.store.get(output)?["tree"].as_str() {
-            Some(tree) => copy.commit_tree(tree, &parent, &message)?,
-            None => copy.result(&parent, &message)?,
-        };
+        let commit = copy.keep(self.store.get(output)?["tree"].as_str(), &parent, &message)?;
         let mut l = self.ledger();
         match commit {
             Some(c) => l.insert(step.to_string(), c),
@@ -620,8 +609,8 @@ impl<'a> Driver<'a> {
             let decl = &run.manifest.steps[i];
             let Some(done) = s.done.as_ref().filter(|_| s.status == jaynes_core::run::Status::Done && decl.reach.project == ProjectAccess::Write) else { continue };
             let Some(tree) = self.store.get(&done.output)?["tree"].as_str().map(str::to_string) else { continue };
-            let have = ledger.get(&decl.name).map(|c| copy.tree_of(c)).transpose()?;
-            let parent_tree = self.parents().get(&decl.name).map(|p| copy.tree_of(p)).transpose()?;
+            let have = ledger.get(&decl.name).map(|c| copy.state_of(c)).transpose()?;
+            let parent_tree = self.parents().get(&decl.name).map(|p| copy.state_of(p)).transpose()?;
             let current = match &have {
                 Some(t) => *t == tree,
                 None => parent_tree.as_deref() == Some(tree.as_str()),
@@ -668,9 +657,7 @@ impl<'a> Driver<'a> {
             }
             Command::Permit { .. } => None,
             Command::Deliver { digest, merge, .. } => {
-                let (ok, reference) = match run.manifest.target {
-                    Target::Repository => self.deliver_repository(run, merge),
-                };
+                let (ok, reference) = self.deliver(run, merge);
                 if ok {
                     say(&format!("delivered: {reference}"));
                 }
@@ -683,9 +670,10 @@ impl<'a> Driver<'a> {
         }
     }
 
-    /// Deliver on a repository: the run's branch in the person's repository, and the merge into the branch it
-    /// started from when the role delivers by merge. Whether it was made, and what was made.
-    fn deliver_repository(&self, run: &Run, merge: bool) -> (bool, String) {
+    /// Deliver from the run's copy of its target, and land it on the person's own thing when the role's delivery
+    /// lands (on a repository: the run's branch, and the merge into the branch it started from). Whether it was made,
+    /// and what was made.
+    fn deliver(&self, run: &Run, merge: bool) -> (bool, String) {
         let writers: Vec<String> = run
             .path()
             .into_iter()
@@ -703,7 +691,7 @@ impl<'a> Driver<'a> {
         if ok && merge
             && let Some(copy) = &self.setup.copy {
                 let head = copy.head().unwrap_or_default();
-                let merged = copy.merge(&head, &self.setup.run);
+                let merged = copy.land(&head, &self.setup.run);
                 // For the tests of recovery: die where a kill can fall, once the merge landed.
                 if std::env::var("JAYNES_DIE_AFTER_MERGE").is_ok() && matches!(merged, Ok(Some(_))) {
                     std::process::exit(9);
@@ -726,7 +714,7 @@ impl<'a> Driver<'a> {
     fn cwd(&self, run: &Run, i: usize, attempt: u32) -> PathBuf {
         let decl = &run.manifest.steps[i];
         match (&self.setup.copy, decl.reach.project) {
-            (Some(copy), ProjectAccess::Read | ProjectAccess::Write) => copy.dir.clone(),
+            (Some(copy), ProjectAccess::Read | ProjectAccess::Write) => copy.dir().to_path_buf(),
             _ => self.setup.dir.join("steps").join(&decl.name).join(format!("attempt-{attempt}")),
         }
     }
@@ -813,7 +801,7 @@ impl<'a> Driver<'a> {
             fix_prompt(&turn)
         };
         say(&format!("· {} attempt {}{}", turn.step, turn.attempt, if turn.fix > 0 { format!(", fix {}", turn.fix) } else { String::new() }));
-        let mut reads = self.setup.copy.as_ref().map(Copy::reads).unwrap_or_default();
+        let mut reads = self.setup.copy.as_ref().map(|c| c.reads()).unwrap_or_default();
         if let Ok(home) = std::env::var("HOME").map(PathBuf::from).and_then(|h| std::fs::canonicalize(h).map_err(|_| std::env::VarError::NotPresent)) {
             reads.extend(crate::project::toolchains(&std::env::var("PATH").unwrap_or_default(), &home));
         }
@@ -831,8 +819,8 @@ impl<'a> Driver<'a> {
             env.push(("npm_config_offline".into(), "true".into()));
         }
         if let Some(copy) = &self.setup.copy {
-            let venv = copy.dir.join(".venv");
-            env.push(("PYTHONPATH".into(), format!("{}:{}", copy.dir.join("src").display(), copy.dir.display())));
+            let venv = copy.dir().join(".venv");
+            env.push(("PYTHONPATH".into(), format!("{}:{}", copy.dir().join("src").display(), copy.dir().display())));
             env.push(("UV_NO_SYNC".into(), "1".into()));
             env.push(("UV_OFFLINE".into(), "1".into()));
             if venv.exists() {
@@ -911,7 +899,7 @@ impl<'a> Driver<'a> {
         let mut tree = Value::Null;
         if let (Some(copy), ProjectAccess::Write | ProjectAccess::Read) = (&self.setup.copy, decl.reach.project) {
             let write = if decl.reach.project == ProjectAccess::Write { decl.reach.write.clone() } else { Vec::new() };
-            match copy.stage(&write) {
+            match copy.measure(&write) {
                 Ok((c, t)) => {
                     changed = c;
                     tree = Value::String(t);
@@ -1056,8 +1044,8 @@ impl<'a> Driver<'a> {
             return end(AttemptOutcome::Fault { reason: e });
         }
         let reaches = run.manifest.steps[i].reach.project != ProjectAccess::None;
-        let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir.display().to_string());
-        let source = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.source.display().to_string());
+        let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir().display().to_string());
+        let source = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.source().display().to_string());
         say(&format!("· {step} (the role's own step)"));
         let reply = self.setup.role.call(Call::Execute {
             step: step.clone(),
@@ -1117,8 +1105,8 @@ impl<'a> Driver<'a> {
         };
         let i = run.manifest.index(step).unwrap_or(0);
         let reaches = run.manifest.steps[i].reach.project != ProjectAccess::None;
-        let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir.display().to_string());
-        let source = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.source.display().to_string());
+        let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir().display().to_string());
+        let source = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.source().display().to_string());
         checks
             .iter()
             .map(|name| {
@@ -1318,6 +1306,31 @@ mod tests {
         store.append("old", &events).expect("append");
         std::fs::create_dir_all(home.join("runs/old")).expect("dir");
         store.state("old").expect("state").expect("run")
+    }
+
+    #[test]
+    fn a_run_works_on_the_target_its_setup_names_and_one_from_before_targets_on_a_repository() {
+        let home = std::env::temp_dir().join(format!("jaynes-target-setup-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let place = |target: Option<&str>| {
+            let mut s = json!({"role_given": "r", "fingerprint": "f", "agent": "claude", "project": "/somewhere", "branch": "jaynes/x"});
+            if let Some(t) = target {
+                s["target"] = t.into();
+            }
+            s
+        };
+        store.put_setup("before", &place(None)).expect("setup");
+        store.put_setup("named", &place(Some("repository"))).expect("setup");
+        store.put_setup("unknown", &place(Some("a-browser-session"))).expect("setup");
+        for run in ["before", "named"] {
+            let setup = Setup::load(&store, &home, run).expect("loads");
+            let copy = setup.copy.expect("a copy");
+            assert_eq!((copy.source(), copy.dir()), (Path::new("/somewhere"), home.join("runs").join(run).join("project").as_path()));
+        }
+        let refused = Setup::load(&store, &home, "unknown").err().expect("refused");
+        assert!(refused.contains("a-browser-session"), "{refused}");
     }
 
     #[test]

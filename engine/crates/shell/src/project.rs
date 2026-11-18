@@ -1,8 +1,12 @@
-//! The run's copy of the project: a clone of the person's repository at the commit it had, on the run's own
-//! branch. Each attempt's change becomes a commit there, measured by Jaynes. The person's working tree is never
-//! touched; the delivery is the run's branch, fetched into their repository.
+//! The run's copy of its target, and the operations every kind of target answers ([`Workspace`]): make the copy,
+//! measure what an attempt changed, compose the copy as the steps before left it, deliver, and undo what landed.
+//!
+//! A repository ([`Copy`]) is the kind the engine carries: a clone of the person's repository at the commit it had,
+//! on the run's own branch. Each attempt's change becomes a commit there, measured by Jaynes. The person's working
+//! tree is never touched; the delivery is the run's branch, fetched into their repository.
 
 use jaynes_core::glob;
+use jaynes_core::manifest::Target;
 use jaynes_core::risk::Changed;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,6 +30,107 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The run's copy of its target, as the shell works it. Every change, state and landing is named by an id the
+/// workspace gives and alone reads; the run keeps them in its folder, in order, and the delivery is made from them.
+pub trait Workspace {
+    /// Where the steps that reach the target work.
+    fn dir(&self) -> &Path;
+    /// The person's own thing the copy was made from.
+    fn source(&self) -> &Path;
+    /// What an attempt changed, measured by Jaynes, with the id of the state it left. Changes outside `write` are
+    /// refused: the copy goes back to where it was, and what was outside comes back.
+    #[allow(clippy::type_complexity)]
+    fn measure(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>>;
+    /// Put the copy at the base with `changes` applied in order, each one step's own; the id of the state it is in.
+    /// A change that does not apply over the ones before it is an error naming its step.
+    fn compose(&self, changes: &[(String, String)]) -> Result<String, String>;
+    /// Keep a step's change: `state` as measured (or the copy as it is now) over `parent`. None when the step changed
+    /// nothing.
+    fn keep(&self, state: Option<&str>, parent: &str, message: &str) -> Result<Option<String>, String>;
+    /// The state a change or state id stands for, compared by equality.
+    fn state_of(&self, id: &str) -> Result<String, String>;
+    /// The state the run started from.
+    fn base(&self) -> Result<String, String>;
+    /// The state the copy is in.
+    fn head(&self) -> Result<String, String>;
+    /// Throw away what an attempt left that is not kept.
+    fn discard(&self) -> Result<(), String>;
+    /// Put the run's change where the person takes it, leaving their own thing as it was. What was made, in words.
+    fn deliver(&self, changes: &[(String, String)]) -> Result<String, String>;
+    /// Land the delivery `head` on the person's own thing. The id of what landed, or None when it was there already.
+    fn land(&self, head: &str, run: &str) -> Result<Option<String>, String>;
+    /// Undo what the run landed, the latest first, over what the person's thing has now.
+    fn undo(&self, landed: &[String], run: &str) -> Result<String, String>;
+    /// Folders outside the copy the target's own commands must read.
+    fn reads(&self) -> Vec<PathBuf>;
+}
+
+/// Make the copy a run of `target` works in, from the person's `source`, named `name` (a repository's branch).
+pub fn make(target: Target, source: &Path, dir: &Path, name: &str) -> Result<Box<dyn Workspace>, String> {
+    match target {
+        Target::Repository => Copy::make(source, dir, name).map(|c| Box::new(c) as Box<dyn Workspace>),
+    }
+}
+
+/// The copy a run of `target` already made.
+pub fn open(target: Target, source: &Path, dir: &Path, name: &str) -> Box<dyn Workspace> {
+    match target {
+        Target::Repository => Box::new(Copy { source: source.to_path_buf(), dir: dir.to_path_buf(), branch: name.to_string() }),
+    }
+}
+
+impl Workspace for Copy {
+    fn dir(&self) -> &Path {
+        &self.dir
+    }
+    fn source(&self) -> &Path {
+        &self.source
+    }
+    fn measure(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
+        self.stage(write)
+    }
+    fn compose(&self, changes: &[(String, String)]) -> Result<String, String> {
+        Copy::compose(self, changes)
+    }
+    fn keep(&self, state: Option<&str>, parent: &str, message: &str) -> Result<Option<String>, String> {
+        match state {
+            Some(tree) => self.commit_tree(tree, parent, message),
+            None => self.result(parent, message),
+        }
+    }
+    fn state_of(&self, id: &str) -> Result<String, String> {
+        self.tree_of(id)
+    }
+    fn base(&self) -> Result<String, String> {
+        Copy::base(self)
+    }
+    fn head(&self) -> Result<String, String> {
+        Copy::head(self)
+    }
+    fn discard(&self) -> Result<(), String> {
+        Copy::discard(self)
+    }
+    fn deliver(&self, changes: &[(String, String)]) -> Result<String, String> {
+        Copy::deliver(self, changes)
+    }
+    fn land(&self, head: &str, run: &str) -> Result<Option<String>, String> {
+        self.merge(head, run)
+    }
+    fn undo(&self, landed: &[String], run: &str) -> Result<String, String> {
+        if !self.dir.join(".git").exists() {
+            return Err(format!(
+                "the run's copy of the project was cleared a week after it finished; revert its merge in your repository with git revert -m 1 {}",
+                landed.last().map(String::as_str).unwrap_or("<the merge>")
+            ));
+        }
+        Copy::undo(self, landed, run)
+    }
+    fn reads(&self) -> Vec<PathBuf> {
+        Copy::reads(self)
+    }
+}
+
+/// A repository's copy: a clone on the run's branch.
 #[derive(Clone, Debug)]
 pub struct Copy {
     pub source: PathBuf,
@@ -84,10 +189,10 @@ impl Copy {
             let mut parts = line.splitn(3, '\t');
             let (a, d, path) = (parts.next().unwrap_or("0"), parts.next().unwrap_or("0"), parts.next().unwrap_or(""));
             let lines = a.parse::<u64>().unwrap_or(1) + d.parse::<u64>().unwrap_or(0);
-            changed.push(Changed { path: path.to_string(), lines });
+            changed.push(Changed::file(path.to_string(), lines));
         }
         let outside: Vec<String> =
-            changed.iter().filter(|c| !glob::allowed(&c.path, write)).map(|c| c.path.clone()).collect();
+            changed.iter().filter(|c| !glob::allowed(&c.what, write)).map(|c| c.what.clone()).collect();
         if !outside.is_empty() {
             self.discard().map_err(Err)?;
             return Err(Ok(outside));

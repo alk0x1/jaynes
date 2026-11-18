@@ -42,12 +42,43 @@ pub const FLOOR: &[&str] = &[
     "Jenkinsfile", "azure-pipelines.yml", ".travis.yml", "**/Cargo.toml", "**/build.rs",
 ];
 
-/// A file a step changed, as Jaynes measured it from the step's copy, never as the agent reported it.
+/// One thing a step changed in its target, as Jaynes measured it from the step's copy, never as the agent reported
+/// it. On a repository: a file, its lines added and removed, and whether it is on the floor ([`FLOOR`]).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(from = "ChangedOnRecord")]
 pub struct Changed {
-    pub path: String,
-    /// Lines added and removed.
-    pub lines: u64,
+    /// What changed, in the target's own words: a path, an element, an action.
+    pub what: String,
+    /// How much it changed, in the target's unit: lines on a repository.
+    pub size: u64,
+    /// It runs or is obeyed later outside any box, or cannot be taken back: it alone makes the change risky.
+    pub floor: bool,
+}
+
+impl Changed {
+    /// A file of a repository or a folder that changed by `lines`, on the floor when [`FLOOR`] names it.
+    pub fn file(path: String, lines: u64) -> Changed {
+        let floor = !floor([path.as_str()]).is_empty();
+        Changed { what: path, size: lines, floor }
+    }
+}
+
+/// A change as the record holds it: as above, or as engines before targets wrote it (a path and its lines, the floor
+/// found from the path), so every recorded run reads as it did.
+#[derive(Deserialize, schemars::JsonSchema)]
+struct ChangedOnRecord {
+    #[serde(alias = "path")]
+    what: String,
+    #[serde(alias = "lines")]
+    size: u64,
+    floor: Option<bool>,
+}
+
+impl From<ChangedOnRecord> for Changed {
+    fn from(r: ChangedOnRecord) -> Changed {
+        let floor = r.floor.unwrap_or_else(|| !floor([r.what.as_str()]).is_empty());
+        Changed { what: r.what, size: r.size, floor }
+    }
 }
 
 /// The paths among `paths` that run later outside any box, in any case, since macOS ignores it.
@@ -74,21 +105,23 @@ pub fn of_role(m: &Manifest) -> (Risk, Vec<String>) {
     }
 }
 
-/// The risk of a run's change so far on its target, with the reason for each rule that raised it.
+/// The risk of a run's change so far on its target, with the reason for each rule that raised it. The same rules for
+/// every target: what is on the floor, the size of the change, and how many things it touches. A measure may mark
+/// more as on the floor than the core knows, and never less: on a repository, a path on [`FLOOR`] is on it whatever
+/// the measure said.
 pub fn of_change(target: Target, changed: &[Changed]) -> (Risk, Vec<String>) {
-    match target {
-        Target::Repository => of_repository_change(changed),
-    }
-}
-
-/// A change to a repository is small while it stays under the lines and files above and touches nothing on the floor.
-fn of_repository_change(changed: &[Changed]) -> (Risk, Vec<String>) {
     let mut reasons = Vec::new();
-    let floor = floor(changed.iter().map(|c| c.path.as_str()));
+    let on_floor = |c: &Changed| {
+        c.floor
+            || match target {
+                Target::Repository => !floor([c.what.as_str()]).is_empty(),
+            }
+    };
+    let floor: Vec<&str> = changed.iter().filter(|c| on_floor(c)).map(|c| c.what.as_str()).collect();
     if !floor.is_empty() {
         reasons.push(format!("the change touches files that run later outside any box: {}", floor.join(", ")));
     }
-    let lines: u64 = changed.iter().map(|c| c.lines).sum();
+    let lines: u64 = changed.iter().map(|c| c.size).sum();
     if lines > SMALL_LINES {
         reasons.push(format!("the change has {lines} changed lines, more than {SMALL_LINES}"));
     }
@@ -137,7 +170,28 @@ mod tests {
     use super::*;
 
     fn c(path: &str, lines: u64) -> Changed {
-        Changed { path: path.to_string(), lines }
+        Changed::file(path.to_string(), lines)
+    }
+
+    #[test]
+    fn a_change_recorded_by_an_older_engine_reads_with_its_floor_found_again() {
+        let old: Vec<Changed> = serde_json::from_str(r#"[{"path":".github/workflows/ci.yml","lines":2},{"path":"src/a.py","lines":3}]"#).expect("reads");
+        assert_eq!(old, vec![c(".github/workflows/ci.yml", 2), c("src/a.py", 3)]);
+        assert!(old[0].floor && !old[1].floor);
+        let again: Vec<Changed> = serde_json::from_str(&serde_json::to_string(&old).expect("json")).expect("reads");
+        assert_eq!(again, old);
+    }
+
+    #[test]
+    fn a_measure_may_put_more_on_the_floor_and_never_take_off_what_the_core_knows() {
+        let marked = Changed { what: "src/a.py".into(), size: 1, floor: true };
+        assert_eq!(of_change(Target::Repository, &[marked]).0, Risk::High);
+        let unknown = Changed { what: "a form sent".into(), size: 1, floor: true };
+        assert_eq!(of_change(Target::Repository, &[unknown]).0, Risk::High, "a name the core does not know, marked by the measure");
+        let unmarked = Changed { what: ".github/workflows/ci.yml".into(), size: 1, floor: false };
+        assert_eq!(of_change(Target::Repository, &[unmarked]).0, Risk::High);
+        let plain = Changed { what: "src/a.py".into(), size: 1, floor: false };
+        assert_eq!(of_change(Target::Repository, &[plain]).0, Risk::Low);
     }
 
     #[test]

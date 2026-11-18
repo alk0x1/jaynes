@@ -375,7 +375,7 @@ fn start(args: &[String]) -> Result<(), String> {
     drive::keep_engine(&home())?;
     let branch = format!("jaynes/{id}");
     if let Some(p) = &project {
-        project::Copy::make(p, &building.join("project"), &branch)?;
+        project::make(manifest.target, p, &building.join("project"), &branch)?;
     }
     drop(role);
     std::fs::rename(&building, &dir).map_err(|e| format!("Jaynes could not put the run's folder in place: {e}"))?;
@@ -390,7 +390,7 @@ fn start(args: &[String]) -> Result<(), String> {
         attention.insert(step.name.clone(), c);
     }
     s.put_setup(&id, &json!({
-        "role_given": role_dir, "fingerprint": fingerprint, "agent": agent,
+        "role_given": role_dir, "fingerprint": fingerprint, "agent": agent, "target": manifest.target,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
     }))?;
     drive::sweep_engines(&home(), &s)?;

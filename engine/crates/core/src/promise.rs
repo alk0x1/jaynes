@@ -330,10 +330,10 @@ fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> V
         AttemptOutcome::Delivered { output: d, items, changed, usage: Usage::default(), session: Some(format!("session-{step}")) }
     };
     if turn.reach.project == ProjectAccess::Write {
-        out.push(mv(ended(delivered("small", vec![Changed { path: "src/a".into(), lines: 1 }])), format!("{step} delivers a small change"), false));
+        out.push(mv(ended(delivered("small", vec![Changed::file("src/a".into(), 1)])), format!("{step} delivers a small change"), false));
         // a large change only raises the risk, so it is another way only below high risk
         if risk == Risk::Low {
-            out.push(mv(ended(delivered("large", vec![Changed { path: "src/a".into(), lines: 80 }])), format!("{step} delivers a large change"), false));
+            out.push(mv(ended(delivered("large", vec![Changed::file("src/a".into(), 80)])), format!("{step} delivers a large change"), false));
         }
     } else {
         out.push(mv(ended(delivered("output", Vec::new())), format!("{step} delivers"), false));

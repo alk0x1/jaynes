@@ -394,6 +394,9 @@ impl World {
         let changed: Vec<Changed> =
             post.path().into_iter().filter_map(|i| post.steps[i].done.as_ref()).flat_map(|d| d.changed.clone()).collect();
         assert!(post.risk >= risk::of_change(post.manifest.target, &changed).0, "seed {seed}: G7 the risk is below its rules");
+        // and whatever a measure marked: a change it put on the floor, or one on a repository's floor it did not mark
+        let on_floor = changed.iter().any(|c| c.floor || !risk::floor([c.what.as_str()]).is_empty());
+        assert!(!on_floor || post.risk == risk::Risk::High, "seed {seed}: G7 a change on the floor left the run below high");
         // G13: once delivered, every step kept used the values that hold now.
         if !post.halted && post.delivered.is_some() && post.delivering.is_none() && matches!(post.phase, Phase::Waiting { step: None, .. } | Phase::Finished { .. }) {
             for i in post.path() {
@@ -555,9 +558,10 @@ fn items_for(rng: &mut Rng, run: &Run, step: &str) -> Vec<Item> {
 
 fn changed(rng: &mut Rng) -> Vec<Changed> {
     match rng.below(10) {
-        0 => vec![Changed { path: ".github/workflows/ci.yml".to_string(), lines: 2 }],
-        1 => vec![Changed { path: "src/big.rs".to_string(), lines: 80 }],
-        2..=5 => vec![Changed { path: format!("src/f{}.rs", rng.below(3)), lines: 1 + rng.below(5) as u64 }],
+        // raw, as any measure may report it: the mark at random, also off a path the core knows is on the floor
+        0 => vec![Changed { what: ".github/workflows/ci.yml".to_string(), size: 2, floor: rng.chance(50) }],
+        1 => vec![Changed { what: "src/big.rs".to_string(), size: 80, floor: rng.chance(20) }],
+        2..=5 => vec![Changed { what: format!("src/f{}.rs", rng.below(3)), size: 1 + rng.below(5) as u64, floor: rng.chance(10) }],
         _ => Vec::new(),
     }
 }
@@ -1168,7 +1172,7 @@ fn g7_touching_ci_raises_the_risk_and_owes_the_full_path() {
         outcome: AttemptOutcome::Delivered {
             output: Digest("o".to_string()),
             items: Vec::new(),
-            changed: vec![Changed { path: ".github/workflows/ci.yml".to_string(), lines: 1 }],
+            changed: vec![Changed::file(".github/workflows/ci.yml".to_string(), 1)],
             usage: Usage::default(),
             session: None,
         },
