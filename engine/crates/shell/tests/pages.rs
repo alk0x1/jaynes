@@ -260,7 +260,7 @@ fn the_quotes_of_a_note_are_shown_in_their_pages_at_a_stop_of_jaynes_s_own() {
         "given": [{"step": "note", "output": note}, {"step": "fetch", "output": fetched}], "previous": null, "answers": [], "key": null, "project": null, "source": null}));
     let output = &reply["output"];
     assert_eq!((output["judged"].as_u64(), output["quotes"][0]["found"].as_bool()), (Some(1), Some(true)), "{reply}");
-    assert!(output["windows"].as_str().unwrap_or("").contains("HTTP Caching \u{b6} \u{bb}A cache MUST NOT store a response\u{ab} when the no-store"), "{reply}");
+    assert!(output["windows"].as_str().unwrap_or("").contains("HTTP Caching \u{2016} \u{bb}A cache MUST NOT store a response\u{ab} when the no-store"), "{reply}");
     let items = serve(&s, json!({"jaynes": 1, "id": "y", "call": "items", "step": "windows", "output": output}));
     let item = &items["items"][0];
     assert_eq!(item["detail"], "Reading, not measured: it matters.", "{items}");

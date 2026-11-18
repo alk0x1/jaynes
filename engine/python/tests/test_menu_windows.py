@@ -47,6 +47,22 @@ class Where(unittest.TestCase):
         self.assertIn("Some guides claim that", q["window"])
         self.assertIn("That is wrong", q["window"])
 
+    def test_a_quote_that_stands_in_more_than_one_place_says_how_many(self):
+        url = "https://example.org/rfc"
+        body = (f"<h2>The request directive</h2><p>It applies to both private and shared caches.</p>"
+                f"<h2>The response directive</h2><p>It applies to both private and shared caches.</p><p>{LONG}</p>").encode()
+        out = windows([{"url": url, "quote": "It applies to both private and shared caches."}],
+                      fetched=step({"read": {"sources": [{"url": url, "quotes": []}]}}, pages={url: body}))
+        q = out["quotes"][0]
+        self.assertEqual(q["places"], 2)
+        self.assertIn("in 2 places on the page; the first:", out["windows"])
+
+    def test_blocks_are_parted_by_a_mark_pages_do_not_use_themselves(self):
+        # a page's own pilcrow, as RFC pages have after each paragraph, is not a break between blocks
+        got = step({"read": READ})
+        window = got["pages"][0]["quotes"][0]["window"]
+        self.assertIn("Caching \u2016 \u00bbA cache", window)
+
     def test_the_window_is_bounded(self):
         got = step({"read": READ})
         window = got["pages"][0]["quotes"][0]["window"]

@@ -519,8 +519,9 @@ class Prepared:
     def locate(self, quote: str) -> tuple[int, int, str] | None:
         """Where the quote stands: the block of the page (counting from 0), where in that block's compared text,
         and the window around it, with the quote marked between \u00bb and \u00ab. The window goes on into the
-        blocks before and after, each break between blocks shown as \u00b6, since a heading or the paragraph before
-        can say that a source mentions a claim only to deny it."""
+        blocks before and after, each break between blocks shown as \u2016 (a mark pages rarely use, where the
+        pilcrow is common), since a heading or the paragraph before can say that a source mentions a claim only to
+        deny it."""
         words = _searchable(same_words(quote))
         if not words:
             return None
@@ -529,14 +530,22 @@ class Prepared:
             if at >= 0:
                 end = at + len(words)
                 shown = search
-                earlier = " \u00b6 ".join(b for b in self.plain[:n] if b)
-                later = " \u00b6 ".join(b for b in self.plain[n + 1:] if b)
-                before = ((earlier + " \u00b6 ") if earlier else "") + shown[:at]
-                after = shown[end:] + ((" \u00b6 " + later) if later else "")
+                earlier = " \u2016 ".join(b for b in self.plain[:n] if b)
+                later = " \u2016 ".join(b for b in self.plain[n + 1:] if b)
+                before = ((earlier + " \u2016 ") if earlier else "") + shown[:at]
+                after = shown[end:] + ((" \u2016 " + later) if later else "")
                 window = (("..." if len(before) > WINDOW_CHARS else "") + before[-WINDOW_CHARS:] + "\u00bb" + shown[at:end] + "\u00ab"
                           + after[:WINDOW_CHARS] + ("..." if len(after) > WINDOW_CHARS else ""))
                 return n, at, window
         return None
+
+    def places(self, quote: str) -> int:
+        """In how many blocks of the page the quote stands: a sentence a page says in two sections is shown where
+        it stands first, and the person is told there are more."""
+        words = _searchable(same_words(quote))
+        if not words:
+            return 0
+        return len({n for n, block, search in self.blocks if _bounded_in(words, block, search)})
 
     def nearest(self, quote: str) -> str:
         """What Jaynes read nearest to a quote it did not find: the block sharing most of its words, cut around
@@ -1216,7 +1225,7 @@ def quote_windows(call: Call, params: Params) -> Any:
             n = len(shown) + 1
             page = by_url.get(_key(url))
             entry: dict[str, Any] = {"n": n, "url": url, "quote": quote, "found": False, "why": "", "page_sha256": "",
-                                     "block": None, "at": None, "window": ""}
+                                     "block": None, "at": None, "window": "", "places": 0}
             if page is None:
                 entry["why"] = "its page was not downloaded by Jaynes in this run"
             elif not page.get("read"):
@@ -1232,9 +1241,11 @@ def quote_windows(call: Call, params: Params) -> Any:
                 entry.update(found=found, why=why + _near(near), page_sha256=page.get("sha256", ""))
                 where = prepared[key].locate(quote) if found else None
                 if where:
-                    entry.update(block=where[0], at=where[1], window=where[2])
+                    entry.update(block=where[0], at=where[1], window=where[2], places=prepared[key].places(quote))
             shown.append(entry)
             seen = entry["window"] if entry["found"] else f"(not on the page: {entry['why']})"
+            if entry["places"] > 1:
+                seen = f"(in {entry['places']} places on the page; the first:) {seen}"
             lines.append(f"{n}. \"{quote}\"\n   {url}\n   {seen}")
     out: dict[str, Any] = {"quotes": shown, "judged": len(shown),
                            "windows": "\n\n".join(lines) if lines else "No quotation to show: the note quotes nothing."}
