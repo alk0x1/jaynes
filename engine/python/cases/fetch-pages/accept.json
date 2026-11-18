@@ -1,0 +1,89 @@
+[
+ {
+  "id": "public",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "accept",
+  "keeps": "a page of text on a public address"
+ },
+ {
+  "id": "public-v6",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "2606:2800:21f:cb07:6820:80da:af6b:8b2c"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "accept",
+  "keeps": "a page on a public IPv6 address"
+ },
+ {
+  "id": "redirect-public",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "https://docs.example.org/b"
+    },
+    "body": ""
+   },
+   "https://docs.example.org/b": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "accept",
+  "keeps": "a redirect to another public https page"
+ },
+ {
+  "id": "plain-text",
+  "url": "https://docs.example.org/a.txt",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a.txt": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/plain"
+    },
+    "body": "FILL"
+   }
+  },
+  "expect": "accept",
+  "keeps": "a page of plain text"
+ }
+]

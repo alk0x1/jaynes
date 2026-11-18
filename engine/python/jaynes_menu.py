@@ -1295,7 +1295,77 @@ def quotes_found_case(case: dict[str, Any]) -> Any:
     return quotes_found({"output": {"claims": [claim]}, "given": [{"step": "fetch", "output": fetched}]}, {"field": "claims", "pages": "fetch"})
 
 
-CASE_READERS: dict[str, Callable[[dict[str, Any]], Any]] = {"quotes-found": quotes_found_case}
+def fetch_pages_case(case: dict[str, Any]) -> Any:
+    """What fetch-pages does with a case, as a run reads a page (download, then its text), with no network. A case
+    gives the ``url`` an agent listed; ``resolve``, what each name resolves to (left out, and always for an address
+    written as a number or for localhost, the machine's own resolver, which needs no network for them); and
+    ``answers``, what the server answers at each address asked: ``status``, ``headers``, ``body`` (FILL in it is a
+    long paragraph, and ``body_bytes`` makes it that many bytes long), and ``endless`` for an answer that never ends.
+    ``Pass`` when the page is read, or when anything was sent to an address that is not on the public internet,
+    though nothing was read: both let the agent's address reach what it may not. ``Fail``, with why, when it was not
+    read and nothing went where it may not."""
+    import io
+    import ipaddress
+    import socket
+    sent: list[str] = []
+    now = [0.0]
+
+    def numeric(host: str) -> bool:
+        return host == "localhost" or all(c in "0123456789abcdefx.:%" for c in host.lower())
+
+    def resolve(host: str) -> list[str]:
+        if "resolve" in case and not numeric(host):
+            if host not in case["resolve"]:
+                raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
+            return list(case["resolve"][host])
+        return _resolve(host)
+
+    def answer_at(host: str, target: str) -> dict[str, Any] | None:
+        for url, said in (case.get("answers") or {}).items():
+            try:
+                h, t = _address(url)
+            except Unread:
+                continue
+            if h == host and t == target:
+                return said
+        return None
+
+    def send(host: str, ip: str, target: str, timeout: float, **_: Any) -> Any:
+        sent.append(ip)
+        said = answer_at(host, target)
+        if said is None:
+            raise ConnectionRefusedError(f"nothing answers at {host}{target}")
+        body = str(said.get("body", "")).replace("FILL", CASE_FILL).encode()
+        if said.get("body_bytes"):
+            body = body + b" " * max(0, int(said["body_bytes"]) - len(body))
+        if said.get("endless"):
+            def more(_n: int) -> bytes:
+                now[0] += 0.5
+                return b"<p>more</p>"
+            return said["status"], dict(said.get("headers") or {}), more
+        return said["status"], dict(said.get("headers") or {}), io.BytesIO(body).read
+
+    def get(url: str) -> dict[str, Any]:
+        return download(url, resolve=resolve, send=send, clock=lambda: now[0], sleep=lambda _s: None)
+
+    def public(ip: str) -> bool:
+        try:
+            a = ipaddress.ip_address(ip.split("%")[0])
+        except ValueError:
+            return False
+        return a.is_global and not a.is_multicast and not (a.version == 6 and a.ipv4_mapped is not None)
+
+    try:
+        page = read_page(case["url"], get)
+    except Unreachable as e:
+        page = {"read": False, "why": f"Jaynes could not read it in time: {e}"}
+    # what was sent where it may not is let through, read or not
+    if page["read"] or any(not public(ip) for ip in sent):
+        return Pass()
+    return Fail(str(page["why"]))
+
+
+CASE_READERS: dict[str, Callable[[dict[str, Any]], Any]] = {"quotes-found": quotes_found_case, "fetch-pages": fetch_pages_case}
 
 
 STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,

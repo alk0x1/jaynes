@@ -1,0 +1,734 @@
+[
+ {
+  "id": "loopback",
+  "hole": "this machine's own address",
+  "url": "https://127.0.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "loopback-other",
+  "hole": "any address of 127.0.0.0/8 is this machine",
+  "url": "https://127.8.9.10/",
+  "expect": "reject"
+ },
+ {
+  "id": "loopback-short",
+  "hole": "127.1 is 127.0.0.1 written short",
+  "url": "https://127.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "loopback-decimal",
+  "hole": "2130706433 is 127.0.0.1 written as one number",
+  "url": "https://2130706433/",
+  "expect": "reject"
+ },
+ {
+  "id": "loopback-hex",
+  "hole": "0x7f.0.0.1 is 127.0.0.1 written in hexadecimal",
+  "url": "https://0x7f.0.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "unspecified",
+  "hole": "0.0.0.0 reaches this machine",
+  "url": "https://0.0.0.0/",
+  "expect": "reject"
+ },
+ {
+  "id": "localhost",
+  "hole": "localhost is this machine by name",
+  "url": "https://localhost/",
+  "expect": "reject"
+ },
+ {
+  "id": "localhost-dot",
+  "hole": "localhost. is localhost, with the root's dot",
+  "url": "https://localhost./",
+  "expect": "reject"
+ },
+ {
+  "id": "loopback-v6",
+  "hole": "this machine's IPv6 address",
+  "url": "https://[::1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "unspecified-v6",
+  "hole": ":: reaches this machine",
+  "url": "https://[::]/",
+  "expect": "reject"
+ },
+ {
+  "id": "mapped-loopback",
+  "hole": "an IPv4 address carried in IPv6: ::ffff:127.0.0.1 is this machine",
+  "url": "https://[::ffff:127.0.0.1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "mapped-hex",
+  "hole": "::ffff:7f00:1 is ::ffff:127.0.0.1 written in hexadecimal",
+  "url": "https://[::ffff:7f00:1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "nat64-loopback",
+  "hole": "NAT64 carries 127.0.0.1 inside an IPv6 address",
+  "url": "https://[64:ff9b::7f00:1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "sixtofour-loopback",
+  "hole": "6to4 carries 127.0.0.1 inside an IPv6 address",
+  "url": "https://[2002:7f00:1::]/",
+  "expect": "reject"
+ },
+ {
+  "id": "private-10",
+  "hole": "a private network, 10.0.0.0/8",
+  "url": "https://10.0.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "private-172",
+  "hole": "a private network, 172.16.0.0/12",
+  "url": "https://172.16.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "private-192",
+  "hole": "a private network, 192.168.0.0/16",
+  "url": "https://192.168.1.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "shared-100",
+  "hole": "the network carriers share, 100.64.0.0/10",
+  "url": "https://100.64.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "link-local",
+  "hole": "link-local: where cloud machines keep their keys",
+  "url": "https://169.254.169.254/",
+  "expect": "reject"
+ },
+ {
+  "id": "link-local-decimal",
+  "hole": "2852039166 is 169.254.169.254 written as one number",
+  "url": "https://2852039166/",
+  "expect": "reject"
+ },
+ {
+  "id": "link-local-v6",
+  "hole": "IPv6 link-local",
+  "url": "https://[fe80::1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "zone-v6",
+  "hole": "an address with a zone names an interface of this machine",
+  "url": "https://[fe80::1%25en0]/",
+  "expect": "reject"
+ },
+ {
+  "id": "unique-local-v6",
+  "hole": "IPv6 unique local, a private network",
+  "url": "https://[fc00::1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "site-local-v6",
+  "hole": "IPv6 site-local, a private network",
+  "url": "https://[fec0::1]/",
+  "expect": "reject"
+ },
+ {
+  "id": "multicast",
+  "hole": "a multicast address is no page",
+  "url": "https://224.0.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "broadcast",
+  "hole": "the broadcast address is no page",
+  "url": "https://255.255.255.255/",
+  "expect": "reject"
+ },
+ {
+  "id": "name-to-loopback",
+  "hole": "a public-looking name that resolves to this machine",
+  "url": "https://docs.example.org/",
+  "resolve": {
+   "docs.example.org": [
+    "127.0.0.1"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "name-to-private",
+  "hole": "a public-looking name that resolves to a private network",
+  "url": "https://docs.example.org/",
+  "resolve": {
+   "docs.example.org": [
+    "10.1.2.3"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "name-to-metadata",
+  "hole": "a name that resolves to where cloud machines keep their keys",
+  "url": "https://docs.example.org/",
+  "resolve": {
+   "docs.example.org": [
+    "169.254.169.254"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "name-mixed",
+  "hole": "a name with one public address and one private: the connection may go to either",
+  "url": "https://docs.example.org/",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14",
+    "192.168.0.10"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "name-to-mapped",
+  "hole": "a name that resolves to an IPv4 address carried in IPv6",
+  "url": "https://docs.example.org/",
+  "resolve": {
+   "docs.example.org": [
+    "::ffff:10.0.0.1"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "name-to-link-local-v6",
+  "hole": "a name that resolves to IPv6 link-local",
+  "url": "https://docs.example.org/",
+  "resolve": {
+   "docs.example.org": [
+    "fe80::1"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-loopback",
+  "hole": "a public page that redirects to this machine",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "https://127.0.0.1/admin"
+    },
+    "body": ""
+   },
+   "https://127.0.0.1/admin": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-private-name",
+  "hole": "a public page that redirects to a name of a private network",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ],
+   "intranet.example.org": [
+    "10.0.0.7"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "https://intranet.example.org/"
+    },
+    "body": ""
+   },
+   "https://intranet.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-http",
+  "hole": "a redirect to plain http, which anyone on the way reads and changes",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "http://docs.example.org/b"
+    },
+    "body": ""
+   },
+   "http://docs.example.org/b": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-file",
+  "hole": "a redirect to a file of this machine",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "file:///etc/passwd"
+    },
+    "body": ""
+   },
+   "file:///etc/passwd": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-ftp",
+  "hole": "a redirect to another scheme",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "ftp://docs.example.org/b"
+    },
+    "body": ""
+   },
+   "ftp://docs.example.org/b": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-port",
+  "hole": "a redirect to a port that is not the usual one",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "https://docs.example.org:8443/b"
+    },
+    "body": ""
+   },
+   "https://docs.example.org:8443/b": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "redirect-credentials",
+  "hole": "a redirect to an address carrying a name and password",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 302,
+    "headers": {
+     "location": "https://user:secret@docs.example.org/b"
+    },
+    "body": ""
+   },
+   "https://user:secret@docs.example.org/b": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "http",
+  "hole": "plain http, which anyone on the way reads and changes",
+  "url": "http://example.org/",
+  "expect": "reject"
+ },
+ {
+  "id": "ftp",
+  "hole": "a scheme that is not https",
+  "url": "ftp://example.org/file",
+  "expect": "reject"
+ },
+ {
+  "id": "file",
+  "hole": "a file of this machine",
+  "url": "file:///etc/passwd",
+  "expect": "reject"
+ },
+ {
+  "id": "data",
+  "hole": "a page made up in its own address",
+  "url": "data:text/html,<p>made up</p>",
+  "expect": "reject"
+ },
+ {
+  "id": "javascript",
+  "hole": "no page at all",
+  "url": "javascript:alert(1)",
+  "expect": "reject"
+ },
+ {
+  "id": "no-scheme",
+  "hole": "an address with no scheme",
+  "url": "//example.org/",
+  "expect": "reject"
+ },
+ {
+  "id": "credentials",
+  "hole": "an address carrying a name and password",
+  "url": "https://user:secret@example.org/",
+  "expect": "reject"
+ },
+ {
+  "id": "user-only",
+  "hole": "an address carrying a name",
+  "url": "https://user@example.org/",
+  "expect": "reject"
+ },
+ {
+  "id": "userinfo-trick",
+  "hole": "what stands before the @ is a name, and the host is this machine",
+  "url": "https://example.org@127.0.0.1/",
+  "expect": "reject"
+ },
+ {
+  "id": "port-other",
+  "hole": "a port that is not the usual one",
+  "url": "https://docs.example.org:8443/",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "port-80",
+  "hole": "the port of plain http",
+  "url": "https://docs.example.org:80/",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "too-long",
+  "hole": "an address longer than any page needs",
+  "url": "https://docs.example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {},
+  "expect": "reject"
+ },
+ {
+  "id": "too-large-said",
+  "hole": "a page that says it is larger than Jaynes reads",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html",
+     "content-length": "3000000"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "too-large-sent",
+  "hole": "a page larger than Jaynes reads, that does not say its length",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html"
+    },
+    "body": "<p>FILL</p>",
+    "body_bytes": 2000474
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "never-ends",
+  "hole": "a page that never ends, a few bytes at a time: refused when its clock runs out, as Jaynes could not read it in time, since a server that holds on on purpose and one that is slow look the same; fetch-pages counts it as not read when another page or one that always answers did",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html"
+    },
+    "body": "<p>FILL</p>",
+    "endless": true
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "pdf",
+  "hole": "a format that is not text",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/pdf"
+    },
+    "body": "%PDF-1.7 FILL"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "image",
+  "hole": "an image is not text",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "image/png"
+    },
+    "body": "FILL"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "octet-stream",
+  "hole": "bytes of no format said",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/octet-stream"
+    },
+    "body": "FILL"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "no-type",
+  "hole": "a page that says no format",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {},
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "json",
+  "hole": "data is not a page of text",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json"
+    },
+    "body": "{\"text\": \"FILL\"}"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "binary-as-html",
+  "hole": "bytes that are not text, said to be HTML",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html"
+    },
+    "body": "\u0000\u0001\u0002FILL"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "refused",
+  "hole": "a server that answers 403",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 403,
+    "headers": {
+     "content-type": "text/html"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "missing",
+  "hole": "a page that does not exist",
+  "url": "https://docs.example.org/a",
+  "resolve": {
+   "docs.example.org": [
+    "93.184.215.14"
+   ]
+  },
+  "answers": {
+   "https://docs.example.org/a": {
+    "status": 404,
+    "headers": {
+     "content-type": "text/html"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
+ }
+]
