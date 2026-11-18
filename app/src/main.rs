@@ -31,6 +31,7 @@ mod menubar;
 mod news;
 mod notify;
 mod prefs;
+mod settings_window;
 mod presence;
 mod rail;
 mod settings;
@@ -52,7 +53,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings
     ]
 );
 
@@ -1294,11 +1295,13 @@ fn main() {
             KeyBinding::new("cmd-]", NextPane, Some("Jaynes")),
             KeyBinding::new("cmd-[", PreviousPane, Some("Jaynes")),
             KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
+            KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("cmd-w", settings_window::CloseSettings, Some("Settings")),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         // the menu bar's menus, where a Mac app shows what it does and its keys
         cx.set_menus(vec![
-            Menu { name: "Jaynes".into(), disabled: false, items: vec![MenuItem::action("Shortcuts", Shortcuts), MenuItem::separator(), MenuItem::action("Quit Jaynes", Quit)] },
+            Menu { name: "Jaynes".into(), disabled: false, items: vec![MenuItem::action("Settings…", OpenSettings), MenuItem::separator(), MenuItem::action("Shortcuts", Shortcuts), MenuItem::separator(), MenuItem::action("Quit Jaynes", Quit)] },
             Menu { name: "Edit".into(), disabled: false, items: vec![MenuItem::action("Copy", Copy), MenuItem::action("Paste", Paste)] },
             Menu {
                 name: "View".into(),
@@ -1334,6 +1337,7 @@ fn main() {
             },
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &OpenSettings, cx| settings_window::open(cx));
         // The terminal stays in herdr-core when the window closes; the app has nothing else to show.
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -1498,7 +1502,7 @@ fn the_key() -> Option<Arc<key::Key>> {
 /// test (or an agent) sees what the person would see without taking their screen.
 /// With JAYNES_APP_SHOT_MS=<ms> it draws that often instead, and a `{n}` in the file's name numbers the pictures, so
 /// a test can watch something that lasts less than a second.
-fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut App) {
+pub(crate) fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut App) {
     let every = std::env::var("JAYNES_APP_SHOT_MS").ok().and_then(|ms| ms.parse().ok()).unwrap_or(1000);
     cx.spawn(async move |cx| {
         // The app quits with its window, so the loop ends with it.

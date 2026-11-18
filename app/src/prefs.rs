@@ -268,6 +268,15 @@ mod tests {
     }
 
     #[test]
+    fn every_color_offered_has_a_swatch() {
+        for c in super::COLORS {
+            assert!(crate::settings::swatch(c).is_some(), "{c}");
+        }
+        assert_eq!(crate::settings::swatch("jaynes").unwrap()[0], 0x0b0c0f);
+        assert!(crate::settings::swatch("neon").is_none());
+    }
+
+    #[test]
     fn a_new_agent_is_its_program_or_a_command_line_for_the_login_shell() {
         assert_eq!(new_agent_argv("claude"), ["claude"]);
         let argv = new_agent_argv("claude --model opus");

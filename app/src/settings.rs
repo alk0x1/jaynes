@@ -400,6 +400,16 @@ pub fn ui_font_size() -> f32 {
 /// Font families on this machine (the bundled ones and the home's included).
 static FONTS: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
 
+/// Whether this machine has a font family (as the text system listed them at start); true before the list comes.
+pub fn has_font(family: &str) -> bool {
+    FONTS.lock().unwrap().as_ref().is_none_or(|have| have.contains(&family.to_lowercase()))
+}
+
+/// Three colors that stand for a preset in a swatch: its background, its blue and its green.
+pub fn swatch(name: &str) -> Option<[u32; 3]> {
+    preset(name).map(|p| [p.background, p.ansi[4], p.ansi[2]])
+}
+
 pub fn note_fonts(names: Vec<String>) {
     *FONTS.lock().unwrap() = Some(names.into_iter().map(|n| n.to_lowercase()).collect());
 }

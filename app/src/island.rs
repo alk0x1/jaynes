@@ -392,7 +392,7 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -469,6 +469,19 @@ impl Island {
                 if let Err(e) = crate::prefs::change(name, value, cx) {
                     tracing::warn!("{e}");
                 }
+            }
+            // the Settings window, as Command-comma opens it; a section of it, as a click in its toolbar; a control in
+            // it, as a click on it: `settings-pick <name> <value>`
+            "settings" => window.dispatch_action(Box::new(crate::OpenSettings), cx),
+            "settings-section" => {
+                if let Some(s) = crate::settings_window::Section::named(rest) {
+                    crate::settings_window::with_open(cx, |v, _, cx| v.show(s, cx));
+                }
+            }
+            "settings-pick" => {
+                let (name, value) = rest.split_once(' ').unwrap_or((rest, ""));
+                let (name, value) = (name.to_owned(), value.to_owned());
+                crate::settings_window::with_open(cx, |v, _, cx| v.pick(&name, &value, cx));
             }
             // a click on the system's notice about an agent or a run
             "notice" => crate::notify::click(rest.to_string()),
