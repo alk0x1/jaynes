@@ -1331,14 +1331,20 @@ def fetch_pages_case(case: dict[str, Any]) -> Any:
             ipaddress.ip_address(h.split("%")[0])
             return True
         except ValueError:
-            return all(re.fullmatch(r"0x[0-9a-f]*|[0-9]+", label) for label in h.split("."))
+            pass
+        try:  # what the machine reads as an IPv4 address in any of its forms, and nothing else
+            socket.inet_aton(h)
+            return True
+        except OSError:
+            return False
 
     def resolve(host: str) -> list[str]:
-        if "resolve" in case and not numeric(host):
-            if host not in case["resolve"]:
-                raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
-            return list(case["resolve"][host])
-        return _resolve(host)
+        if numeric(host):
+            return _resolve(host)
+        # a name is only what the case says it resolves to: none, and it does not exist
+        if host not in (case.get("resolve") or {}):
+            raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
+        return list(case["resolve"][host])
 
     def answer_at(host: str, target: str) -> dict[str, Any] | None:
         for url, said in (case.get("answers") or {}).items():

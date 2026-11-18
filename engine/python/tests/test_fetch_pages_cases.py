@@ -80,6 +80,19 @@ class TheReader(unittest.TestCase):
         with mock.patch.object(menu, "_resolve", side_effect=AssertionError("a name went to the machine's resolver")):
             self.assertIsInstance(menu.CASE_READERS["fetch-pages"](case), Pass)
 
+    def test_reads_as_a_number_only_what_the_machine_reads_as_an_address(self):
+        never = mock.patch.object(menu, "_resolve", side_effect=AssertionError("a name went to the machine's resolver"))
+        # digits and dots that are no address, and a name the case does not resolve: names, which do not exist
+        for url in ("https://999.999.999.999/", "https://docs.example.org/"):
+            with never:
+                got = menu.CASE_READERS["fetch-pages"]({"id": "n", "url": url})
+            self.assertIsInstance(got, Fail, url)
+        # what the machine does read as an address in any of its forms goes to its resolver, which needs no network
+        for host in ("127.0.0.1", "0177.0.0.1", "0x7f.0.0.1", "2130706433", "127.1", "localhost"):
+            with mock.patch.object(menu, "_resolve", return_value=["127.0.0.1"]) as asked:
+                menu.CASE_READERS["fetch-pages"]({"id": "n", "url": f"https://{host}/"})
+            asked.assert_called_once_with(host)
+
     def test_counts_as_off_the_internet_what_either_its_own_rule_or_the_menu_s_does(self):
         # ranges the menu closes that Python may call global, an address with a zone, and what Python itself closes
         for ip in ("192.0.0.8", "192.88.99.1", "3fff::1", "5f00::1", "fe80::1%en0", "10.0.0.1", "::ffff:8.8.8.8"):
