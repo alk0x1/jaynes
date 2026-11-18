@@ -24,23 +24,35 @@ HTML = (f"<html><head><title>Caching</title><style>p {{ color: red }}</style></h
         f"<script>var secret = 'only in a script';</script><p>{LONG}</p></body></html>").encode()
 
 
-class Net:
-    """A network that is only a table: names to addresses, and addresses of pages to answers."""
+NO_NAME = socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
 
-    def __init__(self, names: dict[str, list[str]] | None = None, pages: dict[str, Any] | None = None) -> None:
+
+class Net:
+    """A network that is only a table: names to addresses (or the error looking one up gives), addresses of pages
+    to answers (a list is one answer per request, in turn), and addresses that cannot be reached."""
+
+    def __init__(self, names: dict[str, Any] | None = None, pages: dict[str, Any] | None = None, down: dict[str, Exception] | None = None) -> None:
         self.names = names if names is not None else {"example.org": [PUBLIC]}
+        self.names.setdefault(menu.RESOLVER_CANARY, [PUBLIC])
         self.pages = pages or {}
+        self.down = down or {}
         self.sent: list[tuple[str, str, str]] = []
+        self.slept: list[float] = []
         self.now = 0.0
 
     def resolve(self, host: str) -> list[str]:
-        if host not in self.names:
-            raise socket.gaierror("unknown name")
-        return self.names[host]
+        got = self.names.get(host, NO_NAME)
+        if isinstance(got, Exception):
+            raise got
+        return got
 
     def send(self, host: str, ip: str, target: str, timeout: float) -> tuple[int, dict[str, str], Callable[[int], bytes]]:
         self.sent.append((host, ip, target))
+        if ip in self.down:
+            raise self.down[ip]
         answer = self.pages.get(f"{host}{target}")
+        if isinstance(answer, list):
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if answer is None:
             return 404, {}, lambda n: b""
         if isinstance(answer, Exception):
@@ -55,8 +67,12 @@ class Net:
 
         return status, headers, read
 
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
     def download(self, url: str) -> dict[str, Any]:
-        return menu.download(url, resolve=self.resolve, send=self.send, clock=lambda: self.now)
+        return menu.download(url, resolve=self.resolve, send=self.send, clock=lambda: self.now, sleep=self.sleep)
 
 
 def page(body: bytes = HTML, kind: str = "text/html; charset=utf-8", status: int = 200, **headers: str) -> tuple[int, dict[str, str], bytes]:
@@ -199,7 +215,58 @@ class Download(unittest.TestCase):
         self.assertEqual(self.refused("https://mixed.example/", "public internet", net).sent, [])
 
     def test_a_name_that_does_not_exist_is_not_read(self):
-        self.refused("https://nowhere.example/", "not found")
+        # the name does not exist while names are looked up: the source is made up, and that is the agent's
+        self.refused("https://nowhere.example/", "its name does not exist")
+
+    def unreachable(self, url: str, saying: str, net: Net) -> Net:
+        with self.assertRaises(menu.Unreachable) as e:
+            net.download(url)
+        self.assertIn(saying, str(e.exception))
+        return net
+
+    def test_when_no_name_is_found_on_this_machine_jaynes_could_not_ask(self):
+        net = Net(names={menu.RESOLVER_CANARY: NO_NAME})
+        self.unreachable("https://nowhere.example/", "names are not being looked up on this machine", net)
+
+    def test_a_lookup_that_fails_is_not_the_source_s_answer(self):
+        net = Net(names={"example.org": socket.gaierror(socket.EAI_AGAIN, "temporary failure in name resolution")})
+        self.unreachable("https://example.org/", "the name example.org could not be looked up", net)
+
+    def test_every_address_is_tried_ipv4_first(self):
+        # a name with an IPv6 address sorted before its IPv4 one, on a machine with no route for IPv6
+        six, four = "2a05:d014:5c0:2600::6", "3.147.99.198"
+        net = Net(names={"example.org": [six, four]}, pages={"example.org/": page()}, down={six: OSError(65, "No route to host")})
+        self.assertEqual(net.download("https://example.org/")["body"], HTML)
+        self.assertEqual([ip for _, ip, _ in net.sent], [four])
+        net = Net(names={"example.org": [four, six]}, pages={"example.org/": page()}, down={four: ConnectionRefusedError(61, "Connection refused")})
+        self.assertEqual(net.download("https://example.org/")["body"], HTML)
+        self.assertEqual([ip for _, ip, _ in net.sent], [four, six])
+
+    def test_when_no_address_answers_jaynes_could_not_ask_and_says_each(self):
+        six, four = "2a05:d014:5c0:2600::6", "3.147.99.198"
+        net = Net(names={"example.org": [six, four]}, pages={"example.org/": page()},
+                  down={six: OSError(65, "No route to host"), four: socket.timeout("timed out")})
+        net = self.unreachable("https://example.org/", "no address of example.org answered", net)
+        with self.assertRaises(menu.Unreachable) as e:
+            net.download("https://example.org/")
+        self.assertIn("3.147.99.198 (timed out)", str(e.exception))
+        self.assertIn("2a05:d014:5c0:2600::6 (No route to host)", str(e.exception))
+
+    def test_a_connection_that_drops_is_not_the_source_s_answer(self):
+        self.unreachable("https://example.org/", "no address of example.org answered", Net(pages={"example.org/": ConnectionResetError(54, "Connection reset by peer")}))
+
+    def test_a_server_that_cannot_answer_now_is_asked_again_with_a_wait(self):
+        net = Net(pages={"example.org/": [page(b"", status=503), page(b"", status=429, **{"retry-after": "2"}), page()]})
+        self.assertEqual(net.download("https://example.org/")["body"], HTML)
+        self.assertEqual(net.slept, [menu.PAGE_WAITS[0], 2.0])
+
+    def test_a_server_that_cannot_answer_after_the_waits_is_not_the_source_s_answer(self):
+        net = Net(pages={"example.org/": page(b"", status=503)})
+        self.unreachable("https://example.org/", "the server answered 503 3 times", net)
+        self.assertEqual(len(net.sent), 3)
+        net = Net(pages={"example.org/": page(b"", status=429, **{"retry-after": "3600"})})
+        self.unreachable("https://example.org/", "the server answered 429", net)
+        self.assertTrue(all(w <= menu.PAGE_WAIT_MOST for w in net.slept), net.slept)
 
     def test_a_redirect_is_followed_to_a_public_page(self):
         net = Net(names={"example.org": [PUBLIC], "www.example.org": ["93.184.216.35"]},
@@ -245,14 +312,14 @@ class Download(unittest.TestCase):
         net = Net(pages={"example.org/": page(b"x" * menu.PAGE_BYTES, "text/plain")})
         self.assertEqual(len(net.download("https://example.org/")["body"]), menu.PAGE_BYTES)
 
-    def test_a_page_past_the_time_limit_is_not_read(self):
+    def test_a_page_past_the_time_limit_is_not_the_source_s_answer(self):
         net = Net(pages={"example.org/": page(b"x" * 500_000, "text/plain")})
         net.slow = menu.PAGE_SECONDS / 2
-        self.refused("https://example.org/", "longer than", net)
+        self.unreachable("https://example.org/", "longer than", net)
 
-    def test_a_connection_that_fails_is_not_read(self):
-        self.refused("https://example.org/", "connection", Net(pages={"example.org/": ConnectionResetError("reset")}))
-        self.refused("https://example.org/", "connection", Net(pages={"example.org/": socket.timeout("timed out")}))
+    def test_a_certificate_that_does_not_hold_is_the_source_s_answer(self):
+        import ssl
+        self.refused("https://example.org/", "certificate", Net(pages={"example.org/": ssl.SSLCertVerificationError(1, "certificate verify failed")}))
 
 
 def fake(pages: dict[str, Any]) -> Callable[[str], dict[str, Any]]:
@@ -316,6 +383,30 @@ class FetchPages(unittest.TestCase):
         out = menu.fetch_pages(call, {"pages": "read.sources"}, download=download)
         self.assertFalse(out["any_read"])
         self.assertIn("application/pdf", out["pages"][0]["why"])
+
+    def test_a_page_jaynes_could_not_ask_about_stops_the_step_and_says_which(self):
+        pages = dict(PAGES)
+        pages["https://example.org/gone"] = menu.Unreachable("no address of example.org answered: 93.184.216.34 (timed out)")
+        with self.assertRaises(menu.Unreachable) as e:
+            step({"read": READ}, pages=pages)
+        self.assertIn("https://example.org/gone: no address of example.org answered: 93.184.216.34 (timed out)", str(e.exception))
+
+    def test_the_menu_answers_a_step_jaynes_could_not_do_as_its_own_fault(self):
+        import io
+        import json
+        ask = {"kind": "step", "use": "fetch-pages", "with": {"pages": "read.links"},
+               "call": {"given": [{"step": "read", "output": {"links": ["https://nowhere.invalid/"]}}]}}
+        real = menu.download
+        try:
+            def offline(url: str, **_: Any) -> dict[str, Any]:
+                raise menu.Unreachable("names are not being looked up on this machine")
+            menu.download = offline
+            body = menu.answer(json.loads(json.dumps(ask)))
+        finally:
+            menu.download = real
+        self.assertEqual(body["reply"], "error", body)
+        self.assertIn("Jaynes could not download https://nowhere.invalid/: names are not being looked up on this machine", body["message"])
+        self.assertIn("no attempt", body["message"])
 
     def test_nothing_read_is_said(self):
         self.assertFalse(step({"read": READ}, pages={})["any_read"])

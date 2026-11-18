@@ -320,19 +320,36 @@ def _executable(path: str) -> bool:
 #
 # The address comes from an agent, so it is held to rules before anything is sent: https only, the usual port, no
 # name or password, and every address the name resolves to on the public internet, checked again at each
-# redirect. The connection goes to the address that was checked. A page is read within a size and a time.
+# redirect. The connection goes to an address that was checked, IPv4 first, each in turn until one answers. A page
+# is read within a size and a time.
+#
+# A page that is not read is one of two things, and they go apart (the engine's rule that a check which cannot
+# judge never spends the agent's attempt):
+# - The source said no, or does not exist (``Unread``): the server answered and refused (a 4xx other than 429),
+#   the page is too large, in a format Jaynes does not read, or has no text of its own, its certificate does not
+#   hold, it broke a rule above, or its name does not exist while other names are found. Nothing quoted from it is
+#   proved, and that is the agent's to deal with: choose another source, or drop the claim.
+# - Jaynes could not ask, or the source could not answer now (``Unreachable``): names are not being looked up on
+#   this machine, the lookup failed, no address answered (no route, refused, dropped, timed out), the page took
+#   longer than its time, or the server answered 5xx or 429 every time it was asked, with waits between. The step
+#   stops as Jaynes's fault, saying which page and why, and no attempt is spent: continue the run when it can ask.
 
 PAGE_BYTES = 2_000_000      # a page larger than this is not read
-PAGE_SECONDS = 20.0         # nor one that takes longer, redirects included
+PAGE_SECONDS = 20.0         # nor one that takes longer to come, redirects included, each time it is asked
 PAGE_REDIRECTS = 5
+PAGE_WAITS = (1.0, 3.0)     # the waits before asking again a server that answered 5xx or 429: three times in all
+PAGE_WAIT_MOST = 10.0       # the longest wait a server's Retry-After is followed for
+RESOLVER_CANARY = "example.com"  # a name that always exists: when it is not found either, the machine cannot look names up
 PAGES_MAX = 12              # pages one step downloads
 QUOTE_CHARS = 20            # a quote shorter than this, as compared, proves nothing
 SCRIPTED_BELOW = 200        # an HTML page with less text than this was left for a script to fill
 PAGE_AGENT = "jaynes"
 
-_QUOTES = "\"“”„‟«»‘’‚‛`´"
-_DASHES = "‐‑‒–—―−"
-_UNSEEN = "­​‌‍⁠﻿"
+# Written as escapes, since most of them look alike or do not show: quotation marks, dashes, and the characters
+# that take no room (soft hyphen, zero-width space and joiners, word joiner, byte order mark).
+_QUOTES = "\"\u201c\u201d\u201e\u201f\u00ab\u00bb\u2018\u2019\u201a\u201b`\u00b4"
+_DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+_UNSEEN = "\u00ad\u200b\u200c\u200d\u2060\ufeff"
 _HTML_TYPES = ("text/html", "application/xhtml+xml")
 _TEXT_TYPES = ("text/plain", "text/markdown")
 _SKIPPED = ("script", "style", "noscript", "template", "svg")
@@ -342,7 +359,12 @@ _BLOCKS = ("address", "article", "aside", "blockquote", "br", "dd", "details", "
 
 
 class Unread(Exception):
-    """Why a page was not read. What is quoted from a page that was not read is not proved."""
+    """Why a page was not read, when the source said no or does not exist. What is quoted from it is not proved."""
+
+
+class Unreachable(Exception):
+    """Why Jaynes could not ask for a page, or the source could not answer now: the machine's or the network's
+    fault, never the agent's."""
 
 
 # A word that goes on past the end of a line at its hyphen, as plain text wraps "best-effort": a letter or digit,
@@ -467,10 +489,56 @@ def _address(url: str) -> tuple[str, str]:
 
 
 def _resolve(host: str) -> list[str]:
-    """Every address a name resolves to."""
+    """Every address a name resolves to, in the resolver's order."""
     import socket
     found = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    return sorted({str(sockaddr[0]) for _family, _type, _proto, _name, sockaddr in found})
+    return list(dict.fromkeys(str(sockaddr[0]) for _family, _type, _proto, _name, sockaddr in found))
+
+
+def _lookup(host: str, resolve: Callable[[str], list[str]]) -> list[str]:
+    """The addresses of ``host``, IPv4 first; ``Unread`` when the name does not exist, ``Unreachable`` when it could
+    not be looked up. A name not found counts as not existing only when a name that always exists is found."""
+    import socket
+    missing = {getattr(socket, n) for n in ("EAI_NONAME", "EAI_NODATA") if hasattr(socket, n)}
+    try:
+        addresses = resolve(host)
+    except UnicodeError:
+        raise Unread("its name does not read") from None
+    except socket.gaierror as e:
+        if e.errno not in missing:
+            raise Unreachable(f"the name {host} could not be looked up ({e.strerror or e})") from None
+        try:
+            resolve(RESOLVER_CANARY)
+        except (OSError, UnicodeError):
+            raise Unreachable(f"names are not being looked up on this machine ({host}, and {RESOLVER_CANARY} too)") from None
+        raise Unread("its name does not exist") from None
+    except OSError as e:
+        raise Unreachable(f"the name {host} could not be looked up ({e.strerror or e})") from None
+    return sorted(addresses, key=lambda a: ":" in a)
+
+
+def _ask(host: str, addresses: list[str], target: str, send: Callable[..., Any], left: float) -> Any:
+    """The answer of the first address that answers, each tried in turn; ``Unreachable`` naming every one when none
+    does, and ``Unread`` when the server's certificate does not hold."""
+    import http.client
+    import ssl
+    failed: list[str] = []
+    for ip in addresses:
+        try:
+            return send(host, ip, target, left)
+        except ssl.SSLCertVerificationError:
+            raise Unread("its certificate does not hold") from None
+        except (OSError, http.client.HTTPException) as e:
+            failed.append(f"{ip} ({getattr(e, 'strerror', None) or e or type(e).__name__})")
+    raise Unreachable(f"no address of {host} answered: {', '.join(failed)}")
+
+
+def _wait(n: int, headers: dict[str, str]) -> float:
+    """How long to wait before asking again: the server's Retry-After in seconds, up to a limit, else the n-th wait."""
+    try:
+        return min(max(float(headers.get("retry-after", "")), 0.0), PAGE_WAIT_MOST)
+    except ValueError:
+        return PAGE_WAITS[n]
 
 
 def _send(host: str, ip: str, target: str, timeout: float) -> tuple[int, dict[str, str], Callable[[int], bytes]]:
@@ -492,42 +560,44 @@ def _send(host: str, ip: str, target: str, timeout: float) -> tuple[int, dict[st
 
 
 def download(url: str, *, resolve: Callable[[str], list[str]] = _resolve, send: Callable[..., Any] = _send,
-             clock: Callable[[], float] | None = None) -> dict[str, Any]:
-    """Download one page under the rules above: ``{final_url, type, body}``, or ``Unread`` with the reason."""
+             clock: Callable[[], float] | None = None, sleep: Callable[[float], None] | None = None) -> dict[str, Any]:
+    """Download one page under the rules above: ``{final_url, type, body}``, ``Unread`` when the source said no or
+    does not exist, or ``Unreachable`` when Jaynes could not ask, each with the reason."""
     import http.client
     import time
     from urllib.parse import urljoin
     clock = clock or time.monotonic
-    slow = f"it took longer than {PAGE_SECONDS:.0f} s"
-    deadline = clock() + PAGE_SECONDS
+    sleep = sleep or time.sleep
+    slow = f"it took longer than {PAGE_SECONDS:.0f} s to come"
     for _hop in range(PAGE_REDIRECTS + 1):
         host, target = _address(url)
-        try:
-            addresses = resolve(host)
-        except (OSError, UnicodeError):
-            raise Unread("its address was not found") from None
+        addresses = _lookup(host, resolve)
         if not addresses or not all(_public(a) for a in addresses):
             raise Unread("its address is not on the public internet")
-        left = deadline - clock()
-        if left <= 0:
-            raise Unread(slow)
+        for n in range(len(PAGE_WAITS) + 1):
+            deadline = clock() + PAGE_SECONDS
+            status, headers, read = _ask(host, addresses, target, send, PAGE_SECONDS)
+            if status != 429 and not 500 <= status <= 599:
+                break
+            if n == len(PAGE_WAITS):
+                raise Unreachable(f"the server answered {status} {n + 1} times, with waits between")
+            sleep(_wait(n, headers))
+        if status in (301, 302, 303, 307, 308) and headers.get("location"):
+            url = urljoin(url, headers["location"])
+            continue
+        if status != 200:
+            raise Unread(f"the server answered {status}")
+        body = b""
         try:
-            status, headers, read = send(host, addresses[0], target, left)
-            if status in (301, 302, 303, 307, 308) and headers.get("location"):
-                url = urljoin(url, headers["location"])
-                continue
-            if status != 200:
-                raise Unread(f"the server answered {status}")
-            body = b""
             while len(body) <= PAGE_BYTES:
                 if clock() > deadline:
-                    raise Unread(slow)
+                    raise Unreachable(slow)
                 piece = read(min(65536, PAGE_BYTES + 1 - len(body)))
                 if not piece:
                     break
                 body += piece
         except (OSError, http.client.HTTPException) as e:
-            raise Unread(f"the connection failed ({type(e).__name__})") from None
+            raise Unreachable(f"the connection dropped while the page came ({getattr(e, 'strerror', None) or e or type(e).__name__})") from None
         if len(body) > PAGE_BYTES:
             raise Unread(f"it is larger than {PAGE_BYTES // 1_000_000} MB")
         return {"final_url": url, "type": headers.get("content-type", ""), "body": body}
@@ -562,13 +632,15 @@ def _fingerprint(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[str, Any]] = download) -> Any:
+def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[str, Any]] | None = None) -> Any:
     """Download the pages an earlier step lists. The output says, for each, whether it was read and why not, with
     the fingerprint of what came, and in ``unread`` a line for each page not read, with why, for a sentence to the
     person; keeps the text of each page read, in ``texts``; and, for the quotes listed with
-    a page, whether each is in its text. A page that could not be read is never an error of the step: it is a
-    page not read, and nothing quoted from it is found."""
+    a page, whether each is in its text. A page the source refused is a page not read, and nothing quoted from it
+    is found. A page Jaynes could not ask for stops the step with ``Unreachable``, naming every such page: what
+    is proved must not depend on whether the network held."""
     from concurrent.futures import ThreadPoolExecutor
+    get = download or globals()["download"]
     step, _, field = str(params["pages"]).partition(".")
     asked = _pages_asked((_given(call).get(step) or {}).get(field))
     if asked is None:
@@ -576,18 +648,22 @@ def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[st
     if len(asked) > PAGES_MAX:
         return Refused(f"{params['pages']} lists {len(asked)} pages, and a step downloads at most {PAGES_MAX}")
 
+    unreachable: list[str] = []
+
     def one(url: str) -> tuple[dict[str, Any], str]:
         page: dict[str, Any] = {"url": url, "read": False, "why": "", "final_url": "", "type": "", "bytes": 0, "sha256": "",
                                 "text_sha256": "", "chars": 0}
         text = ""
         try:
-            got = download(url)
+            got = get(url)
             body = got["body"]
             page.update(final_url=got["final_url"], type=got["type"].split(";")[0].strip().lower(), bytes=len(body), sha256=_fingerprint(body))
             text = page_text(body, got["type"])
             page.update(read=True, text_sha256=_fingerprint(text.encode()), chars=len(text))
         except Unread as e:
             page["why"] = str(e)
+        except Unreachable as e:
+            unreachable.append(f"{url}: {e}")
         except Exception as e:  # whatever went wrong, the page was not read, and that is said
             page["why"] = f"Jaynes could not read it ({type(e).__name__})"
         quotes = asked[url]
@@ -597,6 +673,9 @@ def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[st
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         done = list(pool.map(one, asked))
+    if unreachable:
+        raise Unreachable(f"Jaynes could not download {'; '.join(sorted(unreachable))}. That is the machine or the network, "
+                          "not the agent: no attempt was spent, and continuing the run downloads every page again")
     return {"pages": [page for page, _ in done], "texts": {page["url"]: text for page, text in done if page["read"]},
             "any_read": any(page["read"] for page, _ in done),
             "unread": [f"{page['url']}: {page['why']}" for page, _ in done if not page["read"]]}
@@ -662,7 +741,10 @@ def answer(ask: dict[str, Any]) -> dict[str, Any]:
     if ask.get("kind") == "step":
         if use not in STEPS:
             return {"reply": "error", "message": f"the menu has no step {use}"}
-        return _result(STEPS[use](call, params))
+        try:
+            return _result(STEPS[use](call, params))
+        except Unreachable as e:  # Jaynes could not do its own step: its fault, never the agent's
+            return {"reply": "error", "message": str(e)}
     if use not in CHECKS:
         return {"reply": "error", "message": f"the menu has no check {use}"}
     return {"reply": "verdict", "verdict": _verdict(CHECKS[use](call, params))}
