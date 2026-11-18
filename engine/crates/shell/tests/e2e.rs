@@ -286,6 +286,40 @@ fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_delivery_that_failed_is_made_again_only_by_the_person_s_continue_and_never_by_one_refused() {
+    let s = scratch("refused");
+    // while the step works, the person checks out the run's branch in a worktree of theirs: git will not fetch into it
+    let aside = s.base.join("aside");
+    let agent = format!(
+        "perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT} && git -C {p} worktree add -q -b jaynes/refused {a} >/dev/null 2>&1",
+        p = s.project.display(),
+        a = aside.display()
+    );
+    let out = start(&s, "refused", &agent);
+    let tip = || String::from_utf8_lossy(&Command::new("git").arg("-C").arg(&s.project).args(["rev-parse", "jaynes/refused"]).output().expect("git").stdout).trim().to_string();
+    let before = tip();
+    assert!(!before.is_empty() && aside.exists(), "the worktree is there: {out}");
+    let delivered = |s: &Scratch| events(s, "refused").iter().filter(|e| e["type"] == "Delivered").count();
+    assert_eq!(delivered(&s), 0, "{out}");
+    assert!(events(&s, "refused").iter().any(|e| e["type"] == "Blocked" && e["fault"] == "jaynes"), "{out}");
+    // a continue that is not the person's is refused, and the process it started delivers nothing
+    let ok = Command::new("git").arg("-C").arg(&s.project).args(["worktree", "remove", "--force"]).arg(&aside).status().expect("git").success();
+    assert!(ok);
+    let (_, said) = engine(&s, &["continue", "refused"]);
+    assert!(said.contains("refused"), "{said}");
+    assert_eq!(delivered(&s), 0, "a refused continue delivered: {said}");
+    assert_eq!(tip(), before, "a refused continue moved the run's branch");
+    // the person's continue, at a terminal, delivers
+    let mut c = tty();
+    c.args([BIN, "continue", "refused"]).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "");
+    let out = c.output().expect("continue");
+    assert_eq!(delivered(&s), 1, "{}", String::from_utf8_lossy(&out.stdout));
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/refused:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
     let s = scratch("fix");
     // first the agent writes "hey" (the suite wants "hi"); asked to fix, in its session, it writes "hi"

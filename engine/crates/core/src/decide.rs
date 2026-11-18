@@ -150,6 +150,8 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 return refuse("the run is not halted");
             }
             c.emit(Event::Resumed { by: by.clone() });
+            // a delivery under way when the person halted is made now, by their resume, and by nothing before it
+            c.redeliver();
             c.advance();
         }
         Input::Recovered => c.recovered(),
@@ -180,6 +182,15 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
         Input::Abandon { by } => {
             if !by.person() {
                 return refuse("only you abandon a run");
+            }
+            // G14: a step that acts on something real, stopped in the middle, may have acted; the record says so
+            for i in 0..c.run.steps.len() {
+                if let Status::Running { attempt, .. } = c.run.steps[i].status
+                    && c.run.manifest.steps[i].effect.acts()
+                {
+                    let step = c.name(i);
+                    c.emit(Event::MayHaveActed { step, attempt });
+                }
             }
             let cost = c.run.cost();
             c.emit(Event::RunFinished { outcome: Outcome::Abandoned, cost });
@@ -1040,6 +1051,21 @@ impl Ctx {
         out
     }
 
+    /// Make again the delivery under way, when nothing holds it: a run blocked (a delivery that failed) waits for
+    /// the continue that is accepted, which asks it afresh, and a halted one for the person's resume. A process that
+    /// merely starts, whatever it was asked and whether that is refused, delivers nothing then.
+    fn redeliver(&mut self) {
+        if self.run.blocked() || self.run.halted {
+            return;
+        }
+        if let Some(digest) = self.run.delivering.clone() {
+            let (_, given) = self.run.delivery();
+            // a delivery under way was asked only once G19 let it: the person's answer decides again what it does
+            let merge = self.lands(&digest).unwrap_or(false);
+            self.command(Command::Deliver { digest, given, merge });
+        }
+    }
+
     fn recovered(&mut self) {
         for i in 0..self.run.steps.len() {
             let name = self.name(i);
@@ -1069,12 +1095,7 @@ impl Ctx {
                 _ => {}
             }
         }
-        if let Some(digest) = self.run.delivering.clone() {
-            let (_, given) = self.run.delivery();
-            // a delivery under way was asked only once G19 let it: the person's answer decides again what it does
-            let merge = self.lands(&digest).unwrap_or(false);
-            self.command(Command::Deliver { digest, given, merge });
-        }
+        self.redeliver();
         let open: Vec<Question> = self.run.open_questions().iter().map(|q| q.question.clone()).collect();
         for question in open {
             self.command(Command::Ask { question });

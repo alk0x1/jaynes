@@ -40,7 +40,8 @@ pub struct StepLine {
     pub name: String,
     /// Who does it: "agent", "Jaynes" or "person".
     pub by: &'static str,
-    /// "done", "not done" or "left out at this risk".
+    /// "done", "not done", "not done, may have acted" (a step that acts on something real, stopped in the middle,
+    /// G14) or "left out at this risk".
     pub state: &'static str,
     pub attempts: u32,
     pub rounds: u32,
@@ -221,7 +222,15 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
                     Executor::Role => "Jaynes",
                     Executor::Person => "person",
                 },
-                state: if !on_path { "left out at this risk" } else if done { "done" } else { "not done" },
+                state: if !on_path {
+                    "left out at this risk"
+                } else if done {
+                    "done"
+                } else if s.maybe_acted {
+                    "not done, may have acted"
+                } else {
+                    "not done"
+                },
                 attempts: attempts.get(d.name.as_str()).copied().unwrap_or(0),
                 rounds: s.round + 1,
                 passed: if done { s.checks.iter().filter(|c| c.passed && !c.blocked).map(|c| (c.check.clone(), c.kind == CheckKind::Hidden)).collect() } else { Vec::new() },
@@ -953,5 +962,15 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
         let broken = vec![Promised { says: "Nothing is merged before the tests pass".into(), proved: false }];
         let unproved = summarize(&e, &[], Promises::Told(broken)).expect("summary").markdown();
         assert!(unproved.contains("### Promises of the role\n\n- Nothing is merged before the tests pass: NOT proved\n"), "{unproved}");
+ 
+        // abandoned while a step that acts was under way: it may have acted, and the summary says so (G14)
+        let mut acting = started(0);
+        acting.extend([
+            (10, attempt("plan", 1)),
+            (20, Event::MayHaveActed { step: "plan".into(), attempt: 1 }),
+            (20, finished(Outcome::Abandoned)),
+        ]);
+        let told = summarize(&acting, &[], Promises::Unread).expect("summary").markdown();
+        assert!(told.contains("1. **plan** (agent): not done, may have acted"), "{told}");
     }
 }

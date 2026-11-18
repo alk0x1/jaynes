@@ -203,9 +203,11 @@ pub fn stop_agent_for(dir: &Path, input: &Input) {
             stop_box_groups(dir);
         }
         Input::Halt { .. } => {
-            // the mark goes first: the process may get the turn back as soon as the agent is gone
+            // the mark goes first: the process may get the turn back as soon as the agent is gone. A halt that stops
+            // nothing takes away only its own mark, never one an earlier halt left for the agent it stopped
+            let before = dir.join(HALTED_AGENT).exists();
             let _marked = std::fs::write(dir.join(HALTED_AGENT), "");
-            if !agent::stop_left(&dir.join("agent.pid")) {
+            if !agent::stop_left(&dir.join("agent.pid")) && !before {
                 let _gone = std::fs::remove_file(dir.join(HALTED_AGENT));
             }
             // a mark an earlier halt left stays: that halt's stopped call may not have come back yet
@@ -1673,6 +1675,22 @@ mod tests {
         let _gone = std::fs::remove_file(dir.join(HALTED_BOX));
         stop_agent_for(&dir, &Input::Halt { by: By::Person });
         assert!(!dir.join(HALTED_BOX).exists(), "a halt that stopped nothing left a mark");
+        let _gone = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_halt_that_stops_nothing_keeps_the_mark_the_first_left() {
+        let dir = std::env::temp_dir().join(format!("jaynes-halted-mark-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let halt = Input::Halt { by: By::Person };
+        // no agent runs: a halt marks nothing
+        stop_agent_for(&dir, &halt);
+        assert!(!dir.join(HALTED_AGENT).exists(), "a halt that stopped nothing left a mark");
+        // the first halt stopped the agent and left its mark; a second, before the run's process took it, finds none
+        std::fs::write(dir.join(HALTED_AGENT), "").expect("mark");
+        stop_agent_for(&dir, &halt);
+        assert!(dir.join(HALTED_AGENT).exists(), "the second halt took away the first one's mark: its turn would count as failed");
         let _gone = std::fs::remove_dir_all(&dir);
     }
 

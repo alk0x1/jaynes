@@ -735,7 +735,7 @@ fn print_state(r: &jaynes_core::Run) {
     let path = r.path();
     for (i, s) in r.steps.iter().enumerate() {
         let d = &r.manifest.steps[i];
-        let mark = if !path.contains(&i) {
+        let mut mark = if !path.contains(&i) {
             "left out at this risk".to_string()
         } else {
             match &s.status {
@@ -744,6 +744,10 @@ fn print_state(r: &jaynes_core::Run) {
                 other => format!("{other:?}").to_lowercase(),
             }
         };
+        // G14: what acts on something real and stopped in the middle is said, whatever the run did after
+        if s.maybe_acted && s.status != Status::Done {
+            mark.push_str(", may have acted: look at what it acts on before you trust either way");
+        }
         println!("  {:<16} {:<8} round {}  {mark}", d.name, format!("{:?}", d.executor).to_lowercase(), s.round);
     }
     for q in r.open_questions() {
