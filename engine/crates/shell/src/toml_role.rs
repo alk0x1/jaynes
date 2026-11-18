@@ -102,6 +102,36 @@ struct RoleFile {
     step: Vec<toml::Spanned<StepFile>>,
     #[serde(default)]
     promise: Vec<toml::Spanned<PromiseFile>>,
+    #[serde(default)]
+    claim: Vec<toml::Spanned<ClaimFile>>,
+}
+
+/// A claim of the role about what a run delivers, and what proves it in a run: a condition, or nothing, with why.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimFile {
+    says: String,
+    proved_by: Option<String>,
+    unchecked: Option<String>,
+}
+
+/// A claim of the role about what a run delivers. A promise is about the method and is proved before any run, over
+/// every way a run can go; a claim is about one delivery, and each run proves it or does not.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Claim {
+    pub line: usize,
+    pub says: String,
+    pub by: ClaimBy,
+}
+
+/// What proves a claim in a run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClaimBy {
+    /// A condition of the run, in the words of the promises: a check of a step passed, the person answered at a step,
+    /// a step was done.
+    Condition(Condition),
+    /// Nothing does, and the role says why.
+    Unchecked(String),
 }
 
 /// A promise of the role about its own method, in one of three forms.
@@ -586,6 +616,8 @@ pub struct TomlRole {
     pub extras: BTreeMap<String, StepExtra>,
     /// The role's promises, each with its line in role.toml.
     pub promises: Vec<(usize, Promise)>,
+    /// What the role claims of what a run delivers, in order.
+    pub claims: Vec<Claim>,
 }
 
 /// An error in a role's files, with where it is.
@@ -1291,7 +1323,42 @@ impl TomlRole {
                 }
             }
         }
-        if errors.is_empty() { Ok(TomlRole { dir: dir.to_path_buf(), manifest, extras, promises }) } else { Err(errors) }
+        let mut claims: Vec<Claim> = Vec::new();
+        if errors.is_empty() {
+            for spanned in &file.claim {
+                let line = line_of(&text, spanned.span().start);
+                let c = spanned.get_ref();
+                let says = c.says.trim().to_string();
+                if says.is_empty() {
+                    errors.push(at(Some(line), FILE, "the claim says nothing: write what the delivery holds in says"));
+                    continue;
+                }
+                if claims.iter().any(|k| k.says == says) {
+                    errors.push(at(Some(line), FILE, format!("the claim {says:?} is written twice")));
+                    continue;
+                }
+                let by = match (&c.proved_by, &c.unchecked) {
+                    (Some(cond), None) => match Condition::parse(cond, &manifest) {
+                        Ok(cond) => ClaimBy::Condition(cond),
+                        Err(e) => {
+                            errors.push(at(Some(line), FILE, format!("the claim {says:?}: {e}")));
+                            continue;
+                        }
+                    },
+                    (None, Some(why)) if !why.trim().is_empty() => ClaimBy::Unchecked(why.trim().to_string()),
+                    (None, Some(_)) => {
+                        errors.push(at(Some(line), FILE, format!("the claim {says:?} is unchecked and says not why: unchecked = \"why nothing checks it\"")));
+                        continue;
+                    }
+                    _ => {
+                        errors.push(at(Some(line), FILE, "a claim is proved_by a condition or unchecked with why, one of them"));
+                        continue;
+                    }
+                };
+                claims.push(Claim { line, says, by });
+            }
+        }
+        if errors.is_empty() { Ok(TomlRole { dir: dir.to_path_buf(), manifest, extras, promises, claims }) } else { Err(errors) }
     }
 }
 
@@ -1313,6 +1380,9 @@ impl TomlRole {
                     s.name
                 ));
             }
+        }
+        if self.claims.is_empty() {
+            notes.push("the role claims nothing of what it delivers: a run's summary then has no claim to say proved or not. Write [[claim]] with says and proved_by (a condition, as in a promise) or unchecked (why nothing checks it); the next version of the format refuses a role with none".to_string());
         }
         // a check that was never seen to refuse anything is said, here and in every run's summary
         notes.extend(self.untested().into_iter().map(|c| {
@@ -1520,6 +1590,59 @@ impl TomlRole {
                 other => jaynes_core::CheckVerdict::Blocked { reason: format!("the menu answered a case with {other:?}") },
             }
         })
+    }
+
+    /// The role's claims that a run did not prove, a sentence each, in the role's order: a claim nothing checks, with
+    /// the role's reason; one whose condition did not hold in the run, as `holds` says (on a run,
+    /// [`Condition::holds`]); and one proved by a check that comes with no cases, since a check never seen to refuse
+    /// anything proves nothing by passing. What is not here was proved.
+    pub fn claims_told(&self, holds: &dyn Fn(&Condition) -> bool) -> Vec<String> {
+        let untested = self.untested();
+        self.claims
+            .iter()
+            .filter_map(|c| {
+                let says = &c.says;
+                match &c.by {
+                    ClaimBy::Unchecked(why) => Some(format!("{says:?}: not checked: {why}")),
+                    ClaimBy::Condition(Condition::CheckPassed { check, step }) if untested.contains(&format!("check {check} of {step}")) => {
+                        Some(format!("{says:?}: not proved: the check {check} of {step} is untested, so its passing proves nothing"))
+                    }
+                    ClaimBy::Condition(cond) if holds(cond) => None,
+                    ClaimBy::Condition(cond) => Some(format!(
+                        "{says:?}: not proved: {} in this run",
+                        match cond {
+                            Condition::CheckPassed { check, step } => format!("the check {check} of {step} did not pass"),
+                            Condition::PersonAnswered(step) => format!("the person did not answer at {step}"),
+                            Condition::StepDone(step) => format!("{step} was not done"),
+                        }
+                    )),
+                }
+            })
+            .collect()
+    }
+
+    /// The role's claims as `jaynes check` prints them, a line each: what each says and what will prove it in a run.
+    pub fn claims_listed(&self) -> Vec<String> {
+        self.claims
+            .iter()
+            .map(|c| match &c.by {
+                ClaimBy::Unchecked(why) => format!("claim {:?}: nothing checks it: {why}", c.says),
+                ClaimBy::Condition(cond) => format!(
+                    "claim {:?}: proved in a run when {}",
+                    c.says,
+                    match cond {
+                        Condition::CheckPassed { check, step } => format!("the check {check} of {step} passes"),
+                        Condition::PersonAnswered(step) => format!("the person answers at {step}"),
+                        Condition::StepDone(step) => format!("{step} is done"),
+                    }
+                ),
+            })
+            .collect()
+    }
+
+    /// The role's claims that `run` did not prove: [`TomlRole::claims_told`] over the run as it ended.
+    pub fn claims_not_proved(&self, run: &jaynes_core::Run) -> Vec<String> {
+        self.claims_told(&|c| c.holds(run))
     }
 
     /// The role's own checks that name no cases, each as "check NAME of STEP".
@@ -2716,7 +2839,7 @@ files = { type = "array", items = "string" }
             ("all-there", false, "every file named is there"),
         ]);
         assert_eq!(cases[0].input["output"]["files"], json!(["a.txt", "b.txt"]), "a case is the check's input, as written");
-        assert!(r.notes().is_empty() && !r.not_proved().iter().any(|n| n.contains("untested")), "a check with cases is not untested");
+        assert!(!r.notes().iter().chain(r.not_proved().iter()).any(|n| n.contains("untested")), "a check with cases is not untested");
     }
 
     #[test]
@@ -2821,7 +2944,90 @@ files = { type = "array", items = "string" }
         let r = TomlRole::load(&dir).unwrap_or_else(|e| panic!("{}", e.join("\n")));
         let CheckImpl::Script { cases: Some(cases), .. } = &r.extras["make"].checks["files-exist"] else { panic!("no cases") };
         assert_eq!((cases.iter().filter(|c| c.reject).count(), cases.iter().filter(|c| !c.reject).count()), (2, 2));
-        assert!(r.notes().is_empty(), "{:?}", r.notes());
+        assert!(!r.notes().iter().any(|n| n.contains("untested")), "{:?}", r.notes());
+    }
+
+    // --- what a role claims of what it delivers ----------------------------------------------------------------
+
+    /// The checked role with claims of what it delivers: one a check proves, one the person's answer proves, one
+    /// nothing checks.
+    fn claiming(more: &str) -> String {
+        format!("{}\n[[step]]\nname = \"approve\"\nby = \"person\"\nneeds = [\"write\"]\nstop = {{ ask = \"Good?\", verdicts = [\"keep\"] }}\n{more}", CHECKED)
+    }
+    const CLAIMS: &str = r#"
+[[claim]]
+says = "Every file the change names is in the project"
+proved_by = "check fits of write passed"
+
+[[claim]]
+says = "The person read the change"
+proved_by = "person answered at approve"
+
+[[claim]]
+says = "The change does what the request asks"
+unchecked = "only the person can say, and the role asks them only whether it is good"
+"#;
+
+    #[test]
+    fn a_role_claims_what_it_delivers_and_how_each_claim_is_proved() {
+        let r = TomlRole::load(&checked("claims", &claiming(CLAIMS), REJECT, ACCEPT)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        assert_eq!(r.claims.iter().map(|c| c.says.as_str()).collect::<Vec<_>>(), [
+            "Every file the change names is in the project",
+            "The person read the change",
+            "The change does what the request asks",
+        ]);
+        assert_eq!(r.claims[0].by, ClaimBy::Condition(Condition::CheckPassed { check: "fits".into(), step: "write".into() }));
+        assert_eq!(r.claims[1].by, ClaimBy::Condition(Condition::PersonAnswered("approve".into())));
+        assert_eq!(r.claims[2].by, ClaimBy::Unchecked("only the person can say, and the role asks them only whether it is good".into()));
+        // a run that proved both: only what nothing checks is not proved, with the role's own reason
+        assert_eq!(r.claims_told(&|_| true), [
+            "\"The change does what the request asks\": not checked: only the person can say, and the role asks them only whether it is good",
+        ]);
+        assert_eq!(r.claims_listed(), [
+            "claim \"Every file the change names is in the project\": proved in a run when the check fits of write passes",
+            "claim \"The person read the change\": proved in a run when the person answers at approve",
+            "claim \"The change does what the request asks\": nothing checks it: only the person can say, and the role asks them only whether it is good",
+        ]);
+        // a run where the person did not answer: that claim is not proved, and why
+        assert_eq!(r.claims_told(&|c| !matches!(c, Condition::PersonAnswered(_)))[0], "\"The person read the change\": not proved: the person did not answer at approve in this run");
+        // a check that failed or never ran proves nothing
+        assert_eq!(r.claims_told(&|c| !matches!(c, Condition::CheckPassed { .. }))[0], "\"Every file the change names is in the project\": not proved: the check fits of write did not pass in this run");
+    }
+
+    #[test]
+    fn a_claim_proved_by_a_check_with_no_cases_is_never_proved() {
+        let text = claiming(CLAIMS).replace(", cases = \"cases/fits\"", "");
+        let r = TomlRole::load(&checked("claims-untested", &text, REJECT, ACCEPT)).expect("reads");
+        assert_eq!(r.claims_told(&|_| true)[0], "\"Every file the change names is in the project\": not proved: the check fits of write is untested, so its passing proves nothing");
+    }
+
+    #[test]
+    fn a_claim_that_is_not_well_formed_is_refused_at_its_line() {
+        // the step write starts on line 9 and approve after it; the claims come after the steps
+        for (name, claim, says) in [
+            ("claim-both", "says = \"x\"\nproved_by = \"step write done\"\nunchecked = \"y\"", "a claim is proved_by a condition or unchecked with why, one of them"),
+            ("claim-neither", "says = \"x\"", "a claim is proved_by a condition or unchecked with why, one of them"),
+            ("claim-silent", "says = \" \"\nproved_by = \"step write done\"", "the claim says nothing: write what the delivery holds in says"),
+            ("claim-no-why", "says = \"x\"\nunchecked = \" \"", "the claim \"x\" is unchecked and says not why"),
+            ("claim-no-step", "says = \"x\"\nproved_by = \"check fits of wrote passed\"", "the claim \"x\": wrote is not a step of the role"),
+            ("claim-no-check", "says = \"x\"\nproved_by = \"check fit of write passed\"", "the claim \"x\": write has no check fit"),
+            ("claim-no-stop", "says = \"x\"\nproved_by = \"person answered at write\"", "the claim \"x\": write has no stop, so the person is never asked there"),
+            ("claim-grammar", "says = \"x\"\nproved_by = \"the tests are green\"", "the claim \"x\": \"the tests are green\" is not a condition"),
+            ("claim-key", "says = \"x\"\nproved_by = \"step write done\"\nprove = \"y\"", "unknown field `prove`"),
+        ] {
+            let e = TomlRole::load(&checked(name, &claiming(&format!("\n[[claim]]\n{claim}\n")), REJECT, ACCEPT)).expect_err(name).join("\n");
+            assert!(e.contains("role.toml:") && e.contains(says), "{name}:\n{e}");
+        }
+        // a claim is a sentence of its own: two that say the same are one claim written twice
+        let e = TomlRole::load(&checked("claim-twice", &claiming(&format!("{CLAIMS}\n[[claim]]\nsays = \"The person read the change\"\nproved_by = \"step write done\"\n")), REJECT, ACCEPT)).expect_err("twice").join("\n");
+        assert!(e.contains("the claim \"The person read the change\" is written twice"), "{e}");
+    }
+
+    #[test]
+    fn a_role_that_claims_nothing_is_told_so_for_now() {
+        let r = TomlRole::load(&checked("claims-none", CHECKED, REJECT, ACCEPT)).expect("a role with no claim still reads");
+        assert!(r.notes().iter().any(|n| n.starts_with("the role claims nothing of what it delivers:") && n.contains("the next version of the format refuses")), "{:?}", r.notes());
+        assert!(TomlRole::load(&checked("claims-some", &claiming(CLAIMS), REJECT, ACCEPT)).expect("reads").notes().is_empty());
     }
 
     #[test]
@@ -2830,8 +3036,8 @@ files = { type = "array", items = "string" }
         let notes = reads("notes", SCRIPTED).notes();
         assert!(notes.iter().any(|n| n.contains("announce cannot be undone") && n.contains("high risk")), "{notes:?}");
         let late = reads("notes-late", &SCRIPTED.replacen("effect = \"irreversible\"", "effect = \"irreversible\"\nfrom_risk = \"high\"", 1)).notes();
-        assert!(late.is_empty(), "left out of the short path, it raises no run by itself: {late:?}");
-        assert!(TomlRole::load(&role("notes-good", GOOD)).expect("reads").notes().is_empty());
+        assert!(!late.iter().any(|n| n.contains("high risk")), "left out of the short path, it raises no run by itself: {late:?}");
+        assert!(!TomlRole::load(&role("notes-good", GOOD)).expect("reads").notes().iter().any(|n| n.contains("high risk")));
     }
 
     #[test]

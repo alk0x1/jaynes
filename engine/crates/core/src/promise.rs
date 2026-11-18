@@ -143,7 +143,8 @@ impl Condition {
         Err(format!("{t:?} is not a condition: person answered at STEP, check NAME of STEP passed, or step STEP done"))
     }
 
-    fn holds(&self, r: &Run) -> bool {
+    /// Whether the condition holds in the run as it stands.
+    pub fn holds(&self, r: &Run) -> bool {
         let at = |s: &str| r.manifest.index(s);
         match self {
             Condition::PersonAnswered(s) => at(s).is_some_and(|i| {

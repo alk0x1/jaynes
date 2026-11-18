@@ -648,6 +648,11 @@ fn jaynes_check_reads_a_role_of_scripts_and_says_its_runs_start_at_high_risk() {
         assert!(out.lines().any(|l| l == line), "{line}\nis not in:\n{out}");
     }
     assert!(out.contains("not refused") && out.contains("not promised"), "{out}");
+    // what the role claims of each delivery, and what proves each claim in a run
+    assert!(out.contains("  claim \"The registry lists the version\": proved in a run when the check announced of announce passes"), "{out}");
+    assert!(out.contains("  claim \"The entry's words are the ones the release needs\": nothing checks it: the role writes the request as it came, and no person is asked"), "{out}");
+    // the check that asks the registry comes with no cases yet: untested, and the claim it proves never is
+    assert!(out.contains("! check announced of announce has no cases: untested."), "{out}");
 }
 
 #[test]

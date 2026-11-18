@@ -53,3 +53,15 @@ id = { type = "string", about = "the registry's id for the announcement" }
 says = "Nothing is announced before the changelog has the version's entry"
 event = "step announce starts"
 only_after = "step stamp done"
+
+[[claim]]
+says = "The changelog has the entry of the version announced"
+proved_by = "check output-follows-schema of stamp passed"
+
+[[claim]]
+says = "The registry lists the version"
+proved_by = "check announced of announce passed"
+
+[[claim]]
+says = "The entry's words are the ones the release needs"
+unchecked = "the role writes the request as it came, and no person is asked"
