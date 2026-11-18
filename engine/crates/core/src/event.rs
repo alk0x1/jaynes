@@ -110,6 +110,15 @@ pub enum Event {
         /// The arm of the evaluation the run is in, a label.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arm: Option<String>,
+        /// The person's device keys, as paired when the run started: the only keys its proofs are checked by.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        person_keys: Vec<crate::proof::PersonKey>,
+        /// A nonce of this start, so the run's fingerprint is its own though another run had the same id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonce: Option<String>,
+        /// The person asked the run to run outside its box: it waits for their proof before any command on the project.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unboxed: bool,
     },
     RiskRaised {
         to: Risk,
@@ -242,6 +251,14 @@ pub enum Event {
     QuestionSuperseded {
         question: String,
     },
+    /// The input that follows came with a proof only the person can give, and it held for one of the run's keys. The
+    /// input and the proof are kept whole, so reading the record again checks the proof again.
+    Proved {
+        nonce: String,
+        key: crate::proof::KeyKind,
+        input: Box<crate::io::Input>,
+        proof: crate::proof::Proof,
+    },
     AnswerRecorded {
         answer: Answer,
         effects: Effects,
@@ -323,6 +340,7 @@ impl Event {
             Event::StepInvalidated { .. } => "StepInvalidated",
             Event::QuestionOpened { .. } => "QuestionOpened",
             Event::QuestionSuperseded { .. } => "QuestionSuperseded",
+            Event::Proved { .. } => "Proved",
             Event::AnswerRecorded { .. } => "AnswerRecorded",
             Event::Waiting { .. } => "Waiting",
             Event::Blocked { .. } => "Blocked",

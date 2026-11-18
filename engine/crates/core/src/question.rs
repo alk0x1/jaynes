@@ -72,6 +72,9 @@ pub enum QuestionKind {
     Decision,
     /// Leave for an agent to reach something: a routine one may be answered by a rule in code.
     Permission,
+    /// Whether the run may run its commands outside its box: asked at the start, before any command on the project,
+    /// and opened only by the person's answer with a proof only they can give.
+    Unbox,
     /// A step that cannot be undone already acted, and something sent it back or what it rested on changed: it is not
     /// done again on its own. The person keeps the act as it is, or orders a second act.
     Acted,

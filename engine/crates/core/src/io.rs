@@ -8,6 +8,16 @@ use crate::question::{Answer, Ask, By, Item, Question, VerdictKind};
 use crate::risk::{Ceiling, Changed, Risk};
 use serde::{Deserialize, Serialize};
 
+/// What a start knows of the person: the keys of their device, a nonce of this start, and whether they asked the run
+/// to run outside its box.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StartPerson {
+    pub keys: Vec<crate::proof::PersonKey>,
+    pub nonce: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unboxed: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "input", rename_all = "snake_case")]
 pub enum Input {
@@ -34,6 +44,10 @@ pub enum Input {
         /// The arm of the evaluation the run is in, a label too. None: none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         arm: Option<String>,
+        /// The person's own keys and a nonce of this start, so a proof signed for this run holds for no other with the
+        /// same id; and whether they asked the run to run outside its box. Left out of a start without a person's key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        person: Option<StartPerson>,
     },
     /// Go on as far as the run can without anything from outside.
     Tick,
@@ -72,6 +86,14 @@ pub enum Input {
     },
     Answer {
         answer: Answer,
+    },
+    /// An input with a proof only the person can give over it (`proof::input_message`), checked by the core itself.
+    Proved {
+        /// The input the proof is over.
+        signed: Box<Input>,
+        /// Used once in a run.
+        nonce: String,
+        proof: crate::proof::Proof,
     },
     RaiseRisk {
         to: Risk,

@@ -40,6 +40,18 @@ pub struct Run {
     /// The questions the person was told of, by a wait on them: each is told of once.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub told: std::collections::BTreeSet<String>,
+    /// The fingerprint of how the run started: what a proof of the person's is signed for.
+    pub started: Digest,
+    /// The person's device keys, as paired when the run started.
+    pub person_keys: Vec<crate::proof::PersonKey>,
+    /// Nonces of proofs the run took: each is used once.
+    pub nonces: std::collections::BTreeSet<String>,
+    /// The questions whose answer came with a proof that held, and the kind of key that signed it.
+    pub proved_by: BTreeMap<String, crate::proof::KeyKind>,
+    /// A proof just folded, for the input that comes right after it in the record.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub last_proved: Option<(crate::io::Input, crate::proof::KeyKind)>,
     /// Events folded into this state.
     pub seq: u64,
     /// G19: each question that held a merge, with the delivery it was asked about: an answer counts only for it.
@@ -178,7 +190,21 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// The id of the question whether a run may leave its box.
+pub const UNBOX: &str = "unbox";
+
 impl Run {
+    /// Whether the run runs its commands outside its box: the person approved it with a proof that held.
+    pub fn unboxed(&self) -> bool {
+        self.questions.get(UNBOX).is_some_and(|q| q.answer.as_ref().is_some_and(|a| a.by.person() && a.verdicts.get("box") == Some(&Verdict::Keep)))
+            && self.proved_by.contains_key(UNBOX)
+    }
+
+    /// Whether the run waits for the person to say if it may leave its box.
+    pub fn unbox_pending(&self) -> bool {
+        self.questions.get(UNBOX).is_some_and(|q| q.open())
+    }
+
     /// Whether step `i` cannot be undone and already acted on what it rests on: from then on it is never done again on
     /// its own (G14).
     pub fn acted(&self, i: usize) -> bool {
@@ -211,7 +237,7 @@ impl Run {
     }
 
     pub fn started(e: &Event) -> Option<Run> {
-        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, ceilings, ceiling, attention, .. } = e else {
+        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, ceilings, ceiling, attention, person_keys, .. } = e else {
             return None;
         };
         Some(Run {
@@ -238,6 +264,11 @@ impl Run {
             context: Vec::new(),
             undone: false,
             told: Default::default(),
+            started: Digest::of_json(e),
+            person_keys: person_keys.clone(),
+            nonces: Default::default(),
+            proved_by: Default::default(),
+            last_proved: None,
             seq: 1,
             merges: BTreeMap::new(),
         })
@@ -256,6 +287,10 @@ impl Run {
 
     pub fn apply(&mut self, e: &Event) {
         self.seq += 1;
+        // a proof stands only for the input recorded right after it
+        if !matches!(e, Event::Proved { .. } | Event::AnswerRecorded { .. }) {
+            self.last_proved = None;
+        }
         match e {
             Event::RunStarted { .. } => {}
             Event::RiskRaised { to, ceiling, .. } => {
@@ -445,7 +480,19 @@ impl Run {
                         d.reads = reads.clone();
                     }
             }
+            Event::Proved { nonce, key, input, proof } => {
+                // the proof is checked again: a record written by anything else than this core grants nothing
+                let message = crate::proof::input_message(&self.id, &self.started, nonce, input);
+                if !self.nonces.contains(nonce) && crate::proof::holds(&self.person_keys, &message, proof) == Ok(*key) {
+                    self.nonces.insert(nonce.clone());
+                    self.last_proved = Some(((**input).clone(), *key));
+                }
+            }
             Event::AnswerRecorded { answer, effects } => {
+                if let Some((crate::io::Input::Answer { answer: proved }, key)) = self.last_proved.take()
+                    && proved == *answer {
+                        self.proved_by.insert(answer.question.clone(), key);
+                    }
                 self.unwait();
                 let Some(q) = self.questions.get_mut(&answer.question) else { return };
                 if q.question.kind == QuestionKind::Acted {

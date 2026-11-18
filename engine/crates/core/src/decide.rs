@@ -9,7 +9,7 @@ use crate::io::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, I
 use crate::manifest::{CheckKind, Executor, ProjectAccess, SessionKind};
 use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Verdict, VerdictKind};
 use crate::risk::{self, Ceiling, Ceilings, Changed};
-use crate::run::{Phase, QuestionState, Run, Status};
+use crate::run::{Phase, QuestionState, Run, Status, UNBOX};
 use crate::{ENGINE, FORMAT, PROTOCOL};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,7 +48,7 @@ pub const PAUSE_OVER: &str = "pause-over";
 const MAX_MOVES: usize = 10_000;
 
 pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
-    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm } = input {
+    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm, person } = input {
         if run.is_some() {
             return refuse("the run already started");
         }
@@ -57,6 +57,13 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 return refuse(format!("the {what} is a label: 1 to 64 letters, digits and hyphens, the first a letter or a digit"));
             }
         }
+        if person.as_ref().is_some_and(|p| p.unboxed && p.keys.is_empty()) {
+            return refuse("a run outside its box needs a proof only you can give, and none can be given here (no device of yours is paired with this engine): the run is refused and never runs outside its box");
+        }
+        if let Some(p) = person
+            && let Some(k) = p.keys.iter().find(|k| crate::proof::strict_hex(&k.public).is_none()) {
+                return refuse(format!("a paired key of yours is not hex: {}", k.public));
+            }
         if let Err(errors) = manifest.validate() {
             return refuse(format!("the role is refused: {}", errors.join("; ")));
         }
@@ -88,19 +95,43 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 .collect(),
             task: task.clone(),
             arm: arm.clone(),
+            person_keys: person.as_ref().map(|p| p.keys.clone()).unwrap_or_default(),
+            nonce: person.as_ref().map(|p| p.nonce.clone()),
+            unboxed: person.as_ref().is_some_and(|p| p.unboxed),
         };
         let Some(state) = Run::started(&start) else { return refuse("the run could not start") };
-        let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() }, again: None };
+        let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() }, again: None, proved: None };
+        if person.as_ref().is_some_and(|p| p.unboxed) {
+            c.ask_unbox();
+        }
         c.advance();
         return Ok(c.out);
     }
     let Some(run) = run else { return refuse("there is no such run") };
-    let mut c = Ctx { run: run.clone(), out: Decided::default(), again: None };
+    let mut c = Ctx { run: run.clone(), out: Decided::default(), again: None, proved: None };
+    // an input with the person's proof: checked here, against the keys the run recorded, for this run and once
+    let input = match input {
+        Input::Proved { signed, nonce, proof } => {
+            if matches!(**signed, Input::Start { .. } | Input::Proved { .. }) {
+                return refuse("only an input to a run under way takes a proof");
+            }
+            if c.run.nonces.contains(nonce) {
+                return refuse("this proof was used already: a proof stands for one input, once");
+            }
+            let message = crate::proof::input_message(&c.run.id, &c.run.started, nonce, signed);
+            let key = crate::proof::holds(&c.run.person_keys, &message, proof).map_err(|e| Refusal(format!("the proof does not hold: {e}")))?;
+            c.emit(Event::Proved { nonce: nonce.clone(), key, input: signed.clone(), proof: proof.clone() });
+            c.proved = Some(key);
+            &**signed
+        }
+        other => other,
+    };
     if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. }) {
         return refuse("the run is finished");
     }
     match input {
         Input::Start { .. } => return refuse("the run already started"),
+        Input::Proved { .. } => return refuse("a proof is over one input, not over another proof"),
         Input::Tick => c.advance(),
         Input::ProbeEnded { step, ok, reason } => c.probe_ended(step, *ok, reason)?,
         Input::AttemptEnded { step, attempt, fix, outcome } => c.attempt_ended(step, *attempt, *fix, outcome)?,
@@ -221,6 +252,8 @@ struct Ctx {
     out: Decided,
     /// The person ordered a second act of this step: the one invalidation of a step that already acted.
     again: Option<usize>,
+    /// The input came with the person's proof, by this kind of key.
+    proved: Option<crate::proof::KeyKind>,
 }
 
 impl Ctx {
@@ -280,6 +313,11 @@ impl Ctx {
     /// One move of the run, if one can be made now. True when it may make another.
     fn move_once(&mut self) -> bool {
         if self.run.finished() || self.run.blocked() || self.run.halted || self.run.delivering.is_some() {
+            return false;
+        }
+        // G18: nothing runs on the project before the person says whether the run may leave its box
+        if self.run.unbox_pending() {
+            self.wait(None, vec![UNBOX.to_string()], "the run asks you whether it may run outside its box".to_string());
             return false;
         }
         let path = self.run.path();
@@ -1121,6 +1159,21 @@ impl Ctx {
         let Some(q) = self.run.questions.get(&answer.question).cloned() else {
             return refuse(format!("there is no question {}", answer.question));
         };
+        if self.proved.is_some() && !answer.by.person() {
+            return refuse("a proof of yours stands only for an answer of yours");
+        }
+        // what this answer must come with: the person's word, or their device's proof (G14, G18)
+        let need = requires(&self.run, &q.question.id, !answer.sends_back());
+        if !need.met_by(self.proved) {
+            return refuse(match need {
+                crate::proof::Requires::Biometry => "this answer needs your fingerprint, in the Jaynes app".to_string(),
+                _ if self.run.person_keys.is_empty() => "this answer needs a proof only you can give, and no device of yours is paired with this run".to_string(),
+                _ => "this answer needs a proof only you can give: answer it in the Jaynes app".to_string(),
+            });
+        }
+        if q.question.kind == QuestionKind::Unbox {
+            return self.answer_unbox(&q, answer);
+        }
         if q.question.kind == QuestionKind::Acted {
             return self.answer_acted(&q, answer);
         }
@@ -1220,8 +1273,8 @@ impl Ctx {
                     self.command(Command::Permit { step: q.question.step.clone(), attempt, allow });
                 }
             }
-            // answered in answer_acted and answer_merge, never here
-            QuestionKind::Acted | QuestionKind::Merge => {}
+            // answered in answer_acted, answer_merge and answer_unbox, never here
+            QuestionKind::Acted | QuestionKind::Merge | QuestionKind::Unbox => {}
             QuestionKind::Decision if executor == Executor::Person => self.answered_person(i, &q, answer),
             QuestionKind::Decision => {
                 let input = self.run.steps[i].inputs.contains(&q.question.id);
@@ -1243,6 +1296,52 @@ impl Ctx {
                 }
             }
         }
+        self.advance();
+        Ok(())
+    }
+
+    /// Ask the person whether the run may leave its box, before anything runs on the project.
+    fn ask_unbox(&mut self) {
+        let Some(first) = self.run.manifest.steps.first().map(|s| s.name.clone()) else { return };
+        let about = "Run this run's commands outside its box? They could then reach anything your account can: your files, your keys, the network. Only your answer in the Jaynes app opens it.".to_string();
+        let question = Question {
+            back: Default::default(),
+            id: UNBOX.to_string(),
+            step: first,
+            round: 0,
+            kind: QuestionKind::Unbox,
+            items: vec![Item { id: "box".to_string(), label: "Run outside the box".to_string(), digest: Digest::of_json(&("unbox", &self.run.id)) }],
+            offered: vec![VerdictKind::Keep, VerdictKind::Drop],
+            holds: true,
+            about,
+            choose: false,
+            pass: 0,
+            passes: 0,
+        };
+        self.emit(Event::QuestionOpened { question: question.clone() });
+        self.command(Command::Ask { question });
+    }
+
+    /// The person's answer whether the run leaves its box: once, theirs, and opening it only with their proof, which
+    /// `answer` has checked.
+    fn answer_unbox(&mut self, q: &QuestionState, answer: &Answer) -> Result<(), Refusal> {
+        if !q.open() {
+            return refuse("whether the run leaves its box was already answered, and that answer stands");
+        }
+        if !answer.by.person() {
+            return refuse("only you answer whether the run leaves its box");
+        }
+        if answer.shown != q.question.shown() {
+            return refuse("the question changed since it was shown to you; look at it again");
+        }
+        if answer.verdicts.keys().any(|id| id != "box") || !answer.back.is_empty() {
+            return refuse("the question has one item, box");
+        }
+        if !matches!(answer.verdicts.get("box"), Some(Verdict::Keep | Verdict::Drop)) {
+            return refuse("say whether the run may leave its box: keep opens it, drop keeps it");
+        }
+        let effects = effects(&self.run, &q.question, answer);
+        self.emit(Event::AnswerRecorded { answer: answer.clone(), effects });
         self.advance();
         Ok(())
     }
@@ -1501,6 +1600,13 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
     }
     let Some(i) = run.manifest.index(&q.step) else { return Effects::default() };
+    if q.kind == QuestionKind::Unbox {
+        sentences.push(match answer.verdict("box") {
+            Verdict::Keep => "The run's commands run outside its box from now to its end: they can reach anything your account can.".to_string(),
+            _ => "The run stays in its box, and goes on there.".to_string(),
+        });
+        return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
+    }
     if q.kind == QuestionKind::Acted {
         let again = answer.verdict(&q.step).sends_back();
         if again && run.manifest.index(&q.step).is_some_and(|k| run.steps[k].maybe_acted) {
@@ -1644,4 +1750,27 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         }
     }
     Effects { sentences, reruns, may_rerun }
+}
+
+/// What an answer to question `id` must come with, as the core requires it: the person's device's proof where the
+/// answer lets out what cannot be undone, their word elsewhere. `lets_go` is whether the answer lets the work go on
+/// (keeps), rather than sending it back.
+pub fn requires(run: &Run, id: &str, lets_go: bool) -> crate::proof::Requires {
+    use crate::proof::Requires;
+    let Some(q) = run.questions.get(id) else { return Requires::Word };
+    match q.question.kind {
+        // G18: leaving the box
+        QuestionKind::Unbox if lets_go => Requires::Presence,
+        // G14: acting again, a second act or the same intent repeated; a run with no device of the person's paired
+        // keeps taking their word, as before
+        QuestionKind::Acted if !lets_go && !run.person_keys.is_empty() => Requires::Presence,
+        _ => Requires::Word,
+    }
+}
+
+/// What the answer that lets out what question `id` holds back must come with: what a page shows instead of its
+/// button when it is not the person's word.
+pub fn requires_to_release(run: &Run, id: &str) -> crate::proof::Requires {
+    let acted = run.questions.get(id).is_some_and(|q| q.question.kind == QuestionKind::Acted);
+    requires(run, id, !acted)
 }

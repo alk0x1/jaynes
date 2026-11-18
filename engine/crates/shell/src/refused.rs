@@ -172,7 +172,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jaynes-refused-{name}-{}", std::process::id()));
         let _gone = std::fs::remove_dir_all(&dir);
         let manifest: Manifest = serde_json::from_value(serde_json::json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "plan", "executor": "agent"}]})).expect("manifest");
-        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, person: None };
         let events = jaynes_core::decide(None, &start).expect("start").events;
         Store::open(&dir.join("record.sqlite3")).expect("store").append("r1", &events).expect("append");
         dir
