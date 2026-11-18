@@ -80,6 +80,36 @@ class SameWords(unittest.TestCase):
         self.assertNotEqual(menu.same_words("MUST NOT"), menu.same_words("must not"))
         self.assertFalse(menu.held("a cache MUST NOT store a response", "a cache SHOULD NOT store a response"))
 
+    # a word wrapped at its hyphen, as RFC 9111's text has "MUST make a best-" at the end of a line and "effort
+    # attempt" at the start of the next
+    RFC = ("   store the information in non-volatile storage and MUST make a best-\n"
+           "   effort attempt to remove the information from volatile storage as\n")
+
+    def test_a_word_wrapped_at_its_hyphen_is_one_word(self):
+        self.assertTrue(menu.held(self.RFC, "MUST make a best-effort attempt to remove the information from volatile storage"))
+        self.assertTrue(menu.held("best-\r\n  effort", "best-effort"))
+
+    def test_the_quote_is_read_by_the_same_rule(self):
+        self.assertTrue(menu.held("MUST make a best-effort attempt", "MUST make a best-\neffort attempt"))
+
+    def test_a_wrapped_word_keeps_its_hyphen(self):
+        self.assertFalse(menu.held(self.RFC, "MUST make a best effort attempt"))
+        self.assertFalse(menu.held(self.RFC, "MUST make a besteffort attempt"))
+        self.assertFalse(menu.held("the remo-\nval of the entry", "the removal of the entry"))
+
+    def test_a_hyphen_and_a_space_on_one_line_stay_apart(self):
+        self.assertFalse(menu.held("both pre- and post-processing", "both pre-and post-processing"))
+        self.assertFalse(menu.held("MUST make a best- effort attempt", "MUST make a best-effort attempt"))
+
+    def test_a_hyphen_before_a_blank_line_stays_apart(self):
+        self.assertFalse(menu.held("a list ending in non-\n\nvolatile things", "non-volatile things"))
+        self.assertFalse(menu.held("non-\n\n- next", "non-- next"))
+
+    def test_a_hyphen_at_the_end_of_an_html_block_does_not_join_the_next(self):
+        text = menu.page_text(f"<ul><li>keep it non-</li><li>volatile storage</li></ul><p>{LONG}</p>".encode(), "text/html")
+        self.assertFalse(menu.held(text, "non-volatile storage"))
+        self.assertTrue(menu.held(text, "keep it non-"))
+
     def test_a_quote_is_held_whatever_its_spacing(self):
         self.assertTrue(menu.held("a cache MUST NOT\n   store a response", "MUST NOT store  a response"))
 

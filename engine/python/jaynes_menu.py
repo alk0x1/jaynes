@@ -345,13 +345,25 @@ class Unread(Exception):
     """Why a page was not read. What is quoted from a page that was not read is not proved."""
 
 
+# A word that goes on past the end of a line at its hyphen, as plain text wraps "best-effort": a letter or digit,
+# the hyphen, one line break with nothing but spaces around it, and a letter or digit.
+_WRAPPED = re.compile(r"(?<=\w)-[ \t]*\r?\n[ \t]*(?=\w)")
+
+
 def same_words(text: str) -> str:
     """The text as two texts are compared: Unicode compatibility forms folded (NFKC), characters that do not show
-    dropped, every kind of quotation mark made ', every kind of dash made -, and each run of spaces and line
-    breaks made one space. Letters, digits, their case and every other mark stay as written."""
+    dropped, every kind of quotation mark made ', every kind of dash made -, a word wrapped at its hyphen joined
+    again with the hyphen kept, and each run of spaces and line breaks made one space. Letters, digits, their case
+    and every other mark stay as written.
+
+    The joining is the one place a break counts: only a single line break right after a hyphen inside a word
+    ("best-" then "effort" on the next line is best-effort). A hyphen followed by a space on the same line, or by a
+    blank line, as between two blocks of a page, stays apart ("best- effort"); and the hyphen is never dropped, so
+    a word split by hyphenation ("remo-" then "val") reads remo-val and not removal."""
     import unicodedata
     text = unicodedata.normalize("NFKC", text)
     text = "".join("'" if c in _QUOTES else "-" if c in _DASHES else "" if c in _UNSEEN else c for c in text)
+    text = _WRAPPED.sub("-", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -365,7 +377,8 @@ def _reader() -> Any:
     from html.parser import HTMLParser
 
     class Reader(HTMLParser):
-        """The text of an HTML page as a reader sees it: no scripts or styles, and blocks apart."""
+        """The text of an HTML page as a reader sees it: no scripts or styles, and blocks apart by a blank line, so a
+        hyphen at the end of one block never joins the next."""
 
         def __init__(self) -> None:
             super().__init__(convert_charrefs=True)
@@ -376,13 +389,13 @@ def _reader() -> Any:
             if tag in _SKIPPED:
                 self.skipping += 1
             elif tag in _BLOCKS:
-                self.parts.append("\n")
+                self.parts.append("\n\n")
 
         def handle_endtag(self, tag: str) -> None:
             if tag in _SKIPPED:
                 self.skipping = max(0, self.skipping - 1)
             elif tag in _BLOCKS:
-                self.parts.append("\n")
+                self.parts.append("\n\n")
 
         def handle_data(self, data: str) -> None:
             if not self.skipping:
