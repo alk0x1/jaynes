@@ -261,6 +261,20 @@ class WhatDefinesTheSuite(unittest.TestCase):
             self.assertEqual(menu.as_it_began("given", (list(start), start.get), Path(project), "sh tests/run.sh"), start)
             self.assertEqual(menu.as_it_began("given", (list(start), start.get), Path(project), "npm test"), {})
 
+    def test_an_if_hides_a_failure_only_when_its_body_cannot_fail(self):
+        self.assertTrue(menu._cannot_fail("if grep -q hi greeting.txt; then :; fi"))
+        self.assertTrue(menu._cannot_fail("if grep -q hi greeting.txt; then echo checked; fi"))
+        for line in ('if [ "$(pbpaste)" = "x" ]; then echo "read it"; exit 1; fi', "if grep -q bye g; then false; fi",
+                     "if grep -q hi g; then :; else exit 1; fi", "if test -f x; then rm x; fi"):
+            with self.subTest(line=line):
+                self.assertFalse(menu._cannot_fail(line))
+        # the probe a test of the box runs as a suite: each of its ifs fails when it finds what it looks for
+        probe = ('\nif [ "$(/usr/bin/pbpaste -pboard find 2>/dev/null)" = "t" ]; then echo "read the pasteboard"; exit 1; fi\n'
+                 'printf w | /usr/bin/pbcopy -pboard find 2>/dev/null\n'
+                 'if /usr/bin/security list-keychains >/dev/null 2>&1; then echo "reached the keychain"; exit 1; fi\n'
+                 'grep -q hi greeting.txt\n')
+        self.assertIsNone(menu._script_cannot_fail(probe))
+
     def test_a_shell_script_that_cannot_fail_is_told_and_one_that_can_is_not(self):
         for text in ("grep -q hi g || true\n", "grep -q hi g\nexit 0\n", "grep -q hi g\necho ok\n"):
             with self.subTest(text=text):

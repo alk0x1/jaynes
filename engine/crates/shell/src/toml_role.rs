@@ -2293,12 +2293,12 @@ impl TomlRole {
                     }
                 }
             },
-            Call::Check { step, check, request, output, given, project, source, any_port } => match step_of(&step) {
+            Call::Check { step, check, request, output, given, project, source, start, any_port } => match step_of(&step) {
                 Err(b) => b,
                 Ok((_, x)) => {
-                    // the start of the run's copy, where the engine keeps it: a check of the menu compares with it
-                    let start = project.as_deref().and_then(|p| crate::project::start_of(Path::new(p)))
-                        .map(|(git, commit)| json!({"git": git.display().to_string(), "commit": commit}));
+                    // where the project stood when the run began, as the engine gives it: a check of the menu compares
+                    // with it; never worked out from where `project` is, the state judged laid out apart
+                    let start = start.map(|s| json!({"git": s.git, "commit": s.commit}));
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
                                       "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port,
                                       "start": start});

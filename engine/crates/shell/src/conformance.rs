@@ -91,6 +91,7 @@ pub fn run(role: &RoleProgram) -> Vec<Finding> {
                     given: Vec::new(),
                     project: None,
                     source: None,
+                    start: None,
                     any_port: false,
                 });
                 let ok = matches!(reply, Ok(Body::Verdict { .. }));

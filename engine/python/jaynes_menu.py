@@ -401,14 +401,26 @@ def as_it_began(kind: str, start: Start, project: Path, suite: str = "") -> dict
     return back
 
 
+def _if_hides(line: str) -> bool:
+    """Whether a one-line if hides its condition's failure: with no else, its body does nothing that could fail, so
+    the line succeeds whatever the condition does. A body that exits with a failure, or runs a command that could
+    fail, is a test: `if [ ... ]; then echo bad; exit 1; fi` fails when it should. An if written over several lines is
+    not read here."""
+    m = re.match(r"if\s+.+?;\s*then\s+(?P<body>.*?)\s*;?\s*fi$", line)
+    if not m or re.search(r"\b(else|elif)\b", line):
+        return False
+    pieces = [p.strip() for p in re.split(r";|&&|\|\|", m.group("body")) if p.strip()]
+    return all(box.NOTHING.fullmatch(p) for p in pieces)
+
+
 def _cannot_fail(line: str) -> bool:
     """Whether a recipe's or a test script's ``line`` runs something that could fail and is made unable to: its last
     alternative after || only succeeds or prints, its last command after ; does, or it is an if with no else."""
     line = line.strip().lstrip("@-+").strip()
     if box.noop([line]):
         return False
-    if re.match(r"if\s", line) and not re.search(r"\belse\b", line):
-        return True
+    if re.match(r"if\s", line):
+        return _if_hides(line)
     for joined in (r"\|\|", r";"):
         parts = [p.strip() for p in re.split(joined, line) if p.strip()]
         if len(parts) > 1 and box.NOTHING.fullmatch(parts[-1]) and not all(box.NOTHING.fullmatch(p) for p in parts):

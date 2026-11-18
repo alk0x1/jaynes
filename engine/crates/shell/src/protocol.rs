@@ -87,6 +87,11 @@ pub enum Call {
         /// ignores is not there. The folder goes when the check is over.
         project: Option<String>,
         source: Option<String>,
+        /// The project as the run began, for a check that compares with it: the engine's repository beside the
+        /// run's copy, out of every agent's reach, and the commit the run began from. Given by the engine from the
+        /// run's copy, never read from where `project` is, the state judged laid out apart. Left out when not known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<Start>,
         /// The person opened this project's checks to every local port (`jaynes project open-ports`), as the run's
         /// setup recorded it when it started: the role's box then lets its commands reach any local TCP port. Left
         /// out when not.
@@ -98,6 +103,13 @@ pub enum Call {
     /// The output with only the items the person chose, each as it was: a stop that chooses asks for it when the
     /// person chose without a note, so no agent works. The reply is a `result`.
     Narrow { step: String, output: Value, keep: Vec<String> },
+}
+
+/// Where the project stood when the run began: a repository and a commit of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Start {
+    pub git: String,
+    pub commit: String,
 }
 
 /// An earlier step's output given to a call.

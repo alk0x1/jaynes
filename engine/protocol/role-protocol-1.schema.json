@@ -857,6 +857,17 @@
                 "null"
               ]
             },
+            "start": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Start"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The project as the run began, for a check that compares with it: the engine's repository beside the\nrun's copy, out of every agent's reach, and the commit the run began from. Given by the engine from the\nrun's copy, never read from where `project` is, the state judged laid out apart. Left out when not known."
+            },
             "step": {
               "type": "string"
             }
@@ -990,6 +1001,22 @@
       "required": [
         "id",
         "label"
+      ],
+      "type": "object"
+    },
+    "Start": {
+      "description": "Where the project stood when the run began: a repository and a commit of it.",
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "git": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "git",
+        "commit"
       ],
       "type": "object"
     },

@@ -1430,6 +1430,8 @@ impl<'a> Driver<'a> {
         let judged = laid.as_ref().and(tree.clone());
         let project = laid.as_ref().map(|l| l.dir.display().to_string()).or_else(|| copy.map(|c| c.dir().display().to_string()));
         let source = copy.map(|c| c.source().display().to_string());
+        // where the project stood when the run began, from the run's copy itself, never from the state laid out apart
+        let start = copy.and_then(|c| crate::project::start_of(c.dir())).map(|(git, commit)| crate::protocol::Start { git: git.display().to_string(), commit });
         // what git ignores is in no state and no delivery: a check that fails or cannot judge says it was not given it
         let not_given = laid.as_ref().and(copy).and_then(|c| crate::project::not_given(&c.left_out()));
         let hidden = |name: &str| decl.checks.iter().any(|c| c.name == name && c.kind == jaynes_core::manifest::CheckKind::Hidden);
@@ -1458,6 +1460,7 @@ impl<'a> Driver<'a> {
                     given: given.clone(),
                     project: project.clone(),
                     source: source.clone(),
+                    start: start.clone(),
                     any_port: self.setup.any_port,
                 }) {
                     Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict: told(name, verdict), tree: judged.clone() },
