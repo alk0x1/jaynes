@@ -28,6 +28,8 @@ rustix = { version = "1", features = ["process"] }
 # the box on Linux: the kernel's Landlock and a seccomp filter, set by the program on itself
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
+# the box's own network: a new user and network namespace, and its loopback brought up by netlink
+rustix = { version = "1", features = ["process", "thread", "net"] }
 seccompiler = "0.5"
 libc = "0.2"
 
