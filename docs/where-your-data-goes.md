@@ -69,9 +69,12 @@ your home folder beyond the run's copy, the folders the role names and the toolc
 partial (in Claude Code the sandbox covers shell commands only); [what the engine guarantees](guarantees.md#what-this-page-does-not-promise)
 says how far they go.
 
-The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS: it
-denies the network, except local ports. **The known limit:** to run a test suite with its own servers and
-databases, the box lets the suite reach any local port on the machine, not only its own.
+The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS. It
+denies the network except local TCP ports and sends no UDP, and it hides what the engine keeps (the page's key and
+log, the record, other runs). **The known limit:** so that a test suite's own servers work, the commands reach any
+local TCP port on the machine, so everything else that listens there too: a browser's debugger, a database without
+a password, the Jaynes page (without its key, so what comes through it is not you). A command may also serve on
+`0.0.0.0` while it runs, where other machines on your network can reach it.
 
 ## What this page does not promise
 
