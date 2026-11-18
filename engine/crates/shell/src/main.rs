@@ -20,6 +20,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
+  box [--write DIR]... [--hide PATH]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
@@ -334,6 +335,31 @@ fn run(args: &[String]) -> Result<(), String> {
                 println!("{name} {version}  {about}{}", if origin.is_empty() { String::new() } else { format!("  (from {origin})") });
             }
             Ok(())
+        }
+        "box" => {
+            // the box on Linux: confine this process, then become the command after --
+            let (opts, argv) = match rest.iter().position(|a| a == "--") {
+                Some(i) => (&rest[..i], rest[i + 1..].to_vec()),
+                None => (rest, Vec::new()),
+            };
+            if opts.iter().any(|a| a == "--check") {
+                return match jaynes_shell::sandbox::unavailable() {
+                    None => {
+                        say(&format!("the box can open here; {}", jaynes_shell::sandbox::unix_sockets()));
+                        Ok(())
+                    }
+                    Some(why) => Err(why),
+                };
+            }
+            let all = |name: &str| opts.windows(2).filter(|w| w[0] == name).map(|w| w[1].clone()).collect::<Vec<_>>();
+            let ports = all("--port").iter().map(|p| p.parse::<u16>().map_err(|_| format!("{p} is not a port"))).collect::<Result<Vec<_>, _>>()?;
+            let spec = jaynes_shell::sandbox::Spec {
+                writable: all("--write").into_iter().map(PathBuf::from).collect(),
+                hidden: all("--hide").into_iter().map(PathBuf::from).collect(),
+                ports,
+                local: opts.iter().any(|a| a == "--local"),
+            };
+            Err(jaynes_shell::sandbox::run(&spec, &argv))
         }
         "guide" => {
             print!("{}", install::GUIDE);

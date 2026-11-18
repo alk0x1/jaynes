@@ -15,6 +15,7 @@ pub mod presence;
 pub mod project;
 pub mod protocol;
 pub mod role;
+pub mod sandbox;
 pub mod stop;
 pub mod store;
 pub mod summary;
