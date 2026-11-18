@@ -17,16 +17,19 @@ pub enum Section {
     Terminal,
     Notifications,
     Agents,
+    /// The person's device keys (G18): pairing this Mac.
+    Device,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::Terminal, Section::Notifications, Section::Agents];
+    const ALL: [Section; 4] = [Section::Terminal, Section::Notifications, Section::Agents, Section::Device];
 
     fn name(self) -> &'static str {
         match self {
             Section::Terminal => "Terminal",
             Section::Notifications => "Notifications",
             Section::Agents => "Agents",
+            Section::Device => "This Mac",
         }
     }
 
@@ -35,6 +38,7 @@ impl Section {
             Section::Terminal => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>"##,
             Section::Notifications => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>"##,
             Section::Agents => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>"##,
+            Section::Device => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>"##,
         }
     }
 
@@ -67,6 +71,53 @@ pub struct SettingsView {
     editor: Entity<InputState>,
     focus: FocusHandle,
     note: Option<String>,
+    /// This Mac's keys and the pairing the record holds, read when This Mac shows and after a pairing.
+    device: Option<DeviceState>,
+    /// A pairing waits for the person's gesture.
+    pairing: bool,
+}
+
+/// What This Mac shows: what this Mac can hold, its keys if it made them, and the pairing the record holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceState {
+    pub can: crate::device_key::Can,
+    pub mine: Option<Vec<jaynes_core::proof::PersonKey>>,
+    pub paired: Result<Option<crate::pairing::Paired>, String>,
+}
+
+impl DeviceState {
+    pub fn read() -> DeviceState {
+        let mine = crate::device_key::DeviceKeys::open(&crate::device_key::dir()).ok().flatten().map(|k| k.keys().to_vec());
+        DeviceState { can: crate::device_key::can(), mine, paired: crate::pairing::standing(&jaynes_shell::home()) }
+    }
+
+    /// Whether Pair is offered: a Mac that can hold the keys, and nothing paired yet.
+    pub fn can_pair(&self) -> bool {
+        self.can != crate::device_key::Can::Nothing && matches!(self.paired, Ok(None))
+    }
+}
+
+/// What This Mac says of the pairing, at `now_ms`.
+pub fn device_status(d: &DeviceState, now_ms: u64) -> String {
+    use crate::device_key::Can;
+    let paired = match &d.paired {
+        Err(e) => return format!("The record cannot be read: {e}"),
+        Ok(p) => p,
+    };
+    match paired {
+        None if d.can == Can::Nothing => "This Mac has no Secure Enclave: it cannot hold a key only you can use.".into(),
+        None => "Not paired. Once paired, letting a step that cannot be undone go on, and letting a run out of its box, take your touch or your password here.".into(),
+        Some(p) => {
+            let ago = crate::agents::age(p.at * 1000, now_ms);
+            let when = if ago == "now" { "just now".to_string() } else { format!("{ago} ago") };
+            if d.mine.as_deref().is_some_and(|m| p.is(m)) {
+                let keys = if p.keys.len() == 2 { "a fingerprint key and a device key" } else { "a device key (no finger is enrolled for Touch ID)" };
+                format!("Paired {when}: {keys}, made by this Mac's Secure Enclave.")
+            } else {
+                format!("Another device's keys were paired {when}. Unpair them from that device to pair this Mac.")
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -127,7 +178,7 @@ impl SettingsView {
         }
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        SettingsView { section: Section::Terminal, font_open: false, fonts_closed_at: None, new_agent, editor, focus, note: None }
+        SettingsView { section: Section::Terminal, font_open: false, fonts_closed_at: None, new_agent, editor, focus, note: None, device: None, pairing: false }
     }
 
     /// What a click on a control does: the setting changes, at once, and is kept.
@@ -147,7 +198,40 @@ impl SettingsView {
     pub fn show(&mut self, section: Section, cx: &mut Context<Self>) {
         self.section = section;
         self.font_open = false;
+        if section == Section::Device {
+            self.device = Some(DeviceState::read());
+        }
         cx.notify();
+    }
+
+    /// Pair this Mac: its keys made the first time, the person's gesture asked, the change sent to the engine. The
+    /// dialog waits for the person, so it runs away from the window's thread.
+    pub fn pair(&mut self, cx: &mut Context<Self>) {
+        if self.pairing {
+            return;
+        }
+        self.pairing = true;
+        self.note = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let done = cx.background_executor().spawn(async move { crate::pairing::pair(&jaynes_shell::home(), &crate::device_key::dir()) }).await;
+            let device = cx.background_executor().spawn(async move { DeviceState::read() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.pairing = false;
+                this.note = match &done {
+                    Ok(crate::pairing::Pairing::Cancelled) => Some("Nothing was paired: the dialog was closed.".into()),
+                    Ok(_) => None,
+                    Err(e) => Some(format!("This Mac was not paired: {e}")),
+                };
+                match &done {
+                    Ok(p) => tracing::info!("pairing: {p:?}"),
+                    Err(e) => tracing::warn!("pairing: {e}"),
+                }
+                this.device = Some(device);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn rows(&self, p: &Prefs, cx: &mut Context<Self>) -> Vec<Div> {
@@ -169,6 +253,28 @@ impl SettingsView {
                 row("New agent runs", Some("What Command-T starts, in the open agent's folder".into()), field(&self.new_agent)),
                 row("Editor", Some("What e opens in Changes; empty: your shell's $VISUAL or $EDITOR".into()), field(&self.editor)),
             ],
+            Section::Device => {
+                let d = self.device.clone().unwrap_or_else(DeviceState::read);
+                let status = device_status(&d, crate::agents::now_ms());
+                let control = if self.pairing {
+                    div().text_color(rgb(look::faint())).child("Waiting for your touch…").into_any_element()
+                } else if d.can_pair() {
+                    div()
+                        .id("pair")
+                        .px(px(12.))
+                        .py(px(5.))
+                        .rounded(px(7.))
+                        .bg(rgb(look::blue()))
+                        .text_color(rgb(look::on_fill()))
+                        .cursor_pointer()
+                        .child("Pair this Mac")
+                        .on_click(cx.listener(|this, _, _, cx| this.pair(cx)))
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                };
+                vec![row("Pairing", Some(status), control)]
+            }
         }
     }
 
@@ -475,7 +581,36 @@ mod tests {
     }
 
     #[test]
+    fn this_mac_says_how_it_stands_and_offers_pair_only_with_nothing_paired() {
+        use super::{DeviceState, device_status};
+        use crate::device_key::Can;
+        use crate::pairing::Paired;
+        use jaynes_core::proof::{KeyKind, PersonKey};
+        let key = |kind, public: &str| PersonKey { kind, public: public.into() };
+        let mine = vec![key(KeyKind::Biometry, "04aa"), key(KeyKind::Presence, "04bb")];
+        let paired = |keys: Vec<PersonKey>| Paired { at: 1_000, keys, nonce: "n".into(), channel: "app".into(), caller: String::new() };
+        let now = 1_000_000 + 5 * 60_000;
+        let state = |can, mine: Option<Vec<PersonKey>>, p| DeviceState { can, mine, paired: Ok(p) };
+
+        let none = state(Can::Nothing, None, None);
+        assert!(device_status(&none, now).contains("no Secure Enclave") && !none.can_pair());
+        let fresh = state(Can::Both, None, None);
+        assert!(device_status(&fresh, now).starts_with("Not paired.") && fresh.can_pair());
+        let ours = state(Can::Both, Some(mine.clone()), Some(paired(mine.iter().rev().cloned().collect())));
+        assert_eq!(device_status(&ours, now), "Paired 5m ago: a fingerprint key and a device key, made by this Mac's Secure Enclave.");
+        assert!(!ours.can_pair());
+        let alone = state(Can::DeviceKey, Some(vec![mine[1].clone()]), Some(paired(vec![mine[1].clone()])));
+        assert!(device_status(&alone, now).contains("a device key (no finger is enrolled"));
+        let theirs = state(Can::Both, Some(mine.clone()), Some(paired(vec![key(KeyKind::Presence, "04cc")])));
+        assert!(device_status(&theirs, now).starts_with("Another device's keys were paired 5m ago.") && !theirs.can_pair());
+        let broken = DeviceState { can: Can::Both, mine: None, paired: Err("locked".into()) };
+        assert_eq!(device_status(&broken, now), "The record cannot be read: locked");
+        assert!(!broken.can_pair());
+    }
+
+    #[test]
     fn a_section_is_found_by_its_name() {
+        assert_eq!(Section::named("this mac"), Some(Section::Device));
         assert_eq!(Section::named("notifications"), Some(Section::Notifications));
         assert_eq!(Section::named("Agents"), Some(Section::Agents));
         assert_eq!(Section::named("look"), None);
