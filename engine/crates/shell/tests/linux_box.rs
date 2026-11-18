@@ -367,3 +367,25 @@ fn a_command_that_asks_for_no_network_gets_none_on_any_machine() {
     let o = boxed(&p, "echo $JAYNES_BOX_NETWORK", &[]);
     assert!(o.status.success() && said(&o).contains("none"), "{}", said(&o));
 }
+
+#[test]
+fn what_is_shown_inside_a_hidden_folder_is_read_and_nothing_else_of_it() {
+    // the run's copy lives inside the hidden runs: the box reads the copy and no other run
+    let p = place("show");
+    opens();
+    let runs = p.base.join("runs");
+    for d in ["mine/project", "other"] {
+        std::fs::create_dir_all(runs.join(d)).expect("dir");
+    }
+    std::fs::write(runs.join("mine/project/greeting.txt"), "hello\n").expect("write");
+    std::fs::write(runs.join("other/output.json"), "secret\n").expect("write");
+    std::fs::write(runs.join("mine/record"), "secret\n").expect("write");
+    let copy = runs.join("mine/project");
+    let args = ["--hide", runs.to_str().expect("path"), "--show", copy.to_str().expect("path")];
+    let o = boxed(&p, &format!("cat {}/mine/project/greeting.txt", runs.display()), &args);
+    assert!(o.status.success() && said(&o).contains("hello"), "the shown copy is read: {}", said(&o));
+    for other in ["other/output.json", "mine/record"] {
+        let o = boxed(&p, &format!("cat {}/{other}", runs.display()), &args);
+        assert!(!o.status.success(), "the box read {other}, which is hidden: {}", said(&o));
+    }
+}
