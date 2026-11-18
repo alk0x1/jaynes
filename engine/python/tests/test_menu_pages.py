@@ -396,14 +396,14 @@ class FetchPages(unittest.TestCase):
         import json
         ask = {"kind": "step", "use": "fetch-pages", "with": {"pages": "read.links"},
                "call": {"given": [{"step": "read", "output": {"links": ["https://nowhere.invalid/"]}}]}}
-        real = menu.download
+        real = menu.read_page
         try:
-            def offline(url: str, **_: Any) -> dict[str, Any]:
+            def offline(url: str, get: Any = None) -> dict[str, Any]:
                 raise menu.Unreachable("names are not being looked up on this machine")
-            menu.download = offline
+            menu.read_page = offline
             body = menu.answer(json.loads(json.dumps(ask)))
         finally:
-            menu.download = real
+            menu.read_page = real
         self.assertEqual(body["reply"], "error", body)
         self.assertIn("Jaynes could not download https://nowhere.invalid/: names are not being looked up on this machine", body["message"])
         self.assertIn("no attempt", body["message"])
@@ -466,6 +466,300 @@ class QuotesFound(unittest.TestCase):
         fetched["texts"]["https://example.org/caching"] += " A cache MAY store anything it likes, forever."
         out = {"claims": [{"url": "https://example.org/caching", "quote": "A cache MAY store anything it likes, forever."}]}
         self.assertIsInstance(check(out, fetched=fetched), Blocked)
+
+
+def _slow_job(seconds: float) -> str:
+    import time
+    time.sleep(seconds)
+    return "done"
+
+
+def _job_that_dies() -> str:
+    import os
+    os._exit(9)
+
+
+class Review(unittest.TestCase):
+    """Each case a second reading found, as a test that passed wrongly before."""
+
+    # A. a quote matches whole words, inside one block of the page
+    def test_a_quote_does_not_start_inside_a_word(self):
+        self.assertFalse(menu.held("It is unsafe to cache this response at all.", "safe to cache this response at all."))
+        self.assertTrue(menu.held("It is safe to cache this response at all.", "safe to cache this response at all."))
+
+    def test_a_quote_does_not_end_inside_a_number(self):
+        self.assertFalse(menu.held("The rate limit is 1000 requests per minute.", "The rate limit is 100"))
+        self.assertFalse(menu.held("Only 25% of users were affected by the bug.", "5% of users were affected by the bug."))
+        self.assertTrue(menu.held("The rate limit is 100 requests per minute.", "The rate limit is 100"))
+
+    def test_a_raised_number_does_not_join_its_base(self):
+        text = menu.page_text(f"<p>About 10<sup>6</sup> requests a day.</p><p>{LONG}</p>".encode(), "text/html")
+        self.assertFalse(menu.held(text, "About 106 requests a day."))
+
+    def test_a_raised_or_lowered_character_does_not_join_its_base(self):
+        self.assertFalse(menu.held("The cache holds 10\u00b2 entries.", "The cache holds 102 entries."))
+        self.assertFalse(menu.held("Water is H\u2082O here.", "Water is H2O here."))
+        self.assertTrue(menu.held("The cache holds 10\u00b2 entries.", "The cache holds 10\u00b2 entries."))
+
+    def test_a_quote_does_not_cross_blocks_that_have_nothing_to_do_with_each_other(self):
+        text = menu.page_text(f"<h2>Not</h2><table><tr><td>recommended</td></tr></table><p>for production use</p><p>{LONG}</p>".encode(), "text/html")
+        self.assertFalse(menu.held(text, "Not recommended for production use"))
+        self.assertTrue(menu.held(text, "for production use"))
+
+    def test_a_line_break_inside_a_paragraph_does_not_part_it(self):
+        text = menu.page_text(f"<p>A cache MUST NOT store<br>a response.</p><p>{LONG}</p>".encode(), "text/html")
+        self.assertTrue(menu.held(text, "A cache MUST NOT store a response."))
+
+    def test_text_a_reader_does_not_see_is_not_the_page_s(self):
+        body = (f'<p>Visible.</p><p hidden>A cache MAY store anything.</p><div style="display: none">A cache MAY keep it forever.</div>'
+                f'<span aria-hidden="true">A cache MAY share it with anyone.</span><p>A cache <del>MAY</del> MUST NOT store it.</p><p>{LONG}</p>').encode()
+        text = menu.page_text(body, "text/html")
+        for hidden in ["A cache MAY store anything.", "A cache MAY keep it forever.", "A cache MAY share it with anyone.", "A cache MAY MUST NOT store it."]:
+            self.assertFalse(menu.held(text, hidden), hidden)
+        self.assertTrue(menu.held(text, "A cache MUST NOT store it."))
+
+    # B. a page that only repeats its own address proves nothing
+    def test_a_quote_the_address_itself_carries_is_refused(self):
+        url = "https://en.wikipedia.org/w/index.php?fulltext=1&ns0=1&search=RFC+9111+says+that+a+shared+cache+must+store+every+response+forever"
+        echo = f"<p>Results for RFC 9111 says that a shared cache must store every response forever</p><p>{LONG}</p>".encode()
+        got = step({"read": {"sources": [{"url": url, "quotes": ["RFC 9111 says that a shared cache must store every response forever"]}]}}, pages={url: echo})
+        self.assertFalse(got["pages"][0]["quotes"][0]["found"])
+        verdict = check({"claims": [{"url": url, "quote": "RFC 9111 says that a shared cache must store every response forever"}]}, fetched=got)
+        self.assertIsInstance(verdict, Fail)
+        self.assertIn("the page's own address carries these words", " ".join(verdict.reasons))
+
+    def test_a_quote_that_shares_a_few_words_with_the_address_is_not_refused(self):
+        url = "https://example.org/docs/no-store-directive"
+        body = f"<p>The no-store directive indicates that a cache MUST NOT store any part of the response.</p><p>{LONG}</p>".encode()
+        got = step({"read": {"sources": [{"url": url, "quotes": ["The no-store directive indicates that a cache MUST NOT store any part of the response."]}]}}, pages={url: body})
+        self.assertTrue(got["pages"][0]["quotes"][0]["found"])
+
+    def test_every_address_asked_is_kept_and_a_page_from_another_host_is_said(self):
+        net = Net(names={"example.org": [PUBLIC], "elsewhere.example": ["93.184.216.35"]},
+                  pages={"example.org/old": page(b"", status=302, location="https://elsewhere.example/new"), "elsewhere.example/new": page()})
+        got = net.download("https://example.org/old")
+        self.assertEqual(got["asked"], ["https://example.org/old", "https://elsewhere.example/new"])
+        out = menu.fetch_pages({"given": [{"step": "read", "output": {"links": ["https://example.org/old"]}}]}, {"pages": "read.links"}, download=net.download)
+        self.assertEqual(out["pages"][0]["asked"], ["https://example.org/old", "https://elsewhere.example/new"])
+        self.assertEqual(out["pages"][0]["came_from"], "elsewhere.example")
+        verdict = check({"claims": [{"url": "https://example.org/old", "quote": "A cache MAY store anything it likes, forever."}]}, fetched=out)
+        self.assertIn("the page came from elsewhere.example", " ".join(verdict.reasons))
+
+    # C. what goes out is bounded
+    def test_an_address_too_long_is_not_sent(self):
+        net = Net(pages={})
+        with self.assertRaises(menu.Unread) as e:
+            net.download("https://example.org/?q=" + "x" * menu.URL_CHARS)
+        self.assertIn(f"longer than {menu.URL_CHARS} characters", str(e.exception))
+        self.assertEqual(net.sent, [])
+
+    # D. one clock around the whole page, and a closed list of character sets
+    def test_the_whole_page_has_one_clock(self):
+        import time
+        started = time.monotonic()
+        with self.assertRaises(menu.Unreachable) as e:
+            menu.within(1.0, _slow_job, 30.0)
+        self.assertLess(time.monotonic() - started, 5.0)
+        self.assertIn("longer than 1 s in all", str(e.exception))
+        self.assertEqual(menu.within(5.0, _slow_job, 0.0), "done")
+
+    def test_a_page_too_slow_to_take_apart_is_the_source_s_answer(self):
+        with self.assertRaises(menu.Unread) as e:
+            menu.within(1.0, _slow_job, 30.0, late=menu.Unread, says="taking its text apart took longer than 1 s")
+        self.assertIn("taking its text apart took longer than 1 s", str(e.exception))
+
+    def test_the_clock_runs_whoever_calls_it(self):
+        # a caller that is a script with no main guard, as a reviewer's was
+        import subprocess
+        import sys
+        here = Path(__file__).resolve().parent
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "caller.py"
+            script.write_text("import sys\nsys.path[:0] = [%r, %r]\nimport jaynes_menu as m, test_menu_pages as t\nprint(m.within(5.0, t._slow_job, 0.0))\n" % (str(here.parent), str(here)))
+            ran = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(ran.stdout.strip(), "done", ran.stderr)
+
+    def test_a_page_whose_reading_dies_is_not_the_source_s_answer(self):
+        with self.assertRaises(menu.Unreachable):
+            menu.within(5.0, _job_that_dies)
+
+    def test_a_character_set_off_the_list_is_not_read(self):
+        with self.assertRaises(menu.Unread) as e:
+            menu.page_text(b"caf\xe9 " * 100, "text/plain; charset=punycode")
+        self.assertIn("character set (punycode)", str(e.exception))
+        self.assertEqual(menu.page_text("caf\u00e9".encode("cp1252"), "text/plain; charset=windows-1252"), "caf\u00e9")
+
+    # E. only global unicast IPv6
+    def test_ipv6_forms_that_carry_a_local_address_are_not_public(self):
+        for ip in ["::127.0.0.1", "::10.0.0.5", "::ffff:0:127.0.0.1", "fec0::1", "64:ff9b:1::a00:5", "64:ff9b::a00:5", "2002:a00:5::1", "2001::1", "2001:db8::1"]:
+            self.assertFalse(menu._public(ip), ip)
+        # ranges this Python still calls global: protocol assignments, the old 6to4 relay, IPv6 documentation
+        # (3fff::/20) and segment routing (5f00::/16); and an address with a zone after it
+        for ip in ["192.0.0.8", "192.0.0.9", "192.88.99.1", "3fff::1", "5f00::1", "8.8.8.8%lo0", "2606:4700::1111%en0"]:
+            self.assertFalse(menu._public(ip), ip)
+        self.assertTrue(menu._public("2606:4700::1111"))
+        self.assertTrue(menu._public("8.8.8.8"))
+        self.assertTrue(menu._public("2a05:d014:5c0:2600::6"))
+        self.assertTrue(menu._public("2800:3f0:4001:81a::200e"))
+
+    # F. every item brings a quote
+    def test_an_item_without_a_quote_fails(self):
+        for item in [{"url": "https://example.org/caching", "quote": None, "claim": "invented"},
+                     {"url": "https://example.org/caching", "quotes": "A cache MUST NOT store a response when the no-store"},
+                     {"url": "https://example.org/caching", "quotes": [None]}]:
+            ok = {"url": "https://example.org/caching", "quote": "A cache MUST NOT store a response when the no-store"}
+            verdict = check({"claims": [ok, item]})
+            self.assertIsInstance(verdict, Fail, item)
+            self.assertIn("item 2 has no quote", " ".join(verdict.reasons))
+
+    # G. true quotes that failed
+    def test_an_address_with_a_section_or_the_page_s_final_address_finds_the_page(self):
+        for url in ["https://example.org/caching#section-5.2", "https://example.org/caching"]:
+            self.assertIsInstance(check({"claims": [{"url": url, "quote": "A cache MUST NOT store a response when the no-store"}]}), Pass, url)
+        fetched = step({"read": READ})
+        fetched["pages"][0]["final_url"] = "https://www.example.org/caching"
+        self.assertIsInstance(check({"claims": [{"url": "https://www.example.org/caching", "quote": "A cache MUST NOT store a response when the no-store"}]}, fetched=fetched), Pass)
+
+    def test_a_short_page_without_scripts_is_read(self):
+        self.assertIn("This domain is for use in examples.", menu.page_text(b"<html><body><h1>Example</h1><p>This domain is for use in examples.</p></body></html>", "text/html"))
+        with self.assertRaises(menu.Unread) as e:
+            menu.page_text(b"<html><body></body></html>", "text/html")
+        self.assertIn("no text", str(e.exception))
+
+    def test_a_hyphen_left_hanging_at_a_line_break_reads_both_ways(self):
+        self.assertTrue(menu.held("both pre-\nand post-processing", "both pre- and post-processing"))
+        self.assertTrue(menu.held("a best-\neffort attempt", "a best-effort attempt"))
+        self.assertFalse(menu.held("both pre-\nand post-processing", "both preand post-processing"))
+
+    def test_apostrophes_and_marks_that_do_not_show_are_the_same(self):
+        self.assertTrue(menu.held("the server\u02bcs answer", "the server's answer"))
+        self.assertTrue(menu.held("the server\u2032s answer", "the server's answer"))
+        self.assertTrue(menu.held("the \u200eserver's answer", "the server's answer"))
+
+    def test_an_element_left_open_at_the_top_does_not_hide_the_rest_of_the_page(self):
+        body = f"<template><p>x</p><p>A cache MUST NOT store a response when asked.</p><p>{LONG}</p>".encode()
+        self.assertTrue(menu.held(menu.page_text(body, "text/html"), "A cache MUST NOT store a response"))
+
+    def test_two_inline_elements_side_by_side_read_as_one_word_as_a_browser_shows_them(self):
+        text = menu.page_text(f"<p><span>Cache</span><span>Control</span> header sets it</p><p>{LONG}</p>".encode(), "text/html")
+        self.assertFalse(menu.held(text, "Cache Control header sets it"))
+        self.assertTrue(menu.held(text, "CacheControl header sets it"))
+
+    def test_an_element_left_open_does_not_hide_the_rest_of_the_page(self):
+        for tag in ["template", "svg", "noscript"]:
+            body = f"<div><{tag}>hidden part</div><p>A cache MUST NOT store a response.</p><p>{LONG}</p>".encode()
+            self.assertTrue(menu.held(menu.page_text(body, "text/html"), "A cache MUST NOT store a response."), tag)
+
+    # H. the step and the check agree, and a page is prepared once
+    def test_a_quote_too_short_is_not_found_by_the_step_either(self):
+        got = step({"read": {"sources": [{"url": "https://example.org/caching", "quotes": ["a"]}]}})
+        self.assertFalse(got["pages"][0]["quotes"][0]["found"])
+
+    def test_a_large_page_is_prepared_once_for_all_its_quotes(self):
+        import time
+        text = ("Caches keep copies of responses. " * 60000) + "A cache MUST NOT store a response."
+        started = time.monotonic()
+        prepared = menu.Prepared(text)
+        for _ in range(20):
+            self.assertTrue(prepared.holds("A cache MUST NOT store a response."))
+        self.assertLess(time.monotonic() - started, 5.0)
+
+    # I. the real lookup and the real connection
+    def test_the_lookup_keeps_the_resolver_s_order_without_repeats(self):
+        import socket as s
+        real = s.getaddrinfo
+        try:
+            s.getaddrinfo = lambda *a, **k: [(s.AF_INET6, 1, 6, "", ("2a05:d014::6", 443, 0, 0)), (s.AF_INET, 1, 6, "", ("3.147.99.198", 443)),
+                                             (s.AF_INET, 1, 6, "", ("3.147.99.198", 443))]
+            self.assertEqual(menu._resolve("example.org"), ["2a05:d014::6", "3.147.99.198"])
+        finally:
+            s.getaddrinfo = real
+
+
+class RealConnection(unittest.TestCase):
+    """_send against a server on this machine with a test certificate: the connection goes to the address given,
+    whatever the name resolves to, and the certificate is held to the name."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import shutil
+        import ssl
+        import subprocess
+        import tempfile
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        if not shutil.which("openssl"):
+            raise unittest.SkipTest("openssl is needed to make a test certificate")
+        cls.tmp = tempfile.mkdtemp()
+        cert, key = f"{cls.tmp}/cert.pem", f"{cls.tmp}/key.pem"
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=jaynes.test",
+                        "-addext", "subjectAltName=DNS:jaynes.test", "-keyout", key, "-out", cert], check=True, capture_output=True)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path == "/slow":
+                    import time
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", "100")
+                    self.end_headers()
+                    try:
+                        for _ in range(100):
+                            self.wfile.write(b"x")
+                            self.wfile.flush()
+                            time.sleep(0.2)
+                    except OSError:
+                        pass
+                    return
+                body = f"host {self.headers.get('Host')} path {self.path}".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a: Any) -> None:
+                pass
+
+        from http.server import ThreadingHTTPServer
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        served = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        served.load_cert_chain(cert, key)
+        cls.server.socket = served.wrap_socket(cls.server.socket, server_side=True)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.trust = ssl.create_default_context(cafile=cert)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+
+    def test_the_connection_goes_to_the_address_checked_with_the_certificate_held_to_the_name(self):
+        port = self.server.server_address[1]
+        status, headers, read = menu._send("jaynes.test", "127.0.0.1", "/a?b=1", 5.0, port=port, context=self.trust)
+        self.assertEqual(status, 200)
+        # the server was asked for the name, never the address, and the path as given
+        self.assertEqual(read(1000), f"host jaynes.test:{port} path /a?b=1".encode())
+
+    def test_a_server_that_sends_a_byte_at_a_time_is_stopped_at_the_page_s_time(self):
+        import time
+        port = self.server.server_address[1]
+        real = menu.PAGE_SECONDS
+        menu.PAGE_SECONDS = 1.0
+        try:
+            send = lambda host, ip, target, timeout: menu._send("jaynes.test", "127.0.0.1", target, timeout, port=port, context=self.trust)
+            started = time.monotonic()
+            with self.assertRaises(menu.Unreachable) as e:
+                menu.download("https://jaynes.test/slow", resolve=lambda h: [PUBLIC], send=send)
+            self.assertLess(time.monotonic() - started, 4.0)
+            self.assertIn("longer than 1 s", str(e.exception))
+        finally:
+            menu.PAGE_SECONDS = real
+
+    def test_a_certificate_for_another_name_does_not_hold(self):
+        import ssl
+        with self.assertRaises(ssl.SSLCertVerificationError):
+            menu._send("other.test", "127.0.0.1", "/", 5.0, port=self.server.server_address[1], context=self.trust)
 
 
 class Menu(unittest.TestCase):

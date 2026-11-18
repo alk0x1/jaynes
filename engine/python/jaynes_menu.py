@@ -319,43 +319,63 @@ def _executable(path: str) -> bool:
 # step's output, which is in the record, and says by comparing text whether a quote is in it.
 #
 # The address comes from an agent, so it is held to rules before anything is sent: https only, the usual port, no
-# name or password, and every address the name resolves to on the public internet, checked again at each
-# redirect. The connection goes to an address that was checked, IPv4 first, each in turn until one answers. A page
-# is read within a size and a time.
+# name or password, at most URL_CHARS characters, and every address the name resolves to on the public internet,
+# checked again at each redirect. The connection goes to an address that was checked, IPv4 first, each in turn
+# until one answers. One clock runs around the whole page, from the lookup to the last character of its text, in
+# a process of its own that is stopped when the clock runs out. Every address asked is kept.
 #
 # A page that is not read is one of two things, and they go apart (the engine's rule that a check which cannot
 # judge never spends the agent's attempt):
 # - The source said no, or does not exist (``Unread``): the server answered and refused (a 4xx other than 429),
-#   the page is too large, in a format Jaynes does not read, or has no text of its own, its certificate does not
-#   hold, it broke a rule above, or its name does not exist while other names are found. Nothing quoted from it is
-#   proved, and that is the agent's to deal with: choose another source, or drop the claim.
+#   the page is too large, in a format or character set Jaynes does not read, or has no text of its own, its
+#   certificate does not hold, it broke a rule above, or its name does not exist while other names are found.
+#   Nothing quoted from it is proved, and that is the agent's to deal with: choose another source, or drop the
+#   claim.
 # - Jaynes could not ask, or the source could not answer now (``Unreachable``): names are not being looked up on
 #   this machine, the lookup failed, no address answered (no route, refused, dropped, timed out), the page took
-#   longer than its time, or the server answered 5xx or 429 every time it was asked, with waits between. The step
+#   longer than its clock, or the server answered 5xx or 429 every time it was asked, with waits between. The step
 #   stops as Jaynes's fault, saying which page and why, and no attempt is spent: continue the run when it can ask.
+#
+# A quote is in a page when its words, compared by ``same_words``, are inside one block of the page's text (a
+# paragraph, a heading, a cell: never across two), start and end at the edge of a word or number, and are not
+# words the page's own address carries, since a page may only be repeating what it was asked.
 
 PAGE_BYTES = 2_000_000      # a page larger than this is not read
-PAGE_SECONDS = 20.0         # nor one that takes longer to come, redirects included, each time it is asked
+PAGE_SECONDS = 20.0         # the time one asking of a page may take to come, redirects included
+PAGE_WALL = 60.0            # the clock around downloading a page: lookup, asking again, every address, the body
+PARSE_SECONDS = 20.0        # the clock around taking a page's text apart; past it, the page is the source's no
 PAGE_REDIRECTS = 5
 PAGE_WAITS = (1.0, 3.0)     # the waits before asking again a server that answered 5xx or 429: three times in all
 PAGE_WAIT_MOST = 10.0       # the longest wait a server's Retry-After is followed for
-RESOLVER_CANARY = "example.com"  # a name that always exists: when it is not found either, the machine cannot look names up
 PAGES_MAX = 12              # pages one step downloads
+URL_CHARS = 2048            # an address longer than this is not sent
 QUOTE_CHARS = 20            # a quote shorter than this, as compared, proves nothing
-SCRIPTED_BELOW = 200        # an HTML page with less text than this was left for a script to fill
+ECHO_WORDS = 6              # this many words of a quote in a row, in the page's address, and the address carries it
+SCRIPTED_BELOW = 200        # an HTML page with scripts and less text than this is put together by them
+RESOLVER_CANARY = "example.com"  # a name that always exists: when it is not found either, the machine cannot look names up
 PAGE_AGENT = "jaynes"
 
-# Written as escapes, since most of them look alike or do not show: quotation marks, dashes, and the characters
-# that take no room (soft hyphen, zero-width space and joiners, word joiner, byte order mark).
-_QUOTES = "\"\u201c\u201d\u201e\u201f\u00ab\u00bb\u2018\u2019\u201a\u201b`\u00b4"
-_DASHES = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
-_UNSEEN = "\u00ad\u200b\u200c\u200d\u2060\ufeff"
+# Written as escapes, since most of them look alike or do not show: quotation marks and apostrophes (with the
+# modifier letter apostrophe and the prime, which pages use for one), dashes, and the characters that take no room
+# (soft hyphen, zero-width space and joiners, word joiner, byte order mark, and the marks that set the direction
+# of text).
+_QUOTES = "\"“”„‟«»‘’‚‛`´ʼ′″"
+_DASHES = "‐‑‒–—―−"
+_UNSEEN = "­​‌‍⁠﻿‎‏؜‪‫‬‭‮⁦⁧⁨⁩"
 _HTML_TYPES = ("text/html", "application/xhtml+xml")
 _TEXT_TYPES = ("text/plain", "text/markdown")
-_SKIPPED = ("script", "style", "noscript", "template", "svg")
-_BLOCKS = ("address", "article", "aside", "blockquote", "br", "dd", "details", "div", "dl", "dt", "figcaption", "figure",
-           "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
-           "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr", "ul")
+_CHARSETS = ("utf-8", "utf8", "us-ascii", "ascii", "iso-8859-1", "latin-1", "latin1", "iso-8859-15", "windows-1252", "cp1252")
+_SKIPPED = ("script", "style", "noscript", "template", "svg", "del")
+_VOID = ("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr")
+_APART = ("sup", "sub")
+_BLOCKS = ("address", "article", "aside", "blockquote", "caption", "dd", "details", "div", "dl", "dt", "figcaption",
+           "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol",
+           "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr", "ul")
+# a blank line, which parts two blocks of a page's text
+_GAP = re.compile(r"\n[ \t\r\f\v]*\n")
+# A word that goes on past the end of a line at its hyphen: a letter or digit, the hyphen, one line break with
+# nothing but spaces around it, and a letter or digit.
+_WRAPPED = re.compile(r"(?<=\w)-[ \t]*\r?\n[ \t]*(?=\w)")
 
 
 class Unread(Exception):
@@ -367,68 +387,142 @@ class Unreachable(Exception):
     fault, never the agent's."""
 
 
-# A word that goes on past the end of a line at its hyphen, as plain text wraps "best-effort": a letter or digit,
-# the hyphen, one line break with nothing but spaces around it, and a letter or digit.
-_WRAPPED = re.compile(r"(?<=\w)-[ \t]*\r?\n[ \t]*(?=\w)")
+def same_words(text: str, hanging: bool = False) -> str:
+    """The text as two texts are compared: Unicode compatibility forms folded (NFKC), a raised or lowered character
+    kept apart from what comes before it, characters that do not show
+    dropped, every kind of quotation mark and apostrophe made ', every kind of dash made -, a word wrapped at its
+    hyphen joined again with the hyphen kept, and each run of spaces and line breaks made one space. Letters,
+    digits, their case and every other mark stay as written.
 
-
-def same_words(text: str) -> str:
-    """The text as two texts are compared: Unicode compatibility forms folded (NFKC), characters that do not show
-    dropped, every kind of quotation mark made ', every kind of dash made -, a word wrapped at its hyphen joined
-    again with the hyphen kept, and each run of spaces and line breaks made one space. Letters, digits, their case
-    and every other mark stay as written.
-
-    The joining is the one place a break counts: only a single line break right after a hyphen inside a word
-    ("best-" then "effort" on the next line is best-effort). A hyphen followed by a space on the same line, or by a
-    blank line, as between two blocks of a page, stays apart ("best- effort"); and the hyphen is never dropped, so
-    a word split by hyphenation ("remo-" then "val") reads remo-val and not removal."""
+    A break counts in one place only: a single line break right after a hyphen inside a word. The page cannot say
+    which it was, so a page is read both ways: as one word ("best-" then "effort" is best-effort) and, with
+    ``hanging``, as a hyphen left hanging before the next word ("pre-" then "and" is pre- and). A hyphen and a
+    space on the same line stay apart, and the hyphen is never dropped: "remo-" then "val" is never removal."""
     import unicodedata
+    # a raised or lowered character stays apart from its base, as on the page: folded alone, 10\u00b2 would be 102
+    text = "".join(" " + c if unicodedata.decomposition(c).startswith(("<super>", "<sub>")) else c for c in text)
     text = unicodedata.normalize("NFKC", text)
     text = "".join("'" if c in _QUOTES else "-" if c in _DASHES else "" if c in _UNSEEN else c for c in text)
-    text = _WRAPPED.sub("-", text)
+    text = _WRAPPED.sub("- " if hanging else "-", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _bounded_in(words: str, block: str) -> bool:
+    """Whether ``words`` is in ``block`` with nothing of a word or number joined to it on either side."""
+    start = 0
+    while (at := block.find(words, start)) >= 0:
+        end = at + len(words)
+        open_left = not words[0].isalnum() or at == 0 or not block[at - 1].isalnum()
+        open_right = not words[-1].isalnum() or end == len(block) or not block[end].isalnum()
+        if open_left and open_right:
+            return True
+        start = at + 1
+    return False
+
+
+class Prepared:
+    """A page's text made ready to be asked about many quotes: each block compared once, read both ways where a
+    hyphen ends a line."""
+
+    def __init__(self, text: str) -> None:
+        self.blocks: list[str] = []
+        for block in _GAP.split(text):
+            self.blocks.append(same_words(block))
+            if _WRAPPED.search(block):
+                self.blocks.append(same_words(block, hanging=True))
+
+    def holds(self, quote: str) -> bool:
+        words = same_words(quote)
+        return bool(words) and any(_bounded_in(words, b) for b in self.blocks)
+
+
 def held(text: str, quote: str) -> bool:
-    """Whether ``text`` has the words of ``quote``, by ``same_words``."""
-    words = same_words(quote)
-    return bool(words) and words in same_words(text)
+    """Whether ``text`` has the words of ``quote``, inside one of its blocks, as whole words."""
+    return Prepared(text).holds(quote)
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[0-9a-z]+", same_words(text).lower())
+
+
+def _echoes(quote: str, addresses: list[str]) -> bool:
+    """Whether an address the page was asked by carries the quote: the whole of it, or ECHO_WORDS of its words in a
+    row, read from the address with its escapes undone."""
+    from urllib.parse import unquote_plus
+    said = _words(quote)
+    if not said:
+        return False
+    runs = [said] if len(said) <= ECHO_WORDS else [said[i:i + ECHO_WORDS] for i in range(len(said) - ECHO_WORDS + 1)]
+    for address in addresses:
+        carried = " " + " ".join(_words(unquote_plus(address))) + " "
+        if any(" " + " ".join(run) + " " in carried for run in runs):
+            return True
+    return False
+
+
+def _hidden(attrs: list[tuple[str, str | None]]) -> bool:
+    """Whether an element's attributes keep it from the reader: hidden, aria-hidden, or a style that hides it."""
+    named = {k.lower(): (v or "") for k, v in attrs}
+    style = re.sub(r"\s+", "", named.get("style", "").lower())
+    return "hidden" in named or named.get("aria-hidden", "").lower() == "true" or "display:none" in style or "visibility:hidden" in style
+
+
+# elements whose content a page fills in later; one left open at the top would hide the rest of the page
+_FILLED_LATER = ("template", "noscript", "svg")
 
 
 def _reader() -> Any:
     from html.parser import HTMLParser
 
     class Reader(HTMLParser):
-        """The text of an HTML page as a reader sees it: no scripts or styles, and blocks apart by a blank line, so a
-        hyphen at the end of one block never joins the next."""
+        """The text of an HTML page as a reader sees it: no scripts, styles, deleted or hidden parts; blocks apart by
+        a blank line, a line break as a line break, and a raised or lowered number apart from its base. What it
+        leaves out ends with its element, or with the element around it, so one left open does not take the rest
+        of the page."""
 
-        def __init__(self) -> None:
+        def __init__(self, skipped: tuple[str, ...]) -> None:
             super().__init__(convert_charrefs=True)
+            self.skipped = skipped
             self.parts: list[str] = []
-            self.skipping = 0
+            self.open: list[str] = []
+            self.hidden_at: int | None = None
 
         def handle_starttag(self, tag: str, attrs: Any) -> None:
-            if tag in _SKIPPED:
-                self.skipping += 1
-            elif tag in _BLOCKS:
-                self.parts.append("\n\n")
+            if tag in _VOID:
+                if self.hidden_at is None:
+                    self.parts.append("\n" if tag == "br" else "\n\n" if tag in _BLOCKS else "")
+                return
+            self.open.append(tag)
+            if self.hidden_at is None and (tag in self.skipped or _hidden(attrs)):
+                self.hidden_at = len(self.open) - 1
+            elif self.hidden_at is None:
+                self.parts.append("\n\n" if tag in _BLOCKS else " " if tag in _APART else "")
+
+        def handle_startendtag(self, tag: str, attrs: Any) -> None:
+            self.handle_starttag(tag, attrs)
+            if tag not in _VOID:
+                self.handle_endtag(tag)
 
         def handle_endtag(self, tag: str) -> None:
-            if tag in _SKIPPED:
-                self.skipping = max(0, self.skipping - 1)
-            elif tag in _BLOCKS:
-                self.parts.append("\n\n")
+            if tag in _VOID or tag not in self.open:
+                return
+            while self.open and self.open.pop() != tag:
+                pass
+            if self.hidden_at is not None and len(self.open) <= self.hidden_at:
+                self.hidden_at = None
+            elif self.hidden_at is None:
+                self.parts.append("\n\n" if tag in _BLOCKS else " " if tag in _APART else "")
 
         def handle_data(self, data: str) -> None:
-            if not self.skipping:
+            if self.hidden_at is None:
                 self.parts.append(data)
 
-    return Reader()
+    return Reader
 
 
 def page_text(body: bytes, content_type: str) -> str:
-    """The text of a downloaded page, or ``Unread``: a format Jaynes does not read, bytes that are not text, or an
-    HTML page that leaves its text for a script to fill."""
+    """The text of a downloaded page, or ``Unread``: a format or character set Jaynes does not read, bytes that are
+    not text, an HTML page with no text, or one that leaves its text for a script to fill."""
     kind = content_type.split(";")[0].strip().lower()
     if kind not in _HTML_TYPES and kind not in _TEXT_TYPES:
         raise Unread(f"its format ({kind or 'not said'}) is not one Jaynes reads")
@@ -439,40 +533,55 @@ def page_text(body: bytes, content_type: str) -> str:
     if not charset and kind in _HTML_TYPES:
         meta = re.search(rb"<meta[^>]+charset=[\"']?([\w.:-]+)", body[:4096], re.I)
         charset = meta.group(1).decode("ascii", "replace") if meta else ""
-    try:
-        text = body.decode(charset or "utf-8", errors="replace")
-    except LookupError:
-        text = body.decode("utf-8", errors="replace")
+    if charset and charset.lower() not in _CHARSETS:
+        raise Unread(f"its character set ({charset}) is not one Jaynes reads")
+    text = body.decode(charset or "utf-8", errors="replace")
     if kind in _TEXT_TYPES:
         return text
-    reader = _reader()
+    Reader = _reader()
+    reader = Reader(_SKIPPED)
     reader.feed(text)
     reader.close()
+    if reader.hidden_at is not None and reader.open[reader.hidden_at] in _FILLED_LATER:
+        # left open with nothing around it to end it: read the page again with that kind of element shown
+        reader = Reader(tuple(t for t in _SKIPPED if t not in _FILLED_LATER))
+        reader.feed(text)
+        reader.close()
     seen = "".join(reader.parts)
-    if len(same_words(seen)) < SCRIPTED_BELOW:
+    words = same_words(seen)
+    if len(words) < SCRIPTED_BELOW and re.search(rb"<script", body, re.I):
         raise Unread("it has almost no text of its own: a script puts the page together in the browser")
+    if not words:
+        raise Unread("it has no text")
     return seen
 
 
 def _public(ip: str) -> bool:
-    """Whether an address is on the public internet: not this machine, a private or link-local network, a shared
-    or reserved range, multicast, or an IPv6 form that carries an IPv4 address inside."""
+    """Whether an address is on the public internet. IPv4: global and not multicast. IPv6: global unicast only
+    (2000::/3), and none of the forms that carry an IPv4 address inside (6to4, Teredo, mapped, compatible,
+    translated), which leaves out this machine, private, link-local and site-local networks. Never an address
+    with a zone, and never the ranges listed in ``closed``, which this Python's own list does not close."""
     import ipaddress
+    if "%" in ip:  # a zone names an interface of this machine
+        return False
     try:
-        a = ipaddress.ip_address(ip.split("%")[0])
+        a = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    if a.version == 6:
-        if a.ipv4_mapped is not None:
-            a = a.ipv4_mapped
-        elif a.sixtofour is not None or a.teredo is not None or a in ipaddress.ip_network("64:ff9b::/96"):
-            return False
-    return a.is_global and not a.is_multicast
+    # ranges a Python may still call global that no public page is on
+    closed = [ipaddress.ip_network(n) for n in ("192.0.0.0/24", "192.88.99.0/24", "2002::/16", "2001::/32", "3fff::/20", "5f00::/16")]
+    if any(a.version == n.version and a in n for n in closed):
+        return False
+    if a.version == 4:
+        return a.is_global and not a.is_multicast
+    return a in ipaddress.ip_network("2000::/3") and a.is_global
 
 
 def _address(url: str) -> tuple[str, str]:
     """The host and the request target of an address Jaynes may download, or ``Unread``."""
     from urllib.parse import quote, urlsplit
+    if len(url) > URL_CHARS:
+        raise Unread(f"its address is longer than {URL_CHARS} characters")
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -517,6 +626,25 @@ def _lookup(host: str, resolve: Callable[[str], list[str]]) -> list[str]:
     return sorted(addresses, key=lambda a: ":" in a)
 
 
+def _send(host: str, ip: str, target: str, timeout: float, *, port: int = 443, context: Any = None) -> tuple[int, dict[str, str], Callable[[int], bytes]]:
+    """One GET over TLS to ``ip``, the address that was checked, with the certificate held to ``host``."""
+    import http.client
+    import socket
+    import ssl
+    tls = context or ssl.create_default_context()
+
+    class Pinned(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            sock = socket.create_connection((ip, port), self.timeout)
+            self.sock = tls.wrap_socket(sock, server_hostname=host)
+
+    conn = Pinned(host, port, timeout=timeout)
+    conn.request("GET", target, headers={"User-Agent": PAGE_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
+                                         "Accept-Encoding": "identity", "Connection": "close"})
+    answer = conn.getresponse()
+    return answer.status, {k.lower(): v for k, v in answer.getheaders()}, answer.read
+
+
 def _ask(host: str, addresses: list[str], target: str, send: Callable[..., Any], left: float) -> Any:
     """The answer of the first address that answers, each tried in turn; ``Unreachable`` naming every one when none
     does, and ``Unread`` when the server's certificate does not hold."""
@@ -541,67 +669,133 @@ def _wait(n: int, headers: dict[str, str]) -> float:
         return PAGE_WAITS[n]
 
 
-def _send(host: str, ip: str, target: str, timeout: float) -> tuple[int, dict[str, str], Callable[[int], bytes]]:
-    """One GET over TLS to ``ip``, the address that was checked, with the certificate held to ``host``."""
-    import http.client
-    import socket
-    import ssl
-
-    class Pinned(http.client.HTTPSConnection):
-        def connect(self) -> None:
-            sock = socket.create_connection((ip, 443), self.timeout)
-            self.sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
-
-    conn = Pinned(host, 443, timeout=timeout)
-    conn.request("GET", target, headers={"User-Agent": PAGE_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
-                                         "Accept-Encoding": "identity", "Connection": "close"})
-    answer = conn.getresponse()
-    return answer.status, {k.lower(): v for k, v in answer.getheaders()}, answer.read
-
-
 def download(url: str, *, resolve: Callable[[str], list[str]] = _resolve, send: Callable[..., Any] = _send,
              clock: Callable[[], float] | None = None, sleep: Callable[[float], None] | None = None) -> dict[str, Any]:
-    """Download one page under the rules above: ``{final_url, type, body}``, ``Unread`` when the source said no or
-    does not exist, or ``Unreachable`` when Jaynes could not ask, each with the reason."""
+    """Download one page under the rules above: ``{final_url, type, body, asked}``, with every address asked in
+    order; ``Unread`` when the source said no or does not exist, or ``Unreachable`` when Jaynes could not ask, each
+    with the reason and with the addresses asked in ``asked``."""
     import http.client
     import time
     from urllib.parse import urljoin
     clock = clock or time.monotonic
     sleep = sleep or time.sleep
+    asked: list[str] = []
     slow = f"it took longer than {PAGE_SECONDS:.0f} s to come"
-    for _hop in range(PAGE_REDIRECTS + 1):
-        host, target = _address(url)
-        addresses = _lookup(host, resolve)
-        if not addresses or not all(_public(a) for a in addresses):
-            raise Unread("its address is not on the public internet")
-        for n in range(len(PAGE_WAITS) + 1):
-            deadline = clock() + PAGE_SECONDS
-            status, headers, read = _ask(host, addresses, target, send, PAGE_SECONDS)
-            if status != 429 and not 500 <= status <= 599:
-                break
-            if n == len(PAGE_WAITS):
-                raise Unreachable(f"the server answered {status} {n + 1} times, with waits between")
-            sleep(_wait(n, headers))
-        if status in (301, 302, 303, 307, 308) and headers.get("location"):
-            url = urljoin(url, headers["location"])
-            continue
-        if status != 200:
-            raise Unread(f"the server answered {status}")
-        body = b""
-        try:
-            while len(body) <= PAGE_BYTES:
-                if clock() > deadline:
-                    raise Unreachable(slow)
-                piece = read(min(65536, PAGE_BYTES + 1 - len(body)))
-                if not piece:
+    try:
+        for _hop in range(PAGE_REDIRECTS + 1):
+            host, target = _address(url)
+            addresses = _lookup(host, resolve)
+            if not addresses or not all(_public(a) for a in addresses):
+                raise Unread("its address is not on the public internet")
+            asked.append(url)
+            for n in range(len(PAGE_WAITS) + 1):
+                deadline = clock() + PAGE_SECONDS
+                status, headers, read = _ask(host, addresses, target, send, PAGE_SECONDS)
+                if status != 429 and not 500 <= status <= 599:
                     break
-                body += piece
-        except (OSError, http.client.HTTPException) as e:
-            raise Unreachable(f"the connection dropped while the page came ({getattr(e, 'strerror', None) or e or type(e).__name__})") from None
-        if len(body) > PAGE_BYTES:
-            raise Unread(f"it is larger than {PAGE_BYTES // 1_000_000} MB")
-        return {"final_url": url, "type": headers.get("content-type", ""), "body": body}
-    raise Unread(f"it redirected more than {PAGE_REDIRECTS} times")
+                if n == len(PAGE_WAITS):
+                    raise Unreachable(f"the server answered {status} {n + 1} times, with waits between")
+                sleep(_wait(n, headers))
+            if status in (301, 302, 303, 307, 308) and headers.get("location"):
+                url = urljoin(url, headers["location"])
+                continue
+            if status != 200:
+                raise Unread(f"the server answered {status}")
+            body = b""
+            # an http.client answer is read as it comes, so a server that sends a byte at a time meets the clock
+            read = getattr(getattr(read, "__self__", None), "read1", read)
+            try:
+                while len(body) <= PAGE_BYTES:
+                    if clock() > deadline:
+                        raise Unreachable(slow)
+                    piece = read(min(65536, PAGE_BYTES + 1 - len(body)))
+                    if not piece:
+                        break
+                    body += piece
+            except (OSError, http.client.HTTPException) as e:
+                raise Unreachable(f"the connection dropped while the page came ({getattr(e, 'strerror', None) or e or type(e).__name__})") from None
+            if len(body) > PAGE_BYTES:
+                raise Unread(f"it is larger than {PAGE_BYTES // 1_000_000} MB")
+            return {"final_url": url, "type": headers.get("content-type", ""), "body": body, "asked": asked}
+        raise Unread(f"it redirected more than {PAGE_REDIRECTS} times")
+    except (Unread, Unreachable) as e:
+        e.asked = asked  # type: ignore[attr-defined]
+        raise
+
+
+def _child_main() -> None:
+    """What runs in the process ``within`` starts: reads which function to call and with what, as a pickle on
+    standard input, and writes what came of it, as a pickle on standard output."""
+    import importlib
+    import pickle
+    module, name, args = pickle.loads(sys.stdin.buffer.read())
+    try:
+        fn = importlib.import_module(module)
+        for part in name.split("."):
+            fn = getattr(fn, part)
+        done: tuple[str, Any, Any] = ("ok", fn(*args), None)
+    except Unread as e:
+        done = ("unread", str(e), getattr(e, "asked", None))
+    except Unreachable as e:
+        done = ("unreachable", str(e), getattr(e, "asked", None))
+    except BaseException as e:  # noqa: BLE001: whatever stopped it is said, as Jaynes's own fault
+        done = ("error", f"{type(e).__name__}: {e}", None)
+    sys.stdout.buffer.write(pickle.dumps(done))
+    sys.stdout.buffer.flush()
+
+
+def within(seconds: float, fn: Callable[..., Any], *args: Any, late: type = None, says: str = "") -> Any:  # type: ignore[assignment]
+    """``fn(*args)`` in a program of its own, killed when ``seconds`` run out, so nothing it does (a lookup, a
+    server that sends a byte at a time, a page slow to take apart) outlasts its clock. Out of time, it raises
+    ``late`` (``Unreachable`` unless said otherwise) with ``says``; a program that died is ``Unreachable``, Jaynes's
+    fault. ``fn`` is a function of a module, called by name in the new program, which does not run the caller's
+    own program again."""
+    import os
+    import pickle
+    import signal
+    import subprocess
+    late = late or Unreachable
+    module = fn.__module__
+    if module == "__main__":
+        module = Path(sys.modules["__main__"].__file__ or "").stem
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p), "PYTHONDONTWRITEBYTECODE": "1"}
+    here = Path(__file__).resolve().parent
+    starter = f"import sys; sys.path.insert(0, {str(here)!r}); import jaynes_menu; jaynes_menu._child_main()"
+    proc = subprocess.Popen([sys.executable, "-c", starter], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env=env, start_new_session=True)
+    try:
+        out, _err = proc.communicate(pickle.dumps((module, fn.__qualname__, args)), timeout=seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+        raise late(says or f"it took longer than {seconds:.0f} s in all") from None
+    if proc.returncode != 0 or not out:
+        raise Unreachable(f"Jaynes's reading of it stopped (exit code {proc.returncode})")
+    kind, value, asked = pickle.loads(out)
+    if kind == "ok":
+        return value
+    error: Exception = Unread(value) if kind == "unread" else Unreachable(value) if kind == "unreachable" else Unreachable(f"Jaynes could not read it ({value})")
+    error.asked = asked  # type: ignore[attr-defined]
+    raise error
+
+
+def _key(url: str) -> str:
+    """An address as pages are found by: without its section."""
+    return url.split("#", 1)[0]
+
+
+def _hostname(url: str) -> str:
+    from urllib.parse import urlsplit
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _host(url: str) -> str:
+    """A page's host as two are compared, without a leading www."""
+    host = _hostname(url)
+    return host[4:] if host.startswith("www.") else host
 
 
 def _quotes_of(item: dict[str, Any]) -> list[str]:
@@ -609,6 +803,13 @@ def _quotes_of(item: dict[str, Any]) -> list[str]:
     one = [item["quote"]] if isinstance(item.get("quote"), str) else []
     more = [q for q in item["quotes"] if isinstance(q, str)] if isinstance(item.get("quotes"), list) else []
     return one + more
+
+
+def _quoteless(item: dict[str, Any]) -> bool:
+    """Whether an item brings no quote, or brings one that is not text."""
+    bad_one = "quote" in item and not isinstance(item["quote"], str)
+    bad_more = "quotes" in item and not (isinstance(item["quotes"], list) and all(isinstance(q, str) for q in item["quotes"]))
+    return bad_one or bad_more or not _quotes_of(item)
 
 
 def _pages_asked(listed: Any) -> dict[str, list[str] | None] | None:
@@ -632,89 +833,131 @@ def _fingerprint(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _found(quote: str, prepared: Prepared, asked: list[str]) -> tuple[bool, str]:
+    """Whether a quote is proved by a page read, and why not."""
+    if len(same_words(quote)) < QUOTE_CHARS:
+        return False, f"too short to prove anything: quote at least {QUOTE_CHARS} characters"
+    if _echoes(quote, asked):
+        return False, "the page's own address carries these words, so the page may only be repeating what it was asked"
+    if not prepared.holds(quote):
+        return False, "these words are not in the text Jaynes downloaded"
+    return True, ""
+
+
+def read_page(url: str, get: Callable[[str], dict[str, Any]] | None = None) -> dict[str, Any]:
+    """One page as fetch-pages records it: downloaded and taken apart, or why not; ``Unreachable`` when Jaynes could
+    not ask. Without ``get``, this is the real download: in a program of its own within PAGE_WALL, and the text
+    taken apart in another within PARSE_SECONDS, whose running out is the source's answer (a page too slow to read)."""
+    real = get is None
+    page: dict[str, Any] = {"url": url, "read": False, "why": "", "final_url": "", "came_from": "", "asked": [url], "type": "",
+                            "bytes": 0, "sha256": "", "text_sha256": "", "chars": 0, "text": ""}
+    try:
+        got = within(PAGE_WALL, download, url) if real else get(url)  # type: ignore[misc]
+        body = got["body"]
+        page.update(final_url=got["final_url"], asked=got.get("asked") or [url], type=got["type"].split(";")[0].strip().lower(),
+                    bytes=len(body), sha256=_fingerprint(body))
+        if _host(got["final_url"]) != _host(url):
+            page["came_from"] = _hostname(got["final_url"])
+        text = (within(PARSE_SECONDS, page_text, body, got["type"], late=Unread, says=f"taking its text apart took longer than {PARSE_SECONDS:.0f} s")
+                if real else page_text(body, got["type"]))
+        page.update(read=True, text=text, text_sha256=_fingerprint(text.encode()), chars=len(text))
+    except Unread as e:
+        page.update(why=str(e), asked=getattr(e, "asked", None) or page["asked"])
+    return page
+
+
 def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[str, Any]] | None = None) -> Any:
-    """Download the pages an earlier step lists. The output says, for each, whether it was read and why not, with
-    the fingerprint of what came, and in ``unread`` a line for each page not read, with why, for a sentence to the
-    person; keeps the text of each page read, in ``texts``; and, for the quotes listed with
-    a page, whether each is in its text. A page the source refused is a page not read, and nothing quoted from it
-    is found. A page Jaynes could not ask for stops the step with ``Unreachable``, naming every such page: what
-    is proved must not depend on whether the network held."""
+    """Download the pages an earlier step lists. The output says, for each, whether it was read and why not, every
+    address asked for it, the host it came from when a redirect took it to another, and the fingerprint of what
+    came; ``unread`` has a line for each page not read, with why, for a sentence to the person; ``texts`` keeps the
+    text of each page read; and, for the quotes listed with a page, whether each is in its text, and why not. A
+    page the source refused is a page not read, and nothing quoted from it is found. A page Jaynes could not ask
+    for stops the step with ``Unreachable``, naming every such page: what is proved must not depend on whether the
+    network held."""
     from concurrent.futures import ThreadPoolExecutor
-    get = download or globals()["download"]
     step, _, field = str(params["pages"]).partition(".")
     asked = _pages_asked((_given(call).get(step) or {}).get(field))
     if asked is None:
         return Refused(f"{params['pages']} lists no pages: it is a list of https addresses, or of items that each have a url")
     if len(asked) > PAGES_MAX:
         return Refused(f"{params['pages']} lists {len(asked)} pages, and a step downloads at most {PAGES_MAX}")
-
     unreachable: list[str] = []
 
-    def one(url: str) -> tuple[dict[str, Any], str]:
-        page: dict[str, Any] = {"url": url, "read": False, "why": "", "final_url": "", "type": "", "bytes": 0, "sha256": "",
-                                "text_sha256": "", "chars": 0}
-        text = ""
+    def one(url: str) -> dict[str, Any] | None:
         try:
-            got = get(url)
-            body = got["body"]
-            page.update(final_url=got["final_url"], type=got["type"].split(";")[0].strip().lower(), bytes=len(body), sha256=_fingerprint(body))
-            text = page_text(body, got["type"])
-            page.update(read=True, text_sha256=_fingerprint(text.encode()), chars=len(text))
-        except Unread as e:
-            page["why"] = str(e)
+            page = read_page(url, download)
         except Unreachable as e:
             unreachable.append(f"{url}: {e}")
-        except Exception as e:  # whatever went wrong, the page was not read, and that is said
-            page["why"] = f"Jaynes could not read it ({type(e).__name__})"
+            return None
         quotes = asked[url]
         if quotes is not None:
-            page["quotes"] = [{"quote": q, "found": page["read"] and held(text, q)} for q in quotes]
-        return page, text
+            prepared = Prepared(page["text"]) if page["read"] else None
+            page["quotes"] = []
+            for q in quotes:
+                found, why = _found(q, prepared, page["asked"]) if prepared else (False, f"the page was not read: {page['why']}")
+                page["quotes"].append({"quote": q, "found": found, "why": why})
+        return page
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         done = list(pool.map(one, asked))
     if unreachable:
         raise Unreachable(f"Jaynes could not download {'; '.join(sorted(unreachable))}. That is the machine or the network, "
                           "not the agent: no attempt was spent, and continuing the run downloads every page again")
-    return {"pages": [page for page, _ in done], "texts": {page["url"]: text for page, text in done if page["read"]},
-            "any_read": any(page["read"] for page, _ in done),
-            "unread": [f"{page['url']}: {page['why']}" for page, _ in done if not page["read"]]}
+    pages = [p for p in done if p is not None]
+    texts = {p["url"]: p.pop("text") for p in pages if p["read"]}
+    for p in pages:
+        p.pop("text", None)
+    return {"pages": pages, "texts": texts, "any_read": any(p["read"] for p in pages),
+            "unread": [f"{p['url']}: {p['why']}" for p in pages if not p["read"]]}
 
 
 def quotes_found(call: Call, params: Params) -> Any:
-    """Every quote the output lists, each with the url of its page, is in the text Jaynes downloaded from that page.
-    A quote from a page that was not read, or not downloaded at all, is not proved."""
+    """Every quote the output lists, each with the url of its page (as listed, with a section or not, or the address
+    the page came from), is in the text Jaynes downloaded from that page, by the rule above. An item with no quote,
+    a quote from a page that was not read or not downloaded at all, or one the page's address carries, is not
+    proved."""
     field, step = str(params["field"]), str(params["pages"])
     fetched = _given(call).get(step)
     pages = fetched.get("pages") if isinstance(fetched, dict) else None
     texts = fetched.get("texts") if isinstance(fetched, dict) else None
     if not isinstance(pages, list) or not isinstance(texts, dict) or not all(isinstance(p, dict) for p in pages):
         return Blocked(f"the check was not given the pages {step} downloaded")
-    by_url = {str(p.get("url")): p for p in pages}
+    by_url: dict[str, dict[str, Any]] = {}
+    for p in pages:
+        for u in (p.get("final_url"), p.get("url")):
+            if isinstance(u, str) and u:
+                by_url[_key(u)] = p
     for url, text in texts.items():
-        if not isinstance(text, str) or _fingerprint(text.encode()) != by_url.get(url, {}).get("text_sha256"):
+        if not isinstance(text, str) or _fingerprint(text.encode()) != by_url.get(_key(url), {}).get("text_sha256"):
             return Blocked(f"the text kept from {url} is not the text that was downloaded")
     output = call.get("output")
     listed = output.get(field) if isinstance(output, dict) else None
     if not isinstance(listed, list) or not all(isinstance(i, dict) for i in listed):
         return Fail(f"{field} is a list of quotes, each with the url of its page and the quote")
     reasons: list[str] = []
+    prepared: dict[str, Prepared] = {}
     count = 0
-    for item in listed:
+    for n, item in enumerate(listed, 1):
+        if _quoteless(item):
+            reasons.append(f"{field}, item {n} has no quote: give quote, the words as text, or quotes, a list of them")
         url = str(item.get("url") or "")
         for quote in _quotes_of(item):
             count += 1
             short = quote if len(quote) <= 80 else quote[:77] + "..."
-            page = by_url.get(url)
+            page = by_url.get(_key(url))
+            moved = f" (the page came from {page['came_from']})" if page and page.get("came_from") else ""
             if page is None:
                 reasons.append(f"\"{short}\": its page, {url or 'none named'}, was not downloaded by Jaynes in this run")
             elif not page.get("read"):
-                reasons.append(f"\"{short}\": Jaynes could not read {url} ({page.get('why')}), so nothing quoted from it is proved")
-            elif len(same_words(quote)) < QUOTE_CHARS:
-                reasons.append(f"\"{short}\" is too short to prove anything: quote at least {QUOTE_CHARS} characters")
-            elif not held(texts.get(url, ""), quote):
-                reasons.append(f"\"{short}\": these words are not in the text Jaynes downloaded from {url}")
-    if count == 0:
+                reasons.append(f"\"{short}\": Jaynes could not read {url} ({page.get('why')}), so nothing quoted from it is proved{moved}")
+            else:
+                key = str(page.get("url"))
+                if key not in prepared:
+                    prepared[key] = Prepared(texts.get(key, ""))
+                found, why = _found(quote, prepared[key], page.get("asked") or [key])
+                if not found:
+                    reasons.append(f"\"{short}\": {why} from {url}{moved}" if why.startswith("these words") else f"\"{short}\": {why}{moved}")
+    if count == 0 and not reasons:
         return Fail(f"there is no quote to prove: {field} lists none")
     return Fail(*reasons[:20]) if reasons else Pass()
 
