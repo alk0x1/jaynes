@@ -568,17 +568,22 @@ impl Page {
     /// What the person does to a run from its page: halt, resume, continue, raise, abandon, correct.
     /// Change the guard, update Jaynes, or restart the page; only the person does these.
     fn setup(&self, body: &Value, by: By) -> Result<Value, String> {
-        use crate::install::{guard, set_guard};
+        use crate::install::{guard, guard_notes_path, set_guard, set_guard_watch};
         if by != By::Person {
             return Err("only you change the setup: open the link the page printed".into());
         }
         let (on, mut owners) = guard();
         let owner = body["owner"].as_str().unwrap_or("").trim().to_string();
         match body["action"].as_str().unwrap_or("") {
-            "guard-on" => set_guard(true, &owners)?,
+            "guard-on" => set_guard_watch(false)?,
+            "guard-watch" => set_guard_watch(true)?,
             "guard-off" => set_guard(false, &owners)?,
+            "watch-clear" => match std::fs::remove_file(guard_notes_path()?) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("the notes stay: {e}")),
+                _ => {}
+            },
             "owner-add" => {
-                if owner.is_empty() || !owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                if !owner_shape(&owner) {
                     return Err("a GitHub owner is letters, digits and dashes".into());
                 }
                 if !owners.iter().any(|o| o.eq_ignore_ascii_case(&owner)) {
@@ -1255,15 +1260,84 @@ fn banner() -> String {
     format!("<div class=\"notice new\"><span>{text}</span><button class=\"act\" data-setup=\"{act}\">{label}</button></div>")
 }
 
+/// Whether a name has the shape of a GitHub owner, as Free owners takes one: letters, digits and dashes.
+fn owner_shape(owner: &str) -> bool {
+    !owner.is_empty() && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// What the watching guard noted it would have asked, by owner, or by where when it could not tell one, the most
+/// first, each owner with a way to free it. The notes are text from outside, since an owner is read from a remote:
+/// all of it is escaped, and an owner is offered only in the shape Free owners takes.
+fn guard_notes_html(owners: &[String]) -> String {
+    let Some(text) = crate::install::guard_notes_path().ok().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return String::new();
+    };
+    // (owner or where, whether it is an owner, how many of each action, how many in all)
+    let mut groups: Vec<(String, bool, std::collections::BTreeMap<String, usize>, usize)> = Vec::new();
+    let (mut first, mut notes) = (None::<String>, 0usize);
+    for note in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+        let Some(held) = note["held"].as_array().filter(|h| !h.is_empty()) else { continue };
+        notes += 1;
+        if first.is_none() {
+            first = note["at"].as_str().map(|t| t.chars().take(10).collect());
+        }
+        for h in held {
+            let (key, is_owner) = match h["owner"].as_str() {
+                Some(o) => (o.to_string(), true),
+                None => (h["where"].as_str().unwrap_or("where it could not tell").to_string(), false),
+            };
+            let action = h["action"].as_str().unwrap_or("an action").to_string();
+            let at = match groups.iter().position(|g| g.1 == is_owner && g.0.eq_ignore_ascii_case(&key)) {
+                Some(at) => at,
+                None => {
+                    groups.push((key, is_owner, std::collections::BTreeMap::new(), 0));
+                    groups.len() - 1
+                }
+            };
+            if let Some(g) = groups.get_mut(at) {
+                *g.2.entry(action).or_default() += 1;
+                g.3 += 1;
+            }
+        }
+    }
+    if notes == 0 {
+        return String::new();
+    }
+    groups.sort_by_key(|g| std::cmp::Reverse(g.3));
+    let rows: String = groups
+        .iter()
+        .map(|(key, is_owner, actions, n)| {
+            let what = actions.iter().map(|(a, k)| format!("{} {k}", esc(a))).collect::<Vec<_>>().join(", ");
+            let free = if !is_owner {
+                String::new()
+            } else if owners.iter().any(|o| o.eq_ignore_ascii_case(key)) {
+                " <span class=\"none\">free now</span>".to_string()
+            } else if owner_shape(key) {
+                format!("<button class=\"act\" data-setup=\"owner-add\" data-owner=\"{}\">Add to free owners</button>", esc(key))
+            } else {
+                String::new()
+            };
+            format!("<span class=\"owner\"><code>{}</code> {n}: {what}{free}</span>", esc(key))
+        })
+        .collect();
+    let since = first.map(|d| format!(" since {}", esc(&d))).unwrap_or_default();
+    format!(
+        "<tr><td>would have asked</td><td>{notes}{since}: {rows}<button class=\"act\" data-setup=\"watch-clear\">Clear</button></td></tr>"
+    )
+}
+
 /// The guard in Claude Code, and which Jaynes this is.
 fn setup_html(home: &std::path::Path) -> String {
     let (on, owners) = crate::install::guard();
     let path = crate::install::guard_path().map(|p| p.display().to_string()).unwrap_or_default();
-    let state = if on {
-        "<span class=\"chip green\">on</span> <button class=\"act\" data-setup=\"guard-off\">Turn off</button>"
-    } else {
+    let state = if !on {
         "<span class=\"chip red\">off</span> <button class=\"act\" data-setup=\"guard-on\">Turn on</button>"
+    } else if crate::install::guard_watching() {
+        "<span class=\"chip\">watching</span> <button class=\"act\" data-setup=\"guard-on\">Ask again</button> <button class=\"act\" data-setup=\"guard-off\">Turn off</button>"
+    } else {
+        "<span class=\"chip green\">on</span> <button class=\"act\" data-setup=\"guard-off\">Turn off</button> <button class=\"act\" data-setup=\"guard-watch\">Only watch</button>"
     };
+    let notes = guard_notes_html(&owners);
     let rows: String = owners.iter().map(|o| format!("<span class=\"owner\"><code>{}</code><button class=\"act\" data-setup=\"owner-remove\" data-owner=\"{0}\">Remove</button></span>", esc(o))).collect();
     let none = if owners.is_empty() { "<span class=\"none\">none: every held action asks, wherever it lands</span>" } else { "" };
     let installed = crate::install::installed_commit();
@@ -1276,8 +1350,8 @@ fn setup_html(home: &std::path::Path) -> String {
     let log = if log.trim().is_empty() { String::new() } else { format!("<details class=\"way\"><summary>What the last update said</summary><pre class=\"said\">{}</pre></details>", esc(log.trim())) };
     format!(
         "<h1>Setup</h1>\
-         <section class=\"part\"><h2>Guard</h2><p class=\"sub\">In every Claude Code session with the Jaynes plugin, it asks before what cannot be undone in git and GitHub: push, reset --hard, clean, deleting branches or tags, merging or closing pull requests, and creating or deleting repositories. Everything else passes. Repositories whose GitHub owner is a free owner pass freely.</p>\
-         <table class=\"kv\"><tr><td>state</td><td>{state}</td></tr><tr><td>free owners</td><td>{rows}{none}<span class=\"owner\"><input id=\"owner\" placeholder=\"GitHub owner\"><button class=\"act\" data-setup=\"owner-add\">Add</button></span></td></tr><tr><td>settings</td><td><code>{}</code></td></tr></table></section>\
+         <section class=\"part\"><h2>Guard</h2><p class=\"sub\">In every Claude Code session with the Jaynes plugin, it asks before what cannot be undone in git and GitHub: push, reset --hard, clean, deleting branches or tags, merging or closing pull requests, and creating or deleting repositories. Everything else passes. On a free owner's repositories, a plain push and a pull request opened or merged pass; what cannot be undone asks always. Watching, it asks none of those that can be taken back and notes them here instead.</p>\
+         <table class=\"kv\"><tr><td>state</td><td>{state}</td></tr>{notes}<tr><td>free owners</td><td>{rows}{none}<span class=\"owner\"><input id=\"owner\" placeholder=\"GitHub owner\"><button class=\"act\" data-setup=\"owner-add\">Add</button></span></td></tr><tr><td>settings</td><td><code>{}</code></td></tr></table></section>\
          <section class=\"part\"><h2>Version</h2><table class=\"kv\"><tr><td>running</td><td>{running}</td></tr><tr><td>installed</td><td>{version}</td></tr></table>{log}</section>\
          <div class=\"refused\" id=\"setupmsg\"></div>",
         esc(&path)

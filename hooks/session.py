@@ -2,7 +2,8 @@
 
 The plugin has two parts. The conducting part, the skill and the MCP tools, is off in a session started with
 JAYNES_OFF set (to anything but nothing, 0, false, no or off, as ``jaynes mcp`` reads it). The guard keeps its own
-switch, "on" in $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json), and JAYNES_OFF never turns it off.
+switch, "on" in $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json), and JAYNES_OFF never turns it off; with
+"watch" beside it, the guard only watches what can be taken back and notes it (see guard.py).
 
 A project may turn the conducting part off with its own switch, .jaynes.toml (see switch.py), and make the guard
 stricter, never turn it off; the person may turn the guard off in a project in their settings ("off_in").
@@ -25,11 +26,14 @@ def conducting_off() -> bool:
     return os.environ.get("JAYNES_OFF", "").strip().lower() not in ("", "0", "false", "no", "off")
 
 
+def home() -> str:
+    return os.path.expanduser(os.environ.get("JAYNES_HOME") or os.path.join(os.path.expanduser("~"), ".jaynes"))
+
+
 def settings() -> dict[str, object]:
     """The guard's settings, as the guard reads them; {} when missing or broken."""
-    home = os.environ.get("JAYNES_HOME") or os.path.join(os.path.expanduser("~"), ".jaynes")
     try:
-        with open(os.path.join(os.path.expanduser(home), "guard.json"), encoding="utf-8") as f:
+        with open(os.path.join(home(), "guard.json"), encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
@@ -56,6 +60,10 @@ def said(cwd: str) -> dict[str, object] | None:
         guard = f"its guard is off (the Setup page of Jaynes turns it on): it does not ask before {ACTIONS}"
     elif switch.off_in(cwd, data):
         guard = f"its guard is off in this project (your settings, on the Setup page of Jaynes): it does not ask before {ACTIONS}"
+    elif data.get("watch") is True:
+        guard = (f"its guard only watches: a push or a pull request opened or merged it does not ask, and notes in "
+                 f"{os.path.join(home(), 'guard-watch.jsonl')} what it would have asked; what cannot be undone it "
+                 "still asks, and so does a change to its own files (the Setup page of Jaynes turns asking back on)")
     elif project["guard"] == "strict":
         guard = f"its guard is strict in this project ({project['path']}): it asks before every one of the {ACTIONS}, even on your own repositories"
     else:

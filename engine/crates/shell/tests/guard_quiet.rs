@@ -165,6 +165,8 @@ fn a_remote_s_user_and_password_never_reach_the_question() {
         "gh pr create -R https://deploy:s3cr3t-tok@gitlab.example.com/team/thing --fill",
         "gh pr merge --repo=https://deploy:s3cr3t-tok@gitlab.example.com/team/thing 3",
         "git push https://x-access-token:s3cr3t-tok@github.com/someone-else/thing.git main",
+        "git push 'https://gitlab.example.com/team/thing.git?private_token=s3cr3t-tok' main",
+        "git push 'https://gitlab.example.com/team/thing.git#s3cr3t-tok' main",
     ];
     for command in cases {
         let said = w.guard("Bash", bash(command));
@@ -172,5 +174,18 @@ fn a_remote_s_user_and_password_never_reach_the_question() {
         let why = said.as_ref().map(|v| v["hookSpecificOutput"]["permissionDecisionReason"].to_string()).unwrap_or_default();
         assert!(!why.contains("s3cr3t") && !why.contains("deploy") && !why.contains("x-access-token"), "{command}: {why}");
         assert!(why.contains("gitlab.example.com/team/thing") || why.contains("github.com/someone-else/thing"), "{command}: where is still said: {why}");
+    }
+    // an address that does not read whole, as a password with a bare / leaves it (a URL cannot carry one, but a
+    // person may write it): only its scheme and the host after its last @ are said
+    for command in [
+        "git push 'https://deploy:s3cr/et-tok@gitlab.example.com/team/thing.git' main",
+        "git push 'https://deploy:s3/cr/et@tok@gitlab.example.com/team/thing.git' main",
+        "gh pr create -R 'https://deploy:s3cr/et-tok@gitlab.example.com/team/thing' --fill",
+    ] {
+        let said = w.guard("Bash", bash(command));
+        assert!(asks(&said), "{command}: {said:?}");
+        let why = said.as_ref().map(|v| v["hookSpecificOutput"]["permissionDecisionReason"].to_string()).unwrap_or_default();
+        assert!(!why.contains("s3") && !why.contains("cr/et") && !why.contains("deploy") && !why.contains("tok"), "{command}: {why}");
+        assert!(why.contains("https://gitlab.example.com/"), "{command}: the host is still said: {why}");
     }
 }

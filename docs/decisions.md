@@ -2,6 +2,27 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-18: The guard can only watch
+
+**Decided.** Setup can set the guard to watch. Watching, what it would ask
+that can be taken back (a plain push, a pull request opened or merged) it does
+not ask: it notes it in `guard-watch.jsonl`, beside its settings, one line
+each: when, the session, the folder, the action, where it lands and its owner,
+never the command's words. Setup shows the notes by owner, with a button that
+adds each one to Free owners, and only the person clears them. What cannot be
+undone still asks, and so does a change to the guard's own files, the notes
+included. Every action the guard holds is noted or asked, never neither: a note
+it cannot write is asked, saying why. The notes are the person's alone (0600)
+and keep the newest 200.
+
+**Why.** A team can put the guard in, work as before, and see what it would
+ask before it asks anything; GitHub's rulesets have the same "evaluate" state.
+What cannot be undone is not what a team tries out: a watch that let a forced
+push pass would be the guard off for the very actions it exists for.
+
+**Costs.** Watching is set for every project at once. A guard from before this
+does not know the setting and asks as before.
+
 ## 2026-11-18: A free owner passes only what can be taken back
 
 **Decided.** An owner in the guard's Free owners passes a plain push and a pull

@@ -508,26 +508,61 @@ pub fn guard_path() -> Result<PathBuf, String> {
     Ok(home.join("guard.json"))
 }
 
+/// The guard's settings file, `{}` when it is missing, broken or not an object.
+fn guard_json() -> serde_json::Value {
+    guard_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Write the guard's settings whole, through a file renamed into place so the guard never reads half of it.
+fn write_guard(v: &serde_json::Value) -> Result<(), String> {
+    let path = guard_path()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string_pretty(v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 /// The guard's settings, as the guard reads them: on unless it says otherwise, and its free owners.
 pub fn guard() -> (bool, Vec<String>) {
-    let v: serde_json::Value = guard_path().ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let v = guard_json();
     let on = v["on"].as_bool().unwrap_or(true);
     let owners = v["owners"].as_array().map(|a| a.iter().filter_map(|o| o.as_str().map(str::to_string)).collect()).unwrap_or_default();
     (on, owners)
 }
 
-/// Write the guard's settings whole, through a file renamed into place so the guard never reads half of it.
+/// Whether the guard, being on, only watches: what it would ask that can be taken back it notes instead, in
+/// [`guard_notes_path`], as the guard reads it.
+pub fn guard_watching() -> bool {
+    let v = guard_json();
+    v["on"].as_bool().unwrap_or(true) && v["watch"].as_bool() == Some(true)
+}
+
+/// Turn the guard on or off, and set its free owners; whether it only watches stays as it was.
 pub fn set_guard(on: bool, owners: &[String]) -> Result<(), String> {
-    let path = guard_path()?;
-    let mut v: serde_json::Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| serde_json::json!({}));
+    let mut v = guard_json();
     v["on"] = serde_json::json!(on);
     v["owners"] = serde_json::json!(owners);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    write_guard(&v)
+}
+
+/// Turn the guard on, asking or only watching, in one write.
+pub fn set_guard_watch(watch: bool) -> Result<(), String> {
+    let mut v = guard_json();
+    v["on"] = serde_json::json!(true);
+    v["watch"] = serde_json::json!(watch);
+    write_guard(&v)
+}
+
+/// Where the watching guard notes what it would have asked: beside its settings, one JSON line a note.
+pub fn guard_notes_path() -> Result<PathBuf, String> {
+    Ok(guard_path()?.with_file_name("guard-watch.jsonl"))
 }
 
 /// Build and install the newest Jaynes from where it is published, and update the roles that came from git.

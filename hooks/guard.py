@@ -5,10 +5,17 @@ python3's standard library. It holds git and GitHub actions that cannot be undon
 answering "ask"; everything else gets no answer at all, so Claude Code's own permission flow applies. It never
 blocks (never exits 2): in claude -p, where nobody can answer, Claude Code turns the ask into a deny by itself.
 
-Settings: $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json) with "on" and "owners". Repositories on GitHub
-whose owner is a free owner pass freely. With no valid owners list, the free owner is the GitHub user gh is signed
-in as, read from gh's own hosts file. The guard never goes to the network and never writes a file: where it was not
-needed it does nothing, and a command it does not hold runs no program at all.
+Settings: $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json) with "on", "watch" and "owners". On a free owner's
+repositories on GitHub, what can be taken back passes: a plain push, a pull request opened or merged. With no valid
+owners list, the free owner is the GitHub user gh is signed in as, read from gh's own hosts file. The guard never
+goes to the network, and writes no file but its notes: where it was not needed it does nothing, and a command it
+does not hold runs no program at all.
+
+Watching ("watch": true beside "on": true, which only the Setup page writes), what it would ask that can be taken
+back it does not ask: it notes it instead, one JSON line in guard-watch.jsonl beside the settings, the person's alone
+(0600), keeping the newest 200. What cannot be undone still asks, and so does a change to its own files. Every
+action it holds is noted or asked, never neither: a note it cannot write is asked, saying why. A guard from before
+"watch" does not know the key, and asks.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ import switch  # beside this file: a project's own switch, .jaynes.toml
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 GIT_TIMEOUT = 5.0
+NOTES_KEEP = 200
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 
 
@@ -45,6 +53,16 @@ def read_settings() -> dict[str, object]:
 def is_on(data: dict[str, object]) -> bool:
     on = data.get("on", True)
     return on if isinstance(on, bool) else True
+
+
+def is_watching(data: dict[str, object]) -> bool:
+    """Whether the guard, being on, only watches: notes what it would ask that can be taken back."""
+    return is_on(data) and data.get("watch") is True
+
+
+def notes_path() -> str:
+    """Where the watching guard notes what it would have asked: beside its settings."""
+    return os.path.join(os.path.dirname(settings_path()), "guard-watch.jsonl")
 
 
 def configured_owners(data: dict[str, object]) -> list[str] | None:
@@ -355,10 +373,17 @@ REPO_VALUE_FLAGS = {"-d", "--description", "-h", "--homepage", "-t", "--team", "
 
 
 def without_userinfo(url: str) -> str:
-    """url without its user and password: a token in a remote's address is a secret, and the question is read by the
-    person and by the model. Everything after the scheme up to the last @ before the path goes."""
-    m = re.match(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@(.*)", url.strip(), re.S)
-    return m.group(1) + m.group(2) if m else url.strip()
+    """url as the guard says it, with no user, password, query or fragment, where a token goes: the question is read
+    by the person and by the model. An address with an @ past its host, as a password holding a bare / leaves it, is
+    not read whole: only its scheme and the host after its last @ are said."""
+    m = re.match(r"([A-Za-z][A-Za-z0-9+.-]*://)(.*)", url.strip(), re.S)
+    if not m:
+        return url.strip()
+    scheme, rest = m.group(1), re.split(r"[?#]", m.group(2), maxsplit=1)[0]
+    authority, slash, path = rest.partition("/")
+    if "@" in path:
+        return f"{scheme}{path.rsplit('@', 1)[1].split('/', 1)[0]}/..."
+    return scheme + authority.rsplit("@", 1)[-1] + slash + path
 
 
 def github_of(url: str) -> tuple[str, str] | None:
@@ -420,7 +445,7 @@ def resolve(cwd: str, path: str) -> str:
 # merged is reverted). Everything else held cannot be undone, and asks every time, on the person's own repositories
 # too: a forced or deleting push, git reset --hard, git clean, deleting a branch or a tag, closing a pull request that
 # tells everyone who follows it, and creating, deleting or archiving a repository.
-PASSABLE = {GIT_SAYS["push"], GH_SAYS[("pr", "create")], GH_SAYS[("pr", "merge")]}
+PASSABLE = {GIT_SAYS["push"]: "git push", GH_SAYS[("pr", "create")]: "gh pr create", GH_SAYS[("pr", "merge")]: "gh pr merge"}
 SETUP = "http://localhost:8750/"
 
 
@@ -482,12 +507,12 @@ def holds(cmd: Simple) -> list[tuple[str, Target]]:
 # --- its own files --------------------------------------------------------------
 
 def own_paths() -> tuple[list[str], list[str]]:
-    """(folders, files) the guard keeps: the plugin's hooks folder and the settings file."""
+    """(folders, files) the guard keeps: the plugin's hooks folder, the settings file and the notes."""
     folders = {HERE}
     root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if root:
         folders.add(os.path.realpath(os.path.join(root, "hooks")))
-    return sorted(folders), [os.path.realpath(settings_path())]
+    return sorted(folders), [os.path.realpath(settings_path()), os.path.realpath(notes_path())]
 
 
 def is_own(path: str, removing: bool = False) -> bool:
@@ -551,8 +576,12 @@ def own_reason(path: str) -> str:
     return (SWITCH_REASON if switch.is_switch(path) else OWN_REASON).format(path=path)
 
 
-def decide(event: dict[str, object]) -> str | None:
-    """The reason to ask with, or None to stay silent."""
+Verdict = tuple[str, "list[dict[str, object]] | None"]
+
+
+def decide(event: dict[str, object]) -> Verdict | None:
+    """None to stay silent; else the reason to ask with, and what a watching guard notes instead of asking: each held
+    action that can be taken back, with where it lands and its owner; None when something held must be asked."""
     tool = event.get("tool_name")
     tool_input = event.get("tool_input")
     cwd = event.get("cwd")
@@ -565,7 +594,7 @@ def decide(event: dict[str, object]) -> str | None:
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
         if isinstance(path, str) and path and is_own(resolve(cwd, path)):
-            return own_reason(path)
+            return own_reason(path), None
         return None
     if tool != "Bash":
         return None
@@ -576,7 +605,7 @@ def decide(event: dict[str, object]) -> str | None:
     for cmd in commands:
         own = writes_own(cmd)
         if own:
-            return own_reason(own)
+            return own_reason(own), None
     held = [h for cmd in commands for h in holds(cmd)]
     if not held or switch.off_in(cwd, settings):
         return None  # off in this project is the person's word, in their settings; a project's file cannot say it
@@ -585,10 +614,13 @@ def decide(event: dict[str, object]) -> str | None:
     owners: list[str] | None = [] if strict else None
     said: list[str] = []
     offers: list[str] = []
+    notes: list[dict[str, object]] = []
+    must_ask = False
     for says, target in held:
         if says not in PASSABLE:
             said.append(f"{says.format(where=target.words)}, which cannot be undone: the guard asks every time, on "
                         "your own repositories too.")
+            must_ask = True
             continue
         if target.repo is not None:
             if owners is None:
@@ -599,24 +631,72 @@ def decide(event: dict[str, object]) -> str | None:
                    "whose owner is not one of your free owners" if owners else
                    "and you have no free owners yet (gh is signed in as no GitHub user)")
             said.append(f"{says.format(where=target.words)}, {why}.")
+            notes.append({"action": PASSABLE[says], "where": target.words, "owner": target.repo[0]})
             if not strict and target.repo[0] not in offers:
                 offers.append(target.repo[0])
         else:
             said.append(f"{says.format(where=target.words)}, which the guard cannot tell belongs to one of your "
                         "free owners.")
+            notes.append({"action": PASSABLE[says], "where": target.words, "owner": None})
     if not said:
         return None
     offer = "".join(f" To let pushes and pull requests to {o} pass from now on, add {o} to Free owners in Setup: "
                     f"{SETUP} (an organization frees all its repositories)." for o in offers)
-    return " ".join(said) + " The guard asks you first." + offer + " The switch is on the Setup page of Jaynes."
+    return " ".join(said) + " The guard asks you first." + offer + " The switch is on the Setup page of Jaynes.", \
+        (None if must_ask else notes)
+
+
+def note(event: dict[str, object], held: list[dict[str, object]]) -> str | None:
+    """Add one line to the notes, keeping the newest NOTES_KEEP; None when it is written, else why it could not be.
+
+    The file is the person's alone (0600), never followed through a link, and changed in place under a lock, so two
+    sessions noting at once both land. It holds no command's words: only when, the session, the folder and what was
+    held."""
+    import datetime
+    import fcntl
+    session, cwd = event.get("session_id"), event.get("cwd")
+    line = json.dumps({"at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                       "session": session if isinstance(session, str) else None,
+                       "cwd": cwd if isinstance(cwd, str) else None, "held": held}, ensure_ascii=False)
+    try:
+        fd = os.open(notes_path(), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as err:
+        return err.strerror or repr(err)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.fchmod(fd, 0o600)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        kept = [k for k in b"".join(chunks).decode("utf-8", "replace").splitlines() if k.strip()]
+        data = ("\n".join(kept[-(NOTES_KEEP - 1):] + [line]) + "\n").encode("utf-8")
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        while data:
+            data = data[os.write(fd, data):]
+    except OSError as err:
+        return err.strerror or repr(err)
+    finally:
+        os.close(fd)
+    return None
 
 
 def main() -> int:
     try:
         event = json.loads(sys.stdin.read() or "null")
         if isinstance(event, dict):
-            reason = decide(event)
-            if reason:
+            verdict = decide(event)
+            if verdict:
+                reason, held = verdict
+                if held is not None and is_watching(read_settings()):
+                    failed = note(event, held)
+                    if failed is None:
+                        return 0
+                    reason = (f"The guard only watches, but could not note this in {notes_path()} ({failed}), so it "
+                              f"asks. {reason}")
                 ask(reason)
     except Exception as err:  # never in the way: a guard that breaks says why and lets Claude Code decide
         print(f"jaynes guard: {err!r}", file=sys.stderr)

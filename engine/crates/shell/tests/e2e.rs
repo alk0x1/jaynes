@@ -1141,6 +1141,67 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
 }
 
 #[test]
+fn the_page_shows_what_the_watching_guard_would_have_asked_and_frees_an_owner_from_it() {
+    let s = scratch("watch");
+    let settings = s.home.parent().expect("base").join("settings");
+    let install = s.home.parent().expect("base").join("install");
+    std::fs::create_dir_all(&settings).expect("dir");
+    std::fs::create_dir_all(&install).expect("dir");
+    std::fs::write(settings.join("guard.json"), r#"{"on": true, "owners": ["me"]}"#).expect("write");
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_HOME", &settings)
+        .env("JAYNES_INSTALL_ROOT", &install)
+        .env("JAYNES_NO_UPDATE_CHECK", "1")
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
+    let me = "jaynes_key=k3y";
+    let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+    let settings_now = || -> Value { serde_json::from_str(&std::fs::read_to_string(settings.join("guard.json")).expect("guard")).expect("json") };
+    assert!(get("/setup").contains("data-setup=\"guard-watch\""), "the guard on offers to only watch");
+    // only the person makes it watch, and it stays on
+    assert_eq!(post(port, "/api/setup", r#"{"action":"guard-watch"}"#, "")["ok"], false);
+    assert_eq!(post(port, "/api/setup", r#"{"action":"guard-watch"}"#, me)["ok"], true);
+    assert_eq!((settings_now()["on"].clone(), settings_now()["watch"].clone()), (Value::Bool(true), Value::Bool(true)));
+    assert_eq!(settings_now()["owners"], serde_json::json!(["me"]), "the owners stay");
+    // what it noted, as the guard writes it; an owner is read from a remote, so it is text from outside
+    let note = |owner: Value, action: &str, at: &str| format!("{}\n", serde_json::json!({"at": at, "session": "s", "cwd": "/p", "held": [{"action": action, "where": "github.com/x/y", "owner": owner}]}));
+    let notes = [
+        note("acme".into(), "git push", "2026-11-10T09:00:00-03:00"),
+        note("acme".into(), "git push", "2026-11-11T09:00:00-03:00"),
+        note("acme".into(), "gh pr merge", "2026-11-12T09:00:00-03:00"),
+        note("ev\"il<b>x".into(), "git push", "2026-11-12T10:00:00-03:00"),
+        note(Value::Null, "git push", "2026-11-12T11:00:00-03:00"),
+        "not a note\n".to_string(),
+    ]
+    .concat();
+    std::fs::write(settings.join("guard-watch.jsonl"), notes).expect("write");
+    let setup = get("/setup");
+    assert!(setup.contains("chip\">watching") && setup.contains("data-setup=\"guard-on\">Ask again"), "{setup}");
+    assert!(setup.contains("5 since 2026-11-10"), "five notes, from the first one's day: {setup}");
+    assert!(setup.contains("<code>acme</code> 3: gh pr merge 1, git push 2") && setup.contains("data-owner=\"acme\">Add to free owners"), "{setup}");
+    assert!(setup.contains("ev&quot;il&lt;b&gt;x") && !setup.contains("ev\"il<b>") && !setup.contains("data-owner=\"ev"), "an owner from outside is escaped and never offered: {setup}");
+    assert!(setup.contains("<code>github.com/x/y</code> 1: git push"), "where it could not tell an owner, by where: {setup}");
+    // freeing an owner from it goes through the same check as the Add of Free owners
+    assert_eq!(post(port, "/api/setup", r#"{"action":"owner-add","owner":"ev\"il<b>x"}"#, me)["ok"], false);
+    assert_eq!(post(port, "/api/setup", r#"{"action":"owner-add","owner":"acme"}"#, me)["ok"], true);
+    assert_eq!(settings_now()["owners"], serde_json::json!(["me", "acme"]));
+    assert_eq!(settings_now()["watch"], true, "freeing an owner leaves it watching");
+    let setup = get("/setup");
+    assert!(setup.contains("<code>acme</code> 3: gh pr merge 1, git push 2 <span class=\"none\">free now") && !setup.contains("data-owner=\"acme\">Add to free owners"), "{setup}");
+    // only the person clears the notes, and asking again turns watching off
+    assert_eq!(post(port, "/api/setup", r#"{"action":"watch-clear"}"#, "")["ok"], false);
+    assert!(settings.join("guard-watch.jsonl").exists());
+    assert_eq!(post(port, "/api/setup", r#"{"action":"watch-clear"}"#, me)["ok"], true);
+    assert!(!settings.join("guard-watch.jsonl").exists() && !get("/setup").contains("would have asked"));
+    assert_eq!(post(port, "/api/setup", r#"{"action":"guard-on"}"#, me)["ok"], true);
+    assert_eq!((settings_now()["on"].clone(), settings_now()["watch"].clone()), (Value::Bool(true), Value::Bool(false)));
+    assert!(get("/setup").contains("chip green\">on"));
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_their_words() {
     let s = scratch("impossible");
