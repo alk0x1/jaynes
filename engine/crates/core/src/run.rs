@@ -392,11 +392,10 @@ impl Run {
                     id.clone(),
                     QuestionState { question: question.clone(), answer: None, effects: None, superseded: false },
                 );
-                if question.kind == QuestionKind::Acted {
-                    if let Some(s) = self.step_mut(&question.step.clone()) {
+                if question.kind == QuestionKind::Acted
+                    && let Some(s) = self.step_mut(&question.step.clone()) {
                         s.held = Some(id.clone());
                     }
-                }
                 if question.kind == QuestionKind::Decision {
                     let step = question.step.clone();
                     if let Some(s) = self.step_mut(&step) {
