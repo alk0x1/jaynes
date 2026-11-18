@@ -64,8 +64,9 @@ fn get(port: u16, path: &str) -> Result<String, String> {
     ask(port, format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(), Duration::from_secs(3))
 }
 
-fn port(n: u16) -> u16 {
-    22750 + (std::process::id() % 900) as u16 * 3 % 2700 + n
+/// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+fn port(_n: u16) -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
 }
 
 #[test]

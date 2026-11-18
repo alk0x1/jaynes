@@ -7,6 +7,11 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_jaynes");
 
+/// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+}
+
 struct Scratch {
     base: PathBuf,
     home: PathBuf,
@@ -124,7 +129,7 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     start(&s, "asked", &format!("printf 'hi\\n' > greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}"));
     let (ok, early) = engine(&s, &["summary", "asked"]);
     assert!(!ok && early.contains("run asked is not finished: a summary tells what a finished run did"), "{early}");
-    let port = 19750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_NO_UPDATE_CHECK", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y")

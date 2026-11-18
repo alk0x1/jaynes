@@ -117,6 +117,11 @@ fn skipped_without_a_test_browser() -> bool {
     none
 }
 
+/// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+}
+
 struct Scratch {
     base: PathBuf,
     home: PathBuf,
@@ -504,7 +509,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let e = events(&s, "page");
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
-    let port = 18750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -675,7 +680,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let s = scratch("acts");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "acts", &agent);
-    let port = 19750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -877,7 +882,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
     let (ok, out) = engine(&s, &["start", "--run", "looks", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                                  "--request", "make looks", "--agent", &format!("command:{agent}")]);
     assert!(ok && out.contains("Which looks go on?"), "{out}");
-    let port = 20750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -1023,7 +1028,7 @@ impl Drop for Page {
 fn the_person_starts_a_run_from_the_page() {
     let s = scratch("new");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
-    let port = 17750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -1070,7 +1075,7 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
         std::fs::write(install.join(".crates.toml"), line).expect("write");
     };
     installed(&"a".repeat(40));
-    let port = 16750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -1241,7 +1246,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     assert!(!s.home.join("runs/old/project").exists(), "the finished run's copy is cleared");
     assert!(s.home.join("runs/new/project/.git").exists(), "the run just started keeps its copy");
     // the page still shows what the old run changed
-    let port = 15750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k3y").env("JAYNES_NO_UPDATE_CHECK", "1")
@@ -1483,7 +1488,7 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     let photo = std::fs::read(copy.join(".jaynes/pictures/design/ink.png")).expect("the photograph is in the copy");
     assert_eq!(&photo[1..4], b"PNG");
     // on the page the photograph opens the page, served apart: sandboxed, so what an agent wrote cannot answer
-    let port = 21750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -1592,7 +1597,7 @@ fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
     assert!(ok && out.contains("Which direction goes on?"), "{out}");
     let q = question_of(&s, "again", 0);
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
-    let port = 22750 + (std::process::id() % 1000) as u16;
+    let port = free_port();
     let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
