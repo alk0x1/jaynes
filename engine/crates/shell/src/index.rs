@@ -11,18 +11,23 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const FILE: &str = "index.toml";
+/// Each role's license, by its name (an SPDX identifier, as `Apache-2.0`), beside the index: a file of its own, so the
+/// engines that read the index strictly, as every one up to 0.2.2 does, are not broken by a field they do not know.
+pub const LICENSES: &str = "licenses.toml";
 /// The index Jaynes reads by default: `$JAYNES_INDEX` names another, a folder or a git URL.
 pub const DEFAULT: &str = "https://github.com/alk0x1/jaynes-roles";
 
+/// The index as its file holds it. A field this engine does not know is kept as it is and said by the index's
+/// check, never refused: a field added later must not break the engines already installed.
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct IndexFile {
     #[serde(default)]
     role: Vec<Entry>,
+    #[serde(flatten)]
+    unknown: toml::Table,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Entry {
     pub name: String,
     pub version: String,
@@ -38,6 +43,12 @@ pub struct Entry {
     /// What the role promises, in its words: every one proved.
     #[serde(default)]
     pub promises: Vec<String>,
+    /// Its license, from [`LICENSES`]: empty when the index says none.
+    #[serde(skip)]
+    pub license: String,
+    /// Fields this engine does not know, kept as they are.
+    #[serde(flatten)]
+    pub unknown: toml::Table,
 }
 
 /// A folder removed when dropped.
@@ -87,9 +98,31 @@ pub fn fetch() -> Result<(PathBuf, Option<Gone>), String> {
 }
 
 pub fn load(index: &Path) -> Result<Vec<Entry>, String> {
+    Ok(read(index)?.role)
+}
+
+/// The index's file, each entry with its license.
+fn read(index: &Path) -> Result<IndexFile, String> {
     let text = std::fs::read_to_string(index.join(FILE)).map_err(|e| format!("the index has no {FILE}: {e}"))?;
-    let file: IndexFile = toml::from_str(&text).map_err(|e| format!("{FILE}: {}", e.message()))?;
-    Ok(file.role)
+    let mut file: IndexFile = toml::from_str(&text).map_err(|e| format!("{FILE}: {}", e.message()))?;
+    let licenses: std::collections::BTreeMap<String, String> = match std::fs::read_to_string(index.join(LICENSES)) {
+        Ok(text) => toml::from_str(&text).map_err(|e| format!("{LICENSES}: {} (each line is NAME = \"SPDX identifier\")", e.message()))?,
+        Err(_) => Default::default(),
+    };
+    for entry in &mut file.role {
+        entry.license = licenses.get(&entry.name).map(|l| l.trim().to_string()).unwrap_or_default();
+    }
+    Ok(file)
+}
+
+/// Why an entry's license does not do: none, or not an SPDX identifier as an index writes one.
+fn license_wrong(entry: &Entry) -> Option<String> {
+    let l = &entry.license;
+    if l.is_empty() {
+        return Some(format!("{} has no license in {LICENSES}: add {} = \"Apache-2.0\" (or the SPDX identifier of its license)", entry.name, entry.name));
+    }
+    let fine = l.len() <= 200 && l.chars().all(|c| c.is_ascii_alphanumeric() || " .-+()".contains(c));
+    (!fine).then(|| format!("{}'s license {l:?} is not an SPDX identifier, such as Apache-2.0 or MIT", entry.name))
 }
 
 /// The folder of an entry's role, and the commit it was taken at.
@@ -123,6 +156,8 @@ pub fn describe(folder: &Path, source: &str, commit: &str, about: &str) -> Resul
         commit: commit.to_string(),
         fingerprint: content_fingerprint(folder)?.0,
         promises: proved,
+        license: String::new(),
+        unknown: Default::default(),
     };
     if proofs.iter().any(|p| !matches!(p, Proof::Proved { .. })) {
         return Err(format!("a promise of {} does not hold:\n{}", entry.name, lines.join("\n")));
@@ -154,10 +189,23 @@ pub fn verify(entry: &Entry, folder: &Path) -> Result<Vec<String>, String> {
 /// Check every entry of the index in `index`: what the index's CI runs. With `write`, the entries of roles in the
 /// index's own folders are written again from what their roles are, so a maintainer lists a change with one command.
 pub fn check(index: &Path, write: bool) -> Result<Vec<String>, String> {
-    let mut entries = load(index)?;
+    let mut file = read(index)?;
     let mut said = Vec::new();
     let mut failed = false;
+    let known = |t: &toml::Table| t.keys().cloned().collect::<Vec<_>>().join(", ");
+    if !file.unknown.is_empty() {
+        said.push(format!("note: the index has fields this Jaynes does not know, left as they are: {}", known(&file.unknown)));
+    }
+    let entries = &mut file.role;
     for entry in entries.iter_mut() {
+        if !entry.unknown.is_empty() {
+            said.push(format!("note: {}'s entry has fields this Jaynes does not know, left as they are: {}", entry.name, known(&entry.unknown)));
+        }
+        if let Some(why) = license_wrong(entry) {
+            failed = true;
+            said.push(format!("✘ {}: {why}", entry.name));
+            continue;
+        }
         let (folder, _, _gone) = match resolve(entry, index) {
             Ok(r) => r,
             Err(e) => {
@@ -169,7 +217,7 @@ pub fn check(index: &Path, write: bool) -> Result<Vec<String>, String> {
         if write && !remote(&entry.source) {
             match describe(&folder, &entry.source, "", &entry.about) {
                 Ok((now, lines)) => {
-                    *entry = now;
+                    *entry = Entry { license: entry.license.clone(), unknown: entry.unknown.clone(), ..now };
                     said.push(format!("✔ {} {} (written)", entry.name, entry.version));
                     said.extend(lines.into_iter().map(|l| format!("  {l}")));
                     continue;
@@ -193,7 +241,7 @@ pub fn check(index: &Path, write: bool) -> Result<Vec<String>, String> {
         }
     }
     if write {
-        let text = toml::to_string(&IndexFile { role: entries }).map_err(|e| e.to_string())?;
+        let text = toml::to_string(&file).map_err(|e| e.to_string())?;
         let head = "# The roles anyone installs by name: jaynes add NAME. Written by `jaynes index check . --write`;\n# the CI proves every entry again.\n\n";
         std::fs::write(index.join(FILE), format!("{head}{text}")).map_err(|e| e.to_string())?;
     }
@@ -207,6 +255,9 @@ pub fn find(name: &str) -> Result<(Entry, PathBuf, Option<String>, Vec<Gone>), S
         .into_iter()
         .find(|e| e.name == name)
         .ok_or_else(|| format!("the index has no role {name}: a folder, or URL#path, installs a role it does not list"))?;
+    if let Some(why) = license_wrong(&entry) {
+        return Err(format!("{why}, so it was not installed"));
+    }
     let (folder, commit, more) = resolve(&entry, &index)?;
     verify(&entry, &folder).map_err(|e| format!("the index's entry for {name} does not hold, so it was not installed:\n{e}"))?;
     let keep: Vec<Gone> = gone.into_iter().chain(more).collect();

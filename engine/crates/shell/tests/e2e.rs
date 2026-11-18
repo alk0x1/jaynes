@@ -1408,7 +1408,7 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello $1\"\n");
 }
 
-/// An index in a git repository, with small-change in it, its entry written by `jaynes index check --write`.
+/// An index in a git repository, with small-change in it under Apache-2.0, its entry written by `jaynes index check --write`.
 fn an_index(s: &Scratch) -> PathBuf {
     let index = s.home.parent().expect("base").join("index");
     std::fs::create_dir_all(index.join("roles")).expect("dir");
@@ -1416,6 +1416,7 @@ fn an_index(s: &Scratch) -> PathBuf {
     let ok = Command::new("cp").arg("-R").arg(&from).arg(index.join("roles/small-change")).status().expect("cp").success();
     assert!(ok);
     std::fs::write(index.join("index.toml"), "[[role]]\nname = \"small-change\"\nversion = \"3.0.0\"\nsource = \"roles/small-change\"\nfingerprint = \"\"\n").expect("write");
+    std::fs::write(index.join("licenses.toml"), "small-change = \"Apache-2.0\"\n").expect("write");
     let (ok, out) = engine(s, &["index", "check", index.to_str().expect("path"), "--write"]);
     assert!(ok, "{out}");
     let (ok, out) = engine(s, &["index", "check", index.to_str().expect("path")]);
@@ -1468,6 +1469,44 @@ fn an_index_entry_that_does_not_hold_installs_nothing() {
     let (ok, out) = engine(&s, &["index", "check", index.to_str().expect("path")]);
     assert!(!ok && out.contains("✘ small-change"), "{out}");
     assert!(!s.home.join("roles/small-change").exists());
+}
+
+#[test]
+fn add_says_a_role_s_license_before_installing_it_and_a_role_without_one_is_refused() {
+    let s = scratch("license");
+    let index = an_index(&s);
+    let (ok, out) = engine_with_index(&s, index.to_str().expect("path"), &["add", "small-change"]);
+    assert!(ok, "{out}");
+    let said = out.find("license: Apache-2.0").unwrap_or_else(|| panic!("add does not say the license: {out}"));
+    assert!(said < out.find("role small-change installed").expect("installed"), "the license comes after the install: {out}");
+    let _gone = std::fs::remove_dir_all(s.home.join("roles/small-change"));
+    // a role the index lists with no license: the index check refuses it, and add installs nothing
+    std::fs::write(index.join("licenses.toml"), "").expect("write");
+    let (ok, out) = engine(&s, &["index", "check", index.to_str().expect("path")]);
+    assert!(!ok && out.contains("✘ small-change") && out.contains("no license"), "{out}");
+    let (ok, out) = engine_with_index(&s, index.to_str().expect("path"), &["add", "small-change"]);
+    assert!(!ok && out.contains("no license"), "{out}");
+    assert!(!s.home.join("roles/small-change").exists());
+}
+
+#[test]
+fn a_field_of_the_index_this_jaynes_does_not_know_breaks_nothing_and_is_kept() {
+    // so a field added to the index later does not break the engines already installed
+    let s = scratch("newfield");
+    let index = an_index(&s);
+    let file = index.join("index.toml");
+    let listed = std::fs::read_to_string(&file).expect("read");
+    std::fs::write(&file, format!("format = 2\n{}", listed.replace("[[role]]\n", "[[role]]\nmaintainer = \"someone\"\n"))).expect("write");
+    let (ok, out) = engine(&s, &["index", "check", index.to_str().expect("path")]);
+    assert!(ok && out.contains("✔ small-change"), "{out}");
+    assert!(out.contains("does not know") && out.contains("format") && out.contains("maintainer"), "it does not say so: {out}");
+    let (ok, out) = engine_with_index(&s, index.to_str().expect("path"), &["add", "small-change"]);
+    assert!(ok && out.contains("role small-change installed"), "{out}");
+    // written again, the fields it does not know stay
+    let (ok, out) = engine(&s, &["index", "check", index.to_str().expect("path"), "--write"]);
+    assert!(ok, "{out}");
+    let written = std::fs::read_to_string(&file).expect("read");
+    assert!(written.contains("format = 2") && written.contains("maintainer = \"someone\""), "{written}");
 }
 
 /// The agent of the directions test role: two pages and an output naming them.

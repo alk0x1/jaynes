@@ -56,6 +56,8 @@ pub fn add(home: &Path, source: &str) -> Result<String, String> {
     if let Some(name) = by_name(source) {
         // from the index: its entry was checked and its promises proved again on the way
         let (entry, folder, commit, _gone) = crate::index::find(&name)?;
+        // its license is said before anything is installed
+        println!("{} {}, license: {}", entry.name, entry.version, entry.license);
         return install(home, &format!("index:{}", entry.name), &folder, commit, true);
     }
     let (folder, commit, _tmp) = fetch(source)?;
