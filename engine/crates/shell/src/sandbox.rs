@@ -21,6 +21,8 @@
 //! |                                                           | empty read-only one, each hidden file an empty one; what |
 //! |                                                           | it writes or is shown inside is mounted back. Without |
 //! |                                                           | a user namespace the box does not open                |
+//! | of this machine's ports, only those listed, on its        | in the box's own network, a relay carries each listed |
+//! | loopback                                                  | port to 127.0.0.1 here; nothing else is there (relay) |
 //! | no network but local ports                                | where the machine allows, a network of the box's own: |
 //! |                                                           | a user and network namespace with only its loopback,  |
 //! |                                                           | any port there; elsewhere Landlock's port rules for   |
@@ -368,7 +370,8 @@ mod imp {
         if spec.any_port && !spec.local {
             return Err("any local port is for a command that runs local servers (--local)".into());
         }
-        if spec.local && own_made {
+        // a network of its own: local servers run in it, and the ports of this machine it may reach come in by relay
+        if own_made && !spec.any_port {
             return Ok(Net::Own);
         }
         let own = spec.local.then_some("its network namespace could not be made");
@@ -403,15 +406,15 @@ mod imp {
     /// user and group stay what they are, so the command does not see itself as root. Says whether the network one
     /// was made. Without a user namespace the box does not open: Landlock alone hides what a file holds, not that it
     /// is there, its size and its times.
-    pub(super) fn namespaces(spec: &Spec) -> Result<bool, String> {
+    pub(super) fn namespaces(spec: &Spec, want_net: bool) -> Result<bool, String> {
         let threads = threads();
         if threads != Some(1) {
             let n = threads.map(|n| n.to_string()).unwrap_or_else(|| "an unknown number of".into());
             return Err(format!("the box makes its namespaces only from a process with one thread, and this one has {n} threads"));
         }
         let (uid, gid) = (rustix::process::getuid().as_raw(), rustix::process::getgid().as_raw());
-        let net = match (spec.local, new_namespaces(spec.local)) {
-            (_, Ok(())) => spec.local,
+        let net = match (want_net, new_namespaces(want_net)) {
+            (_, Ok(())) => want_net,
             (true, Err(_)) => {
                 new_namespaces(false).map_err(no_user_namespace)?;
                 false
@@ -427,6 +430,41 @@ mod imp {
         }
         mounts(spec)?;
         Ok(net)
+    }
+
+    /// Start the relay's helper in this machine's network, for `ports` only (relay.rs), and give back the end of
+    /// their channel for the forwarder. Made before the namespaces, and the only way between the two.
+    fn relay_out(ports: &[u16]) -> Result<rustix::fd::OwnedFd, String> {
+        use rustix::net::{socketpair, AddressFamily, SocketFlags, SocketType};
+        let (helper_end, forwarder_end) = socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, SocketFlags::CLOEXEC, None)
+            .map_err(|e| format!("the box could not make the channel of its relay: {e}"))?;
+        relay(&["out"], ports, helper_end, std::process::Stdio::null())?;
+        Ok(forwarder_end)
+    }
+
+    /// Start the relay's forwarder in the box's network, and wait until it listens at every port.
+    fn relay_in(ports: &[u16], channel: rustix::fd::OwnedFd) -> Result<(), String> {
+        use std::io::BufRead;
+        let mut child = relay(&["in"], ports, channel, std::process::Stdio::piped())?;
+        let said = child.stdout.take().map(|o| std::io::BufReader::new(o).lines().next());
+        match said {
+            Some(Some(Ok(line))) if line == "ready" => Ok(()),
+            _ => Err("the box's relay did not start in its network".into()),
+        }
+    }
+
+    fn relay(how: &[&str], ports: &[u16], channel: rustix::fd::OwnedFd, out: std::process::Stdio) -> Result<std::process::Child, String> {
+        let exe = std::env::current_exe().map_err(|e| format!("the box cannot find itself to start its relay: {e}"))?;
+        std::process::Command::new(exe)
+            .arg("box-relay")
+            .args(how)
+            .arg("--parent")
+            .arg(std::process::id().to_string())
+            .args(ports.iter().flat_map(|p| ["--port".to_string(), p.to_string()]))
+            .stdin(std::process::Stdio::from(channel))
+            .stdout(out)
+            .spawn()
+            .map_err(|e| format!("the box could not start its relay: {e}"))
     }
 
     /// Why the box does not open without a user namespace, and how the person allows one.
@@ -643,8 +681,19 @@ mod imp {
     }
 
     fn confine(spec: &Spec) -> Result<Net, String> {
-        // the namespaces first, the mounts in them, then the network: all before Landlock and the filter close the calls
-        let own = namespaces(spec)?;
+        // the namespaces first, the mounts in them, then the network: all before Landlock and the filter close the calls.
+        // The ports of this machine it may reach are carried into a network of its own: the helper that connects to
+        // them starts before the namespaces, so it stays in this machine's network
+        let never = &spec.never;
+        let mut ports: Vec<u16> = spec.ports.iter().copied().filter(|p| !never.contains(p)).collect();
+        ports.sort_unstable();
+        ports.dedup();
+        // only for a command that runs no servers of its own: one that does serves on its own ports in its network
+        let channel = if ports.is_empty() || spec.local { None } else { Some(relay_out(&ports)?) };
+        let own = namespaces(spec, spec.local || channel.is_some())?;
+        if let (true, Some(channel)) = (own, channel) {
+            relay_in(&ports, channel)?;
+        }
         let net = network(spec, own)?;
         let fail = |e: &dyn std::fmt::Display| format!("the box could not be made: {e}");
         // Landlock ABI 9 checks a Unix socket's path; ABI 6 is the least the box opens with, since it keeps signals
@@ -780,7 +829,7 @@ mod tests {
     #[test]
     fn the_box_s_namespaces_are_made_only_from_a_process_of_one_thread() {
         // the test harness runs more than one thread: the box says so in its own words, and makes nothing
-        let said = imp::namespaces(&Spec { local: true, ..Default::default() }).expect_err("refused");
+        let said = imp::namespaces(&Spec { local: true, ..Default::default() }, true).expect_err("refused");
         assert!(said.contains("only from a process with one thread"), "{said}");
     }
 

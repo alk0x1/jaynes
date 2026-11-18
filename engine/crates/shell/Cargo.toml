@@ -30,7 +30,7 @@ rustix = { version = "1", features = ["process"] }
 landlock = "0.4"
 # the box's own namespaces: a user and mount namespace where it hides by mounting, a network one with its loopback
 # brought up by netlink
-rustix = { version = "1", features = ["process", "thread", "net", "mount", "fs"] }
+rustix = { version = "1", features = ["process", "thread", "net", "mount", "fs", "event"] }
 seccompiler = "0.5"
 libc = "0.2"
 

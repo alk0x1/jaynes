@@ -19,6 +19,8 @@ pub mod project;
 pub mod project_prefs;
 pub mod protocol;
 pub mod refused;
+#[cfg(target_os = "linux")]
+pub mod relay;
 pub mod role;
 pub mod sandbox;
 pub mod stop;
