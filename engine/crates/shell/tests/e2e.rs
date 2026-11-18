@@ -460,7 +460,9 @@ summary = { type = "string", about = "what changed" }
     let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
     assert!(asked.elapsed() < std::time::Duration::from_secs(10), "the agent went on after the halt: {:?}\n{said}", asked.elapsed());
     assert!(said.contains("(halted)"), "{said}");
-    let alive = Command::new("kill").args(["-0", &agent_pid]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    // read by the engine's own means, which see a process that ended and waits to be collected as ended, and need
+    // no kill program
+    let alive = jaynes_shell::agent::group_runs(agent_pid.parse().expect("pid")).expect("probe");
     assert!(!alive, "the agent is still running: {said}");
 }
 
@@ -755,7 +757,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     let _waited = engine_process.wait();
     let pidfile = s.home.join("runs/crash/agent.pid");
     let pgid = std::fs::read_to_string(&pidfile).expect("the agent's process group is noted");
-    let alive = |g: &str| Command::new("kill").args(["-0", "--", &format!("-{}", g.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    let alive = |g: &str| jaynes_shell::agent::group_runs(g.split_whitespace().next().and_then(|p| p.parse().ok()).expect("group")).expect("probe");
     assert!(alive(&pgid), "the agent outlived the engine");
     // the next process stops what was left, and the run goes on with an attempt that is not counted against the agent
     let (ok, out) = engine(&s, &["continue", "crash"]);
@@ -1116,7 +1118,7 @@ fn abandoning_a_run_stops_its_agent_at_once() {
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("abandon");
     let said = String::from_utf8_lossy(&abandoned.stdout).to_string();
-    let alive = Command::new("kill").args(["-0", "--", &format!("-{}", pgid.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    let alive = jaynes_shell::agent::group_runs(pgid.split_whitespace().next().and_then(|p| p.parse().ok()).expect("group")).expect("probe");
     assert!(!alive, "the agent was stopped at once: {said}");
     let _done = run.wait();
     assert!(!mark.join("finished").exists());
