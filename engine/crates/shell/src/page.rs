@@ -65,11 +65,10 @@ static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Connections the page serves at once, on both of its addresses.
 const MOST_AT_ONCE: usize = 64;
 
-/// A connection being served: when it came, whether it is still sending its request, and a handle to close it.
+/// A connection being served: when it came, and a handle to close it.
 struct Slot {
     id: u64,
     since: std::time::Instant,
-    reading: bool,
     stream: TcpStream,
 }
 
@@ -79,30 +78,22 @@ static SERVED: std::sync::Mutex<(u64, Vec<Slot>)> = std::sync::Mutex::new((0, Ve
 struct Turn(u64);
 
 impl Turn {
-    /// A place for a new connection. When every place is taken, the oldest connection still sending its request
-    /// is closed to make way: one that only holds its place cannot keep the person out. When none is still
-    /// sending, the new one is refused.
+    /// A place for a new connection. When every place is taken, the oldest connection is closed to make way,
+    /// whether it is still sending its request or still taking its reply: one that only holds its place, sending or
+    /// taking a byte at a time, cannot keep the person out, and a new connection is never refused.
     fn take(stream: &TcpStream) -> Option<Turn> {
         let handle = stream.try_clone().ok()?;
         let mut served = SERVED.lock().ok()?;
-        if served.1.len() >= MOST_AT_ONCE {
-            let oldest = served.1.iter().enumerate().filter(|(_, s)| s.reading).min_by_key(|(_, s)| s.since).map(|(i, _)| i)?;
+        if served.1.len() >= MOST_AT_ONCE
+            && let Some(oldest) = served.1.iter().enumerate().min_by_key(|(_, s)| s.since).map(|(i, _)| i)
+        {
             let gone = served.1.remove(oldest);
             let _closed = gone.stream.shutdown(std::net::Shutdown::Both);
         }
         served.0 += 1;
         let id = served.0;
-        served.1.push(Slot { id, since: std::time::Instant::now(), reading: true, stream: handle });
+        served.1.push(Slot { id, since: std::time::Instant::now(), stream: handle });
         Some(Turn(id))
-    }
-
-    /// The request is read: the connection is being answered, and is no longer the first to make way.
-    fn read(&self) {
-        if let Ok(mut served) = SERVED.lock()
-            && let Some(s) = served.1.iter_mut().find(|s| s.id == self.0)
-        {
-            s.reading = false;
-        }
     }
 }
 
@@ -114,9 +105,12 @@ impl Drop for Turn {
     }
 }
 
-/// How long a connection has to send its whole request, from when it came, and to take its reply.
+/// How long a connection has to send its whole request, from when it came.
 const HEAD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
-const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a connection has for all of it, from when it came: its request, and taking the whole of its reply. The
+/// largest reply is a page an agent wrote, kept with no limit on its size; at even 1 MB a second, a thousand times
+/// slower than a browser takes it from this machine, 30 seconds carry more than 25 MB after the request's 3.
+const WHOLE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 /// The most a request's head may hold, and its body: the page's own are far smaller.
 const MOST_HEAD: u64 = 64 * 1024;
 const MOST_BODY: u64 = 1 << 20;
@@ -168,9 +162,9 @@ impl Page {
     }
 
     /// Answer what comes to one address. Each connection on its own, with [`HEAD_DEADLINE`] from when it came to send
-    /// its whole request: one that says nothing, or speaks a byte at a time, holds no other, and one whose request
-    /// breaks its handler ends alone, never the page. Past [`MOST_AT_ONCE`] in service, the oldest still sending its
-    /// request is closed to make way.
+    /// its whole request and [`WHOLE_DEADLINE`] to have taken its reply: one that says nothing, or speaks or listens a
+    /// byte at a time, holds no other, and one whose request breaks its handler ends alone, never the page. Past
+    /// [`MOST_AT_ONCE`] in service, the oldest is closed to make way.
     fn accept(&self, listener: &TcpListener) {
         for stream in listener.incoming().flatten() {
             let came = std::time::Instant::now();
@@ -178,7 +172,6 @@ impl Page {
                 drop(stream);
                 continue;
             };
-            let _deadline = stream.set_write_timeout(Some(READ_DEADLINE));
             let page = self.clone();
             let _started = std::thread::Builder::new().name("page-connection".into()).spawn(move || {
                 let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream, &turn, came)));
@@ -187,9 +180,8 @@ impl Page {
         }
     }
 
-    fn handle(&self, mut stream: TcpStream, turn: &Turn, came: std::time::Instant) -> Result<(), String> {
+    fn handle(&self, stream: TcpStream, _turn: &Turn, came: std::time::Instant) -> Result<(), String> {
         let req = read(&stream, came + HEAD_DEADLINE)?;
-        turn.read();
         // reading the person's words takes a model's time: it is answered on a thread of its own, and the page goes on
         if req.method == "POST" && req.path == "/api/understand" && self.host(&req) != Host::Other {
             let json_body = req.headers.get("content-type").is_some_and(|c| c.starts_with("application/json"));
@@ -204,7 +196,8 @@ impl Page {
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
                         reply.len()
                     );
-                    let _sent = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(reply.as_bytes()));
+                    // the reading took a model's time, which is not the connection's: its reply has its own deadline
+                    let _sent = send(&stream, std::time::Instant::now() + WHOLE_DEADLINE, &[head.as_bytes(), reply.as_bytes()]);
                 });
                 return Ok(());
             }
@@ -218,8 +211,7 @@ impl Page {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
         head.push_str("\r\n");
-        stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
-        stream.write_all(body.as_bytes()).map_err(|e| e.to_string())
+        send(&stream, came + WHOLE_DEADLINE, &[head.as_bytes(), body.as_bytes()])
     }
 
     /// Whether an Origin is this page's, exactly: http://localhost:PORT, its one origin.
@@ -1258,6 +1250,38 @@ impl Read for Deadlined<'_> {
     }
 }
 
+/// A connection written against one deadline for all of a reply, however slowly the other side takes it: each write
+/// waits at most what is left.
+struct DeadlinedWrite<'a> {
+    stream: &'a TcpStream,
+    until: std::time::Instant,
+}
+
+impl Write for DeadlinedWrite<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the reply took longer than it may"));
+        }
+        self.stream.set_write_timeout(Some(left))?;
+        let mut s = self.stream;
+        s.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A reply's parts, all sent by `until`, or the connection given up.
+fn send(stream: &TcpStream, until: std::time::Instant, parts: &[&[u8]]) -> Result<(), String> {
+    let mut w = DeadlinedWrite { stream, until };
+    for part in parts {
+        w.write_all(part).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn read(stream: &TcpStream, until: std::time::Instant) -> Result<Request, String> {
     // never more than a head and a body may hold, nor longer than a request may take, however the other side goes on
     let mut r = BufReader::new(Read::take(Deadlined { stream, until }, MOST_HEAD + MOST_BODY));
@@ -1677,6 +1701,53 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A connection to a listener of this test, and the page's end of it.
+    fn pair(listener: &TcpListener) -> (TcpStream, TcpStream) {
+        let theirs = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (ours, _) = listener.accept().expect("accept");
+        (theirs, ours)
+    }
+
+    #[test]
+    fn past_its_ceiling_the_oldest_connection_makes_way_even_while_it_takes_its_reply() {
+        // every place taken by a connection whose request is read and whose reply it takes slowly, or not at all
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let mut held = Vec::new();
+        for _ in 0..MOST_AT_ONCE {
+            let (theirs, ours) = pair(&listener);
+            let turn = Turn::take(&ours).expect("a place");
+            held.push((theirs, ours, turn));
+        }
+        // a new one is served, never refused, and the oldest is the one closed
+        let (_theirs, ours) = pair(&listener);
+        assert!(Turn::take(&ours).is_some(), "the new connection was refused");
+        let (first, _, _) = &mut held[0];
+        first.set_read_timeout(Some(std::time::Duration::from_secs(1))).expect("timeout");
+        let mut b = [0u8; 1];
+        assert!(matches!(first.read(&mut b), Ok(0)), "the oldest is closed");
+        let (second, _, _) = &mut held[1];
+        second.set_read_timeout(Some(std::time::Duration::from_millis(200))).expect("timeout");
+        assert!(second.read(&mut b).is_err(), "only the oldest is closed");
+    }
+
+    #[test]
+    fn a_reply_taken_slowly_is_cut_off_at_the_connection_s_deadline() {
+        // the other side takes a few bytes at a time: each write goes on a little, the whole reply does not
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let (mut theirs, ours) = pair(&listener);
+        let _reader = std::thread::spawn(move || {
+            let mut b = [0u8; 4096];
+            while theirs.read(&mut b).is_ok_and(|n| n > 0) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let started = std::time::Instant::now();
+        let big = vec![b'x'; 40 * 1024 * 1024];
+        let sent = send(&ours, started + std::time::Duration::from_secs(1), &[&b"HTTP/1.1 200 OK\r\n\r\n"[..], &big[..]]);
+        assert!(sent.is_err(), "the whole reply went");
+        assert!(started.elapsed() < std::time::Duration::from_millis(2500), "{:?}", started.elapsed());
+    }
 
     #[test]
     fn no_key_is_made_from_randomness_that_does_not_read() {

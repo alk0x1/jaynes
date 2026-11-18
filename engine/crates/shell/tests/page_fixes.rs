@@ -423,3 +423,50 @@ fn the_page_proves_it_holds_the_key_without_saying_it() {
     assert_ne!(proof, jaynes_shell::page::proof("k3y", "00fe"));
     assert!(!reply.contains("k3y"), "{reply}");
 }
+
+#[test]
+#[ignore = "holds about a gigabyte while it runs (64 replies of 10 MB, which the system keeps up to 8 MB of each); run by hand: cargo test --test page_fixes -- --ignored"]
+fn past_its_ceiling_the_page_closes_the_oldest_even_while_it_takes_its_reply() {
+    // a program sends 64 requests, each quick and whole, for a large kept page, and never reads what comes back: each
+    // holds its place while its reply waits to be taken, past what the system keeps of a reply for a connection (up to
+    // 4 MB sent and 4 MB received on macOS). The person's Halt is still served, at once. The rule itself is tested
+    // without the memory in page.rs
+    let base = home("readers");
+    let name = format!("{}.html", "ab".repeat(32));
+    std::fs::create_dir_all(base.join("home/pictures")).expect("dir");
+    std::fs::write(base.join("home/pictures").join(&name), "<p>a page an agent wrote</p>".repeat(360_000)).expect("page");
+    let port = port(13);
+    let _page = page(&base, port, Some("k3y"));
+    let readers: Vec<TcpStream> = (0..64)
+        .map(|_| {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            s.write_all(format!("GET /page/{name} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes()).expect("write");
+            s
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(800));
+    let started = Instant::now();
+    let body = r#"{"run":"no-such-run","action":"halt"}"#;
+    let halt = ask(
+        port,
+        format!("POST /api/act HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: k3y\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes(),
+        Duration::from_secs(3),
+    );
+    assert!(halt.as_ref().is_ok_and(|h| h.starts_with("HTTP/1.1 200") && h.contains("no such run")), "{halt:?}");
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    drop(readers);
+}
+
+#[test]
+fn the_page_proves_itself_only_to_a_nonce_in_hex_and_short() {
+    let base = home("nonce");
+    let port = port(14);
+    let _page = page(&base, port, Some("k3y"));
+    let ok = |nonce: &str| get(port, &format!("/api/knows?nonce={nonce}")).expect("reply");
+    assert!(ok(&"0f".repeat(32)).starts_with("HTTP/1.1 200"), "64 hex digits are a nonce");
+    for bad in ["", "zz", "0x12", "12%20", &"0f".repeat(32).replace("0f0f", "0f0g"), &format!("{}0", "0f".repeat(32))] {
+        let reply = ok(bad);
+        assert!(reply.starts_with("HTTP/1.1 400") && !reply.contains("proof"), "{bad:?}: {reply}");
+    }
+    assert!(get(port, "/api/knows").expect("reply").starts_with("HTTP/1.1 400"), "no nonce");
+}

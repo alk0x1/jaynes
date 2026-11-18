@@ -11,7 +11,11 @@ the page's key from that origin is the person's. It listens on 127.0.0.1 and on
 IPv6 has only 127.0.0.1. A page opened by number (`127.0.0.1:PORT`) is sent on
 to localhost with its path and query, and the browser takes the key's fragment
 along; a program that sends no origin may still speak by number, as an agent.
-The page serves at most 64 connections at once and closes the rest at once.
+The page serves at most 64 connections at once. Each has 3 seconds from when it
+comes to send its request and 30 to have taken its whole reply; when all 64
+places are taken, the oldest connection is closed to make way, sending or
+taking, and a new one is never refused, so a program that holds places cannot
+keep the person's Halt out.
 
 **Why.** Proving the person with a passkey works only on localhost, never on a
 number, and an origin the page does not hold whole could be answered by
