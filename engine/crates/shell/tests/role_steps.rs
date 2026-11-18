@@ -361,6 +361,31 @@ fn a_script_cannot_write_where_git_keeps_the_run_s_copy() {
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_script_reads_nothing_the_engine_keeps_but_its_own_role() {
+    // another run, whose folder is under the engine's runs, and the record of every run
+    let s = scratch("keeps", "http://127.0.0.1:1");
+    let first = one_script(&s, "first", "", &format!("{DONE}\n"));
+    assert!(start(&s, "first", &first, "act").contains("finished: delivered"));
+    let other = s.home.join("runs/first");
+    assert!(other.is_dir() && s.home.join("record.sqlite3").is_file());
+    let peek = |what: &Path| format!("cat {0} >/dev/null 2>&1 || ls {0} >/dev/null 2>&1 && {{ echo 'read {0}'; exit 1; }}\n", what.display());
+    for (keys, name) in [("", "nosy"), ("reach = { project = \"read\" }", "nosy-read"), ("reach = { project = \"write\", write = [\"**\"] }", "nosy-write")] {
+        let script = format!("{}{}{DONE}\n", peek(&other.join("role/role.toml")), peek(&s.home.join("record.sqlite3")));
+        let role = one_script(&s, name, keys, &script);
+        let out = start(&s, name, &role, "look");
+        assert!(out.contains("finished: delivered"), "{name}: a script read what the engine keeps: {out}");
+    }
+    // and a check of the role's own reads its own script all the same
+    let checked = one_script(&s, "checked", "", &format!("{DONE}\n"));
+    std::fs::create_dir_all(checked.join("checks")).expect("dir");
+    std::fs::write(checked.join("checks/ok.sh"), "exit 0\n").expect("write");
+    let text = std::fs::read_to_string(checked.join("role.toml")).expect("read");
+    std::fs::write(checked.join("role.toml"), format!("{text}checks = [{{ script = \"checks/ok.sh\", about = \"it passes\" }}]\n")).expect("write");
+    assert!(start(&s, "checked", &checked, "act").contains("finished: delivered"));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_reaches_only_the_local_ports_its_step_names() {
     let world = World::open();
     let s = scratch("ports", &world.address());
@@ -536,7 +561,38 @@ fn a_step_that_cannot_be_undone_runs_once_when_an_answer_before_it_changes_after
     assert_ne!(again, draft, "the draft was made again and asked about again: {out}");
     let out = person(&s, &["answer", "once", &again, "--send"]);
     assert_eq!(world.announcements().len(), 1, "what cannot be undone acted again when an answer before it changed: {out}");
+    // the engine holds the run at send and asks the person, since what send used came out different after it acted
+    let e = events(&s, "once");
+    let acted = e.iter().rev().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "send").expect("asked about the act")["question"].clone();
+    assert_eq!(acted["kind"], "acted", "{acted}");
+    assert!(out.contains("send cannot be undone and already acted: it waits for you to keep it or act again"), "{out}");
+    // kept as it acted: it stands, the run goes on, and nothing more reaches the world
+    let out = person(&s, &["answer", "once", acted["id"].as_str().expect("id"), "--send"]);
+    assert!(events(&s, "once").iter().any(|e| e["type"] == "ActKept" && e["step"] == "send"), "{out}");
+    assert!(out.contains("closing is yours to answer"), "{out}");
+    assert_eq!(world.announcements().len(), 1, "{out}");
     assert_eq!(started(&events(&s, "once")).iter().filter(|step| *step == "send").count(), 1, "{out}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_second_act_happens_only_when_the_person_orders_it_and_carries_a_key_of_its_own() {
+    let world = World::open();
+    let s = scratch("again", &world.address());
+    let role = draft_send_close(&s, &world, "again", "", "needs = [\"send\"]\nstop = { ask = \"Close the run?\", verdicts = [\"keep\"] }");
+    start(&s, "again", &role, "tell them");
+    let asked = |step: &str| events(&s, "again").iter().rev().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == step).expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let draft = asked("draft");
+    person(&s, &["answer", "again", &draft, "--send"]);
+    person(&s, &["answer", "again", &draft, "draft=redo:again", "--send"]);
+    let redone = asked("draft");
+    person(&s, &["answer", "again", &redone, "--send"]);
+    // the person orders a second act: it happens once more, with a key of its own, so the registry counts it apart
+    let out = person(&s, &["answer", "again", &asked("send"), "send=redo:send the new draft", "--send"]);
+    let sent = world.announcements();
+    assert_eq!(sent.len(), 2, "{out}");
+    assert!(!sent[0].key.is_empty() && sent[0].key != sent[1].key, "{sent:?}");
+    assert_eq!(started(&events(&s, "again")).iter().filter(|step| *step == "send").count(), 2, "{out}");
 }
 
 #[test]

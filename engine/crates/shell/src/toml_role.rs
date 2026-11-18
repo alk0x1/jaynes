@@ -19,7 +19,7 @@
 //! | `by` = agent/jaynes/role/person | `executor` = agent/role/role/person |
 //! | `session`                  | `session`                        |
 //! | `reach`                    | `reach` (project, write, network, commands, local_ports) |
-//! | `effect`, `idempotent`     | `effect` (`irreversible`, with its `idempotent`) |
+//! | `effect`, `idempotent`     | `effect` (`irreversible`), `idempotent` |
 //! | `checks`                   | `checks` (name, kind, about, reads) |
 //! | `stop.ask`                 | `StopDecl::about`                |
 //! | `stop` verdicts, holds, from_risk, release, budget, audit_rate | the same names |
@@ -741,7 +741,7 @@ impl TomlRole {
                                 if let Some(net) = m.network {
                                     match declared {
                                         None => errs.push(format!("uses {u}, which downloads addresses an agent chose: declare where it may go, reach = {{ network = \"{}\" }}", network_name(net))),
-                                        Some(r) if r.project != ProjectAccess::default() || !r.write.is_empty() || r.commands => {
+                                        Some(r) if r.project != ProjectAccess::default() || !r.write.is_empty() || r.commands == Some(true) => {
                                             errs.push(format!("{u} may only be given network in its reach: it reads and writes nothing of the project, and runs no command"))
                                         }
                                         Some(r) if r.network == Network::None => errs.push(format!("uses {u}, which downloads addresses an agent chose: declare where it may go, reach = {{ network = \"{}\" }}", network_name(net))),
@@ -809,7 +809,9 @@ impl TomlRole {
                     errs.push("says a repeat of it is harmless (idempotent) and declares no effect: idempotent goes with effect".into());
                 }
             }
-            let effect = if irreversible { Effect::Irreversible { idempotent: s.idempotent.unwrap_or(false) } } else { Effect::None };
+            // whether a repeat is harmless lives on the step, where the core reads it (StepDecl::repeats_safely)
+            let effect = if irreversible { Effect::Irreversible { idempotent: false } } else { Effect::None };
+            let idempotent = irreversible && s.idempotent.unwrap_or(false);
             // instructions and their placeholders
             let mut instructions = String::new();
             if let Some(v) = &s.instructions {
@@ -985,7 +987,7 @@ impl TomlRole {
                 from_risk: s.from_risk,
                 attempts: s.attempts.unwrap_or(default_attempts),
                 fixes: s.fixes.unwrap_or(2),
-                hidden: s.hidden, idempotent: false,
+                hidden: s.hidden, idempotent,
                 about: if s.about.is_empty() { s.uses.as_deref().and_then(menu_step).map(|m| m.about.to_string()).unwrap_or_default() } else { s.about.clone() },
             });
             let script = s.script.clone().filter(|_| s.by == By::Role);
@@ -1018,7 +1020,7 @@ impl TomlRole {
                     s.name
                 )));
             }
-            if matches!(s.effect, Effect::Irreversible { idempotent: false }) {
+            if s.effect.irreversible() && !s.repeats_safely() {
                 errors.push(at(line, FILE, format!(
                     "step {} cannot be undone and comes after {first}, which cannot be undone either: a repeat of it must be harmless (idempotent = true)",
                     s.name
@@ -1363,7 +1365,7 @@ impl TomlRole {
                         // the role's own script, run in the box with what its step may reach
                         (None, Some(path)) => menu(library, &self.dir, json!({
                             "kind": "step", "use": "script",
-                            "with": {"path": self.dir.join(path).display().to_string(), "name": path, "project": d.reach.project,
+                            "with": {"path": self.dir.join(path).display().to_string(), "role": self.dir.display().to_string(), "name": path, "project": d.reach.project,
                                      "local_ports": d.reach.local_ports, "acts": d.effect.irreversible()},
                             "call": call,
                         })),
@@ -1380,7 +1382,7 @@ impl TomlRole {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
                         Some(CheckImpl::Script { path }) => menu(library, &self.dir, json!({
-                            "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string()}, "call": call,
+                            "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string(), "role": self.dir.display().to_string()}, "call": call,
                         })),
                     }
                 }
@@ -1835,12 +1837,13 @@ id = "string"
         let effect = |name: &str| r.manifest.steps.iter().find(|s| s.name == name).map(|s| s.effect.clone());
         assert_eq!(effect("survey"), Some(Effect::None), "a step that declares no effect has none");
         assert_eq!(effect("stamp"), Some(Effect::None), "what a step writes in the run's copy is its reach's matter, and no effect it declares");
-        assert_eq!(effect("announce"), Some(Effect::Irreversible { idempotent: true }));
+        assert_eq!(effect("announce"), Some(Effect::Irreversible { idempotent: false }));
+        assert!(r.manifest.steps[2].idempotent && r.manifest.steps[2].repeats_safely(), "a repeat is harmless, said on the step");
         // whether a repeat is harmless is said, and is never assumed
         let r = reads("effects-unsaid", &SCRIPTED.replace("idempotent = true\n", ""));
-        assert_eq!(r.manifest.steps[2].effect, Effect::Irreversible { idempotent: false });
+        assert!(!r.manifest.steps[2].repeats_safely());
         let r = reads("effects-said", &SCRIPTED.replace("idempotent = true\n", "idempotent = false\n"));
-        assert_eq!(r.manifest.steps[2].effect, Effect::Irreversible { idempotent: false });
+        assert!(!r.manifest.steps[2].repeats_safely());
     }
 
     #[test]
@@ -1955,7 +1958,7 @@ id = "string"
         let e = after_announce("after-act", NOTIFY).expect_err("a second act that may not repeat is refused");
         assert!(e.contains("role.toml:37: step notify cannot be undone and comes after announce, which cannot be undone either: a repeat of it must be harmless (idempotent = true)"), "{e}");
         let r = after_announce("after-act-idempotent", &format!("{NOTIFY}idempotent = true\n")).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(r.manifest.steps[3].effect, Effect::Irreversible { idempotent: true });
+        assert!(r.manifest.steps[3].effect.irreversible() && r.manifest.steps[3].repeats_safely());
         // so of the steps that cannot be undone, at most the first may be one whose repeat does harm
         let first_safe = SCRIPTED.to_string();
         let e = TomlRole::load(&scripted("after-act-second", &format!("{first_safe}\n{NOTIFY}"))).expect_err("the second must be harmless to repeat").join("\n");

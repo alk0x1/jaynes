@@ -129,6 +129,7 @@ def script_step(call: Call, params: Params) -> Any:
     try:
         done = box.run_step(_quote(path) if _executable(path) else f"sh {_quote(path)}", project=project,
                             write=access == "write", source=_source(call),
+                            role=Path(str(params["role"])) if params.get("role") else None,
                             ports=tuple(int(p) for p in params.get("local_ports") or []), stdin=given)
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the role's script in: {e}")

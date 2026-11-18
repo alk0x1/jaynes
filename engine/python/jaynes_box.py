@@ -492,7 +492,8 @@ def _output(path: Path) -> tuple[str | None, str]:
 
 
 def run_step(command: str, *, project: Path | None, write: bool = False, source: Path | None = None,
-             ports: tuple[int, ...] = (), timeout: float = 600.0, stdin: str | None = None) -> Stepped:
+             ports: tuple[int, ...] = (), timeout: float = 600.0, stdin: str | None = None,
+             role: Path | None = None) -> Stepped:
     """Run a role's own step, the shell ``command``, in the box with the reach its step declares, and read the
     output it wrote to the file named in ``JAYNES_OUTPUT``. Raises ``Unavailable`` where there is no box.
 
@@ -502,6 +503,8 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
     Jaynes runs git there later, outside any box, and a hook or a setting left in it would run then. (Where the
     box can only add what may be written and not take a folder out, new entries at the top of the copy are
     refused instead.) No network, and of this machine's ports only ``ports``: no local port is open unless named.
+    Of what the engine keeps, it reads only ``role``, the role's own folder, where its script is: never the other
+    runs, the record or the page's key.
     """
     with tempfile.TemporaryDirectory(prefix="jaynes-step-") as tmp:
         scratch, out = Path(tmp) / "tmp", Path(tmp) / "out"
@@ -520,7 +523,9 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
             link_dependencies(project, work)
             if source is not None:
                 link_dependencies(source, work)
-        argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly))
+        # what it reads is said, so the engine's runs are hidden from it but for its role's folder
+        reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
+        argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads))
         env = {**os.environ, **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
         proc = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)

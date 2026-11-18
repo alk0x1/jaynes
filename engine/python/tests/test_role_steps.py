@@ -199,7 +199,7 @@ class WhatTheBoxLets(unittest.TestCase):
             self.assertIn("(deny network-outbound)", closed)
             self.assertNotIn("localhost", closed)
             named = box.profile(box.Box((Path(copy),), ports=(8125,)))
-            self.assertIn('(allow network-outbound (remote ip "localhost:8125"))', named)
+            self.assertIn('(allow network-outbound (remote tcp "localhost:8125"))', named)
             self.assertNotIn("localhost:*", named)
 
     def test_stopping_a_command_that_just_ended_is_no_error(self):
