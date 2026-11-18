@@ -180,14 +180,16 @@ const HALTED_AGENT: &str = "agent-halted";
 /// stopped is said, never left silent: the input is recorded all the same.
 pub fn stop_agent_for(dir: &Path, input: &Input) -> Result<(), String> {
     let unstopped = |e: String| format!("the input is recorded, but Jaynes could not stop the run's agent: {e}");
+    // the process that drives the run stops the agent it holds: this one only asks, and waits until it did
+    let patience = Duration::from_secs(10);
     match input {
         Input::Abandon { .. } => {
-            agent::stop_left(&dir.join("agent.pid")).map_err(unstopped)?;
+            agent::ask_stop(&dir.join("agent.pid"), patience).map_err(unstopped)?;
         }
         Input::Halt { .. } => {
             // the mark goes first: the process may get the turn back as soon as the agent is gone
             let _marked = std::fs::write(dir.join(HALTED_AGENT), "");
-            if !agent::stop_left(&dir.join("agent.pid")).map_err(unstopped)? {
+            if !agent::ask_stop(&dir.join("agent.pid"), patience).map_err(unstopped)? {
                 let _gone = std::fs::remove_file(dir.join(HALTED_AGENT));
             }
         }
@@ -558,6 +560,9 @@ pub fn decide_and_record(store: &mut Store, run: &str, input: &Input) -> Result<
     store.decide(run, input)
 }
 
+/// What taking a run says when another process drives it: the one refusal that leaves an input in the inbox.
+pub const DRIVEN: &str = "another process is driving this run";
+
 pub struct Driver<'a> {
     pub store: &'a mut Store,
     pub setup: Setup,
@@ -569,7 +574,7 @@ impl<'a> Driver<'a> {
     pub fn take(store: &'a mut Store, setup: Setup) -> Result<Driver<'a>, String> {
         std::fs::create_dir_all(&setup.dir).map_err(|e| e.to_string())?;
         let lock = File::create(setup.dir.join("lock")).map_err(|e| e.to_string())?;
-        lock.try_lock().map_err(|_| "another process is driving this run".to_string())?;
+        lock.try_lock().map_err(|_| DRIVEN.to_string())?;
         // macOS tells no child that its parent died: an agent the last process started may still be writing.
         let unstopped = |e: String| format!("a process that died left the run's agent or role running, and Jaynes could not stop it: {e}");
         if agent::stop_left(&setup.dir.join("agent.pid")).map_err(unstopped)? {
