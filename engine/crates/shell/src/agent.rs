@@ -1033,7 +1033,7 @@ mod tests {
         // Claude Code matches a file's path rule as Read(path) or Edit(path), Edit for every tool that writes a file
         // (Write, Edit, NotebookEdit); a Write(path), NotebookEdit(path) or Glob(path) rule matches nothing
         for project in [ProjectAccess::Read, ProjectAccess::Write] {
-            let reach = Reach { project, write: vec!["**".into()], network: Network::None, commands: true };
+            let reach = Reach { project, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
             let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
             for list in ["allow", "deny", "ask"] {
                 for rule in s["permissions"][list].as_array().into_iter().flatten().filter_map(Value::as_str) {
