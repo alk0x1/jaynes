@@ -397,7 +397,7 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
 }
 
 /// Where Jaynes has no box for a project's commands, a run never runs them open: it stops at once, says why, and
-/// nothing of the project runs, the agent included.
+/// nothing of the project runs, the agent included. No variable opens it: only the person does, with their proof (G18).
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
@@ -411,12 +411,15 @@ fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
-        .env_remove("JAYNES_UNBOXED")
+        // the variable that once ran them unboxed changes nothing
+        .env("JAYNES_UNBOXED", "1")
         .output()
         .expect("start");
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(started.elapsed() < std::time::Duration::from_secs(30), "the run waited: {:?}\n{said}", started.elapsed());
     assert!(said.contains("blocked") && said.contains("no box for project commands"), "the person is told why: {said}");
+    assert!(!said.contains("JAYNES_UNBOXED"), "no variable is offered as a way out: {said}");
+    assert!(said.contains("macOS"), "the ways out are said: {said}");
     assert!(!ran.exists(), "the agent ran without a box: {said}");
     let e = events(&s, "no-box");
     let t = types(&e);
@@ -1923,6 +1926,7 @@ try:
 except b.Unavailable as e:
     print("refused:", e)
 "#;
+    // the variable that once ran them unboxed changes nothing here either
     let out = Command::new(python()).args(["-c", script]).env("PYTHONPATH", root().join("python")).env("JAYNES_UNBOXED", "1").output().expect("python");
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(!said.contains("ran under the other sandbox"), "{said}");

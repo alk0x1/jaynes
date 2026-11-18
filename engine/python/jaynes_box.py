@@ -46,7 +46,8 @@ macOS changes): a sample program does its work and tries twelve escapes in it, a
 try (lsopen, Apple events, the last denial of secrets) is read in the profile; the macOS, the box (this file's
 sha256) and the interpreter it held with are kept in the engine's home. With another of the three the proof is made
 again first; when it does not hold, no role's program runs, and the refusal says what got through.
-Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
+Elsewhere there is no box yet, and a project's commands do not run there. Nothing opens them unboxed but the person,
+with a proof only they can give, by starting the run unboxed (G18); never a variable.
 """
 
 from __future__ import annotations
@@ -635,10 +636,8 @@ def command_in_box(script: str, box: Box) -> list[str]:
         raise Unavailable(INSIDE)
     if available():
         return [str(SANDBOX_EXEC), "-p", profile(box), "/bin/sh", "-c", script]
-    if os.environ.get("JAYNES_UNBOXED") == "1":
-        return ["/bin/sh", "-c", script]
-    raise Unavailable("Jaynes has no box for project commands on this system yet; set JAYNES_UNBOXED=1 to run "
-                      "them unboxed, with the agent's changes, on your machine")
+    raise Unavailable("Jaynes has no box for project commands on this system yet, so it runs none of them: run Jaynes "
+                      "on macOS, where the box is, or wait for this system's box")
 
 
 def programs_of(program: Path) -> tuple[Path, ...]:
