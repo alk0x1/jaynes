@@ -41,7 +41,9 @@ jobs:
       - name: A test browser
         run: |
           npx -y playwright@1.50.1 install chromium-headless-shell
-          shell=$(ls -d ~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell | head -1)
+          # this Playwright keeps the shell at chrome-mac/headless_shell; later ones at chrome-headless-shell-mac-*/
+          shell=$(ls -d ~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-mac/headless_shell \
+            ~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell 2>/dev/null | head -1)
           test -x "$shell"
           echo "JAYNES_CHROME=$shell" >> "$GITHUB_ENV"
       - run: cargo clippy --all-targets --locked -- -D warnings
