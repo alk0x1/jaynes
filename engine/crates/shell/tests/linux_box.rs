@@ -500,3 +500,126 @@ fn a_command_started_inside_what_the_box_holds_reaches_it_only_through_the_box()
         .arg("--").args(["sh", "-c", "cat key; ls"]).output().expect("box");
     assert!(!said(&o).contains("k3y"), "started inside the hidden, the command read it: {}", said(&o));
 }
+
+// --- the relay of the ports of this machine a command may reach ----------------------------------------------------
+
+/// A service on this machine's loopback, outside the box, that says hello to whoever connects.
+fn service() -> (std::net::TcpListener, u16) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = l.local_addr().expect("addr").port();
+    let served = l.try_clone().expect("clone");
+    std::thread::spawn(move || {
+        for c in served.incoming().flatten() {
+            use std::io::Write;
+            let mut c = c;
+            let _said = c.write_all(b"hello from outside\n");
+        }
+    });
+    (l, port)
+}
+
+fn read_from(host: &str, port: u16) -> String {
+    format!("python3 -c 'import socket; s=socket.create_connection((\"{host}\",{port}),timeout=3); print(s.recv(100).decode())'")
+}
+
+#[test]
+fn a_listed_port_of_this_machine_is_reached_through_the_relay_and_nothing_else_is() {
+    let p = place("relay");
+    opens();
+    let (_listed, port) = service();
+    let (_other, unlisted) = service();
+    let (_page, page) = service();
+    let o = boxed(&p, &read_from("127.0.0.1", port), &["--port", &port.to_string()]);
+    assert!(o.status.success() && said(&o).contains("hello from outside"), "a listed port of this machine is reached: {}", said(&o));
+    assert!(said(&o).is_empty() || !said(&o).contains("refuses"), "{}", said(&o));
+    for (what, script, args) in [
+        ("a port not listed", read_from("127.0.0.1", unlisted), vec!["--port".to_string(), port.to_string()]),
+        ("the page's port, listed and never", read_from("127.0.0.1", page), vec!["--port".to_string(), page.to_string(), "--never-port".to_string(), page.to_string()]),
+        ("another address at a listed port", read_from("10.255.255.1", port), vec!["--port".to_string(), port.to_string()]),
+        ("the internet", reach("1.1.1.1", 443), vec!["--port".to_string(), "443".to_string()]),
+    ] {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = boxed(&p, &script, &args);
+        assert!(!o.status.success() && !said(&o).contains("hello from outside"), "the box reached {what}: {}", said(&o));
+    }
+}
+
+#[test]
+fn the_relay_s_helper_connects_only_for_the_ports_it_was_started_with() {
+    // the helper as the box starts it, asked from its channel as the forwarder asks it
+    opens();
+    let (_listed, port) = service();
+    let (_other, unlisted) = service();
+    let (mine, its) = rustix::net::socketpair(rustix::net::AddressFamily::UNIX, rustix::net::SocketType::SEQPACKET, rustix::net::SocketFlags::CLOEXEC, None).expect("pair");
+    let mut helper = Command::new(BIN)
+        .args(["box-relay", "out", "--parent", &std::process::id().to_string(), "--port", &port.to_string()])
+        .stdin(Stdio::from(its))
+        .spawn()
+        .expect("helper");
+    use std::os::fd::AsFd;
+    assert!(jaynes_shell::relay::ask(mine.as_fd(), port).expect("asked").is_some(), "a listed port");
+    for other in [unlisted, 8750, 0] {
+        assert!(jaynes_shell::relay::ask(mine.as_fd(), other).expect("asked").is_none(), "the helper connected for port {other}");
+    }
+    // a request of another shape opens nothing either
+    rustix::net::send(mine.as_fd(), b"\x00", rustix::net::SendFlags::empty()).expect("send");
+    let mut b = [0u8; 1];
+    let (n, _) = rustix::net::recv(mine.as_fd(), &mut b[..], rustix::net::RecvFlags::empty()).expect("recv");
+    assert_eq!((n, b[0]), (1, 0), "a request of another shape got a socket");
+    drop(mine);
+    let _ended = helper.wait();
+}
+
+/// The processes whose parent is `pid`, that have not ended.
+fn children_running(pid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir("/proc").expect("proc").flatten() {
+        let Ok(child) = e.file_name().to_string_lossy().parse::<u32>() else { continue };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{child}/stat")) else { continue };
+        let after = stat.rsplit_once(')').map(|(_, a)| a.trim().to_string()).unwrap_or_default();
+        let mut fields = after.split_whitespace();
+        let (state, parent) = (fields.next().unwrap_or(""), fields.next().unwrap_or(""));
+        if parent == pid.to_string() && state != "Z" && state != "X" {
+            out.push(child);
+        }
+    }
+    out
+}
+
+#[test]
+fn the_relay_holds_only_its_channel_and_ends_with_the_command_even_when_it_is_killed() {
+    let p = place("relay-end");
+    opens();
+    let (_listed, port) = service();
+    let mut c = Command::new(BIN);
+    c.arg("box").arg("--write").arg(&p.work).args(hide(&p)).args(["--port", &port.to_string()]).arg("--").args(["sh", "-c", "sleep 30"]);
+    let mut boxed = c.current_dir(&p.work).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("box");
+    let pid = boxed.id();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let relays = loop {
+        let r = children_running(pid);
+        if r.len() >= 2 || std::time::Instant::now() > until {
+            break r;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(relays.len(), 2, "the helper and the forwarder run beside the command: {relays:?}");
+    // each holds its channel, its standard streams and its sockets, and nothing of a folder on disk
+    for r in &relays {
+        for fd in std::fs::read_dir(format!("/proc/{r}/fd")).expect("fds").flatten() {
+            let to = std::fs::read_link(fd.path()).map(|l| l.display().to_string()).unwrap_or_default();
+            assert!(to.starts_with("socket:") || to.starts_with("pipe:") || to == "/dev/null" || to.starts_with("anon_inode:"), "relay {r} holds {to}");
+        }
+    }
+    // killed at once, as a halt of the engine would kill it: neither outlives it
+    let _killed = rustix::process::kill_process(rustix::process::Pid::from_raw(pid as i32).expect("pid"), rustix::process::Signal::KILL);
+    let _reaped = boxed.wait();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while relays.iter().any(|r| std::fs::read_to_string(format!("/proc/{r}/stat")).is_ok_and(|s| !s.contains(") Z") && !s.contains(") X"))) && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    for r in &relays {
+        let left = std::fs::read_to_string(format!("/proc/{r}/stat")).is_ok_and(|s| !s.contains(") Z") && !s.contains(") X"));
+        assert!(!left, "relay {r} outlived the command it served");
+    }
+}

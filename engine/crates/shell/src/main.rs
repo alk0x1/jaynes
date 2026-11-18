@@ -386,6 +386,18 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
+        #[cfg(target_os = "linux")]
+        "box-relay" => {
+            // the Linux box's relay, which only the box starts (relay.rs)
+            let all = |name: &str| rest.windows(2).filter(|w| w[0] == name).map(|w| w[1].clone()).collect::<Vec<_>>();
+            let ports = all("--port").iter().map(|p| p.parse::<u16>().map_err(|_| format!("{p} is not a port"))).collect::<Result<Vec<_>, _>>()?;
+            let parent = all("--parent").first().and_then(|p| p.parse::<u32>().ok()).ok_or("the relay needs the box that starts it")?;
+            match rest.first().map(String::as_str) {
+                Some("out") => jaynes_shell::relay::helper(&ports, parent),
+                Some("in") => jaynes_shell::relay::forwarder(&ports, parent),
+                _ => Err("box-relay is in or out".into()),
+            }
+        }
         "box" => {
             // the box on Linux: confine this process, then become the command after --
             let (opts, argv) = match rest.iter().position(|a| a == "--") {
