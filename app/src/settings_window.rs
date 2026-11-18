@@ -80,7 +80,7 @@ pub fn open(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(600.), px(430.)), cx);
+    let bounds = Bounds::centered(None, size(px(600.), px(500.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some("Settings".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
@@ -153,7 +153,8 @@ impl SettingsView {
     fn rows(&self, p: &Prefs, cx: &mut Context<Self>) -> Vec<Div> {
         match self.section {
             Section::Terminal => vec![
-                row("Colors", None, self.colors(p, cx)),
+                row("Appearance", Some(appearance_hint(p.appearance)), self.appearance(p, cx)),
+                row("Colors", Some("The terminal's in the dark; in the light, Linen".into()), self.colors(p, cx)),
                 row("Font", None, div().flex().items_center().gap(px(8.)).child(self.font(p, cx)).child(stepper("font-size", format!("{}", p.terminal_font_size), "terminal_font_size", p.terminal_font_size, 1.0, cx))),
                 row("Option key", Some(option_hint(p.option_key)), self.option_key(p, cx)),
                 row("Copy on select", None, toggle("copy-on-select", p.copy_on_select, "copy_on_select", cx)),
@@ -254,6 +255,11 @@ impl SettingsView {
         div().child(button).child(deferred(anchored().snap_to_window().child(list)).with_priority(1)).into_any_element()
     }
 
+    fn appearance(&self, p: &Prefs, cx: &mut Context<Self>) -> Div {
+        use crate::prefs::Appearance;
+        segmented("appearance", &[("Dark", "dark", p.appearance == Appearance::Dark), ("Light", "light", p.appearance == Appearance::Light), ("Match the system", "system", p.appearance == Appearance::System)], cx)
+    }
+
     fn option_key(&self, p: &Prefs, cx: &mut Context<Self>) -> Div {
         let choices = [("Auto", "auto", OptionAsAlt::Auto), ("Alt", "alt", OptionAsAlt::On), ("Left Alt", "left", OptionAsAlt::Left), ("Characters", "characters", OptionAsAlt::Off)];
         let mut seg = div().flex().rounded(px(7.)).border_1().border_color(rgb(look::line_2())).overflow_hidden();
@@ -281,6 +287,37 @@ fn times(v: f32) -> String {
     let s = format!("{v:.2}");
     let s = s.trim_end_matches('0');
     format!("{}×", if s.ends_with('.') { format!("{s}0") } else { s.to_owned() })
+}
+
+/// Segments of one setting, `name`, the one in force lit: (label, value, on).
+fn segmented(name: &'static str, choices: &[(&'static str, &'static str, bool)], cx: &mut Context<SettingsView>) -> Div {
+    let mut seg = div().flex().rounded(px(7.)).border_1().border_color(rgb(look::line_2())).overflow_hidden();
+    for (i, (label, value, on)) in choices.iter().copied().enumerate() {
+        seg = seg.child(
+            div()
+                .id(SharedString::from(format!("{name}-{value}")))
+                .px(px(10.))
+                .py(px(4.))
+                .cursor_pointer()
+                .when(i > 0, |d| d.border_l_1().border_color(rgb(look::line_2())))
+                .when(on, |d| d.bg(rgb(look::selected())))
+                .text_color(rgb(if on { look::text() } else { look::dim() }))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| this.pick(name, value, cx))),
+        );
+    }
+    seg
+}
+
+/// What the appearance picked does, said under its name.
+fn appearance_hint(a: crate::prefs::Appearance) -> String {
+    use crate::prefs::Appearance;
+    match a {
+        Appearance::Dark => "Dark, as the window has always been",
+        Appearance::Light => "Linen, a warm off-white",
+        Appearance::System => "Light or dark as macOS is, changing with it",
+    }
+    .into()
 }
 
 /// What the Option key does, said under its name.
@@ -327,7 +364,7 @@ fn toggle(id: &'static str, on: bool, name: &'static str, cx: &mut Context<Setti
         .items_center()
         .px(px(2.))
         .when(on, |d| d.justify_end())
-        .child(div().size(px(14.)).rounded_full().bg(rgb(if on { 0x0b0e13 } else { look::dim() })))
+        .child(div().size(px(14.)).rounded_full().bg(rgb(if on { look::on_fill() } else { look::dim() })))
         .on_click(cx.listener(move |this, _, _, cx| this.pick(name, if on { "off" } else { "on" }, cx)))
 }
 

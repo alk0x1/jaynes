@@ -287,7 +287,7 @@ impl Tabs {
             .font_family(look::MONO_FONT)
             .text_size(px(13.))
             .line_height(px(21.))
-            .text_color(rgb(0xc9ced8))
+            .text_color(rgb(look::story()))
             .flex()
             .flex_col();
         if self.story.is_empty() {

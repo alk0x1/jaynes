@@ -308,6 +308,7 @@ impl Render for Root {
                                 .flex_col()
                                 .border_r_1()
                                 .border_color(rgb(look::line()))
+                                .bg(rgb(look::side()))
                                 .child(self.side_head(cx))
                                 .child(div().flex_1().min_h_0().child(self.side.clone())),
                         )
@@ -1096,7 +1097,7 @@ impl Root {
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgba(0x0000_0099))
+            .bg(rgba(look::scrim_2()))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.help = false;
                 cx.notify();
@@ -1146,6 +1147,7 @@ impl Root {
         let mut bar = div()
             .h(px(STATUS))
             .flex_none()
+            .bg(rgb(look::side()))
             .flex()
             .items_center()
             .gap(px(16.))
@@ -1385,7 +1387,7 @@ fn main() {
         })
         .detach();
         notify::listen();
-        prefs::start();
+        prefs::start(cx);
         open(core.clone(), cx);
         // A test that draws the window into a picture leaves the person's keyboard where it is.
         if crate::testing::var("JAYNES_APP_SHOT").is_none() {
@@ -1408,6 +1410,13 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         ..Default::default()
     };
     cx.open_window(options, move |window, cx| {
+        // Match the system: macOS going light or dark, the window follows
+        window
+            .observe_window_appearance(|window, cx| {
+                let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+                prefs::system_changed(dark, cx);
+            })
+            .detach();
         // its close button hides it: the app stays, in the Dock and the menu bar, and notices still come
         window.on_window_should_close(cx, |window, cx| {
             if let Some(Some(root)) = window.root::<Root>() {

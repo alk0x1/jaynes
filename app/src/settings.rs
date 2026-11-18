@@ -85,7 +85,20 @@ const PAPER: Palette = Palette {
     ],
 };
 
-pub const PRESETS: &[&str] = &["jaynes", "graphite", "ink", "moss", "paper"];
+/// JAYNES: the light the window has (look.rs LINEN): warm paper, dark ink; bright white is ink, as in PAPER.
+const LINEN: Palette = Palette {
+    background: 0xfbfaf7,
+    foreground: 0x2a2722,
+    selection: 0xe3dccd,
+    cursor: Some(0x2a2722),
+    status: Some([0x975f00, 0xb8412f, 0x2f63c8]),
+    ansi: [
+        0x2a2722, 0xb8412f, 0x2c7a3f, 0x8a5a00, 0x2f5fb8, 0x7a4fc2, 0x1f6f6c, 0x6b665c, 0x8f897d, 0xc94a36, 0x2f8a46, 0x975f00, 0x2f63c8,
+        0x8457cf, 0x237b78, 0x1d1b17,
+    ],
+};
+
+pub const PRESETS: &[&str] = &["jaynes", "graphite", "ink", "moss", "paper", "linen"];
 
 /// The theme a layout without one shows, by appearance.
 pub const DEFAULT_DARK: &str = "jaynes";
@@ -98,6 +111,7 @@ fn preset(name: &str) -> Option<&'static Palette> {
         "ink" => Some(&INK),
         "moss" => Some(&MOSS),
         "paper" => Some(&PAPER),
+        "linen" => Some(&LINEN),
         _ => None,
     }
 }

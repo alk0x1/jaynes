@@ -178,7 +178,7 @@ pub fn agent_icon(a: &Agent, at: &str) -> AnyElement {
         } else if a.state == State::Working {
             look::spinner(SharedString::from(format!("{at}-spin-{}", a.address)), 11., look::blue()).into_any_element()
         } else if a.state == State::Idle {
-            div().size(px(8.)).rounded_full().flex_none().border(px(1.5)).border_color(rgb(0x4a505c)).into_any_element()
+            div().size(px(8.)).rounded_full().flex_none().border(px(1.5)).border_color(rgb(look::idle_ring())).into_any_element()
         } else {
             dot(colour(a.state)).into_any_element()
         }

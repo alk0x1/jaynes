@@ -7,12 +7,35 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// The terminal colors the Settings screen offers: the dark ones, as the window around the terminal is dark.
+/// The terminal colors the Settings screen offers for the dark appearance.
 pub const COLORS: &[&str] = &["jaynes", "graphite", "ink", "moss"];
+/// The terminal's colors in the light appearance: the window's own Linen.
+pub const LIGHT_COLORS: &str = "linen";
+
+/// Whether the window is dark or light: the person's pick, or macOS's as it changes during the day.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
+/// Whether the window is light now: Light, or Match the system while macOS is light.
+pub fn light_now(a: Appearance, system_dark: bool) -> bool {
+    match a {
+        Appearance::Dark => false,
+        Appearance::Light => true,
+        Appearance::System => !system_dark,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
+    /// Dark (the default), Light (Linen), or Match the system.
+    pub appearance: Appearance,
     /// One of COLORS.
     pub terminal_colors: String,
     pub terminal_font: String,
@@ -33,6 +56,7 @@ impl Default for Prefs {
     fn default() -> Self {
         let s = Settings::default();
         Prefs {
+            appearance: Appearance::Dark,
             terminal_colors: crate::settings::DEFAULT_DARK.into(),
             terminal_font: s.font_family,
             terminal_font_size: s.font_size,
@@ -117,6 +141,14 @@ pub fn set(p: &mut Prefs, name: &str, value: &str) -> Result<(), String> {
         _ => Err(format!("{name} is on or off, not {value}")),
     };
     match name {
+        "appearance" => {
+            p.appearance = match value {
+                "dark" => Appearance::Dark,
+                "light" => Appearance::Light,
+                "system" => Appearance::System,
+                _ => return Err(format!("appearance is dark, light or system, not {value}")),
+            }
+        }
         "terminal_colors" if COLORS.contains(&value) => p.terminal_colors = value.into(),
         "terminal_colors" => return Err(format!("no terminal colors named {value}: {}", COLORS.join(", "))),
         "terminal_font" if !value.is_empty() => p.terminal_font = value.into(),
@@ -141,9 +173,14 @@ pub fn set(p: &mut Prefs, name: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The terminal's own settings with the person's laid over them.
-pub fn onto(p: &Prefs, mut s: Settings) -> Settings {
-    s.theme = p.terminal_colors.clone();
+/// The terminal's own settings with the person's laid over them, in the dark.
+pub fn onto(p: &Prefs, s: Settings) -> Settings {
+    onto_for(p, s, false)
+}
+
+/// The terminal's settings with the person's laid over them; in the light, the terminal is Linen, as the window is.
+pub fn onto_for(p: &Prefs, mut s: Settings, light: bool) -> Settings {
+    s.theme = if light { LIGHT_COLORS.into() } else { p.terminal_colors.clone() };
     s.theme_dark = p.terminal_colors.clone();
     s.font_family = p.terminal_font.clone();
     s.font_size = p.terminal_font_size;
@@ -164,6 +201,27 @@ pub fn new_agent_argv(command: &str) -> Vec<String> {
 }
 
 static CURRENT: Mutex<Option<Prefs>> = Mutex::new(None);
+/// Whether macOS is dark now, as the window last heard.
+static SYSTEM_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// What macOS's appearance is now (at start, and each time it changes).
+pub fn system_is_dark(dark: bool) {
+    SYSTEM_DARK.store(dark, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Puts `p` in force: the window's colours and the terminal's, for the appearance it says now.
+fn in_force(p: &Prefs) {
+    let light = light_now(p.appearance, SYSTEM_DARK.load(std::sync::atomic::Ordering::Relaxed));
+    crate::look::set(crate::look::for_light(light));
+    crate::settings::set(onto_for(p, (*crate::settings::get()).clone(), light));
+}
+
+/// Puts the settings in force again, as macOS's appearance changed: every window drawn with them.
+pub fn system_changed(dark: bool, cx: &mut gpui::App) {
+    system_is_dark(dark);
+    in_force(&get());
+    cx.refresh_windows();
+}
 
 /// The settings in force.
 pub fn get() -> Prefs {
@@ -171,9 +229,10 @@ pub fn get() -> Prefs {
 }
 
 /// Reads the person's file and puts its settings in force; at start.
-pub fn start() {
+pub fn start(cx: &gpui::App) {
     let p = load(&path());
-    crate::settings::set(onto(&p, (*crate::settings::get()).clone()));
+    system_is_dark(matches!(cx.window_appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark));
+    in_force(&p);
     *CURRENT.lock().unwrap() = Some(p);
 }
 
@@ -181,7 +240,7 @@ pub fn start() {
 pub fn change(name: &str, value: &str, cx: &mut gpui::App) -> Result<(), String> {
     let mut p = get();
     set(&mut p, name, value)?;
-    crate::settings::set(onto(&p, (*crate::settings::get()).clone()));
+    in_force(&p);
     save(&path(), &p).map_err(|e| format!("cannot keep the settings in {}: {e}", path().display()))?;
     *CURRENT.lock().unwrap() = Some(p);
     cx.refresh_windows();
@@ -265,6 +324,32 @@ mod tests {
         assert_eq!((s.theme.as_str(), s.font_size, s.copy_on_select, s.terminal_scroll_speed, s.option_as_alt), ("ink", 15.0, false, 2.0, OptionAsAlt::Off));
         // the rest stays as it was
         assert_eq!(s.terminal_padding, Settings::default().terminal_padding);
+    }
+
+    #[test]
+    fn the_appearance_is_dark_unless_light_is_picked_or_the_system_is_light() {
+        use super::{Appearance, light_now};
+        let mut p = Prefs::default();
+        assert_eq!(p.appearance, Appearance::Dark);
+        assert!(!light_now(p.appearance, false) && !light_now(p.appearance, true));
+        set(&mut p, "appearance", "light").unwrap();
+        assert!(light_now(p.appearance, true));
+        set(&mut p, "appearance", "system").unwrap();
+        assert!(light_now(p.appearance, false) && !light_now(p.appearance, true));
+        assert!(set(&mut p, "appearance", "sepia").is_err());
+    }
+
+    #[test]
+    fn in_the_light_the_terminal_is_linen_and_in_the_dark_the_colors_picked() {
+        use super::onto_for;
+        let mut p = Prefs::default();
+        p.terminal_colors = "moss".into();
+        assert_eq!(onto_for(&p, Settings::default(), true).theme, "linen");
+        assert_eq!(onto_for(&p, Settings::default(), false).theme, "moss");
+        assert!(crate::settings::swatch("linen").is_some());
+        // the window's colours go with it, and the dark is the one it always had
+        assert_eq!(crate::look::for_light(false), crate::look::DARK);
+        assert_eq!(crate::look::for_light(true).panel, 0xfbfaf7);
     }
 
     #[test]

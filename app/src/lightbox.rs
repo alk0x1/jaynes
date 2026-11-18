@@ -76,7 +76,7 @@ impl Render for Lightbox {
             .track_focus(&self.focus)
             .absolute()
             .inset_0()
-            .bg(rgba(0x05070acc))
+            .bg(rgba(look::scrim()))
             .p(px(28.))
             .flex()
             .font_family(look::UI_FONT)

@@ -249,7 +249,7 @@ fn act_icon(id: SharedString, icon: look::Icon) -> Stateful<Div> {
         .rounded(px(5.))
         .cursor_pointer()
         .text_color(rgb(look::dim()))
-        .hover(|d| d.bg(rgba(0xffffff14)))
+        .hover(|d| d.bg(rgba(look::hover())))
         .child(look::icon(icon, 16., look::dim()))
 }
 
@@ -278,7 +278,7 @@ fn row(path: &str, shown: bool, cx: &mut Context<Changes>) -> Stateful<Div> {
         .id(SharedString::from(format!("file-{path}")))
         .relative()
         .cursor_pointer()
-        .hover(|d| d.bg(rgba(0xffffff05)))
+        .hover(|d| d.bg(rgba(look::hover_faint())))
         .when(shown, |d| d.bg(rgb(look::selected())).child(div().absolute().left(px(6.)).top(px(11.)).size(px(6.)).rounded_full().bg(rgb(look::blue()))))
         .on_click(cx.listener(move |this, _, _, cx| this.open_file(open.clone(), cx)))
         .flex()

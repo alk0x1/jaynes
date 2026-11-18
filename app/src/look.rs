@@ -1,6 +1,6 @@
 //! The window's colours and the small pieces the list and the steps panel share: one dark for the whole window, the
 //! terminal's included (the theme `jaynes` in settings.rs has the same background): the near-black of direction C of
-//! the top bar (docs/prototypes/app-topbar.html), after T3 Code's quiet.
+//! the top bar, after T3 Code's quiet.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -27,6 +27,20 @@ pub struct Frame {
     pub violet: u32,
     /// Text on an amber or green fill.
     pub on_fill: u32,
+    /// The column at the left and the status bar.
+    pub side: u32,
+    /// Under the pointer, and fainter (RGBA).
+    pub hover: u32,
+    pub hover_faint: u32,
+    /// Behind a picture shown large, and behind the list of shortcuts (RGBA).
+    pub scrim: u32,
+    pub scrim_2: u32,
+    /// A run's story, as its agent told it.
+    pub story: u32,
+    /// The ring of an agent that is idle.
+    pub idle_ring: u32,
+    /// Claude Code's own mark.
+    pub claude: u32,
 }
 
 /// The dark the window has always had.
@@ -46,7 +60,47 @@ pub const DARK: Frame = Frame {
     grey: 0x7d8899,
     violet: 0xc49bff,
     on_fill: 0x0b0e13,
+    side: 0x0b0c0f,
+    hover: 0xffffff14,
+    hover_faint: 0xffffff05,
+    scrim: 0x05070acc,
+    scrim_2: 0x0000_0099,
+    story: 0xc9ced8,
+    idle_ring: 0x4a505c,
+    claude: 0xe8875f,
 };
+
+/// The light: Linen, a warm off-white.
+pub const LINEN: Frame = Frame {
+    panel: 0xfbfaf7,
+    panel_2: 0xf3f1ec,
+    selected: 0xe8e4dc,
+    line: 0xe6e2d9,
+    line_2: 0xd6d0c4,
+    text: 0x24221e,
+    dim: 0x5e5a52,
+    faint: 0x8f897d,
+    amber: 0x975f00,
+    blue: 0x2f63c8,
+    green: 0x2c7a3f,
+    red: 0xb8412f,
+    grey: 0x7d786e,
+    violet: 0x7a4fc2,
+    on_fill: 0xffffff,
+    side: 0xf3f1ec,
+    hover: 0x24221e12,
+    hover_faint: 0x24221e08,
+    scrim: 0x24221e66,
+    scrim_2: 0x24221e4d,
+    story: 0x3a3730,
+    idle_ring: 0xb9b2a5,
+    claude: 0xd9774f,
+};
+
+/// The window's colours for the light or the dark.
+pub fn for_light(light: bool) -> Frame {
+    if light { LINEN } else { DARK }
+}
 
 thread_local! {
     static FRAME: std::cell::Cell<Frame> = const { std::cell::Cell::new(DARK) };
@@ -77,6 +131,14 @@ pub fn red() -> u32 { frame().red }
 pub fn grey() -> u32 { frame().grey }
 pub fn violet() -> u32 { frame().violet }
 pub fn on_fill() -> u32 { frame().on_fill }
+pub fn side() -> u32 { frame().side }
+pub fn hover() -> u32 { frame().hover }
+pub fn hover_faint() -> u32 { frame().hover_faint }
+pub fn scrim() -> u32 { frame().scrim }
+pub fn scrim_2() -> u32 { frame().scrim_2 }
+pub fn story() -> u32 { frame().story }
+pub fn idle_ring() -> u32 { frame().idle_ring }
+pub fn claude() -> u32 { frame().claude }
 
 pub const UI_FONT: &str = "Instrument Sans";
 pub const MONO_FONT: &str = "IBM Plex Mono";
@@ -263,5 +325,5 @@ pub fn icon_button(id: &'static str, which: Icon, on: bool) -> Stateful<Div> {
 /// Claude Code's critter, small, for the tab of the person's own Claude Code.
 pub fn claude_icon() -> Svg {
     const CRITTER: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 12"><path fill="#000" fill-rule="evenodd" d="M3 0h10v3h3v3h-3v6h-1V9h-1v3h-1V9H6v3H5V9H4v3H3V6H0V3h3zM5 3v2h1V3zm5 0v2h1V3z"/></svg>"##;
-    svg().data(CRITTER.as_bytes()).w(px(14.)).h(px(10.5)).flex_none().text_color(rgb(0xe8875f))
+    svg().data(CRITTER.as_bytes()).w(px(14.)).h(px(10.5)).flex_none().text_color(rgb(claude()))
 }
