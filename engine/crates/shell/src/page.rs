@@ -965,15 +965,16 @@ fn setup_html(home: &std::path::Path) -> String {
     let installed = crate::install::installed_commit();
     let version = match &installed {
         Some(c) => format!("<code>{}</code> from {}", esc(&c[..7]), crate::install::SOURCE),
-        None => "not installed with cargo from git".to_string(),
+        None => "built from a commit it does not know".to_string(),
     };
+    let running = format!("<code>{}</code>", esc(&crate::install::version()));
     let log = std::fs::read_to_string(home.join("update.log")).unwrap_or_default();
     let log = if log.trim().is_empty() { String::new() } else { format!("<details class=\"way\"><summary>What the last update said</summary><pre class=\"said\">{}</pre></details>", esc(log.trim())) };
     format!(
         "<h1>Setup</h1>\
          <section class=\"part\"><h2>Guard</h2><p class=\"sub\">In every Claude Code session with the Jaynes plugin, it asks before what cannot be undone in git and GitHub: push, reset --hard, clean, deleting branches or tags, merging or closing pull requests, and creating or deleting repositories. Everything else passes. Repositories whose GitHub owner is a free owner pass freely.</p>\
          <table class=\"kv\"><tr><td>state</td><td>{state}</td></tr><tr><td>free owners</td><td>{rows}{none}<span class=\"owner\"><input id=\"owner\" placeholder=\"GitHub owner\"><button class=\"act\" data-setup=\"owner-add\">Add</button></span></td></tr><tr><td>settings</td><td><code>{}</code></td></tr></table></section>\
-         <section class=\"part\"><h2>Version</h2><table class=\"kv\"><tr><td>installed</td><td>{version}</td></tr></table>{log}</section>\
+         <section class=\"part\"><h2>Version</h2><table class=\"kv\"><tr><td>running</td><td>{running}</td></tr><tr><td>installed</td><td>{version}</td></tr></table>{log}</section>\
          <div class=\"refused\" id=\"setupmsg\"></div>",
         esc(&path)
     )

@@ -994,7 +994,11 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // the page is up once it takes a connection, which a loaded machine may take a while to give
+    let up = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() && up.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let me = "jaynes_key=k3y";
     let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     let setup = get("/setup");

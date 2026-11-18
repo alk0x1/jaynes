@@ -347,10 +347,50 @@ pub fn install_root() -> Result<PathBuf, String> {
 
 /// The commit of Jaynes that cargo installed from git, as cargo recorded it; None when it was not installed so.
 pub fn installed_commit() -> Option<String> {
+    cargo_installed_commit().or_else(program_commit)
+}
+
+/// The commit cargo installed from git, in its record of what it installed.
+fn cargo_installed_commit() -> Option<String> {
     let text = std::fs::read_to_string(install_root().ok()?.join(".crates.toml")).ok()?;
     let line = text.lines().find(|l| l.contains("\"jaynes-shell ") && l.contains('#'))?;
     let after = line.split('#').nth(1)?;
     let commit: String = after.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+    (commit.len() >= 7).then_some(commit)
+}
+
+/// What the program on disk says it was built from, for one cargo did not install (a release, a build by hand):
+/// after an update it is the new one, whatever runs now. It is asked again only when the file changed, since the
+/// page asks on every request.
+fn program_commit() -> Option<String> {
+    static ASKED: std::sync::Mutex<Option<(std::time::SystemTime, Option<String>)>> = std::sync::Mutex::new(None);
+    let exe = std::env::current_exe().ok()?;
+    let changed = std::fs::metadata(&exe).and_then(|m| m.modified()).ok()?;
+    let mut asked = ASKED.lock().ok()?;
+    if let Some((at, commit)) = asked.as_ref()
+        && *at == changed
+    {
+        return commit.clone();
+    }
+    let said = Command::new(&exe).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    let commit = said.and_then(|s| commit_of(&s));
+    *asked = Some((changed, commit.clone()));
+    commit
+}
+
+/// The commit this program is built from, with "+changes" when its source had changes not committed, or
+/// "unknown".
+pub const BUILD_COMMIT: &str = env!("JAYNES_BUILD_COMMIT");
+
+/// What `jaynes --version` prints: the version, the commit it is built from, and the engine whose rules it runs.
+pub fn version() -> String {
+    format!("jaynes {} (commit {}, engine {})", env!("CARGO_PKG_VERSION"), BUILD_COMMIT, jaynes_core::ENGINE)
+}
+
+/// The commit `jaynes --version` names, or None for a build that does not know it.
+pub fn commit_of(said: &str) -> Option<String> {
+    let after = said.split("(commit ").nth(1)?;
+    let commit: String = after.chars().take_while(char::is_ascii_hexdigit).collect();
     (commit.len() >= 7).then_some(commit)
 }
 
@@ -444,7 +484,7 @@ pub fn update(home: &Path) -> Result<Vec<String>, String> {
     let home_dir = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     let app_missing = target() == "macos-aarch64" && !has_app(&home_dir);
     match release(&manifest, &target(), env!("CARGO_PKG_VERSION")) {
-        Release::Current(v) if !app_missing => said.push(format!("Jaynes {v} is the newest")),
+        Release::Current(v) if !app_missing => said.push(format!("Jaynes {v} is the newest; this one is {}", version())),
         Release::Newer(v) | Release::Current(v) => {
             // the release's own installer, as the person ran it: the app and the program together
             let status = Command::new("sh")
@@ -498,6 +538,17 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).status().expect("git").success();
         assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn the_version_names_the_commit_it_is_built_from() {
+        let v = version();
+        assert!(v.starts_with(&format!("jaynes {} (commit ", env!("CARGO_PKG_VERSION"))), "{v}");
+        assert!(v.contains(jaynes_core::ENGINE), "{v}");
+        // built from a git checkout it knows its commit; from a source without git, it says it does not
+        assert!(commit_of(&v).is_some() || BUILD_COMMIT == "unknown", "{v}");
+        assert_eq!(commit_of("jaynes 0.2.0 (commit 3bf0783abc+changes, engine e)").as_deref(), Some("3bf0783abc"));
+        assert_eq!(commit_of("jaynes 0.2.0 (commit unknown, engine e)"), None);
     }
 
     #[test]

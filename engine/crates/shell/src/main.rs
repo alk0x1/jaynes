@@ -19,6 +19,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
   start --role NAME --request TEXT [--project DIR] [--agent claude|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
+  version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
@@ -83,6 +84,10 @@ fn run(args: &[String]) -> Result<(), String> {
         return Err(format!("the engine of run {id} did not start: {}", std::process::Command::new(exe).args(args).exec()));
     }
     match cmd {
+        "--version" | "version" => {
+            println!("{}", install::version());
+            Ok(())
+        }
         "start" => start(rest),
         "role-serve" => {
             // the program of every role written in TOML: one request in, one reply out
