@@ -35,6 +35,7 @@ mod settings_window;
 mod testing;
 mod looking_at;
 mod run_actions;
+mod palette;
 mod trail;
 mod presence;
 mod rail;
@@ -57,7 +58,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette
     ]
 );
 
@@ -68,7 +69,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Inbox", &[("⌘I", "The Inbox: what needs you, in every space"), ("⌘O", "The next thing that needs you")]),
     ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
     ("Panes", &[("⌘D", "Split right: your shell beside the agent"), ("⇧⌘D", "Split down"), ("⌘]  ⌘[", "Next pane, previous pane")]),
-    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⇧⌘G", "Changes panel"), ("⌘/", "This list")]),
+    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⇧⌘G", "Changes panel"), ("⌘K", "Go to any agent, run or command"), ("⌘/", "This list")]),
 ];
 
 /// The top bar's height; the macOS window buttons sit inside it, in the runs column's header.
@@ -146,6 +147,8 @@ pub(crate) struct Root {
     /// A control of the open run pressed once that asks to be pressed again (Abandon), and what the last one said.
     armed: Option<(String, run_actions::Act)>,
     act_said: Option<String>,
+    /// Command-K, while it shows.
+    palette: Option<(Entity<palette::PaletteView>, Subscription)>,
     _branch: Task<()>,
 }
 
@@ -233,6 +236,7 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
+            .on_action(cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)))
             // the button under a finished run's story
             .on_action(cx.listener(|this, _: &CopySummary, _, cx| this.tabs.update(cx, |t, cx| t.copy_summary(cx))))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
@@ -342,6 +346,7 @@ impl Render for Root {
             .child(self.compare.clone())
             .child(self.lightbox.clone())
             .when(self.help, |d| d.child(self.shortcuts(cx)))
+            .when_some(self.palette.as_ref().map(|(p, _)| p.clone()), |d, p| d.child(p))
     }
 }
 
@@ -389,6 +394,49 @@ enum Shown {
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
+    /// Command-K: the palette over the window, its list read now.
+    pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let here = self.agent_view.as_ref().and_then(|(a, _)| self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|x| x.address == *a)).map(|s| s.name.clone()));
+        let all = palette::entries(&self.agents.read(cx).spaces, &self.runs.read(cx).snap.listing, here.as_deref());
+        let view = cx.new(|cx| palette::PaletteView::new(all, window, cx));
+        let said = cx.subscribe_in(&view, window, |this, _, said: &palette::Said, window, cx| {
+            this.palette = None;
+            if let palette::Said::Go(go) = said {
+                this.go_to(go.clone(), window, cx);
+            } else {
+                // back where the keys were
+                let to = this.agent_view.as_ref().map(|(_, v)| v.read(cx).focus_handle().clone()).unwrap_or_else(|| this.terminal.read(cx).focus_handle().clone());
+                window.focus(&to, cx);
+            }
+            cx.notify();
+        });
+        self.palette = Some((view, said));
+        cx.notify();
+    }
+
+    /// Where an entry of Command-K goes: as a click in the column, or the command's own key.
+    fn go_to(&mut self, go: palette::Go, window: &mut Window, cx: &mut Context<Self>) {
+        use palette::Go;
+        match go {
+            Go::Inbox => self.tabs.update(cx, |t, cx| t.show_inbox(cx)),
+            Go::Agent(address) => {
+                let title = self.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == address).map(|a| a.title.clone()).unwrap_or_else(|| address.clone());
+                self.tabs.update(cx, |t, cx| t.show_agent(address, title, cx));
+            }
+            Go::Run(id) => self.tabs.update(cx, |t, cx| t.show(Some(id), cx)),
+            Go::NewAgent => window.dispatch_action(Box::new(NewAgent), cx),
+            Go::OpenWaiting => window.dispatch_action(Box::new(OpenWaiting), cx),
+            Go::ToggleChanges => window.dispatch_action(Box::new(ToggleChanges), cx),
+            Go::Shortcuts => window.dispatch_action(Box::new(Shortcuts), cx),
+        }
+    }
+
+    /// Command-K's view, while it shows: for a test.
+    #[cfg(feature = "test-driver")]
+    pub(crate) fn palette(&self) -> Option<Entity<palette::PaletteView>> {
+        self.palette.as_ref().map(|(p, _)| p.clone())
+    }
+
     /// The open run's controls, as the page shows them: each only when it can do something.
     fn run_controls(&self, cx: &mut Context<Self>) -> Option<Div> {
         let run = self.tabs.read(cx).open.clone()?;
@@ -1414,6 +1462,7 @@ fn main() {
             KeyBinding::new("cmd-]", NextPane, Some("Jaynes")),
             KeyBinding::new("cmd-[", PreviousPane, Some("Jaynes")),
             KeyBinding::new("cmd-/", Shortcuts, Some("Jaynes")),
+            KeyBinding::new("cmd-k", OpenPalette, Some("Jaynes")),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-w", settings_window::CloseSettings, Some("Settings")),
             KeyBinding::new("cmd-q", Quit, None),
@@ -1426,6 +1475,8 @@ fn main() {
                 name: "View".into(),
                 disabled: false,
                 items: vec![
+                    MenuItem::action("Go to…", OpenPalette),
+                    MenuItem::separator(),
                     MenuItem::action("Runs Column", ToggleRuns),
                     MenuItem::action("Steps Panel", ToggleSteps),
                     MenuItem::action("Changes Panel", ToggleChanges),
@@ -1616,7 +1667,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, _branch: branch }
         })
     })
     .map(|handle| {
@@ -1634,6 +1685,25 @@ pub(crate) fn seen_now(window: &mut Window, cx: &App) -> looking_at::Seen {
     let front = window.is_window_active() && ns_window_visible(window);
     let stop = window.root::<Root>().flatten().and_then(|r| r.read(cx).stop_on_screen(cx));
     looking_at::Seen { front, last_input_ms: looking_at::last_input(), stop }
+}
+
+/// Command-K as a test uses it: `type <letters>`, `down`, `up`, `go`.
+#[cfg(feature = "test-driver")]
+pub(crate) fn palette_does(what: String, cx: &mut App) {
+    let Some(main) = MAIN.with(|m| m.get()) else { return };
+    let _ = main.update(cx, |_, window, cx| {
+        let Some(Some(root)) = window.root::<Root>() else { return };
+        let Some(p) = root.read(cx).palette() else { return };
+        let (verb, rest) = what.split_once(' ').unwrap_or((what.as_str(), ""));
+        let rest = rest.to_string();
+        p.update(cx, |p, cx| match verb {
+            "type" => p.typed(&rest, window, cx),
+            "down" => p.step(1, cx),
+            "up" => p.step(-1, cx),
+            "go" => p.go(cx),
+            _ => {}
+        });
+    });
 }
 
 /// A press on the open run's control named `word`, as a click on it: for a test.
