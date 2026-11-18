@@ -230,7 +230,7 @@
       "description": "What the step does to the world, by where its effect lands.",
       "oneOf": [
         {
-          "description": "Nothing outside the step's own output.",
+          "description": "Nothing that stays changed outside the step's own output. What a step sends in a request is a flow, the\nmatter of its reach and not of its effect, so a step whose network only reads has this effect.",
           "properties": {
             "kind": {
               "const": "none",

@@ -394,7 +394,8 @@ fn a_script_reaches_only_the_local_ports_its_step_names() {
     let out = start(&s, "closed", &closed, "ask");
     assert!(out.contains("blocked (Jaynes)") && out.contains("the box refused"), "a port the step does not name is closed, and the person is told the box refused it: {out}");
     assert!(world.heard.lock().expect("lock").is_empty(), "the registry was reached without being named");
-    let open = one_script(&s, "open", &format!("reach = {{ local_ports = [{}] }}", world.port), &call);
+    // it only asks the registry what it lists, so its author says it changes nothing there
+    let open = one_script(&s, "open", &format!("reach = {{ local_ports = [{}] }}\neffect = \"none\"", world.port), &call);
     let out = start(&s, "open", &open, "ask");
     assert!(out.contains("finished: delivered"), "{out}");
     assert_eq!(world.heard.lock().expect("lock").len(), 1);
@@ -631,6 +632,22 @@ fn jaynes_check_reads_a_role_of_scripts_and_says_its_runs_start_at_high_risk() {
     assert!(out.contains("✔ announce-version 1.0.0 reads: survey → stamp → announce"), "{out}");
     assert!(out.lines().any(|l| l.starts_with("! ") && l.contains("announce cannot be undone") && l.contains("high risk")), "an author is told what the step costs every run: {out}");
     assert!(out.contains("✔ \"Nothing is announced before the changelog has the version's entry\": proved"), "{out}");
+    // what each step does to the world, as resolved, so silence is never guessed
+    for line in [
+        "  survey: none: it only reads the project",
+        "  stamp: none: it changes only the run's copy, which Jaynes throws away or delivers",
+        "  announce: irreversible, as the role declares, and a repeat is harmless (idempotent); it reaches the local port 18473",
+    ] {
+        assert!(out.lines().any(|l| l == line), "{line}\nis not in:\n{out}");
+    }
+    // and each way what a step reads of the project can reach a step with network: told, not refused, not promised
+    for line in [
+        "  survey reads the project → announce needs survey, and has network (local port 18473)",
+        "  stamp writes the project → announce needs stamp, and has network (local port 18473)",
+    ] {
+        assert!(out.lines().any(|l| l == line), "{line}\nis not in:\n{out}");
+    }
+    assert!(out.contains("not refused") && out.contains("not promised"), "{out}");
 }
 
 #[test]
@@ -638,7 +655,7 @@ fn jaynes_check_refuses_a_script_step_that_is_not_well_formed_with_its_line() {
     let s = scratch("check-bad", "http://127.0.0.1:1");
     let role = one_script(&s, "bad", "effect = \"permanent\"", "exit 0\n");
     let (ok, out) = engine(&s, &["check", role.to_str().expect("path")]);
-    assert!(!ok && out.contains("✘ the role does not read") && out.contains("role.toml:4: step act has the effect \"permanent\": the one effect a step declares is \"irreversible\""), "{out}");
+    assert!(!ok && out.contains("✘ the role does not read") && out.contains("role.toml:4: step act has the effect \"permanent\": an effect is \"none\" or \"irreversible\""), "{out}");
 }
 
 #[test]

@@ -47,17 +47,24 @@
 //!
 //! # What a step does to the world
 //!
-//! `effect` answers one question: how what the step did is taken back. A step declares one effect, that it is not:
-//! `effect = "irreversible"`. Left out, the step's work stays in its output and in the run's copy, which Jaynes
-//! throws away or delivers. What a step writes in the copy is never declared: it follows from its reach. An effect
-//! that an operation undoes is not accepted yet, since nothing runs an undo; `undo` is kept for the name of that
-//! operation.
+//! `effect` answers one question: how what the step did is taken back. It is `"none"` or `"irreversible"`. Left
+//! out, it is the floor of the role's target, which a role raises and never lowers: on a repository a step changes
+//! only the run's copy, which Jaynes throws away or delivers, so the floor is none, and `jaynes check` prints the
+//! effect it resolved for every step. What a step writes in the copy is never declared: it follows from its reach.
+//! An effect that an operation undoes is not accepted yet, since nothing runs an undo; `undo` is kept for the name
+//! of that operation.
+//!
+//! A step that names a local port writes its effect, since what it does there is not read-only by construction:
+//! `"none"` when all it does there is read, which is then its author's word that nothing checks and every run's
+//! summary says so, or `"irreversible"`.
 //!
 //! Whether a repeat is harmless is another question, with its own key: `idempotent = true` says the same act sent
 //! twice with the run's `key` counts once. It is never assumed.
 //!
 //! An effect says nothing of what leaves. A step with network sends requests that no one takes back, whatever its
-//! effect: that is the matter of its reach, not of its effect.
+//! effect: that is the matter of its reach, not of its effect, so a step whose network only reads stays none.
+//! `jaynes check` prints each way content of the project can reach a step with network, over the links the engine
+//! carries between steps; it refuses none and promises nothing of them.
 //!
 //! Only a script of the role declares that it cannot be undone. Such a step starts once every answer it rests on
 //! is the person's (the engine's own rule), and the file is held to an order: its own stop sends nothing back, and
@@ -481,6 +488,62 @@ fn names_a_program_it_may_not_run(path: &Path) -> bool {
     says && std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 == 0)
 }
 
+/// What a step does at the least on a target, whatever its role says: the floor a role raises and never lowers.
+/// On a repository a step changes only the run's copy, which Jaynes throws away or delivers: none.
+fn floor(target: Target) -> Effect {
+    match target {
+        Target::Repository => Effect::None,
+    }
+}
+
+/// The effect of a step whose role wrote `said` (nothing, when it left the key out) on a target whose floor is
+/// `floor`: silence means the floor, and a role may write more than the floor and never less.
+fn raised(floor: &Effect, said: Option<Effect>) -> Result<Effect, String> {
+    match said {
+        None => Ok(floor.clone()),
+        Some(Effect::None) if floor.irreversible() => {
+            Err("writes effect = \"none\", and its target does at the least what cannot be undone: a role raises its target's floor and never lowers it".to_string())
+        }
+        Some(effect) => Ok(effect),
+    }
+}
+
+/// The network a step has, in words: the kinds it reaches. None when it has none.
+fn network_of(reach: &Reach) -> Option<String> {
+    let mut kinds = Vec::new();
+    match reach.network {
+        Network::None => {}
+        Network::Web => kinds.push("web".to_string()),
+        Network::Packages => kinds.push("packages".to_string()),
+    }
+    if !reach.local_ports.is_empty() {
+        kinds.push(local_ports_of(reach));
+    }
+    if kinds.is_empty() { None } else { Some(kinds.join(", ")) }
+}
+
+/// The local ports a step names, in words.
+fn local_ports_of(reach: &Reach) -> String {
+    let ports: Vec<String> = reach.local_ports.iter().map(u16::to_string).collect();
+    format!("local port{} {}", if ports.len() == 1 { "" } else { "s" }, ports.join(", "))
+}
+
+/// A way content of the project can reach a step with network, over the links the engine itself carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Flow {
+    /// The step that reads or writes the project.
+    pub from: String,
+    /// The step with network it can reach.
+    pub to: String,
+    /// The network that step has.
+    pub network: String,
+    /// The way, step by step.
+    pub says: String,
+}
+
+/// No more ways are told than this: a role with more has them said as a count.
+const FLOWS_TOLD: usize = 50;
+
 /// A verdict as the file writes it.
 fn word(v: &VerdictKind) -> String {
     format!("{v:?}").to_lowercase()
@@ -783,35 +846,50 @@ impl TomlRole {
                     }
                 }
             }
-            // what the step does to the world: the one effect a step declares is that it cannot be undone
+            // What the step does to the world: none, or that it cannot be undone. Left out, it is the floor of the
+            // role's target, which a role raises and never lowers.
             let not_yet = "is not accepted yet: nothing runs an undo, so a role may not promise one";
-            let mut irreversible = false;
+            let mut said: Option<Effect> = None;
             if s.by != By::Jaynes {
                 match &s.effect {
                     None => {}
                     Some(toml::Value::String(e)) => match e.as_str() {
-                        "irreversible" => irreversible = true,
-                        "none" => errs.push("writes effect = \"none\": a step with no effect leaves the key out".into()),
+                        "irreversible" => said = Some(Effect::Irreversible { idempotent: s.idempotent.unwrap_or(false) }),
+                        "none" => said = Some(Effect::None),
                         "confined" => errs.push(
                             "writes effect = \"confined\": what a step changes in the run's copy follows from its reach and is not declared, so leave the key out".into(),
                         ),
                         "compensable" | "reversible" | "undoable" => errs.push(format!("declares an effect that an operation undoes ({e}), which {not_yet}")),
-                        other => errs.push(format!("has the effect {other:?}: the one effect a step declares is \"irreversible\"")),
+                        other => errs.push(format!("has the effect {other:?}: an effect is \"none\" or \"irreversible\"")),
                     },
                     Some(toml::Value::Table(t)) if t.contains_key("undo") => errs.push(format!("declares an effect that an operation undoes, which {not_yet}")),
-                    Some(toml::Value::Table(_)) => errs.push("writes its effect as a table: it is one word, effect = \"irreversible\"".into()),
-                    Some(_) => errs.push("writes an effect that is not a word: effect = \"irreversible\", or leave the key out".into()),
+                    Some(toml::Value::Table(_)) => errs.push("writes its effect as a table: it is one word, \"none\" or \"irreversible\"".into()),
+                    Some(_) => errs.push("writes an effect that is not a word: \"none\" or \"irreversible\", or leave the key out".into()),
                 }
                 if s.undo.is_some() {
                     errs.push(format!("names an undo, which {not_yet}"));
                 }
-                if s.idempotent.is_some() && s.effect.is_none() {
-                    errs.push("says a repeat of it is harmless (idempotent) and declares no effect: idempotent goes with effect".into());
+                if s.idempotent.is_some() && (s.effect.is_none() || matches!(said, Some(Effect::None))) {
+                    errs.push("says a repeat of it is harmless (idempotent) and has no effect that could repeat: idempotent goes with effect = \"irreversible\"".into());
+                }
+                // what a step does at a local port is not read-only by construction: its author says which it is
+                if !reach.local_ports.is_empty() && s.effect.is_none() {
+                    errs.push(
+                        "names a local port and says nothing of its effect: a local port is not read-only by construction, so write effect = \"none\" when all it does there is read, or effect = \"irreversible\""
+                            .into(),
+                    );
                 }
             }
+            let resolved = match raised(&floor(file.target), said) {
+                Ok(effect) => effect,
+                Err(why) => {
+                    errs.push(why);
+                    Effect::None
+                }
+            };
             // whether a repeat is harmless lives on the step, where the core reads it (StepDecl::repeats_safely)
-            let effect = if irreversible { Effect::Irreversible { idempotent: false } } else { Effect::None };
-            let idempotent = irreversible && s.idempotent.unwrap_or(false);
+            let idempotent = resolved.irreversible() && s.idempotent.unwrap_or(false);
+            let effect = if resolved.irreversible() { Effect::Irreversible { idempotent: false } } else { resolved };
             // instructions and their placeholders
             let mut instructions = String::new();
             if let Some(v) = &s.instructions {
@@ -1086,6 +1164,150 @@ impl TomlRole {
             }
         }
         notes
+    }
+
+    /// What each step does to the world as resolved, a line each, so what a role left unsaid is never guessed: the
+    /// effect it declares, or none with why (on a repository the floor of every step, which changes only the run's
+    /// copy), and the network it has. A step whose network only reads stays none: what a request carries out is a
+    /// flow, the matter of its reach, told by [`TomlRole::flows`].
+    pub fn effects(&self) -> Vec<String> {
+        self.manifest
+            .steps
+            .iter()
+            .map(|s| {
+                let ports = !s.reach.local_ports.is_empty();
+                let effect = match &s.effect {
+                    Effect::Irreversible { .. } => {
+                        format!("irreversible, as the role declares, and a repeat is {}", if s.repeats_safely() { "harmless (idempotent)" } else { "not harmless" })
+                    }
+                    // none at a local port is the author's word: nothing there is read-only by construction
+                    _ if ports => "none, as the role says and nothing checks".to_string(),
+                    _ => format!(
+                        "none: {}",
+                        match (s.executor, s.reach.project) {
+                            (Executor::Person, _) => "it is the person's answer",
+                            (_, ProjectAccess::Write) => "it changes only the run's copy, which Jaynes throws away or delivers",
+                            (_, ProjectAccess::Read) => "it only reads the project",
+                            (_, ProjectAccess::None) => "its work stays in its output",
+                        }
+                    ),
+                };
+                let mut reaches = String::new();
+                match s.reach.network {
+                    Network::None => {}
+                    Network::Web => reaches.push_str("; its network only reads the web"),
+                    Network::Packages => reaches.push_str("; its commands reach only the package registries"),
+                }
+                if ports {
+                    reaches.push_str(&format!("; it reaches the {}", local_ports_of(&s.reach)));
+                }
+                format!("{}: {effect}{reaches}", s.name)
+            })
+            .collect()
+    }
+
+    /// Each way content of the project can reach a step with network, over the links the engine itself carries
+    /// from one step to another: what a step needs, what a check of it reads, a session that goes on, the person's
+    /// words at a stop (which go to every agent's step after it), and work sent back to the step that made it. A
+    /// step that reads or writes the project is where a way starts, so a way never passes through another such
+    /// step: it is told from that one. This is what the role's file says can happen; nothing here is enforced.
+    pub fn flows(&self) -> Vec<Flow> {
+        let m = &self.manifest;
+        let holds = |i: usize| m.steps[i].executor != Executor::Person && m.steps[i].reach.project != ProjectAccess::None;
+        let mut links: Vec<Vec<(usize, String)>> = vec![Vec::new(); m.steps.len()];
+        for (b, step) in m.steps.iter().enumerate() {
+            let name = &step.name;
+            for a in step.needs.iter().filter_map(|n| m.index(n)) {
+                links[a].push((b, format!("{name} needs {}", m.steps[a].name)));
+            }
+            for a in step.checks.iter().flat_map(|c| c.reads.iter()).filter_map(|r| m.index(r)) {
+                if !step.needs.contains(&m.steps[a].name) {
+                    links[a].push((b, format!("a check of {name} reads {}", m.steps[a].name)));
+                }
+            }
+            if step.session == SessionKind::Continue
+                && let Some(a) = m.steps[..b].iter().rposition(|s| s.executor == Executor::Agent)
+            {
+                links[a].push((b, format!("{name} goes on in {}'s session", m.steps[a].name)));
+            }
+            if let Some(stop) = &step.stop {
+                let at = if step.executor == Executor::Person { name.clone() } else { format!("{name}'s stop") };
+                for (later, told) in m.steps.iter().enumerate().skip(b + 1).filter(|(_, s)| s.executor == Executor::Agent) {
+                    links[b].push((later, format!("{} is told what the person writes at {at}", told.name)));
+                }
+                if let Some(maker) = stop.redo.as_ref().and_then(|r| m.index(r)) {
+                    links[b].push((maker, format!("{} is sent back what {name} made of its work", m.steps[maker].name)));
+                }
+            }
+        }
+        let mut flows = Vec::new();
+        for start in (0..m.steps.len()).filter(|&i| holds(i)) {
+            let from = &m.steps[start].name;
+            let begins = format!("{from} {} the project", if m.steps[start].reach.project == ProjectAccess::Write { "writes" } else { "reads" });
+            if let Some(network) = network_of(&m.steps[start].reach) {
+                flows.push(Flow { from: from.clone(), to: from.clone(), says: format!("{begins}, and has network ({network})"), network });
+            }
+            // every way from `start` that passes through no step twice and through no other step that holds the project
+            let mut trail: Vec<(usize, String)> = Vec::new();
+            let mut next: Vec<usize> = vec![0];
+            let mut at = start;
+            while let Some(tried) = next.last_mut() {
+                let found = links[at].get(*tried).cloned();
+                *tried += 1;
+                match found {
+                    // every link from here was tried: back to the step before, or done when this is where it began
+                    None => {
+                        next.pop();
+                        if trail.pop().is_none() {
+                            break;
+                        }
+                        at = trail.last().map_or(start, |(i, _)| *i);
+                    }
+                    Some((to, _)) if to == start || holds(to) || trail.iter().any(|(i, _)| *i == to) => {}
+                    Some((to, how)) => {
+                        trail.push((to, how));
+                        if let Some(network) = network_of(&m.steps[to].reach) {
+                            let way: Vec<&str> = trail.iter().map(|(_, how)| how.as_str()).collect();
+                            flows.push(Flow { from: from.clone(), to: m.steps[to].name.clone(), says: format!("{begins} → {}, and has network ({network})", way.join(" → ")), network });
+                        }
+                        at = to;
+                        next.push(0);
+                    }
+                }
+            }
+        }
+        flows
+    }
+
+    /// The ways told by [`TomlRole::flows`] as `jaynes check` prints them: each way, or that there is none and why.
+    pub fn flows_told(&self) -> Vec<String> {
+        if !self.manifest.steps.iter().any(|s| network_of(&s.reach).is_some()) {
+            return vec!["no step has network, so nothing a step reads of the project leaves through one".to_string()];
+        }
+        let flows = self.flows();
+        if flows.is_empty() {
+            return vec!["nothing a step reads of the project reaches a step with network".to_string()];
+        }
+        let mut told: Vec<String> = flows.iter().take(FLOWS_TOLD).map(|f| f.says.clone()).collect();
+        if flows.len() > FLOWS_TOLD {
+            told.push(format!("and {} more ways", flows.len() - FLOWS_TOLD));
+        }
+        told.push("these are the ways the project's content can reach the network: told, not refused and not promised".to_string());
+        told
+    }
+
+    /// What no run of the role proves, as the engine reads it from the role's file, whatever a run did: a finite
+    /// list, a sentence each. A step's word that it changes nothing at a local port, which nothing checks; and each
+    /// way the project's content can reach the network, which nothing keeps closed.
+    pub fn not_proved(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for s in &self.manifest.steps {
+            if !s.reach.local_ports.is_empty() && !s.effect.irreversible() {
+                out.push(format!("{} reaches the {}, and that it changes nothing there is the role's word: nothing checks it", s.name, local_ports_of(&s.reach)));
+            }
+        }
+        out.extend(self.flows().into_iter().take(FLOWS_TOLD).map(|f| format!("what {} holds of the project can leave by the network of {}: {}", f.from, f.to, f.says)));
+        out
     }
 
     /// Prove every promise: a line each, ✔ proved or ✘ broken with the path that breaks it, and whether all hold.
@@ -1891,10 +2113,9 @@ id = "string"
     fn the_one_effect_a_step_declares_is_that_it_cannot_be_undone() {
         let said = "effect = \"irreversible\"";
         for (name, to, says) in [
-            ("effect-none", "effect = \"none\"", "role.toml:25: step announce writes effect = \"none\": a step with no effect leaves the key out"),
             ("effect-confined", "effect = \"confined\"", "role.toml:25: step announce writes effect = \"confined\": what a step changes in the run's copy follows from its reach and is not declared, so leave the key out"),
-            ("effect-other", "effect = \"permanent\"", "role.toml:25: step announce has the effect \"permanent\": the one effect a step declares is \"irreversible\""),
-            ("effect-table", "effect = { kind = \"irreversible\" }", "role.toml:25: step announce writes its effect as a table: it is one word, effect = \"irreversible\""),
+            ("effect-other", "effect = \"permanent\"", "role.toml:25: step announce has the effect \"permanent\": an effect is \"none\" or \"irreversible\""),
+            ("effect-table", "effect = { kind = \"irreversible\" }", "role.toml:25: step announce writes its effect as a table: it is one word, \"none\" or \"irreversible\""),
         ] {
             let e = scripted_errors(name, &SCRIPTED.replacen(said, to, 1));
             assert!(e.contains(says), "{name}:\n{e}");
@@ -1902,8 +2123,11 @@ id = "string"
         // idempotent is true or false, and goes with an effect that could repeat
         let e = scripted_errors("idempotent-text", &SCRIPTED.replacen("idempotent = true", "idempotent = \"yes\"", 1));
         assert!(e.contains("role.toml:32:") && e.contains("boolean"), "{e}");
+        let alone = "role.toml:15: step stamp says a repeat of it is harmless (idempotent) and has no effect that could repeat: idempotent goes with effect = \"irreversible\"";
         let e = scripted_errors("idempotent-alone", &SCRIPTED.replacen("reach = { project = \"write\", write = [\"STAMP\"] }", "reach = { project = \"write\", write = [\"STAMP\"] }\nidempotent = true", 1));
-        assert!(e.contains("role.toml:15: step stamp says a repeat of it is harmless (idempotent) and declares no effect: idempotent goes with effect"), "{e}");
+        assert!(e.contains(alone), "{e}");
+        let e = scripted_errors("idempotent-none", &SCRIPTED.replacen("reach = { project = \"write\", write = [\"STAMP\"] }", "reach = { project = \"write\", write = [\"STAMP\"] }\neffect = \"none\"\nidempotent = true", 1));
+        assert!(e.contains(alone), "{e}");
     }
 
     #[test]
@@ -1998,6 +2222,143 @@ id = "string"
         // before it, a stop sends back as any other does: nothing has acted yet
         let before = SCRIPTED.replacen("reach = { project = \"write\", write = [\"STAMP\"] }", "reach = { project = \"write\", write = [\"STAMP\"] }\nstop = { ask = \"Stamp it so?\", verdicts = [\"keep\", \"redo\"] }", 1);
         reads("stop-before", &before);
+    }
+
+    // --- what jaynes check tells of each step: its effect as resolved, and where the project's content can go --
+
+    /// A role of an agent's steps over a project: `look` reads it, `plan` works from what look found, `search`
+    /// reads the web from the plan, `install` writes the project with the package registries in reach, and `note`
+    /// goes to the web knowing nothing of the project.
+    const FLOWING: &str = r#"
+role = "flowing"
+version = "1.0.0"
+
+[[step]]
+name = "look"
+reach = { project = "read" }
+instructions = "Look at the project for {{request}}."
+
+[[step]]
+name = "plan"
+needs = ["look"]
+instructions = "Plan from {{look}}."
+
+[[step]]
+name = "search"
+needs = ["plan"]
+reach = { network = "web" }
+instructions = "Search for what {{plan}} needs."
+
+[[step]]
+name = "install"
+needs = ["plan"]
+reach = { project = "write", write = ["**"], network = "packages", commands = true }
+instructions = "Install what {{plan}} names."
+
+[[step]]
+name = "note"
+reach = { network = "web" }
+instructions = "Read the news about {{request}}."
+"#;
+
+    #[test]
+    fn each_step_s_effect_is_told_as_resolved_so_silence_is_never_guessed() {
+        // an effect left out is the floor of the role's target: on a repository, a step changes only the run's copy
+        assert_eq!(reads("told", SCRIPTED).effects(), [
+            "survey: none: it only reads the project",
+            "stamp: none: it changes only the run's copy, which Jaynes throws away or delivers",
+            "announce: irreversible, as the role declares, and a repeat is harmless (idempotent); it reaches the local port 8125",
+        ]);
+        let unsaid = reads("told-unsaid", &SCRIPTED.replace("idempotent = true\n", "")).effects();
+        assert_eq!(unsaid[2], "announce: irreversible, as the role declares, and a repeat is not harmless; it reaches the local port 8125");
+        // a step whose network only reads stays none: what a request carries out is a flow, its reach's matter
+        assert_eq!(TomlRole::load(&role("told-flowing", FLOWING)).expect("reads").effects(), [
+            "look: none: it only reads the project",
+            "plan: none: its work stays in its output",
+            "search: none: its work stays in its output; its network only reads the web",
+            "install: none: it changes only the run's copy, which Jaynes throws away or delivers; its commands reach only the package registries",
+            "note: none: its work stays in its output; its network only reads the web",
+        ]);
+        // none, written where nothing is reached, says what silence says
+        let plain = reads("told-none", &SCRIPTED.replacen("reach = { project = \"read\" }", "reach = { project = \"read\" }\neffect = \"none\"", 1));
+        assert_eq!((plain.manifest.steps[0].effect.clone(), plain.effects()[0].as_str()), (Effect::None, "survey: none: it only reads the project"));
+        // a step of the menu and a step of the person's
+        let asked = format!("{GOOD}\n[[step]]\nname = \"approve\"\nby = \"person\"\nneeds = [\"change\"]\nstop = {{ ask = \"Good?\", verdicts = [\"keep\"] }}\n");
+        assert_eq!(TomlRole::load(&role("told-good", &asked)).expect("reads").effects(), [
+            "runner: none: it only reads the project",
+            "change: none: it changes only the run's copy, which Jaynes throws away or delivers",
+            "approve: none: it is the person's answer",
+        ]);
+    }
+
+    #[test]
+    fn a_step_that_names_a_local_port_writes_its_effect_and_none_is_then_its_author_s_word() {
+        let said = "effect = \"irreversible\"\nidempotent = true\n";
+        // silent, it is refused: what a step does at a local port is not read-only by construction
+        let e = scripted_errors("ports-silent", &SCRIPTED.replace(said, ""));
+        assert!(
+            e.contains("role.toml:25: step announce names a local port and says nothing of its effect: a local port is not read-only by construction, so write effect = \"none\" when all it does there is read, or effect = \"irreversible\""),
+            "{e}"
+        );
+        // none, written, is accepted as the author's word: nothing checks it, and the engine says so
+        let asserted = reads("ports-none", &SCRIPTED.replace(said, "effect = \"none\"\n"));
+        assert_eq!(asserted.manifest.steps[2].effect, Effect::None, "the engine treats it as no effect");
+        assert_eq!(asserted.effects()[2], "announce: none, as the role says and nothing checks; it reaches the local port 8125");
+        assert!(asserted.not_proved().contains(&"announce reaches the local port 8125, and that it changes nothing there is the role's word: nothing checks it".to_string()), "{:?}", asserted.not_proved());
+        // an effect it declares as what cannot be undone is no word to check: the engine holds it to that
+        assert!(!reads("ports-irreversible", SCRIPTED).not_proved().iter().any(|n| n.contains("the role's word")));
+    }
+
+    #[test]
+    fn a_role_raises_its_target_s_floor_and_never_writes_below_it() {
+        // on a repository a step changes only the run's copy, so the floor is none and nothing can be below it
+        assert_eq!(floor(Target::Repository), Effect::None);
+        let acts = Effect::Irreversible { idempotent: false };
+        // left out, the effect is the floor; a role may raise it
+        assert_eq!(raised(&Effect::None, None), Ok(Effect::None));
+        assert_eq!(raised(&Effect::None, Some(Effect::Irreversible { idempotent: true })), Ok(Effect::Irreversible { idempotent: true }));
+        assert_eq!(raised(&acts, None), Ok(acts.clone()), "silence on a target that acts means it acts");
+        assert_eq!(raised(&acts, Some(Effect::Irreversible { idempotent: true })), Ok(Effect::Irreversible { idempotent: true }));
+        // and never lower it
+        let e = raised(&acts, Some(Effect::None)).expect_err("below the floor");
+        assert_eq!(e, "writes effect = \"none\", and its target does at the least what cannot be undone: a role raises its target's floor and never lowers it");
+    }
+
+    #[test]
+    fn each_way_the_project_s_content_can_reach_the_network_is_told() {
+        let said = |name: &str, text: &str| -> Vec<String> { TomlRole::load(&role(name, text)).unwrap_or_else(|e| panic!("{}", e.join("\n"))).flows().into_iter().map(|f| f.says).collect() };
+        // through what a step needs; a step that reads the project and has network is a way by itself; a step that
+        // knows nothing of the project is none
+        assert_eq!(said("flows", FLOWING), [
+            "look reads the project → plan needs look → search needs plan, and has network (web)",
+            "install writes the project, and has network (packages)",
+        ]);
+        // a way that would pass through a step that reads the project itself is told from that step, once
+        let through = FLOWING.replacen("name = \"search\"\nneeds = [\"plan\"]\nreach = { network = \"web\" }", "name = \"search\"\nneeds = [\"plan\"]\nreach = { project = \"read\", network = \"web\" }", 1);
+        assert_eq!(said("flows-through", &through)[0], "search reads the project, and has network (web)");
+        assert_eq!(said("flows-through-2", &through).len(), 2, "look's way through plan ends at a step that reads the project itself");
+        // a session that goes on carries what the agent before it saw
+        let session = FLOWING.replacen("name = \"plan\"\nneeds = [\"look\"]\n", "name = \"plan\"\nsession = \"continue\"\n", 1).replace("Plan from {{look}}.", "Plan.");
+        assert_eq!(said("flows-session", &session)[0], "look reads the project → plan goes on in look's session → search needs plan, and has network (web)");
+        // what a check of the step reads
+        let check = FLOWING.replacen("name = \"plan\"\nneeds = [\"look\"]\ninstructions = \"Plan from {{look}}.\"", "name = \"plan\"\ninstructions = \"Plan.\"\nchecks = [{ script = \"steps/survey.sh\", about = \"it fits what look found\", reads = [\"look\"] }]", 1);
+        let dir = scripted("flows-check", &check);
+        assert_eq!(TomlRole::load(&dir).unwrap_or_else(|e| panic!("{}", e.join("\n"))).flows()[0].says, "look reads the project → a check of plan reads look → search needs plan, and has network (web)");
+        // the person's words at a stop go on to every agent's step after it
+        let stop = FLOWING.replacen("instructions = \"Look at the project for {{request}}.\"", "instructions = \"Look at the project for {{request}}.\"\nstop = { ask = \"Is this the place?\", verdicts = [\"keep\", \"redo\"] }", 1);
+        let told = said("flows-stop", &stop);
+        assert!(told.contains(&"look reads the project → note is told what the person writes at look's stop, and has network (web)".to_string()), "{told:?}");
+        assert!(told.contains(&"look reads the project → search is told what the person writes at look's stop, and has network (web)".to_string()), "{told:?}");
+        // a role's script that reaches a local port
+        let ports: Vec<String> = reads("flows-ports", SCRIPTED).flows().into_iter().map(|f| f.says).collect();
+        assert_eq!(ports, ["stamp writes the project → announce needs stamp, and has network (local port 8125)"]);
+        // and a role where nothing has network tells none
+        let none = TomlRole::load(&role("flows-none", GOOD)).expect("reads");
+        assert!(none.flows().is_empty());
+        assert_eq!((none.flows_told().len(), none.flows_told()[0].as_str()), (1, "no step has network, so nothing a step reads of the project leaves through one"));
+        // a way names its ends, for what reads it after a run
+        let first = &TomlRole::load(&role("flows-ends", FLOWING)).expect("reads").flows()[0];
+        assert_eq!((first.from.as_str(), first.to.as_str(), first.network.as_str()), ("look", "search", "web"));
     }
 
     #[test]

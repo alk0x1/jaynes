@@ -182,7 +182,8 @@ pub enum Network {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
-    /// Nothing outside the step's own output.
+    /// Nothing that stays changed outside the step's own output. What a step sends in a request is a flow, the
+    /// matter of its reach and not of its effect, so a step whose network only reads has this effect.
     #[default]
     None,
     /// Changes only Jaynes's copies, which are thrown away or kept by Jaynes.
