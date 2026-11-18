@@ -16,6 +16,31 @@ fn python() -> String {
     "python3".to_string()
 }
 
+/// A command run at a terminal, as when the person types it: what follows `tty()` is the program and its arguments.
+/// Python's pty is the same on macOS and Linux, where script(1) takes its arguments differently. Its own loop, not
+/// pty.spawn, which on macOS's Python 3.9 waits for ever once the program is done.
+const TTY: &str = r#"
+import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+while True:
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        break
+    if not data:
+        break
+    os.write(1, data)
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+"#;
+
+fn tty() -> Command {
+    let mut c = Command::new(python());
+    c.args(["-c", TTY]);
+    c
+}
+
 struct Scratch {
     home: PathBuf,
     project: PathBuf,
@@ -90,10 +115,11 @@ fn types(e: &[Value]) -> Vec<String> {
 const OUTPUT: &str = r#"printf '{"summary":"hello becomes hi","files":["greeting.txt"]}' > .jaynes/output.json"#;
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
     let s = scratch("small");
     let prompt = s.home.parent().expect("base").join("prompt.txt");
-    let agent = format!("cat > {} && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'", prompt.display());
+    let agent = format!("cat > {} && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'", prompt.display());
     let out = start(&s, "small", &agent);
     // the role's instructions, with the data Jaynes filled in wrapped in tags
     let said = std::fs::read_to_string(&prompt).expect("prompt");
@@ -117,11 +143,12 @@ fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
     let s = scratch("fix");
     // first the agent writes "hey" (the suite wants "hi"); asked to fix, in its session, it writes "hi"
     let agent = format!(
-        "if [ -n \"$JAYNES_SESSION\" ]; then sed -i '' 's/hey/hi/' greeting.txt; else sed -i '' 's/hello/hey/' greeting.txt; fi && {OUTPUT} && echo '{{\"session\":\"s1\"}}'"
+        "if [ -n \"$JAYNES_SESSION\" ]; then perl -pi -e 's/hey/hi/' greeting.txt; else perl -pi -e 's/hello/hey/' greeting.txt; fi && {OUTPUT} && echo '{{\"session\":\"s1\"}}'"
     );
     let out = start(&s, "fix", &agent);
     assert!(out.contains("finished: delivered"), "{out}");
@@ -135,9 +162,10 @@ fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
     let s = scratch("risky");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     let out = start(&s, "risky", &agent);
     assert!(out.contains("risk raised to high"), "{out}");
     assert!(out.contains("waiting: delivered; your answers can still correct it"), "{out}");
@@ -147,8 +175,8 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
     let (ok, out) = engine(&s, &["answer", "risky", &q, "change=redo:smaller", "--send"]);
     assert!(!ok && out.contains("sending it back is yours"), "{out}");
     // the person, at a terminal, keeps it
-    let script = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "answer", "risky", &q, "--send"])
+    let script = tty()
+        .args([BIN, "answer", "risky", &q, "--send"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .output()
@@ -158,9 +186,10 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s() {
     let s = scratch("release");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "release", &agent);
     let e = events(&s, "release");
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
@@ -172,6 +201,7 @@ fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s()
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_program_that_does_not_start_spends_no_attempt() {
     let s = scratch("fault");
     let out = start(&s, "fault", "echo 'no such program' >&2; exit 3");
@@ -197,10 +227,11 @@ fn the_small_change_role_conforms() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     let s = scratch("inbox");
     let role = root().join("crates/shell/tests/roles/small-change");
-    let agent = format!("sleep 4 && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("sleep 4 && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let child = Command::new(BIN)
         .args(["start", "--run", "inbox", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
@@ -223,13 +254,47 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     assert!(!t.contains(&"Delivered".to_string()), "nothing is delivered while halted: {t:?}");
 }
 
+/// Where Jaynes has no box for a project's commands, a run never runs them open: it stops at once, says why, and
+/// nothing of the project runs, the agent included.
 #[test]
+#[cfg(not(target_os = "macos"))]
+fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
+    let s = scratch("no-box");
+    let ran = s.home.parent().expect("base").join("agent-ran");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let started = std::time::Instant::now();
+    let out = Command::new(BIN)
+        .args(["start", "--run", "no-box", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:touch {} && sleep 60", ran.display())])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env_remove("JAYNES_UNBOXED")
+        .output()
+        .expect("start");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "the run waited: {:?}\n{said}", started.elapsed());
+    assert!(said.contains("blocked") && said.contains("no box for project commands"), "the person is told why: {said}");
+    assert!(!ran.exists(), "the agent ran without a box: {said}");
+    let e = events(&s, "no-box");
+    let t = types(&e);
+    assert!(t.contains(&"Blocked".to_string()), "{t:?}");
+    assert!(e.iter().any(|e| e["type"] == "Blocked" && e["fault"] == "jaynes"), "the machine's fault, not the role's: {e:?}");
+    assert!(e.iter().filter(|e| e["type"] == "AttemptFailed").all(|e| e["spent"] == false), "a missing box spends no attempt: {e:?}");
+    assert!(!t.iter().any(|e| e == "StepDone" || e == "Delivered" || e == "SessionStarted"), "nothing ran: {t:?}");
+    // the missing box is the machine's to fix, as a missing Chrome is: not the role's, and no attempt is spent
+    assert!(said.contains("No attempt was spent") && !said.contains("the role says"), "{said}");
+    assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "the project is as it was");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
     let s = scratch("halt-now");
     let role = root().join("crates/shell/tests/roles/small-change");
     // the first turn would work for a minute; the one after the resume is quick
     let once = s.home.parent().expect("base").join("once");
-    let agent = format!("if [ -e {o} ]; then sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}; else touch {o}; sleep 60; fi", o = once.display());
+    let agent = format!("if [ -e {o} ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else touch {o}; sleep 60; fi", o = once.display());
     let child = Command::new(BIN)
         .args(["start", "--run", "halt-now", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
@@ -240,7 +305,15 @@ fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("start");
+    // the agent starts within seconds, or the run ended before it could: then say why rather than wait for ever
+    let mut child = child;
+    let waiting = std::time::Instant::now();
     while !once.exists() {
+        if let Ok(Some(_)) = child.try_wait() {
+            let done = child.wait_with_output().expect("wait");
+            panic!("the run ended before its agent started:\n{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        }
+        assert!(waiting.elapsed() < std::time::Duration::from_secs(60), "the agent never started");
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     let asked = std::time::Instant::now();
@@ -254,8 +327,8 @@ fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
     assert!(t.contains(&"Halted".to_string()) && t.contains(&"AttemptInterrupted".to_string()), "{t:?}");
     assert!(!t.contains(&"AttemptFailed".to_string()), "a halt spends no attempt: {t:?}");
     // the person resumes, at a terminal (script gives the command one), and the step runs again from where it was
-    let out = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "resume", "halt-now"])
+    let out = tty()
+        .args([BIN, "resume", "halt-now"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
@@ -278,6 +351,7 @@ fn bug_project(name: &str) -> Scratch {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     let s = bug_project("fixbug");
     let prompts = s.home.join("prompts");
@@ -334,9 +408,10 @@ fn post(port: u16, path: &str, body: &str, cookie: &str) -> Value {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_answers_as_the_person_only_with_its_key() {
     let s = scratch("page");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "page", &agent);
     let e = events(&s, "page");
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
@@ -395,6 +470,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let s = bug_project("redo");
     let prompts = s.home.join("prompts");
@@ -411,8 +487,8 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     assert!(c.output().expect("start").status.success());
     let q = events(&s, "redo").into_iter().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "reproduce").expect("asked")["question"]["id"].as_str().expect("id").to_string();
     // the person, at a terminal, sends reproduce back after the fix was made
-    let mut c = Command::new("script");
-    c.args(["-q", "/dev/null", BIN, "answer", "redo", &q, "examples-1=redo:also an empty name", "--send"]);
+    let mut c = tty();
+    c.args([BIN, "answer", "redo", &q, "examples-1=redo:also an empty name", "--send"]);
     env(&mut c);
     let said = String::from_utf8_lossy(&c.output().expect("answer").stdout).to_string();
     let e = events(&s, "redo");
@@ -436,12 +512,13 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_attempt() {
     let s = scratch("crash");
     let mark = s.home.join("mark");
     std::fs::create_dir_all(&mark).expect("dir");
     let agent = format!(
-        "if [ ! -e {m}/started ]; then echo '{{\"type\":\"system\",\"session_id\":\"s9\",\"model\":\"m9\",\"permissionMode\":\"default\",\"tools\":[\"Read\",\"Bash\"]}}'; touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; echo \"$JAYNES_SESSION\" > {m}/resumed; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}",
+        "if [ ! -e {m}/started ]; then echo '{{\"type\":\"system\",\"session_id\":\"s9\",\"model\":\"m9\",\"permissionMode\":\"default\",\"tools\":[\"Read\",\"Bash\"]}}'; touch {m}/started; sleep 20; touch {m}/orphan-finished; exit 0; fi; echo \"$JAYNES_SESSION\" > {m}/resumed; perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}",
         m = mark.display()
     );
     let role = root().join("crates/shell/tests/roles/small-change");
@@ -467,7 +544,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
     let _waited = engine_process.wait();
     let pidfile = s.home.join("runs/crash/agent.pid");
     let pgid = std::fs::read_to_string(&pidfile).expect("the agent's process group is noted");
-    let alive = |g: &str| Command::new("kill").args(["-0", &format!("-{}", g.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    let alive = |g: &str| Command::new("kill").args(["-0", "--", &format!("-{}", g.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
     assert!(alive(&pgid), "the agent outlived the engine");
     // the next process stops what was left, and the run goes on with an attempt that is not counted against the agent
     let (ok, out) = engine(&s, &["continue", "crash"]);
@@ -489,7 +566,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
 #[test]
 fn no_run_goes_on_over_a_record_that_was_changed() {
     let s = scratch("tamper");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     start(&s, "tamper", &agent);
     let db = s.home.join("record.sqlite3");
     let ok = Command::new("sqlite3")
@@ -505,9 +582,10 @@ fn no_run_goes_on_over_a_record_that_was_changed() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_halts_resumes_and_records_a_correction() {
     let s = scratch("acts");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "acts", &agent);
     let port = 19750 + (std::process::id() % 1000) as u16;
     let _page = Command::new(BIN)
@@ -578,12 +656,13 @@ impl Mcp {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let s = scratch("leave");
     let mark = s.home.join("mark");
     std::fs::create_dir_all(&mark).expect("dir");
     // the agent works for a while: the leave server is asked while its turn runs
-    let agent = format!("touch {}/started; sleep 8; sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}", mark.display());
+    let agent = format!("touch {}/started; sleep 8; perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}", mark.display());
     let role = root().join("crates/shell/tests/roles/small-change");
     let run = Command::new(BIN)
         .args(["start", "--run", "leave", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
@@ -628,8 +707,8 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     // while it waits for the person, the turn's clock stands still: the server marks the wait
     let waiting = s.home.join("runs/leave/leave-waiting");
     assert!(waiting.exists(), "the wait is marked");
-    let answered = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "answer", "leave", &q, "leave=drop", "--context", "not outside the project", "--send"])
+    let answered = tty()
+        .args([BIN, "answer", "leave", &q, "leave=drop", "--context", "not outside the project", "--send"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("answer");
     assert!(String::from_utf8_lossy(&answered.stdout).contains("recorded"), "{}", String::from_utf8_lossy(&answered.stdout));
@@ -666,6 +745,7 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_reverts_it() {
     let s = bug_project("merge");
     let said = fix_bug_run(&s, "merge");
@@ -677,8 +757,8 @@ fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_revert
     // an agent may not undo; the person at a terminal does
     let (ok, out) = engine(&s, &["undo", "merge", "--note", "not now"]);
     assert!(!ok && out.contains("only you undo"), "{out}");
-    let undo = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "undo", "merge", "--note", "not now"])
+    let undo = tty()
+        .args([BIN, "undo", "merge", "--note", "not now"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("undo");
     assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}", String::from_utf8_lossy(&undo.stdout));
@@ -687,6 +767,7 @@ fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_revert
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_merge_waits_for_a_clean_checkout_and_says_why() {
     let s = bug_project("dirty");
     std::fs::write(s.project.join("greet.sh"), "echo \"hello there $1\"\n").expect("write");
@@ -727,6 +808,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_is_installed_by_name_and_only_when_it_conforms() {
     let s = scratch("roles");
     let (ok, out) = engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]);
@@ -740,7 +822,7 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
     let (ok, out) = engine(&s, &["add", bad.to_str().expect("path")]);
     assert!(!ok && out.contains("does not conform"), "{out}");
     // a run starts with the installed role by its name
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let (ok, out) = engine(&s, &["start", "--run", "byname", "--role", "small-change", "--project", s.project.to_str().expect("path"),
                                  "--request", "say hi", "--agent", &format!("command:{agent}")]);
     assert!(ok && out.contains("finished: delivered"), "{out}");
@@ -749,10 +831,11 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     let s = scratch("mcp");
     assert!(engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]).0);
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     // the agent program of the run is a command; the MCP start uses Claude by default, so start here and read through MCP
     start(&s, "viamcp", &agent);
     let child = Command::new(BIN)
@@ -786,6 +869,7 @@ fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_machine_that_cannot_run_the_tests_stops_the_run_before_any_agent_works() {
     if Command::new("python3").args(["-c", "import pytest"]).status().is_ok_and(|s| s.success()) {
         eprintln!("skipped: this machine's python3 has pytest");
@@ -806,6 +890,7 @@ fn a_machine_that_cannot_run_the_tests_stops_the_run_before_any_agent_works() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn abandoning_a_run_stops_its_agent_at_once() {
     let s = scratch("abandon");
     let mark = s.home.join("mark");
@@ -823,12 +908,12 @@ fn abandoning_a_run_stops_its_agent_at_once() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     let pgid = std::fs::read_to_string(s.home.join("runs/abandon/agent.pid")).expect("noted");
-    let abandoned = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "abandon", "abandon"])
+    let abandoned = tty()
+        .args([BIN, "abandon", "abandon"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("abandon");
     let said = String::from_utf8_lossy(&abandoned.stdout).to_string();
-    let alive = Command::new("kill").args(["-0", &format!("-{}", pgid.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    let alive = Command::new("kill").args(["-0", "--", &format!("-{}", pgid.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
     assert!(!alive, "the agent was stopped at once: {said}");
     let _done = run.wait();
     assert!(!mark.join("finished").exists());
@@ -846,9 +931,10 @@ impl Drop for Page {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_person_starts_a_run_from_the_page() {
     let s = scratch("new");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let port = 17750 + (std::process::id() % 1000) as u16;
     let _page = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
@@ -928,13 +1014,14 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_their_words() {
     let s = scratch("impossible");
     let prompts = s.home.parent().expect("base").join("prompts");
     std::fs::create_dir_all(&prompts).expect("dir");
     // first turn: it cannot be done as asked; second turn, in the same session: it does what the person said
     let agent = format!(
-        "cat > {p}/turn-${{JAYNES_SESSION:-1}}; if [ -n \"$JAYNES_SESSION\" ]; then sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}; else echo 'the request asks for hi and for hello at once' > .jaynes/impossible.txt; echo '{{\"session\":\"s1\"}}'; fi",
+        "cat > {p}/turn-${{JAYNES_SESSION:-1}}; if [ -n \"$JAYNES_SESSION\" ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else echo 'the request asks for hi and for hello at once' > .jaynes/impossible.txt; echo '{{\"session\":\"s1\"}}'; fi",
         p = prompts.display()
     );
     let out = start(&s, "impossible", &agent);
@@ -944,8 +1031,8 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
     let e = events(&s, "impossible");
     assert!(e.iter().any(|e| e["type"] == "AttemptImpossible"), "{:?}", types(&e));
     let q = e.iter().rfind(|e| e["type"] == "InputNeeded").expect("asked")["question"]["id"].as_str().expect("id").to_string();
-    let answered = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "answer", "impossible", &q, "impossible=change:only hi", "--send"])
+    let answered = tty()
+        .args([BIN, "answer", "impossible", &q, "impossible=change:only hi", "--send"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
         .output().expect("answer");
     assert!(answered.status.success(), "{}", String::from_utf8_lossy(&answered.stdout));
@@ -968,6 +1055,7 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
 /// The engine killed at many moments of a run that merges: each time the next process recovers, the run delivers,
 /// the fix lands exactly once, nothing is left running and the record holds.
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_run_killed_at_any_moment_recovers_and_lands_once() {
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let role = root().join("crates/shell/tests/roles/fix-bug");
@@ -1004,8 +1092,8 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
             if events(&s, &run).iter().any(|e| e["type"] == "Delivered") {
                 break;
             }
-            let mut c = Command::new("script");
-            c.args(["-q", "/dev/null", BIN, "continue", &run]);
+            let mut c = tty();
+            c.args([BIN, "continue", &run]);
             envs(&mut c);
             let out = c.output().expect("continue");
             said.push_str(&String::from_utf8_lossy(&out.stdout));
@@ -1027,11 +1115,12 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_finished_run_leaves_no_toolchain_cache_behind() {
     let s = scratch("caches");
     // what Go leaves: a build cache, and modules it makes read-only
     let fill = r#"mkdir -p "$GOCACHE/ab" "$GOPATH/pkg/mod/m@v1" "$npm_config_cache" && echo x > "$GOCACHE/ab/o" && echo x > "$GOPATH/pkg/mod/m@v1/m.go" && echo x > "$npm_config_cache/p" && chmod -R a-w "$GOPATH/pkg/mod""#;
-    let agent = format!("{fill} && sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("{fill} && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let out = start(&s, "caches", &agent);
     assert!(out.contains("finished: delivered"), "{out}");
     let exchange = s.home.join("runs/caches/project/.jaynes");
@@ -1042,9 +1131,10 @@ fn a_finished_run_leaves_no_toolchain_cache_behind() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     let s = scratch("sweep");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     start(&s, "old", &agent);
     assert!(s.home.join("runs/old/project/.git").exists());
     // the next start clears the copies of runs finished longer ago than the time kept (none kept here)
@@ -1073,6 +1163,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_s_own_check_is_a_script_run_in_the_box_judging_by_its_exit() {
     let s = scratch("script");
     let role = s.home.parent().expect("base").join("odd");
@@ -1143,9 +1234,10 @@ fn a_role_whose_promise_does_not_hold_is_refused_with_the_path_that_breaks_it() 
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_committing_it() {
     let s = scratch("diedone");
-    let agent = format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let role = root().join("crates/shell/tests/roles/small-change");
     let out = Command::new(BIN)
         .args(["start", "--run", "diedone", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
@@ -1162,6 +1254,7 @@ fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_commi
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     let s = bug_project("diemerge");
     let prompts = s.home.join("prompts");
@@ -1184,8 +1277,8 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     let merges = String::from_utf8_lossy(&log.stdout).lines().filter(|l| l.contains("merged")).count();
     assert_eq!(merges, 1, "the fix landed {merges} times: {said}");
     // the merge made before the process died is the run's, so Undo reverts it
-    let undo = Command::new("script")
-        .args(["-q", "/dev/null", BIN, "undo", "diemerge", "--note", "not now"])
+    let undo = tty()
+        .args([BIN, "undo", "diemerge", "--note", "not now"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .output().expect("undo");
     assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}", String::from_utf8_lossy(&undo.stdout));
@@ -1278,6 +1371,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     let s = scratch("photo");
     let role = root().join("crates/shell/tests/roles/directions");
@@ -1316,9 +1410,9 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
 
 /// Answer as the person, at a terminal.
 fn as_person(s: &Scratch, args: &[&str]) -> String {
-    let mut all = vec!["-q", "/dev/null", BIN];
+    let mut all = vec![BIN];
     all.extend_from_slice(args);
-    let out = Command::new("script")
+    let out = tty()
         .args(&all)
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -1332,6 +1426,7 @@ fn question_of(s: &Scratch, run: &str, n: usize) -> Value {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
     let s = scratch("choose");
     let calls = s.home.parent().expect("base").join("calls.txt");
@@ -1354,6 +1449,7 @@ fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() {
     let s = scratch("adjust");
     // the second time it draws, the agent gives Sun alone with Ink's colour
@@ -1377,6 +1473,7 @@ fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() 
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
     let s = scratch("again");
     // sent back, the agent gives Ink alone, changed

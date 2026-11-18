@@ -135,7 +135,7 @@ pub fn stop_left(pidfile: &Path) -> bool {
     let _gone = std::fs::remove_file(pidfile);
     let Ok(pgid) = text.trim().parse::<u32>() else { return false };
     let group = format!("-{pgid}");
-    let alive = |sig: &str| Command::new("kill").args([sig, &group]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    let alive = |sig: &str| Command::new("kill").args([sig, "--", &group]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     if !alive("-0") {
         return false;
     }
@@ -204,7 +204,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             }
         }
     });
-    let group = |sig: &str| Command::new("kill").args([sig, &format!("-{pid}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    let group = |sig: &str| Command::new("kill").args([sig, "--", &format!("-{pid}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     let mut timed_out = false;
     let mut stalled = false;
     let mut waited = Duration::ZERO;

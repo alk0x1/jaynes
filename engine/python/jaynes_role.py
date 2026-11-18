@@ -52,8 +52,9 @@ class Fail:
 
 @dataclass
 class Blocked:
-    """The check could not judge at all, such as a tool it runs that did not start: the engine's fault, never the
-    agent's, and no attempt is spent."""
+    """The check could not judge at all, or the role's own step could not be done on this machine, such as a tool it
+    runs that did not start or no box to run the project's commands in: the engine's or the machine's fault, never
+    the agent's or the role's, and no attempt is spent."""
 
     reason: str
 
@@ -220,4 +221,6 @@ def _result(r: Any) -> dict[str, Any]:
         return {"reply": "needs_input", "items": r.items, "offered": r.offered, "about": r.about}
     if isinstance(r, Refused):
         return {"reply": "refused", "reason": r.reason}
+    if isinstance(r, Blocked):
+        return {"reply": "error", "message": r.reason}
     return {"reply": "result", "output": r}

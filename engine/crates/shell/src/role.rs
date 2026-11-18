@@ -118,7 +118,7 @@ impl RoleProgram {
                 Ok(Some(_)) => break,
                 Ok(None) if started.elapsed() > self.timeout => {
                     // the whole group: a check's suite runs in the role's children
-                    let _killed = Command::new("kill").args(["-KILL", &format!("-{}", child.id())]).status();
+                    let _killed = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status();
                     let _waited = child.wait();
                     if let Some(f) = &self.pidfile {
                         let _gone = std::fs::remove_file(f);
@@ -133,7 +133,7 @@ impl RoleProgram {
             let _gone = std::fs::remove_file(f);
         }
         // what the call left running in its group ends with it; then read for a moment more, at most
-        let group = |sig: &str| Command::new("kill").args([sig, &format!("-{}", child.id())]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        let group = |sig: &str| Command::new("kill").args([sig, "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
         if group("-0") {
             let _term = group("-TERM");
             std::thread::sleep(Duration::from_millis(300));

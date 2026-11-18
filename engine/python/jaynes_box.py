@@ -332,17 +332,15 @@ HARMLESS = ("xcrun_db",)
 
 def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str | None:
     """Why the project's tests cannot run here at all, before any agent works on them, or None. A machine without
-    the test runner is not the agent's to fix: the role refuses at once, with what to install."""
+    the test runner is not the agent's to fix: the role refuses at once, with what to install. Raises
+    ``Unavailable`` where there is no box: that is the machine's to fix, not the role's."""
     program = shlex.split(runner.suite)[0] if runner.suite.strip() else ""
     if not program:
         return None
     probe = f"command -v {shlex.quote(program)} >/dev/null || {{ echo 'not found: {program}'; exit 127; }}"
     if runner.kind == "pytest":
         probe += f" && {shlex.quote(program)} -c 'import pytest'"
-    try:
-        ran = run(project, probe, source=source, timeout=120)
-    except Unavailable as e:
-        return str(e)
+    ran = run(project, probe, source=source, timeout=120)
     if ran.code == 0:
         return None
     said = ran.output.strip().splitlines()[-1] if ran.output.strip() else f"exit {ran.code}"
@@ -365,13 +363,18 @@ CHROMES = ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 SIZE = (1440, 900)
 
 
+# the names a Chrome or Chromium goes by on the PATH, as Linux installs them
+CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+
+
 def chrome() -> str | None:
-    """The Chrome Jaynes photographs with: ``JAYNES_CHROME``, or one installed where macOS keeps apps."""
+    """The Chrome Jaynes photographs with: ``JAYNES_CHROME``, one installed where macOS keeps apps, or one on the
+    PATH under the names Linux gives it."""
     named = os.environ.get("JAYNES_CHROME", "")
     for path in ([named] if named else []) + [*CHROMES, *(str(Path.home()) + p for p in CHROMES)]:
         if path and os.access(path, os.X_OK):
             return path
-    return None
+    return next((found for name in CHROME_NAMES if (found := shutil.which(name))), None)
 
 
 def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tuple[int, ...] = ()) -> str | None:

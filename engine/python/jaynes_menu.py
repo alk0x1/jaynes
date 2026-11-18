@@ -69,7 +69,10 @@ def find_suite(call: Call, params: Params) -> Any:
         if params.get("required"):
             return Refused(NO_RUNNER)
         return {"kind": "", "suite": "", "each": "", "found": ""}
-    why = box.missing(Path(project), found, source=_source(call))
+    try:
+        why = box.missing(Path(project), found, source=_source(call))
+    except box.Unavailable as e:
+        return Blocked(str(e))
     if why:
         return Refused(why)
     return found.to_dict()
