@@ -18,6 +18,10 @@ is said at the end, so nobody reads more into it.
   yours only from a browser holding its key: a random key made on this machine, kept in `~/.jaynes/engine/page.key`.
 - **The app.** The desktop app talks to the page on `127.0.0.1` and to herdr-core, which keeps your terminals on this
   machine. Its settings are a file in `~/.jaynes`.
+- **The guard.** The guard that asks before what cannot be undone in git reaches no network and writes no file. Its
+  switch and the owners whose repositories pass freely are in `~/.jaynes/guard.json`, which only the page's Setup
+  writes; when you set no owners, the owner that passes is the GitHub user `gh` is signed in as, read from gh's own
+  `hosts.yml`. A command it does not hold runs no program; for one it holds, it asks `git` for the remote's address.
 
 ## What lands in your repository
 
@@ -37,9 +41,6 @@ in one step of the menu from its own library, only for these:
 - **Updating.** `jaynes update` reads the newest release's manifest and runs its installer with `curl`. Where no
   release is built for the machine, it builds the newest source with `cargo install --git`. It updates the Claude
   Code plugin through Claude Code's own `claude plugin` commands.
-- **The guard's owner.** The guard that asks before what cannot be undone in git learns whose repositories pass
-  freely: the owners you set, or else your GitHub login, asked once of `gh api user` and saved in
-  `~/.jaynes/guard.json`.
 - **Downloading the pages a step lists.** Only when a role uses the menu's `fetch-pages` step, which must declare
   `network = "web"`. Jaynes itself downloads the pages an earlier step listed, at most 12 a step, and holds each
   address to rules before anything is sent: `https` on port 443 only, no name or password in it, at most 2,048

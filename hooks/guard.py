@@ -6,8 +6,9 @@ answering "ask"; everything else gets no answer at all, so Claude Code's own per
 blocks (never exits 2): in claude -p, where nobody can answer, Claude Code turns the ask into a deny by itself.
 
 Settings: $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json) with "on" and "owners". Repositories on GitHub
-whose owner is a free owner pass freely. With no valid owners list, the person's GitHub user is found once with
-``gh api user --jq .login`` and saved there, so later commands never wait on the network.
+whose owner is a free owner pass freely. With no valid owners list, the free owner is the GitHub user gh is signed
+in as, read from gh's own hosts file. The guard never goes to the network and never writes a file: where it was not
+needed it does nothing, and a command it does not hold runs no program at all.
 """
 
 from __future__ import annotations
@@ -15,12 +16,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))
-GH_TIMEOUT = 5.0
 GIT_TIMEOUT = 5.0
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 
@@ -56,6 +54,9 @@ def configured_owners(data: dict[str, object]) -> list[str] | None:
 
 def run_quiet(argv: list[str], cwd: str | None, timeout: float) -> str | None:
     """stdout of argv, or None if it fails, is missing or takes longer than timeout; it never waits past it."""
+    # imported here: subprocess is most of the guard's own start, and most commands need no program run
+    import signal
+    import subprocess
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GH_PROMPT_DISABLED="1", GIT_OPTIONAL_LOCKS="0")
     try:
         proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -74,33 +75,47 @@ def run_quiet(argv: list[str], cwd: str | None, timeout: float) -> str | None:
     return out.decode(errors="replace") if proc.returncode == 0 else None
 
 
+def gh_hosts_path() -> str:
+    """gh's hosts file, where gh keeps who it is signed in as: $GH_CONFIG_DIR, else $XDG_CONFIG_HOME/gh, else
+    ~/.config/gh, as gh itself looks."""
+    folder = (os.environ.get("GH_CONFIG_DIR")
+              or (os.path.join(os.environ["XDG_CONFIG_HOME"], "gh") if os.environ.get("XDG_CONFIG_HOME") else "")
+              or os.path.join(os.path.expanduser("~"), ".config", "gh"))
+    return os.path.join(folder, "hosts.yml")
+
+
 def github_user() -> str | None:
-    out = run_quiet(["gh", "api", "user", "--jq", ".login"], None, GH_TIMEOUT)
-    login = (out or "").strip()
-    return login if OWNER.fullmatch(login) else None
+    """The GitHub user gh is signed in as on github.com, read from its hosts file: no network, no program run.
+    The file is YAML; only the ``user:`` line of the ``github.com:`` block is read, at that block's first indent."""
+    try:
+        with open(gh_hosts_path(), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except (OSError, ValueError):
+        return None
+    inside, indent = False, None
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        depth = len(line) - len(line.lstrip(" "))
+        if depth == 0:
+            inside, indent = line.strip() in ("github.com:", '"github.com":', "'github.com':"), None
+            continue
+        if not inside:
+            continue
+        indent = depth if indent is None else indent
+        m = re.fullmatch(r"user:\s*[\"']?([^\"'\s#]+)[\"']?\s*(?:#.*)?", line.strip())
+        if depth == indent and m and OWNER.fullmatch(m.group(1)):
+            return m.group(1)
+    return None
 
 
 def free_owners() -> list[str]:
-    """The configured owners; else the person's GitHub user, found with gh and saved; else none."""
-    data = read_settings()
-    owners = configured_owners(data)
+    """The owners the person set; else the GitHub user gh is signed in as; else none. Nothing is saved."""
+    owners = configured_owners(read_settings())
     if owners is not None:
         return owners
     login = github_user()
-    if login is None:
-        return []
-    saved = {"on": is_on(data), "owners": [login], "github_user": login}
-    path = settings_path()
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(saved, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
-    except OSError:
-        pass
-    return [login]
+    return [login] if login else []
 
 
 # --- shell words --------------------------------------------------------------
@@ -428,7 +443,8 @@ def holds(cmd: Simple) -> list[tuple[str, Target]]:
     named = positional[2] if key[0] == "repo" and len(positional) > 2 else repo_flag
     if named:
         repo = gh_repo(named)
-        login = read_settings().get("github_user")
+        saved = read_settings().get("github_user")  # an earlier guard saved it there
+        login = github_user() or saved
         if repo is None and "/" not in named and isinstance(login, str) and OWNER.fullmatch(login):
             repo = (login, named)  # gh puts a bare name under the person's own GitHub user
         elif repo is None and "/" not in named:
@@ -541,7 +557,7 @@ def decide(event: dict[str, object]) -> str | None:
             if target.repo[0].lower() in owners:
                 continue
             why = ("whose owner is not one of your free owners" if owners else
-                   "and you have no free owners yet (gh found no GitHub user)")
+                   "and you have no free owners yet (gh is signed in as no GitHub user)")
             said.append(f"{says.format(where=target.words)}, {why}.")
         else:
             said.append(f"{says.format(where=target.words)}, which the guard cannot tell belongs to one of your "

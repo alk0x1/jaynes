@@ -384,6 +384,10 @@ plugin's hooks run before every shell command and edit. The person's GitHub
 user is found once with gh and saved in `~/.jaynes/guard.json` with the
 switch; Setup shows the guard first, with the switch and the free owners.
 
+**Changed 2026-11-18.** The guard no longer asks GitHub for the user nor saves it: with no owners set, the
+free owner is the user gh is signed in as, read from gh's own hosts file, so the guard reaches no network and
+writes no file in a session that never needed it.
+
 ## 2026-11-09: The software roles stay public and keep improving
 
 **Decided.** The roles that build software (build-feature, fix-bug and
