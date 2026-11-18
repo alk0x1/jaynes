@@ -71,7 +71,7 @@ fn choosing(home: &Path) -> String {
             Do::Probe { step, .. } => Input::ProbeEnded { step, ok: true, reason: String::new() },
             Do::RunAgent(t) => {
                 let items = ["Ink", "Sun", "Moss"].map(|n| Item { id: n.to_lowercase(), label: n.into(), digest: Digest(n.into()) }).to_vec();
-                Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items, changed: vec![], usage: Default::default(), session: None } }
+                Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items, changed: vec![], usage: Default::default(), session: None }, network: None }
             }
             Do::RunChecks { step, attempt, fix, checks, .. } => {
                 Input::ChecksEnded { step, attempt, fix, results: checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass }).collect() }

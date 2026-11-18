@@ -79,6 +79,7 @@ fn delivered(run: &mut Run, step: &str) -> (Vec<Event>, Vec<Command>) {
         attempt,
         fix: 0,
         outcome: AttemptOutcome::Delivered { output: Digest(format!("{step}-out")), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None },
+        network: None,
     })
 }
 

@@ -4,7 +4,7 @@
 //! out the commands, and reports what happened as the next input. A refusal records nothing.
 
 use crate::digest::Digest;
-use crate::event::{Effects, Event, Fault, Outcome, Read};
+use crate::event::{Effects, Event, Fault, Network, Outcome, Read};
 use crate::io::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Input};
 use crate::manifest::{CheckKind, Executor, ProjectAccess, SessionKind};
 use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Verdict, VerdictKind};
@@ -103,7 +103,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
         Input::Start { .. } => return refuse("the run already started"),
         Input::Tick => c.advance(),
         Input::ProbeEnded { step, ok, reason } => c.probe_ended(step, *ok, reason)?,
-        Input::AttemptEnded { step, attempt, fix, outcome } => c.attempt_ended(step, *attempt, *fix, outcome)?,
+        Input::AttemptEnded { step, attempt, fix, outcome, network } => c.attempt_ended(step, *attempt, *fix, outcome, network)?,
         Input::ChecksEnded { step, attempt, fix, results } => c.checks_ended(step, *attempt, *fix, results)?,
         Input::PermissionAsked { step, attempt, ask } => c.permission(step, *attempt, ask)?,
         Input::SessionStarted { step, attempt, session, confirmed } => {
@@ -723,9 +723,11 @@ impl Ctx {
         self.emit(Event::StaleReport { step: step.to_string(), attempt, what: what.to_string() });
     }
 
-    fn attempt_ended(&mut self, step: &str, attempt: u32, fix: u32, outcome: &AttemptOutcome) -> Result<(), Refusal> {
+    fn attempt_ended(&mut self, step: &str, attempt: u32, fix: u32, outcome: &AttemptOutcome, network: &Option<Network>) -> Result<(), Refusal> {
         let i = self.index(step)?;
         if self.run.steps[i].status != (Status::Running { attempt, fix }) {
+            // what the network of a stale report was goes to no event, on purpose: the attempt it speaks of was
+            // already closed, with its own, and a report that changes nothing records nothing of it either
             self.stale(step, attempt, "an attempt that is no longer under way ended");
             return Ok(());
         }
@@ -742,6 +744,7 @@ impl Ctx {
                     changed: changed.clone(),
                     usage: *usage,
                     session: session.clone(),
+                    network: network.clone(),
                 });
                 self.reassess(i, changed);
                 if decl.checks.is_empty() {
@@ -759,6 +762,7 @@ impl Ctx {
                     reasons: reasons.clone(),
                     usage: *usage,
                     spent: !role,
+                    network: network.clone(),
                 });
                 if role {
                     self.block(Some(step.to_string()), Fault::Role, format!("the role's own step {step} failed: {}", reasons.join("; ")));
@@ -773,6 +777,7 @@ impl Ctx {
                     reasons: vec![reason.clone()],
                     usage: Default::default(),
                     spent: false,
+                    network: network.clone(),
                 });
                 // G4: the fault is Jaynes's either way; an act may have happened, and the person is told to look first
                 if self.may_have_acted(i) {
@@ -785,7 +790,7 @@ impl Ctx {
                 }
             }
             AttemptOutcome::Interrupted { reason } => {
-                self.emit(Event::AttemptInterrupted { step: step.to_string(), attempt, reason: reason.clone() });
+                self.emit(Event::AttemptInterrupted { step: step.to_string(), attempt, reason: reason.clone(), network: network.clone() });
                 if self.may_have_acted(i) {
                     self.emit(Event::MayHaveActed { step: step.to_string(), attempt });
                     self.block(Some(step.to_string()), Fault::MayHaveActed, format!("{step}, which acts on something real, was stopped from outside before its outcome was known: it may have acted ({reason}). Look, then continue or abandon the run"));
@@ -822,7 +827,7 @@ impl Ctx {
                 if role {
                     return refuse("only an agent says a step cannot be done; a role step refuses");
                 }
-                self.emit(Event::AttemptImpossible { step: step.to_string(), attempt, reason: reason.clone(), usage: *usage, session: session.clone() });
+                self.emit(Event::AttemptImpossible { step: step.to_string(), attempt, reason: reason.clone(), usage: *usage, session: session.clone(), network: network.clone() });
                 let question = Question { back: Default::default(),
                     id: self.question_id(step),
                     step: step.to_string(),
@@ -848,6 +853,7 @@ impl Ctx {
                     reasons: vec![reason.clone()],
                     usage: Default::default(),
                     spent: false,
+                    network: network.clone(),
                 });
                 self.block(Some(step.to_string()), Fault::Role, format!("the role says {step} cannot be done: {reason}"));
             }
@@ -964,7 +970,7 @@ impl Ctx {
         }
         if decl.executor == Executor::Role || self.run.steps[i].narrow.is_some() {
             let reasons: Vec<String> = shape.into_iter().chain(behaviour).collect();
-            self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons: reasons.clone(), usage: Default::default(), spent: false });
+            self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons: reasons.clone(), usage: Default::default(), spent: false, network: None });
             self.block(Some(step.to_string()), Fault::Role, format!("the role's own step {step} failed its checks: {}", reasons.join("; ")));
             return Ok(());
         }
@@ -976,7 +982,7 @@ impl Ctx {
             return Ok(());
         }
         let reasons = shape.into_iter().chain(behaviour).collect();
-        self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons, usage: Default::default(), spent: true });
+        self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons, usage: Default::default(), spent: true, network: None });
         self.after_spent(i);
         Ok(())
     }
@@ -988,6 +994,7 @@ impl Ctx {
             reasons: vec![reason.to_string()],
             usage: Default::default(),
             spent: false,
+            network: None,
         });
         self.block(Some(step.to_string()), Fault::Jaynes, reason.to_string());
     }
@@ -1027,7 +1034,7 @@ impl Ctx {
                         );
                         self.block(Some(name), Fault::MayHaveActed, reason);
                     } else {
-                        self.emit(Event::AttemptInterrupted { step: name, attempt, reason: "Jaynes stopped while it ran".to_string() });
+                        self.emit(Event::AttemptInterrupted { step: name, attempt, reason: "Jaynes stopped while it ran".to_string(), network: None });
                     }
                 }
                 Status::Checking { attempt, fix } => {

@@ -666,16 +666,18 @@ def programs_of(program: Path) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(out))
 
 
-def agent_in_box(work: Path, scratch: Path, argv: list[str], read_only: bool, no_commands: bool) -> list[str]:
+def agent_in_box(work: Path, scratch: Path, argv: list[str], read_only: bool, no_commands: bool,
+                 ports: Iterable[int] = ()) -> list[str]:
     """The argv that runs an agent program inside the box, the program started directly, never through a shell: on
-    macOS only, since no other system's box holds a list of programs yet. Never unboxed."""
+    macOS only, since no other system's box holds a list of programs yet. Never unboxed. ``ports`` are the local
+    ports it may reach, the engine's proxy to its model; nothing else of the network."""
     if inside():
         raise Unavailable(INSIDE)
     if not available():
         raise Unavailable("Jaynes has no box for an agent program on this system yet, and runs none without one")
     program = Path(os.path.realpath(argv[0]))
     writable = (work / ".jaynes", scratch) if read_only else (work, scratch)
-    box = Box(writable, readable=(work,), runs=programs_of(program) if no_commands else ())
+    box = Box(writable, readable=(work,), ports=tuple(int(p) for p in ports), runs=programs_of(program) if no_commands else ())
     return [str(SANDBOX_EXEC), "-p", profile(box), str(program), *argv[1:]]
 
 
@@ -1334,10 +1336,11 @@ if __name__ == "__main__":
         cut = args.index("--")
         flags, argv = set(args[3:cut]), args[cut + 1:]
         try:
-            print(json.dumps(agent_in_box(Path(args[1]), Path(args[2]), argv, "--read-only" in flags, "--no-commands" in flags)))
+            ports = [int(f.split("=", 1)[1]) for f in flags if f.startswith("--port=")]
+            print(json.dumps(agent_in_box(Path(args[1]), Path(args[2]), argv, "--read-only" in flags, "--no-commands" in flags, ports)))
         except Unavailable as e:
             print(e)
             sys.exit(1)
         sys.exit(0)
-    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT] | agent WORK SCRATCH -- PROGRAM ARGS...")
+    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT] | agent WORK SCRATCH [--port=N] -- PROGRAM ARGS...")
     sys.exit(2)

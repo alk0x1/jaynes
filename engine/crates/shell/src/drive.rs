@@ -998,11 +998,12 @@ impl<'a> Driver<'a> {
             attempt: turn.attempt,
             fix: turn.fix,
             outcome: AttemptOutcome::Fault { reason },
+            network: None,
         };
         let Some(i) = run.manifest.index(&turn.step) else { return fault("no such step".into()) };
         if let Some(keep) = &turn.keep {
             let outcome = self.kept_alone(run, i, &turn, keep).unwrap_or_else(|reason| AttemptOutcome::Fault { reason });
-            return Input::AttemptEnded { step: turn.step.clone(), attempt: turn.attempt, fix: turn.fix, outcome };
+            return Input::AttemptEnded { step: turn.step.clone(), attempt: turn.attempt, fix: turn.fix, outcome, network: None };
         }
         let cwd = self.cwd(run, i, turn.attempt);
         let exchange = cwd.join(EXCHANGE);
@@ -1130,13 +1131,16 @@ impl<'a> Driver<'a> {
         }
         let done = self.setup.agent.turn(spec);
         let _kept = std::fs::write(exchange.join(format!("applied-{}-{}.json", turn.attempt, turn.fix)), done.applied.to_string());
+        // what the agent reached of the network goes to the record from the turn itself, never from the copy, which
+        // the agent writes
+        let network = done.network;
         let outcome = match done.ended {
             Ended::Fault { reason } => AttemptOutcome::Fault { reason },
             Ended::Interrupted { reason } => AttemptOutcome::Interrupted { reason },
             Ended::Failed { reason, usage } => AttemptOutcome::Failed { reasons: vec![reason], usage },
             Ended::Ran { usage, session, .. } => self.delivered(run, i, &turn, &exchange, usage, session),
         };
-        Input::AttemptEnded { step: turn.step, attempt: turn.attempt, fix: turn.fix, outcome }
+        Input::AttemptEnded { step: turn.step, attempt: turn.attempt, fix: turn.fix, outcome, network }
     }
 
     fn delivered(&self, run: &Run, i: usize, turn: &AgentTurn, exchange: &Path, usage: jaynes_core::event::Usage, session: Option<String>) -> AttemptOutcome {
@@ -1308,7 +1312,7 @@ impl<'a> Driver<'a> {
 
     #[allow(clippy::too_many_arguments)]
     fn role_step(&mut self, run: &Run, step: String, round: u32, attempt: u32, given: Vec<Read>, previous: Option<Digest>, answers: Vec<Answer>, key: Option<String>) -> Input {
-        let end = |outcome| Input::AttemptEnded { step: step.clone(), attempt, fix: 0, outcome };
+        let end = |outcome| Input::AttemptEnded { step: step.clone(), attempt, fix: 0, outcome, network: None };
         let given = match self.given(&given) {
             Ok(g) => g,
             Err(e) => return end(AttemptOutcome::Fault { reason: e }),
@@ -1769,7 +1773,7 @@ mod tests {
         let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };
         store.decide("w", &probe).expect("probe");
         let attempt = store.state("w").expect("state").expect("run").steps[0].attempt;
-        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None } };
+        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None }, network: None };
         store.decide("w", &done).expect("done");
         let _ = run;
         let waiting = store.state("w").expect("state").expect("run");

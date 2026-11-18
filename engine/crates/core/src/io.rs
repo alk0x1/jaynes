@@ -2,7 +2,7 @@
 //! The core never touches a disk, a network, a process or a clock: the shell does, and reports back.
 
 use crate::digest::Digest;
-use crate::event::{Read, Usage};
+use crate::event::{Network, Read, Usage};
 use crate::manifest::{CheckDecl, Reach};
 use crate::question::{Answer, Ask, By, Item, Question, VerdictKind};
 use crate::risk::{Ceiling, Changed, Risk};
@@ -48,6 +48,10 @@ pub enum Input {
         attempt: u32,
         fix: u32,
         outcome: AttemptOutcome,
+        /// What the agent reached of the network, as the engine's proxy counted it; copied to the event that closes
+        /// the attempt.
+        #[serde(default)]
+        network: Option<Network>,
     },
     ChecksEnded {
         step: String,

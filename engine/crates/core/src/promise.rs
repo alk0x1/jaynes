@@ -313,7 +313,7 @@ fn options(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
 fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> Vec<Move> {
     let step = &turn.step;
     let mut out = Vec::new();
-    let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: turn.attempt, fix: turn.fix, outcome };
+    let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: turn.attempt, fix: turn.fix, outcome, network: None };
     let mv = |input, says: String, trouble| Move { input, says, trouble, sends_back: None, answers: Some(k) };
     let i = r.manifest.index(step);
     // a round that keeps a choice alone is the role's: it gives the chosen items as they were, or fails like a role
@@ -363,7 +363,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             }
             Command::RunRole { step, round, attempt, .. } => {
                 let (d, items) = output(step, *round, "role");
-                let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: *attempt, fix: 0, outcome };
+                let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: *attempt, fix: 0, outcome, network: None };
                 out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None }), format!("{step} done"), false));
                 out.push(mv(ended(AttemptOutcome::Refused { reason: "refused".into() }), format!("{step} refuses"), true));
                 out.push(mv(ended(AttemptOutcome::Fault { reason: "the role crashed".into() }), format!("{step}'s role program crashes"), true));

@@ -13,6 +13,11 @@ path = "src/lib.rs"
 name = "jaynes"
 path = "src/main.rs"
 
+[features]
+# A test build: the model's host of an agent program is sent to an address the test names (JAYNES_TEST_MODEL_AT).
+# Never in a build for people, which refuses to run an agent with that variable set.
+test-model-host = []
+
 [dependencies]
 jaynes-core = { path = "../core" }
 serde.workspace = true

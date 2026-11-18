@@ -636,7 +636,7 @@ impl World {
                     89..=94 => AttemptOutcome::Fault { reason: "claude did not start".to_string() },
                     _ => AttemptOutcome::Interrupted { reason: "quota".to_string() },
                 };
-                self.send(Input::AttemptEnded { step: turn.step, attempt: turn.attempt, fix: turn.fix, outcome });
+                self.send(Input::AttemptEnded { step: turn.step, attempt: turn.attempt, fix: turn.fix, outcome, network: None });
             }
             Command::RunRole { step, attempt, .. } => {
                 let outcome = match self.rng.below(100) {
@@ -655,7 +655,7 @@ impl World {
                     92..=95 => AttemptOutcome::Refused { reason: "no test runner".to_string() },
                     _ => AttemptOutcome::Fault { reason: "the role program crashed".to_string() },
                 };
-                self.send(Input::AttemptEnded { step, attempt, fix: 0, outcome });
+                self.send(Input::AttemptEnded { step, attempt, fix: 0, outcome, network: None });
             }
             Command::RunChecks { step, attempt, fix, checks, .. } => {
                 let mut results = Vec::new();
@@ -851,6 +851,7 @@ impl World {
                     attempt: s.attempt - 1,
                     fix: 0,
                     outcome: AttemptOutcome::Delivered { output: Digest("late".to_string()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None },
+                    network: None,
                 });
                 assert!(self.log.len() <= before + 1, "seed {}: G6 a late report did more than being recorded", self.seed);
             }
@@ -1077,6 +1078,7 @@ fn deliver(run: &mut Run, step: &str, attempt: u32, output: &str, items: Vec<Ite
             usage: Usage { seconds: 5, tokens: 100, cached: 0 },
             session: Some("s".to_string()),
         },
+        network: None,
     })
 }
 
@@ -1290,11 +1292,11 @@ fn g14_an_act_whose_outcome_was_not_recorded_is_not_started_again_on_its_own() {
         ("Jaynes stopped", Box::new(|run: &mut Run| feed(run, Input::Recovered))),
         ("stopped from outside", Box::new(|run: &mut Run| {
             let attempt = run.steps[0].attempt;
-            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { reason: "halted".to_string() } })
+            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { reason: "halted".to_string() }, network: None })
         })),
         ("a fault", Box::new(|run: &mut Run| {
             let attempt = run.steps[0].attempt;
-            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the box died".to_string() } })
+            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the box died".to_string() }, network: None })
         })),
     ];
     for effect in [Effect::Irreversible { idempotent: false }, Effect::Compensable { undo: "revert".to_string() }] {
@@ -1408,6 +1410,7 @@ fn g5_the_ceiling_stops_new_attempts() {
         attempt: 1,
         fix: 0,
         outcome: AttemptOutcome::Failed { reasons: vec!["slow".to_string()], usage: Usage { seconds: 99_999, tokens: 1, cached: 0 } },
+        network: None,
     });
     assert!(matches!(run.phase, Phase::Blocked { fault: Fault::Ceiling, .. }), "{:?}", run.phase);
 }
@@ -1426,6 +1429,7 @@ fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
             attempt: t,
             fix: 0,
             outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false, ..Default::default() }], usage: Usage::default(), session: None },
+            network: None,
         });
         assert_eq!(run.risk, Risk::High, "G7 {path} left the run at low risk");
     }
@@ -1441,7 +1445,7 @@ fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
-    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None } });
+    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None }, network: None });
     (run, c)
 }
 
@@ -1507,6 +1511,7 @@ fn g7_touching_ci_raises_the_risk_and_owes_the_full_path() {
             usage: Usage::default(),
             session: None,
         },
+        network: None,
     });
     assert_eq!(run.risk, Risk::High);
     assert!(c.iter().any(|c| matches!(c, Command::Probe { step, .. } if step == "review")), "the owed step runs: {c:?}");
@@ -1547,6 +1552,7 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
             usage: Usage { seconds: 30, tokens: 900, cached: 0 },
             session: Some("s1".to_string()),
         },
+        network: None,
     });
     let q = c.iter().find_map(|c| match c { Command::Ask { question } => Some(question.clone()), _ => None }).expect("the person is asked");
     assert!(q.items[0].label.contains("contradict"), "{q:?}");
@@ -1588,7 +1594,7 @@ fn an_attempt_cut_off_from_outside_goes_on_in_its_session_and_a_failed_one_start
     assert_eq!((turn.attempt, turn.session.as_deref(), run.steps[0].spent), (2, Some("s1"), 0));
     // the agent's own failure: the next attempt starts afresh
     feed(&mut run, Input::SessionStarted { step: "build".to_string(), attempt: 2, session: "s1".to_string(), confirmed: Default::default() });
-    let c = feed(&mut run, Input::AttemptEnded { step: "build".to_string(), attempt: 2, fix: 0, outcome: AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: Usage::default() } });
+    let c = feed(&mut run, Input::AttemptEnded { step: "build".to_string(), attempt: 2, fix: 0, outcome: AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: Usage::default() }, network: None });
     let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("again");
     assert_eq!((turn.attempt, turn.session.as_deref()), (3, None));
 }
