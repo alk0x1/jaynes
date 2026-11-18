@@ -1,10 +1,12 @@
 ---
 name: jaynes
-description: Carry out an agreed code change through Jaynes, which runs Claude Code through a method one step at a time, checks each step by code and stops for the person's answer where it matters. Use whenever the person approves a plan or a change to a project's code in this conversation ("faça", "pode fazer", "go ahead", "do it", "ship it"), when they ask to run a task with Jaynes, and when they want a new Jaynes role (a method for a kind of work). Not when they say to do it without Jaynes ("sem a Jaynes", "without Jaynes"): then make the change yourself.
+description: Carry out an agreed code change through Jaynes, which runs Claude Code through a method one step at a time, checks each step by code and stops for the person's answer where it matters. Use whenever the person approves a plan or a change to a project's code in this conversation ("faça", "pode fazer", "go ahead", "do it", "ship it"), when they ask to run a task with Jaynes, and when they want a new Jaynes role (a method for a kind of work). Not when they say to do it without Jaynes ("sem a Jaynes", "without Jaynes"), nor when the session says Jaynes is off in it (JAYNES_OFF): then make the change yourself.
 argument-hint: <task>
 ---
 
 Carry out this change through Jaynes: $ARGUMENTS
+
+If this session said at its start that Jaynes is off in it (JAYNES_OFF), stop here and make the change yourself.
 
 When the skill starts from an approved plan, the task is that plan, in full, with what was agreed in conversation.
 

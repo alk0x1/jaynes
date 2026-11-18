@@ -30,9 +30,19 @@ fn tools() -> Value {
     ])
 }
 
+/// Whether Jaynes is turned off in this session: JAYNES_OFF set to anything but nothing, 0, false, no or off. The
+/// plugin's session hook reads it the same way (hooks/session.py).
+pub fn off() -> bool {
+    std::env::var("JAYNES_OFF").is_ok_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
+}
+
+const OFF: &str = "Jaynes is off in this session (JAYNES_OFF is set): it offers no tools here, and agreed changes are made without it. Its guard keeps its own switch. Unset JAYNES_OFF to use Jaynes.";
+
 pub fn serve(home: &Path) -> Result<(), String> {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
+    // read once: the server is the session's, started with its environment
+    let off = off();
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
@@ -41,10 +51,11 @@ pub fn serve(home: &Path) -> Result<(), String> {
             "initialize" => json!({"jsonrpc": "2.0", "id": id, "result": {
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": {"tools": {}}, "serverInfo": {"name": "jaynes", "version": jaynes_core::ENGINE},
-                "instructions": "Jaynes runs agents through a role's method one step at a time and asks the person only where it matters. These tools read what waits and do the little an agent may; the person answers the rest on the page."}}),
-            "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tools()}}),
+                "instructions": if off { OFF } else { "Jaynes runs agents through a role's method one step at a time and asks the person only where it matters. These tools read what waits and do the little an agent may; the person answers the rest on the page." }}}),
+            "tools/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": if off { json!([]) } else { tools() }}}),
             "tools/call" => {
-                let (text, error) = match call(home, msg["params"]["name"].as_str().unwrap_or(""), &msg["params"]["arguments"]) {
+                let called = if off { Err(OFF.to_string()) } else { call(home, msg["params"]["name"].as_str().unwrap_or(""), &msg["params"]["arguments"]) };
+                let (text, error) = match called {
                     Ok(t) => (t, false),
                     Err(e) => (e, true),
                 };

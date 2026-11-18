@@ -1,6 +1,17 @@
 {
-  "description": "Guards against git and GitHub actions that cannot be undone by asking before them",
+  "description": "Guards against git and GitHub actions that cannot be undone by asking before them, and says at the start of a session what of Jaynes is off in it",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
