@@ -392,7 +392,7 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -477,6 +477,9 @@ impl Island {
                 if let Some(s) = crate::settings_window::Section::named(rest) {
                     crate::settings_window::with_open(cx, |v, _, cx| v.show(s, cx));
                 }
+            }
+            "settings-fonts" => {
+                crate::settings_window::with_open(cx, |v, _, cx| v.toggle_fonts(cx));
             }
             "settings-pick" => {
                 let (name, value) = rest.split_once(' ').unwrap_or((rest, ""));

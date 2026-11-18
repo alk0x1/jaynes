@@ -135,6 +135,12 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// The font list, opened or closed as a click on the font does.
+    pub fn toggle_fonts(&mut self, cx: &mut Context<Self>) {
+        self.font_open = !self.font_open;
+        cx.notify();
+    }
+
     pub fn show(&mut self, section: Section, cx: &mut Context<Self>) {
         self.section = section;
         self.font_open = false;
@@ -207,14 +213,25 @@ impl SettingsView {
             .cursor_pointer()
             .child(current.clone())
             .child(div().text_color(rgb(look::FAINT)).text_size(px(10.)).child("▾"))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.font_open = !this.font_open;
-                cx.notify();
-            }));
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_fonts(cx)));
         if !self.font_open {
             return button.into_any_element();
         }
-        let mut list = div().mt(px(4.)).min_w(px(180.)).py(px(4.)).rounded(px(8.)).bg(rgb(look::PANEL_2)).border_1().border_color(rgb(look::LINE_2)).shadow_lg().occlude();
+        // a click anywhere else closes it, as a menu closes
+        let mut list = div()
+            .mt(px(4.))
+            .min_w(px(180.))
+            .py(px(4.))
+            .rounded(px(8.))
+            .bg(rgb(look::PANEL_2))
+            .border_1()
+            .border_color(rgb(look::LINE_2))
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.font_open = false;
+                cx.notify();
+            }));
         for f in fonts_offered(&current) {
             let on = f == current;
             let value = f.clone();
@@ -230,7 +247,7 @@ impl SettingsView {
                     .on_click(cx.listener(move |this, _, _, cx| this.pick("terminal_font", &value, cx))),
             );
         }
-        div().child(button).child(deferred(anchored().child(list)).with_priority(1)).into_any_element()
+        div().child(button).child(deferred(anchored().snap_to_window().child(list)).with_priority(1)).into_any_element()
     }
 
     fn option_key(&self, p: &Prefs, cx: &mut Context<Self>) -> Div {
