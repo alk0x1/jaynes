@@ -85,7 +85,25 @@ fn engine(s: &Scratch, codex: Option<&Path>, args: &[&str]) -> (bool, String) {
 }
 
 fn start(s: &Scratch, run: &str, codex: Option<&Path>) -> String {
-    let role = root().join("crates/shell/tests/roles/small-change");
+    start_role(s, run, &root().join("crates/shell/tests/roles/small-change"), codex)
+}
+
+/// A role of one step, `change`, that reaches the project as `reach` says.
+fn one_step_role(s: &Scratch, reach: &str) -> PathBuf {
+    let dir = s.base.join("role");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("role.toml"), format!(
+        "role = \"one-step\"\nversion = \"1.0.0\"\n\n[[step]]\nname = \"change\"\nreach = {reach}\ninstructions = \"Do the task: {{{{request}}}}\"\nchecks = [{{ use = \"field-required\", field = \"summary\" }}]\n\n[step.output]\nsummary = \"string\"\n"
+    )).expect("write");
+    dir
+}
+
+/// A file of the run's copy as the turn left it.
+fn in_copy(s: &Scratch, run: &str, file: &str) -> String {
+    std::fs::read_to_string(s.home.join("runs").join(run).join("project").join(file)).unwrap_or_default()
+}
+
+fn start_role(s: &Scratch, run: &str, role: &Path, codex: Option<&Path>) -> String {
     let (_, out) = engine(s, codex, &[
         "start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
         "--request", "say hi instead of hello", "--agent", &format!("codex:{MODEL}"),
@@ -130,13 +148,13 @@ fn completed(input: u64, cached: u64, output: u64) -> String {
 }
 
 /// A stand-in for `codex`: it notes what it was given, runs `body` in the step's folder, prints `body`'s events and
-/// exits with `code`.
+/// exits with `code`. It notes with the shell's own commands only, so it runs in a step where no command may.
 fn stand_in(s: &Scratch, body: &str, code: i32) -> PathBuf {
     let bin = s.base.join("bin");
     std::fs::create_dir_all(&bin).expect("dir");
     let path = bin.join("codex");
     let script = format!(
-        "#!/bin/sh\nmkdir -p .jaynes\n{{ echo '--- turn'; for a in \"$@\"; do echo \"$a\"; done; echo '--- input'; cat; echo; }} >> .jaynes/codex-given.txt\n{body}\nexit {code}\n"
+        "#!/bin/sh\n{{ echo '--- turn'; for a in \"$@\"; do echo \"$a\"; done; echo '--- input'; while IFS= read -r l || [ -n \"$l\" ]; do echo \"$l\"; done; echo; }} >> .jaynes/codex-given.txt\n{body}\nexit {code}\n"
     );
     std::fs::write(&path, script).expect("write");
     use std::os::unix::fs::PermissionsExt;
@@ -313,4 +331,59 @@ fn the_real_codex_is_refused_and_says_why() {
     assert!(out.contains("Codex") && out.contains("model"), "it does not say why: {out}");
     let e = events(&s, "refused");
     assert!(!e.iter().any(|e| e["type"] == "AttemptStarted" && e["step"] == "change"), "the real Codex started: {:?}", types(&e));
+}
+
+
+/// What the step may not do, tried with the shell's own commands and with a program of the machine's (which writes only
+/// in Jaynes's exchange, where every step may): each noted.
+const TRIES: &str = "{ printf 'hi\\n' > greeting.txt 2>/dev/null && echo wrote >> .jaynes/notes || echo refused-the-write >> .jaynes/notes; }; \
+    { /usr/bin/touch .jaynes/made-by-a-command 2>/dev/null && echo ran >> .jaynes/notes || echo refused-the-command >> .jaynes/notes; }";
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+fn a_step_that_only_reads_the_project_keeps_codex_from_writing_it() {
+    let s = scratch("reads");
+    let role = one_step_role(&s, "{ project = \"read\", commands = true }");
+    let codex = stand_in(&s, &format!("{} && {TRIES}; {OUTPUT} && {}", started("th-1"), completed(10, 0, 10)), 0);
+    let out = start_role(&s, "reads", &role, Some(&codex));
+    let notes = in_copy(&s, "reads", ".jaynes/notes");
+    assert!(notes.contains("refused-the-write") && !notes.contains("wrote"), "Codex wrote the project in a step that reads it: {notes}\n{out}");
+    assert_eq!(in_copy(&s, "reads", "greeting.txt"), "hello\n", "{out}");
+    // its commands may run: the step has them
+    assert!(notes.contains("ran"), "{notes}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+fn a_step_without_commands_lets_codex_run_nothing_but_itself() {
+    let s = scratch("no-commands");
+    let role = one_step_role(&s, "{ project = \"write\", write = [\"**\"], commands = false }");
+    let codex = stand_in(&s, &format!("{} && {TRIES}; {OUTPUT} && {}", started("th-1"), completed(10, 0, 10)), 0);
+    let out = start_role(&s, "no-commands", &role, Some(&codex));
+    let notes = in_copy(&s, "no-commands", ".jaynes/notes");
+    assert!(notes.contains("refused-the-command") && !notes.contains("\nran") && !notes.starts_with("ran"), "Codex ran a command in a step without commands: {notes}\n{out}");
+    assert!(!s.home.join("runs/no-commands/project/.jaynes/made-by-a-command").exists());
+    // it may write the project: the step does
+    assert!(notes.contains("wrote") && out.contains("finished: delivered"), "{notes}\n{out}");
+    assert_eq!(on_branch(&s, "no-commands", "greeting.txt"), "hi\n");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
+fn a_write_the_box_refused_that_the_step_may_make_is_jaynes_s_fault_and_spends_no_attempt() {
+    let failed = |path: &str| say(&format!(r#"{{"type":"item.completed","item":{{"id":"item_0","type":"file_change","changes":[{{"path":"{path}","kind":"update"}}],"status":"failed"}}}}"#));
+    // the step may write greeting.txt: the box refusing it is the guards Jaynes set being wrong
+    let s = scratch("refused-write");
+    let role = one_step_role(&s, "{ project = \"write\", write = [\"**\"], commands = true }");
+    let codex = stand_in(&s, &format!("{} && {} && {OUTPUT} && {}", started("th-1"), failed("greeting.txt"), completed(10, 0, 10)), 0);
+    let out = start_role(&s, "refused-write", &role, Some(&codex));
+    assert!(out.contains("blocked (Jaynes)") && out.contains("greeting.txt"), "{out}");
+    let e = events(&s, "refused-write");
+    assert!(e.iter().all(|e| !(e["type"] == "AttemptFailed" && e["spent"] == true)), "{:?}", types(&e));
+    // a step that only reads may not: the same refusal is no fault of Jaynes's
+    let s = scratch("refused-read");
+    let role = one_step_role(&s, "{ project = \"read\", commands = true }");
+    let codex = stand_in(&s, &format!("{} && {} && {OUTPUT} && {}", started("th-1"), failed("greeting.txt"), completed(10, 0, 10)), 0);
+    let out = start_role(&s, "refused-read", &role, Some(&codex));
+    assert!(!out.contains("blocked (Jaynes)"), "{out}");
 }

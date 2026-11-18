@@ -89,6 +89,7 @@ class Box:
     local: bool = False  # any local port: a test suite's own servers, and whatever else listens; never the internet
     readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
     home: Path = field(default_factory=Path.home)
+    runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
 
 
 def hidden_paths(box: Box) -> list[Path]:
@@ -186,6 +187,8 @@ def profile(box: Box) -> str:
         # a suite's own servers on socket files, such as the role tools: only in its own folders, a rule each, since
         # a socket rule with several paths holds only the first
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
+    if box.runs:
+        lines += ["(deny process-exec)", "(allow process-exec " + " ".join(f"(literal {_lit(p)})" for p in box.runs) + ")"]
     lines.append('(deny file-read* file-write* (regex #"^/dev/ttys[0-9]"))')
     lines.append(_mach_denied())
     lines += ["(deny signal)", "(allow signal (target same-sandbox))", "(deny user-preference-write)",
@@ -210,6 +213,41 @@ def command_in_box(script: str, box: Box) -> list[str]:
         return ["/bin/sh", "-c", script]
     raise Unavailable("Jaynes has no box for project commands on this system yet; set JAYNES_UNBOXED=1 to run "
                       "them unboxed, with the agent's changes, on your machine")
+
+
+def programs_of(program: Path) -> tuple[Path, ...]:
+    """What starting ``program`` starts: itself and, for a script, its interpreter, and the shell macOS's /bin/sh starts
+    in turn (which the box must let start too, or /bin/sh refuses: "Failed to exec /bin/bash as variant for /bin/sh")."""
+    program = Path(os.path.realpath(program))
+    out = [program]
+    try:
+        with open(program, "rb") as f:
+            first = f.readline(512)
+    except OSError:
+        return tuple(out)
+    if first.startswith(b"#!"):
+        words = first[2:].decode("utf-8", "replace").split()
+        if words:
+            interpreter = words[0]
+            out.append(Path(os.path.realpath(interpreter)))
+            if os.path.basename(interpreter) == "env" and len(words) > 1 and (found := shutil.which(words[1])):
+                out.append(Path(os.path.realpath(found)))
+            if interpreter == "/bin/sh" and os.path.exists("/private/var/select/sh"):
+                out.append(Path(os.path.realpath("/private/var/select/sh")))
+    return tuple(dict.fromkeys(out))
+
+
+def agent_in_box(work: Path, scratch: Path, argv: list[str], read_only: bool, no_commands: bool) -> list[str]:
+    """The argv that runs an agent program inside the box, the program started directly, never through a shell: on
+    macOS only, since no other system's box holds a list of programs yet. Never unboxed."""
+    if inside():
+        raise Unavailable(INSIDE)
+    if not available():
+        raise Unavailable("Jaynes has no box for an agent program on this system yet, and runs none without one")
+    program = Path(os.path.realpath(argv[0]))
+    writable = (work / ".jaynes", scratch) if read_only else (work, scratch)
+    box = Box(writable, readable=(work,), runs=programs_of(program) if no_commands else ())
+    return [str(SANDBOX_EXEC), "-p", profile(box), str(program), *argv[1:]]
 
 
 def environment(tmp: Path) -> dict[str, str]:
@@ -501,12 +539,14 @@ if __name__ == "__main__":
             print(why)
             sys.exit(1)
         sys.exit(0)
-    # jaynes_box.py agent WORK SCRATCH -- PROGRAM ARGS...: the argv that runs an agent program inside the box, writing
-    # only its step's folder and scratch, reading nothing the engine keeps, and reaching no port
-    if len(args) >= 5 and args[0] == "agent" and args[3] == "--":
-        work, scratch = Path(args[1]), Path(args[2])
+    # jaynes_box.py agent WORK SCRATCH [--read-only] [--no-commands] -- PROGRAM ARGS...: the argv that runs an agent
+    # program inside the box: writing its step's folder (only Jaynes's exchange in it when the step reads the project)
+    # and scratch, reading nothing the engine keeps, reaching no port, and starting only itself without commands
+    if len(args) >= 5 and args[0] == "agent" and "--" in args[3:]:
+        cut = args.index("--")
+        flags, argv = set(args[3:cut]), args[cut + 1:]
         try:
-            print(json.dumps(command_in_box(shlex.join(args[4:]), Box((work, scratch), readable=(work,)))))
+            print(json.dumps(agent_in_box(Path(args[1]), Path(args[2]), argv, "--read-only" in flags, "--no-commands" in flags)))
         except Unavailable as e:
             print(e)
             sys.exit(1)

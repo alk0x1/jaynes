@@ -627,12 +627,23 @@ impl Codex {
     }
 
     /// The command line that runs `args` inside Jaynes's box, from the role library's box.
-    fn boxed(&self, program: &Path, cwd: &Path, tmp: &Path, args: &[String]) -> Result<Vec<String>, String> {
+    /// As Claude Code's settings follow the step's reach, so does the box: a step that reads the project writes only
+    /// Jaynes's exchange in it, and one without commands starts nothing but the program.
+    fn boxed(&self, program: &Path, cwd: &Path, tmp: &Path, reach: &Reach, args: &[String]) -> Result<Vec<String>, String> {
         let library = self.library.as_ref().ok_or("Jaynes has no box library for Codex in this run")?;
         let python = std::env::var("JAYNES_PYTHON").unwrap_or_else(|_| "python3".to_string());
+        let mut flags: Vec<&str> = Vec::new();
+        if reach.project == ProjectAccess::Read {
+            flags.push("--read-only");
+        }
+        if !reach.commands {
+            flags.push("--no-commands");
+        }
         let done = Command::new(python)
             .arg(library.join("jaynes_box.py"))
-            .args(["agent", &cwd.display().to_string(), &tmp.display().to_string(), "--", &program.display().to_string()])
+            .args(["agent", &cwd.display().to_string(), &tmp.display().to_string()])
+            .args(&flags)
+            .args(["--", &program.display().to_string()])
             .args(args)
             .env("PYTHONPATH", library)
             .env("PYTHONDONTWRITEBYTECODE", "1")
@@ -670,7 +681,7 @@ impl Agent for Codex {
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
-        let argv = match self.boxed(program, spec.cwd, &tmp, &args) {
+        let argv = match self.boxed(program, spec.cwd, &tmp, spec.reach, &args) {
             Ok(argv) if !argv.is_empty() => argv,
             Ok(_) => return Turn { ended: Ended::Fault { reason: "Jaynes's box gave an empty command line for Codex".into() }, applied },
             Err(reason) => return Turn { ended: Ended::Fault { reason }, applied },
@@ -691,7 +702,14 @@ impl Agent for Codex {
                 for command in &read.declined {
                     say(&format!("Codex declined a command it was not allowed to run, and could not ask you: {command}"));
                 }
-                read.ended(code, &err, took, timed_out)
+                // a write the box refused although the step may make it: the guards Jaynes set are wrong, which is
+                // Jaynes's fault and must not spend the agent's attempt
+                let refused: Vec<&String> = read.unwritten.iter().filter(|p| may_write(p, spec.cwd, spec.reach)).collect();
+                if refused.is_empty() {
+                    read.ended(code, &err, took, timed_out)
+                } else {
+                    Ended::Fault { reason: format!("Jaynes's box, as Jaynes set it for Codex, refused writes the step may make: {}", refused.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ")) }
+                }
             }
         };
         Turn { ended, applied }
@@ -711,6 +729,8 @@ struct CodexTurn {
     /// From turn.failed and error.
     failures: Vec<String>,
     declined: Vec<String>,
+    /// The files of changes that did not apply.
+    unwritten: Vec<String>,
     /// Lines that are not its events.
     other: usize,
 }
@@ -734,6 +754,13 @@ impl CodexTurn {
                 Some("error") => t.failures.push(e["message"].as_str().unwrap_or("an error").to_string()),
                 Some("item.completed") if e["item"]["type"] == "command_execution" && e["item"]["status"] == "declined" => {
                     t.declined.push(e["item"]["command"].as_str().unwrap_or("").to_string());
+                }
+                Some("item.completed") if e["item"]["type"] == "file_change" && e["item"]["status"] == "failed" => {
+                    for c in e["item"]["changes"].as_array().into_iter().flatten() {
+                        if let Some(p) = c["path"].as_str().filter(|p| !t.unwritten.iter().any(|u| u == p)) {
+                            t.unwritten.push(p.to_string());
+                        }
+                    }
                 }
                 Some(_) => {}
                 None => t.other += 1,
@@ -765,6 +792,18 @@ impl CodexTurn {
             return Ended::Failed { reason: format!("Codex exited with {code:?}: {}", err.trim().chars().take(300).collect::<String>()), usage };
         }
         Ended::Ran { usage, session: self.session, model: String::new() }
+    }
+}
+
+/// Whether the step may write `path`, absolute or from its folder: Jaynes's exchange always, the project as its reach says.
+fn may_write(path: &str, cwd: &Path, reach: &Reach) -> bool {
+    let p = Path::new(path);
+    let rel = if p.is_absolute() { p.strip_prefix(cwd).ok().map(|r| r.display().to_string()) } else { Some(path.trim_start_matches("./").to_string()) };
+    match rel {
+        Some(r) if r.split('/').any(|c| c == "..") => false,
+        Some(r) if r.starts_with(crate::project::EXCHANGE) => true,
+        Some(r) => reach.project == ProjectAccess::Write && jaynes_core::glob::allowed(&r, &reach.write),
+        None => false,
     }
 }
 
