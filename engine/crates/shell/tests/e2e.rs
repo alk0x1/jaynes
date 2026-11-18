@@ -1880,3 +1880,51 @@ fn the_agent_s_git_reads_none_of_the_person_s_configuration_and_its_commits_are_
     let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/agentgit:greeting.txt"]).output().expect("git");
     assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which is macOS's sandbox-exec here")]
+fn in_a_real_run_the_project_s_suite_neither_reads_nor_writes_the_pasteboard_nor_reaches_the_keychain() {
+    // the path a real run takes: small-change runs the project's suite in the box on the run's copy under runs/. The
+    // suite is a probe: it fails when it reads what was copied, writes the pasteboard, or searches the keychain.
+    let s = scratch("mach");
+    let pb = |args: &[&str], input: Option<&[u8]>| -> Option<Vec<u8>> {
+        let mut c = Command::new(args[0]);
+        c.args(&args[1..]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+        let mut child = c.spawn().ok()?;
+        if let Some(i) = input {
+            use std::io::Write;
+            child.stdin.take()?.write_all(i).ok()?;
+        }
+        drop(child.stdin.take());
+        let out = child.wait_with_output().ok()?;
+        out.status.success().then_some(out.stdout)
+    };
+    // the find pasteboard, not the one the person copies with; what it held is put back at the end
+    let saved = pb(&["/usr/bin/pbpaste", "-pboard", "find"], None);
+    let token = format!("jaynes-mach-{}", std::process::id());
+    let pasteboard = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(token.as_bytes())).is_some()
+        && pb(&["/usr/bin/pbpaste", "-pboard", "find"], None).as_deref() == Some(token.as_bytes());
+    // the keychain's service answers outside the box: it lists the keychains (main's box let it answer, too)
+    let keychain = Command::new("/usr/bin/security").arg("list-keychains").output().is_ok_and(|o| o.status.success());
+    std::fs::write(s.project.join("probe.sh"), format!(r#"
+if [ "$(/usr/bin/pbpaste -pboard find 2>/dev/null)" = "{token}" ]; then echo "read the pasteboard"; exit 1; fi
+printf written-from-the-box | /usr/bin/pbcopy -pboard find 2>/dev/null
+if /usr/bin/security list-keychains >/dev/null 2>&1; then echo "reached the keychain"; exit 1; fi
+grep -q hi greeting.txt
+"#)).expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tsh probe.sh\n").expect("write");
+    for args in [&["add", "-A"][..], &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "probe"][..]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(args).status().expect("git").success());
+    }
+    let out = start(&s, "mach", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
+    let after = pb(&["/usr/bin/pbpaste", "-pboard", "find"], None);
+    if let Some(v) = &saved {
+        let _back = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(v));
+    }
+    let e = events(&s, "mach");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "the suite failed in the box:\n{out}\n{:?}", types(&e));
+    if pasteboard {
+        assert_eq!(after.as_deref(), Some(token.as_bytes()), "the suite wrote the pasteboard");
+    }
+    assert!(pasteboard || keychain, "neither the pasteboard nor the keychain answers here, so this test proves nothing");
+}

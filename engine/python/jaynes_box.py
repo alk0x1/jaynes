@@ -21,6 +21,9 @@ closes this, exists only on Linux.
 Other known limits on macOS: a command may still bind a server on 0.0.0.0, which other machines on the network can
 reach while it runs (the bind filter for localhost matches the wildcard too). The box sends no UDP, and reads and
 writes none of the terminals (/dev/ttys*), so a command that needs a pty of its own fails there.
+Services of macOS reached by name (mach-lookup) are open but for the pasteboard's and the keychain's, which are
+denied (``MACH_DENIED``): no project command reads or writes what the person copied, nor asks their keychain. Every
+other service still answers; closing them all takes a profile that denies by default, with each service listed.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
@@ -60,6 +63,14 @@ ENGINE_SECRETS = ("page.key", "page.log", "app-key.pub", "record.sqlite3", "reco
 OLD_ENGINE = ("jaynes.sqlite3", "jaynes.sqlite3-wal", "jaynes.sqlite3-shm", "guard.json", "backups", "objects")
 # Devices a command may write. Not the terminals (/dev/ttys*): a pty's other end has the same names as the person's
 # own terminals, so the box reads and writes none of them, and a command that opens a pty of its own fails.
+# Services of macOS a command reaches by name, past every file and network rule, that no project command needs: the
+# pasteboard (com.apple.pasteboard.1), through which a command read what the person copied and could write it; and
+# the keychain's (com.apple.SecurityServer, com.apple.securityd, com.apple.securityd.xpc), through which it could ask
+# the person's keychain for its items. Measured on real suites before they were denied: Go with httptest, with TLS
+# and the system's verifier, Node with supertest, Python with a test server and its TLS context, a Go app's suite,
+# and the Helm roles' checks with Chrome all pass the same without them.
+MACH_DENIED = ("com.apple.pasteboard.1", "com.apple.SecurityServer", "com.apple.securityd", "com.apple.securityd.xpc")
+
 DEVICES = ('(literal "/dev/null")', '(literal "/dev/zero")', '(literal "/dev/dtracehelper")',
            '(literal "/dev/ptmx")', '(literal "/dev/tty")')
 
@@ -146,6 +157,10 @@ def _chrome_lock() -> list[str]:
     return [f'(allow file-write* (regex #"^{pattern}"))']
 
 
+def _mach_denied() -> str:
+    return "(deny mach-lookup " + " ".join(f'(global-name "{n}")' for n in MACH_DENIED) + ")"
+
+
 def profile(box: Box) -> str:
     """The sandbox-exec profile for ``box``. Where two rules match, an allow with a filter wins over a deny."""
     lines = ["(version 1)", "(allow default)",
@@ -170,6 +185,7 @@ def profile(box: Box) -> str:
         # a socket rule with several paths holds only the first
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
     lines.append('(deny file-read* file-write* (regex #"^/dev/ttys[0-9]"))')
+    lines.append(_mach_denied())
     lines += ["(deny signal)", "(allow signal (target same-sandbox))", "(deny user-preference-write)",
               "(deny appleevent-send)", "(deny lsopen)"]
     return "\n".join(lines) + "\n"
