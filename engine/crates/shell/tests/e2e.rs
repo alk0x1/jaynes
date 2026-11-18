@@ -374,6 +374,74 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     assert!(!t.contains(&"Delivered".to_string()), "nothing is delivered while halted: {t:?}");
 }
 
+/// A halt stops the agent on a machine without the kill program, as a minimal Linux image is: Jaynes signals the
+/// agent's process group itself. The role has no step that needs the box, so this holds on every system.
+#[test]
+fn a_halt_stops_the_agent_on_a_machine_without_the_kill_program() {
+    let s = scratch("no-kill");
+    let base = s.home.parent().expect("base").to_path_buf();
+    // a PATH with only what the run and its agent use, and no kill
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    for tool in ["sh", "git", "python3", "sleep", "touch", "cat", "echo", "printf", "mkdir", "rm"] {
+        let found = Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().expect("which");
+        let path = String::from_utf8_lossy(&found.stdout).trim().to_string();
+        assert!(!path.is_empty(), "{tool} is on this machine");
+        std::os::unix::fs::symlink(&path, bin.join(tool)).expect("link");
+    }
+    assert!(!bin.join("kill").exists(), "the PATH, only this folder, has no kill program");
+    let role = base.join("wait");
+    std::fs::create_dir_all(&role).expect("role");
+    std::fs::write(role.join("role.toml"), r#"
+role = "wait"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Do {{request}}."
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+"#).expect("write");
+    let pid = base.join("agent.pid");
+    let agent = format!("echo $$ > {}; sleep 60", pid.display());
+    let child = Command::new(BIN)
+        .args(["start", "--run", "no-kill", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "wait", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", "python3")
+        .env("PYTHONPATH", "")
+        .env("PATH", &bin)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start");
+    let mut child = child;
+    let waiting = std::time::Instant::now();
+    while !pid.exists() {
+        if let Ok(Some(_)) = child.try_wait() {
+            let done = child.wait_with_output().expect("wait");
+            panic!("the run ended before its agent started:\n{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        }
+        assert!(waiting.elapsed() < std::time::Duration::from_secs(60), "the agent never started");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let agent_pid = std::fs::read_to_string(&pid).expect("pid").trim().to_string();
+    let asked = std::time::Instant::now();
+    let halted = Command::new(BIN).args(["halt", "no-kill"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("PATH", &bin)
+        .output().expect("halt");
+    assert!(halted.status.success(), "{}{}", String::from_utf8_lossy(&halted.stdout), String::from_utf8_lossy(&halted.stderr));
+    let done = child.wait_with_output().expect("wait");
+    let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    assert!(asked.elapsed() < std::time::Duration::from_secs(10), "the agent went on after the halt: {:?}\n{said}", asked.elapsed());
+    assert!(said.contains("(halted)"), "{said}");
+    let alive = Command::new("kill").args(["-0", &agent_pid]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    assert!(!alive, "the agent is still running: {said}");
+}
+
 /// Where Jaynes has no box for a project's commands, a run never runs them open: it stops at once, says why, and
 /// nothing of the project runs, the agent included.
 #[test]
