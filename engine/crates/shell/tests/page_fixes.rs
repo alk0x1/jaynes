@@ -81,3 +81,35 @@ fn a_request_that_breaks_its_handler_does_not_stop_the_page() {
     let home = get(port, "/home").expect("the page is still up");
     assert!(home.starts_with("HTTP/1.1 200"), "{home}");
 }
+
+#[test]
+fn a_connection_that_says_nothing_holds_no_other() {
+    let base = home("silent");
+    let port = port(1);
+    let _page = page(&base, port, Some("k3y"));
+    // an agent on the machine opens a connection and says nothing, and another sends a head that never ends
+    let silent = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let mut endless = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    endless.write_all(format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Pad: ").as_bytes()).expect("write");
+    std::thread::sleep(Duration::from_millis(200));
+    // the person is still answered at once: what the page reads to follow the record, and a Halt
+    let started = Instant::now();
+    let version = get(port, "/api/version").expect("version");
+    assert!(version.starts_with("HTTP/1.1 200") && version.contains("\"seq\""), "{version}");
+    let body = r#"{"run":"no-such-run","action":"halt"}"#;
+    let halt = ask(
+        port,
+        format!("POST /api/act HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: jaynes_key=k3y\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes(),
+        Duration::from_secs(3),
+    )
+    .expect("halt");
+    assert!(halt.starts_with("HTTP/1.1 200") && halt.contains("no such run"), "{halt}");
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    drop(silent);
+    // a head larger than any the page sends is refused, and the page goes on
+    let huge = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Pad: {}\r\n\r\n", "a".repeat(200 * 1024));
+    let refused = ask(port, huge.as_bytes(), Duration::from_secs(3)).unwrap_or_default();
+    assert!(!refused.starts_with("HTTP/1.1 200"), "{}", refused.chars().take(200).collect::<String>());
+    assert!(get(port, "/api/version").expect("still up").starts_with("HTTP/1.1 200"));
+    drop(endless);
+}

@@ -20,6 +20,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Page {
     pub home: PathBuf,
     pub port: u16,
@@ -47,6 +48,12 @@ pub fn key() -> String {
 static RUNNING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 /// The newest commit where Jaynes is published, asked once an hour.
 static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// How long the page waits for a connection to send its request, or to take its reply.
+const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+/// The most a request's head may hold, and its body: the page's own are far smaller.
+const MOST_HEAD: u64 = 64 * 1024;
+const MOST_BODY: u64 = 1 << 20;
+
 /// Whether an update the page started is still building.
 static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -66,8 +73,13 @@ impl Page {
         }
         say(&format!("the page: http://127.0.0.1:{}/?key={}", self.port, self.key));
         for stream in listener.incoming().flatten() {
-            // a request that breaks its handler ends with its own connection, never with the page
-            let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(stream)));
+            // each connection on its own, with a deadline: one that says nothing, or never ends its head, holds no
+            // other, and one whose request breaks its handler ends alone, never the page
+            let _deadline = stream.set_read_timeout(Some(READ_DEADLINE)).and_then(|()| stream.set_write_timeout(Some(READ_DEADLINE)));
+            let page = self.clone();
+            let _started = std::thread::Builder::new().name("page-connection".into()).spawn(move || {
+                let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream)));
+            });
         }
         Ok(())
     }
@@ -1068,7 +1080,8 @@ fn esc(s: &str) -> String {
 }
 
 fn read(stream: &TcpStream) -> Result<Request, String> {
-    let mut r = BufReader::new(stream);
+    // never more than a head and a body may hold, however long the other side goes on
+    let mut r = BufReader::new(Read::take(stream, MOST_HEAD + MOST_BODY));
     let mut line = String::new();
     r.read_line(&mut line).map_err(|e| e.to_string())?;
     let mut parts = line.split_whitespace();
@@ -1077,16 +1090,22 @@ fn read(stream: &TcpStream) -> Result<Request, String> {
     let (path, q) = target.split_once('?').map(|(p, q)| (p.to_string(), q.to_string())).unwrap_or((target, String::new()));
     let query = q.split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let mut headers = BTreeMap::new();
+    let mut head = line.len() as u64;
     loop {
         let mut h = String::new();
-        if r.read_line(&mut h).map_err(|e| e.to_string())? == 0 || h.trim().is_empty() {
+        let n = r.read_line(&mut h).map_err(|e| e.to_string())?;
+        head += n as u64;
+        if head > MOST_HEAD {
+            return Err("the request's head is too large".into());
+        }
+        if n == 0 || h.trim().is_empty() {
             break;
         }
         if let Some((k, v)) = h.split_once(':') {
             headers.insert(k.trim().to_lowercase(), v.trim().to_string());
         }
     }
-    let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(1 << 20);
+    let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(MOST_BODY as usize);
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).map_err(|e| e.to_string())?;
     Ok(Request { method, path, query, headers, body })
