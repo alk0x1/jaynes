@@ -6,7 +6,17 @@ to ``jaynes_role.py``.
 
 The box: on macOS a project's commands run under ``sandbox-exec`` with a profile that allows the rest of the
 system, so toolchains work, and denies the ways out: writing anywhere but the box's folders, the network except
-local ports, reading where secrets usually live, signalling outside the box, writing preferences, opening apps.
+local ports, reading where secrets usually live or what the engine keeps (the page's key and log, the record, other
+runs), signalling outside the box, writing preferences, opening apps.
+
+A known limit, said plainly: on macOS a project's commands reach ANY local TCP port, so a suite's own servers work
+on fixed ports and on port 0, and so does everything else that listens on the machine: a browser's debugger, a
+database without a password, the Jaynes page. The page's key and the record stay out of reach, so what comes through
+the page from inside the box is not the person. sandbox-exec cannot cut one port out of "any local port": a deny of
+one port under ``localhost:*`` holds for some port numbers and not for others (measured on macOS 26.5.2, the same
+every time for the same profile), so no list of refused ports is written here. What holds is allowing listed ports
+only, which breaks suites that serve on port 0; that is still to be measured. A network of the box's own, which
+closes this, exists only on Linux.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
@@ -39,6 +49,11 @@ SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".n
            ".git-credentials", ".config/gh", ".config/gcloud", ".config/op", ".zsh_history", ".bash_history",
            ".claude", ".codex", "Library/Keychains", "Library/Cookies", "Library/Safari", "Library/Mail",
            "Library/Messages", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox")
+# What the engine keeps under its home that no project command reads: the page's key and log, the record. Other
+# runs' folders are hidden as well, and the run's own steps; the run's own copy and role stay readable.
+ENGINE_SECRETS = ("page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm")
+# What the Python engine that came before kept in ~/.jaynes.
+OLD_ENGINE = ("jaynes.sqlite3", "jaynes.sqlite3-wal", "jaynes.sqlite3-shm", "guard.json", "backups", "objects")
 DEVICES = ('(literal "/dev/null")', '(literal "/dev/zero")', '(literal "/dev/dtracehelper")',
            '(literal "/dev/ptmx")', '(regex #"^/dev/tty")')
 
@@ -52,8 +67,15 @@ class Box:
     writable: tuple[Path, ...]
     hidden: tuple[Path, ...] = ()  # folders it may not read, apart from its writable folders inside them
     ports: tuple[int, ...] = ()  # local ports it may connect to
-    local: bool = False  # any local port: a test suite's own servers and databases; never the internet
+    local: bool = False  # any local port: a test suite's own servers, and whatever else listens; never the internet
+    own_run: Path | None = None  # the run's own folder under the engine's runs, readable but for its steps
     home: Path = field(default_factory=Path.home)
+
+
+def engine_home() -> Path:
+    """Where the engine keeps its record, roles and runs, as the engine itself finds it."""
+    named = os.environ.get("JAYNES_ENGINE_HOME")
+    return Path(named) if named else Path.home() / ".jaynes" / "engine"
 
 
 def available() -> bool:
@@ -113,7 +135,16 @@ def profile(box: Box) -> str:
     lines += _chrome_lock()
     if box.writable:
         lines.append(f"(allow file-write* {_subpaths(box.writable)})")
-    lines.append(f"(deny file-read* {_subpaths([box.home / s for s in SECRETS] + list(box.hidden))})")
+    engine, old = engine_home(), box.home / ".jaynes"
+    kept = [engine / f for f in ENGINE_SECRETS] + [old / f for f in OLD_ENGINE]
+    if box.local or box.own_run is not None:
+        # a project's commands read no other run; a photograph's page may be a step's output, so its box keeps them
+        kept.append(engine / "runs")
+    lines.append(f"(deny file-read* {_subpaths([box.home / s for s in SECRETS] + kept + list(box.hidden))})")
+    # the last rule that matches wins: the run's own folder is read again, then its steps and the hidden hidden again
+    if box.own_run is not None:
+        lines.append(f"(allow file-read* {_subpaths([box.own_run])})")
+        lines.append(f"(deny file-read* {_subpaths([box.own_run / 'steps', *box.hidden])})")
     if box.writable:
         lines.append(f"(allow file-read* {_subpaths(box.writable)})")
     lines.append("(deny network-outbound)")
@@ -297,6 +328,13 @@ def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
     return env
 
 
+def own_run(project: Path) -> Path | None:
+    """The run's own folder when ``project`` is a run's copy under the engine's runs."""
+    runs = os.path.realpath(engine_home() / "runs")
+    rel = os.path.relpath(os.path.realpath(project), runs)
+    return None if rel.startswith("..") or rel == "." else Path(runs) / rel.split(os.sep)[0]
+
+
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
@@ -309,7 +347,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         link_dependencies(project, work)
         if source is not None:
             link_dependencies(source, work)
-        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True))
+        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True, own_run=own_run(project)))
         proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {})},
                                 stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True)
