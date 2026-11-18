@@ -83,13 +83,19 @@ jobs:
         run: |
           uname -srm
           echo "unprivileged user namespaces restricted by AppArmor: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo unknown)"
-      # Ubuntu 24.04 holds back the user namespaces a process makes without privilege (AppArmor), and the box makes
-      # its own network in one: without it, local servers are refused where the network has a way out, as here.
-      # A person's machine allows it the same way; the tests then require that network (JAYNES_TEST_NET)
-      - name: A network of the box's own
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo build --locked -p jaynes-shell
+      # Ubuntu 24.04 holds back the user namespaces a process makes without privilege (AppArmor), and the box needs
+      # one, to hide by mounting and for a network of its own. As a person would, the job gives jaynes alone the
+      # AppArmor profile it prints, and shows that every other program is held back as before. The tests then
+      # require the box's own network (JAYNES_TEST_NET)
+      - name: Jaynes's AppArmor profile, for its box's namespaces
+        run: |
+          target/debug/jaynes box --apparmor | sudo tee /etc/apparmor.d/jaynes
+          sudo apparmor_parser -r /etc/apparmor.d/jaynes
+          echo "restricted for every other program: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+          if unshare --user --map-current-user --mount true 2>/dev/null; then echo "another program made a user and mount namespace: the profile is not narrow"; exit 1; fi
+          echo "another program still cannot make one"
       - name: The box on this kernel
         run: target/debug/jaynes box --check
       - run: cargo test --locked

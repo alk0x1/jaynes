@@ -20,7 +20,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
-  box [--write DIR]... [--hide PATH]... [--show PATH]... [--port N]... [--local] [--any-port] [--never-port N]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
+  box [--check | --apparmor] [--write DIR]... [--hide PATH]... [--show PATH]... [--readonly PATH]... [--port N]... [--local] [--any-port] [--never-port N]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
@@ -392,6 +392,12 @@ fn run(args: &[String]) -> Result<(), String> {
                 Some(i) => (&rest[..i], rest[i + 1..].to_vec()),
                 None => (rest, Vec::new()),
             };
+            if opts.iter().any(|a| a == "--apparmor") {
+                // the profile on standard output, for a tee into /etc/apparmor.d; what to do with it on standard error
+                print!("{}", jaynes_shell::sandbox::apparmor_profile()?);
+                say("to let only jaynes make its box's namespaces: jaynes box --apparmor | sudo tee /etc/apparmor.d/jaynes >/dev/null && sudo apparmor_parser -r /etc/apparmor.d/jaynes");
+                return Ok(());
+            }
             if opts.iter().any(|a| a == "--check") {
                 return match jaynes_shell::sandbox::unavailable() {
                     None => {
@@ -407,6 +413,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 writable: all("--write").into_iter().map(PathBuf::from).collect(),
                 hidden: all("--hide").into_iter().map(PathBuf::from).collect(),
                 show: all("--show").into_iter().map(PathBuf::from).collect(),
+                readonly: all("--readonly").into_iter().map(PathBuf::from).collect(),
                 ports,
                 local: opts.iter().any(|a| a == "--local"),
                 any_port: opts.iter().any(|a| a == "--any-port"),
