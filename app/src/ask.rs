@@ -28,9 +28,14 @@ fn short(text: &str) -> String {
     text.split(" · ").next().unwrap_or(text).trim().to_owned()
 }
 
-/// What it asks, as the bar says it after the agent's name: "wants to approve Bash: touch x".
+/// What it asks, as the bar says it after the agent's name: "wants to approve Bash: touch x". An agent that says
+/// what kind of thing it asks but not its words still gets a whole sentence.
 pub fn what(kind: Option<&str>, msg: &str) -> String {
+    let msg = msg.trim();
     match kind {
+        Some("permission") if msg.is_empty() => "wants your permission".into(),
+        Some("question") if msg.is_empty() => "asks you something".into(),
+        Some("auth") if msg.is_empty() => "needs you to sign in".into(),
         Some("permission") => format!("wants to {msg}"),
         Some("question") => format!("asks: {msg}"),
         Some("auth") => format!("needs you to sign in: {msg}"),
@@ -69,5 +74,9 @@ mod tests {
         assert_eq!(what(Some("permission"), "approve Bash: touch x"), "wants to approve Bash: touch x");
         assert_eq!(what(Some("question"), "which one?"), "asks: which one?");
         assert_eq!(what(None, ""), "waits for you");
+        // the kind without its words: a whole sentence, never "wants to" with nothing after it
+        assert_eq!(what(Some("permission"), ""), "wants your permission");
+        assert_eq!(what(Some("question"), " "), "asks you something");
+        assert_eq!(what(Some("auth"), ""), "needs you to sign in");
     }
 }
