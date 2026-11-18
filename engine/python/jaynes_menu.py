@@ -38,12 +38,13 @@ def _source(call: Call) -> Path | None:
     return Path(call["source"]) if call.get("source") else None
 
 
-def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None) -> Any:
-    """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``."""
+def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None, readable: tuple[Path, ...] = ()) -> Any:
+    """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``. ``readable`` names
+    more folders the command may read."""
     if not call.get("project"):
         return Blocked("the check has no copy of the project to run commands on")
     try:
-        ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin)
+        ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable)
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
@@ -286,11 +287,21 @@ def field_max_length(call: Call, params: Params) -> Any:
     return Pass()
 
 
+def _own_role(path: str) -> tuple[Path, ...]:
+    """The folder of the role a check's script is in, for the box to let it read: the folder the menu was started
+    in, which is the role's, and in a run the run's own copy of the role under the engine's home, which the box
+    hides with the rest of the runs. Only that folder, and only when the script is inside it: never the runs, nor
+    another run's copy."""
+    here = Path.cwd().resolve()
+    return (here,) if here in Path(path).resolve().parents else ()
+
+
 def script(call: Call, params: Params) -> Any:
-    """A check of the role's own: a script run in the box on a copy of the project."""
+    """A check of the role's own: a script run in the box on a copy of the project, able to read the role's own
+    folder (its other files, the modules it imports) and to write none of it."""
     path = str(params["path"])
     given = json.dumps({"output": call.get("output"), "given": call.get("given") or [], "project": "."})
-    ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given)
+    ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given, readable=_own_role(path))
     if isinstance(ran, Blocked):
         return ran
     said = [line for line in ran.printed.splitlines() if line.strip()]

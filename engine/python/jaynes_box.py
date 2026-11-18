@@ -354,9 +354,12 @@ def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
 
 
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
-        env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None) -> Ran:
+        env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
+        readable: tuple[Path, ...] = ()) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
-    ``source`` linked, and ``stdin`` on its standard input. Raises ``Unavailable`` where there is no box."""
+    ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
+    inside the hidden ones, such as the run's own copy of the role a check's script is in. Raises ``Unavailable``
+    where there is no box."""
     with tempfile.TemporaryDirectory(prefix="jaynes-suite-") as tmp:
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
@@ -365,7 +368,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         link_dependencies(project, work)
         if source is not None:
             link_dependencies(source, work)
-        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True, readable=(project,)))
+        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True, readable=(project, *readable)))
         proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {})},
                                 stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True)
