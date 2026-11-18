@@ -30,6 +30,8 @@ fn circle(class: &str, name: &str) -> Div {
     match class {
         "checked" | "accepted" | "sampled" | "jaynes" => base.bg(rgb(look::green())).border_color(rgb(look::green())).text_color(rgb(look::on_fill())).child("✓"),
         "running" => base.border_color(rgb(look::blue())).child(look::breathing(SharedString::from(format!("breathe-{name}")), 7., look::blue())),
+        // halted where it ran: still, in the grey of a halted run, until it is resumed
+        "halted" => base.border_color(rgb(look::grey())).text_color(rgb(look::grey())).child("‖"),
         "waiting" => base.bg(rgb(look::amber())).border_color(rgb(look::amber())).text_color(rgb(look::on_fill())).child("!"),
         "blocked" => base.border_color(rgb(look::red())).text_color(rgb(look::red())).child("×"),
         _ => base.border_color(rgb(look::line_2())),
