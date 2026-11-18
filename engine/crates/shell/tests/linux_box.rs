@@ -398,3 +398,105 @@ fn what_is_shown_inside_a_hidden_folder_is_read_and_nothing_else_of_it() {
         assert!(!o.status.success(), "the box read {other}, which is hidden: {}", said(&o));
     }
 }
+
+#[test]
+fn a_folder_it_may_only_read_inside_its_own_is_not_written_and_the_rest_is() {
+    // the run's copy, written by a role's script, and its .git, where Jaynes runs git later outside any box
+    let p = place("readonly");
+    opens();
+    let copy = p.work.join("copy");
+    std::fs::create_dir_all(copy.join(".git/hooks")).expect("dir");
+    std::fs::create_dir_all(copy.join("src")).expect("dir");
+    std::fs::write(copy.join(".git/config"), "[core]\n").expect("write");
+    std::fs::write(copy.join("README.md"), "hello\n").expect("write");
+    let git_dir = copy.join(".git");
+    let args = ["--write", copy.to_str().expect("path"), "--readonly", git_dir.to_str().expect("path")];
+    let in_copy = |script: &str| {
+        Command::new(BIN).arg("box").args(args).args(hide(&p)).arg("--").args(["sh", "-c", &format!("cd {} && {script}", copy.display())]).output().expect("box")
+    };
+    for (what, script) in [
+        ("a hook", "echo 'echo owned' > .git/hooks/post-commit"),
+        ("git's settings", "echo x >> .git/config"),
+        ("a folder in .git", "mkdir .git/info"),
+        ("a rename of .git", "mv .git .old"),
+        ("a link to .git", "ln -s .git g && echo x > g/config"),
+    ] {
+        let o = in_copy(script);
+        assert!(!o.status.success(), "the box let {what} be written: {}", said(&o));
+    }
+    assert!(!copy.join(".git/hooks/post-commit").exists() && std::fs::read_to_string(copy.join(".git/config")).expect("read") == "[core]\n");
+    // it reads .git, and writes everywhere else in the copy, its top as well
+    for (what, script) in [
+        ("reading .git", "cat .git/config"),
+        ("a file at the top", "echo hi > README.md"),
+        ("a new file in a folder", "echo a > src/a.rs && mkdir src/deep && echo b > src/deep/b.rs"),
+        ("removing in a folder", "rm src/a.rs"),
+        ("a new file at the top", "echo x > NEW && rm NEW"),
+    ] {
+        let o = in_copy(script);
+        assert!(o.status.success(), "the box refused {what}: {}", said(&o));
+    }
+    assert_eq!(std::fs::read_to_string(copy.join("README.md")).expect("read"), "hi\n");
+    // one not there yet cannot be made inside the box either
+    std::fs::remove_dir_all(copy.join(".git")).expect("remove");
+    let o = in_copy("mkdir -p .git/hooks; echo 'echo owned' > .git/hooks/post-commit");
+    assert!(!o.status.success() && !copy.join(".git/hooks").exists(), "the box let .git be made: {}", said(&o));
+}
+
+#[test]
+fn nothing_of_what_the_box_hides_shows_not_even_its_names_sizes_or_times() {
+    // Landlock refuses a hidden file's contents but not its stat: the box's mounts hide that too
+    let p = place("names");
+    opens();
+    let runs = p.base.join("runs");
+    std::fs::create_dir_all(runs.join("mine/project")).expect("dir");
+    std::fs::create_dir_all(runs.join("other")).expect("dir");
+    std::fs::write(runs.join("other/secret.txt"), "a secret of some length\n").expect("write");
+    std::fs::write(runs.join("mine/project/greeting.txt"), "hello\n").expect("write");
+    let key = p.base.join("page.key");
+    std::fs::write(&key, "k3y-of-a-length").expect("write");
+    let copy = runs.join("mine/project");
+    let args = ["--hide", runs.to_str().expect("path"), "--hide", key.to_str().expect("path"), "--show", copy.to_str().expect("path")];
+    for (what, script) in [
+        ("a hidden file's stat", format!("stat -c %s {}/other/secret.txt", runs.display())),
+        ("another run's folder", format!("ls -d {}/other", runs.display())),
+        ("a hidden file's size", format!("test -s {}", key.display())),
+        ("a hidden file's contents", format!("cat {}", key.display())),
+        ("a hidden file's name", format!("ls {}", key.display())),
+    ] {
+        let o = boxed(&p, &script, &args);
+        assert!(!o.status.success(), "the box let through {what}: {}", said(&o));
+        assert!(!said(&o).contains("24") && !said(&o).contains("k3y"), "{what} showed: {}", said(&o));
+    }
+    // the hidden folder lists only what was mounted back in it, and the folder of a hidden file lists it no more
+    let o = boxed(&p, &format!("ls -a {} 2>&1; ls -a {}/mine 2>&1; ls -a {} 2>&1", runs.display(), runs.display(), p.base.display()), &args);
+    assert!(!said(&o).contains("other") && !said(&o).contains("secret") && !said(&o).contains("page.key"), "a hidden name showed: {}", said(&o));
+    // what it is shown inside the hidden is there whole
+    let o = boxed(&p, &format!("cat {}/greeting.txt", copy.display()), &args);
+    assert!(o.status.success() && said(&o).contains("hello"), "the shown copy is read: {}", said(&o));
+    // and what it writes inside the hidden is written there, and nowhere else of it
+    let o = Command::new(BIN).arg("box").args(["--write", copy.to_str().expect("path"), "--hide", runs.to_str().expect("path")]).args(hide(&p)).arg("--")
+        .args(["sh", "-c", &format!("echo hi > {}/greeting.txt", copy.display())]).output().expect("box");
+    assert!(o.status.success(), "{}", said(&o));
+    assert_eq!(std::fs::read_to_string(copy.join("greeting.txt")).expect("read"), "hi\n");
+}
+
+#[test]
+fn a_command_started_inside_what_the_box_holds_reaches_it_only_through_the_box() {
+    // a process enters the box standing in the run's copy: a path from there passes through the box's mounts too
+    let p = place("cwd");
+    opens();
+    let copy = p.work.join("copy");
+    std::fs::create_dir_all(copy.join(".git/hooks")).expect("dir");
+    let git_dir = copy.join(".git");
+    let o = Command::new(BIN).current_dir(&copy).arg("box").args(["--write", copy.to_str().expect("path"), "--readonly", git_dir.to_str().expect("path")]).args(hide(&p))
+        .arg("--").args(["sh", "-c", "echo owned > .git/hooks/post-commit"]).output().expect("box");
+    assert!(!o.status.success() && !copy.join(".git/hooks/post-commit").exists(), "a relative path passed by the read-only .git: {}", said(&o));
+    // started inside a folder it hides, it stands in the empty folder that took its place
+    let secret = p.base.join("secret");
+    std::fs::create_dir_all(&secret).expect("dir");
+    std::fs::write(secret.join("key"), "k3y").expect("write");
+    let o = Command::new(BIN).current_dir(&secret).arg("box").args(["--write", p.work.to_str().expect("path"), "--hide", secret.to_str().expect("path")]).args(hide(&p))
+        .arg("--").args(["sh", "-c", "cat key; ls"]).output().expect("box");
+    assert!(!said(&o).contains("k3y"), "started inside the hidden, the command read it: {}", said(&o));
+}
