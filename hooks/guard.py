@@ -316,7 +316,11 @@ def git_hold(sub: list[str]) -> str | None:
     name, args = sub[0], sub[1:]
     flags = short_flags(args)
     if name == "push" and "--dry-run" not in args and "n" not in flags:
-        return "push"
+        refspecs = [a for a in args if not a.startswith("-")][1:]
+        forced = (any(a in ("--force", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "--prune") or
+                      a.startswith(("--force-with-lease=", "--force-if-includes=")) for a in args)
+                  or bool(flags & {"f", "d"}) or any(r.startswith(("+", ":")) for r in refspecs))
+        return "push-force" if forced else "push"
     if name == "reset" and "--hard" in args:
         return "reset"
     if name == "clean" and "--dry-run" not in args and "n" not in flags:
@@ -332,6 +336,7 @@ def git_hold(sub: list[str]) -> str | None:
 
 GIT_SAYS = {
     "push": "git push publishes commits to {where}",
+    "push-force": "git push, forced or deleting, rewrites or removes what others may have on {where}",
     "reset": "git reset --hard throws away uncommitted work in {where}",
     "clean": "git clean deletes untracked files in {where}",
     "branch": "git branch -D deletes a branch that may hold unmerged commits in {where}",
@@ -402,6 +407,14 @@ def push_remote(args: list[str]) -> str:
 
 def resolve(cwd: str, path: str) -> str:
     return os.path.normpath(os.path.join(cwd, os.path.expanduser(os.path.expandvars(path))))
+
+
+# What a free owner lets pass: what can be taken back (a push adds commits; a pull request opened is closed, one
+# merged is reverted). Everything else held cannot be undone, and asks every time, on the person's own repositories
+# too: a forced or deleting push, git reset --hard, git clean, deleting a branch or a tag, closing a pull request that
+# tells everyone who follows it, and creating, deleting or archiving a repository.
+PASSABLE = {GIT_SAYS["push"], GH_SAYS[("pr", "create")], GH_SAYS[("pr", "merge")]}
+SETUP = "http://localhost:8750/"
 
 
 def holds(cmd: Simple) -> list[tuple[str, Target]]:
@@ -564,7 +577,12 @@ def decide(event: dict[str, object]) -> str | None:
     strict = project["guard"] == "strict"
     owners: list[str] | None = [] if strict else None
     said: list[str] = []
+    offers: list[str] = []
     for says, target in held:
+        if says not in PASSABLE:
+            said.append(f"{says.format(where=target.words)}, which cannot be undone: the guard asks every time, on "
+                        "your own repositories too.")
+            continue
         if target.repo is not None:
             if owners is None:
                 owners = [o.lower() for o in free_owners()]
@@ -574,13 +592,16 @@ def decide(event: dict[str, object]) -> str | None:
                    "whose owner is not one of your free owners" if owners else
                    "and you have no free owners yet (gh is signed in as no GitHub user)")
             said.append(f"{says.format(where=target.words)}, {why}.")
+            if not strict and target.repo[0] not in offers:
+                offers.append(target.repo[0])
         else:
             said.append(f"{says.format(where=target.words)}, which the guard cannot tell belongs to one of your "
                         "free owners.")
     if not said:
         return None
-    return " ".join(said) + (" This cannot be undone, so the guard asks you first. Free owners and the switch "
-                             "are on the Setup page of Jaynes.")
+    offer = "".join(f" To let pushes and pull requests to {o} pass from now on, add {o} to Free owners in Setup: "
+                    f"{SETUP} (an organization frees all its repositories)." for o in offers)
+    return " ".join(said) + " The guard asks you first." + offer + " The switch is on the Setup page of Jaynes."
 
 
 def main() -> int:

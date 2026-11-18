@@ -78,7 +78,11 @@ it to Jaynes. Where a run needs you, you answer in the app, or on the page at
 http://localhost:8750, which Jaynes opens in your browser.
 
 The plugin also brings a guard: before a git or GitHub action that cannot be
-undone, such as a push, it asks you.
+undone, such as a push, it asks you. Pushes and pull requests to your own
+repositories pass; to let them pass for an organization you work in, add it to
+Free owners in Setup, and every repository of that organization passes at once.
+A forced push, deleting a branch or a tag, and deleting or archiving a
+repository ask every time, on your own repositories too.
 
 ## MCP, and your instruction files
 

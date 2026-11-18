@@ -108,9 +108,12 @@ fn a_push_to_the_person_s_own_repository_passes_by_gh_s_own_file() {
     assert!(!asks(&said), "the person's own repository: {said:?}");
     assert!(!w.calls().iter().any(|c| c.starts_with("gh ")), "{:?}", w.calls());
     assert!(!w.home().exists(), "the guard wrote {}", w.home().display());
-    // a repository created by a bare name lands under that same user, and passes
+    // a repository created by a bare name lands under that same user, read from the same file; creating one asks
+    // every time, as what cannot be undone does
     let said = w.guard("Bash", bash("gh repo create thing --private"));
-    assert!(!asks(&said), "{said:?}");
+    let why = said.as_ref().map(|v| v["hookSpecificOutput"]["permissionDecisionReason"].to_string()).unwrap_or_default();
+    assert!(asks(&said) && why.contains("github.com/me/thing"), "{said:?}");
+    assert!(!w.calls().iter().any(|c| c.starts_with("gh ")), "{:?}", w.calls());
 }
 
 #[test]

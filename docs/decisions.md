@@ -2,6 +2,27 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-18: A free owner passes only what can be taken back
+
+**Decided.** An owner in the guard's Free owners passes a plain push and a pull
+request opened or merged, on every repository of that owner, an organization
+included. What cannot be undone asks every time, on the person's own
+repositories too: a forced or deleting push, `git reset --hard`, `git clean`,
+deleting a branch or a tag, closing a pull request, and creating, deleting or
+archiving a repository. When the guard asks about an owner not yet free, its
+question says how to make it free from now on: in Setup, on the page, which
+only the person writes; no command is offered, since an agent could run it.
+The guard still asks before an agent edits its settings.
+
+**Why.** At work almost every push goes to an organization's repository, so a
+guard that asks every time is turned off, and under `claude -p` its question
+becomes a refusal. Claude Code's question has only allow and deny, so the third
+choice is a sentence, not a button.
+
+**Costs.** This changes the guard for whoever already has free owners: a forced
+push, a deleted branch or tag, and the rest above now ask on their repositories
+too.
+
 ## 2026-11-18: Jaynes can be off in a session or a project; its guard only by the person
 
 **Decided.** The plugin's two parts turn off apart. The conducting part, the
