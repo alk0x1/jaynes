@@ -226,6 +226,8 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let text = told.split("<pre class=\"said\" id=\"sumtext\">").nth(1).and_then(|t| t.split("</pre>").next()).expect("the summary on the page");
     assert!(text.starts_with("## say hi instead of hello\n\n### Delivered\n\njaynes/asked at "), "{text}");
     assert!(text.contains(&format!(", high risk, engine {}\n", jaynes_core::ENGINE)), "{text}");
+    // the Makefile is what made it so, named apart
+    assert!(text.contains("\nOf these, 1 is run or obeyed later by tools outside any box, which alone makes a change risky:\n\n- `Makefile`\n"), "{text}");
     assert!(text.contains("2. **change** (agent): done, 1 attempt. A person answered 1 question.\n"), "{text}");
     assert!(text.contains("### Promises proved of the role\n\n- Nothing is delivered before the project&#39;s suite passed on the change\n") || text.contains("### Promises proved of the role\n\n- Nothing is delivered before the project's suite passed on the change\n"), "{text}");
     // the person answered one stop, and their time on its screen was measured: seconds, never the wait

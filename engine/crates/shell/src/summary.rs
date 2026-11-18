@@ -93,6 +93,9 @@ pub struct Summary {
     /// What the run changed, as Jaynes measured it on its copy, never as the agent said: each thing once, in the
     /// order of the steps, with how much it changed.
     pub changed: Vec<(String, u64)>,
+    /// What of it is on the floor (jaynes_core::risk::FLOOR on a repository): what tools run or obey later outside any
+    /// box, or what cannot be taken back, which alone makes a change risky. Each thing once, by name.
+    pub floor: Vec<String>,
     /// What this run did not establish, a sentence each: what no check or no person looked at, what was not measured.
     pub unproved: Vec<String>,
     pub started: u64,
@@ -226,14 +229,19 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         .collect::<Vec<StepLine>>();
     // what was delivered is what the done steps changed, each thing once, summed over the steps that changed it
     let mut changed: Vec<(String, u64)> = Vec::new();
+    let mut floor: Vec<String> = Vec::new();
     for &i in &path {
         for c in r.steps[i].done.as_ref().map(|d| d.changed.as_slice()).unwrap_or_default() {
             match changed.iter_mut().find(|(what, _)| *what == c.what) {
                 Some((_, size)) => *size += c.size,
                 None => changed.push((c.what.clone(), c.size)),
             }
+            if c.floor && !floor.contains(&c.what) {
+                floor.push(c.what.clone());
+            }
         }
     }
+    floor.sort();
     let person = person(events, looks);
     let unproved = unproved(&r, &steps, &person, &promises);
     Ok(Summary {
@@ -252,6 +260,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         target: r.manifest.target.noun(),
         repository: r.manifest.target.is_repository(),
         changed,
+        floor,
         unproved,
         started: events.first().map(|(ts, _)| *ts).unwrap_or(0),
         ended: events.last().map(|(ts, _)| *ts).unwrap_or(0),
@@ -389,6 +398,18 @@ impl Summary {
                     if self.changed.len() > MOST_SHOWN {
                         let more = self.changed.len() - MOST_SHOWN;
                         out.push_str(&format!("- and {more} more{}\n", if self.repository { if more == 1 { " file" } else { " files" } } else { "" }));
+                    }
+                    // what alone makes a change risky, named each, whether or not among the largest
+                    if !self.floor.is_empty() {
+                        let n = self.floor.len();
+                        out.push_str(&if self.repository {
+                            format!("\nOf these, {n} {} run or obeyed later by tools outside any box, which alone makes a change risky:\n\n", if n == 1 { "is" } else { "are" })
+                        } else {
+                            format!("\nOf these, {n} cannot be taken back or {} obeyed later outside any box, which alone makes a change risky:\n\n", if n == 1 { "is" } else { "are" })
+                        });
+                        for what in &self.floor {
+                            out.push_str(&if self.repository { format!("- `{what}`\n") } else { format!("- {what}\n") });
+                        }
                     }
                 }
             }
@@ -761,6 +782,40 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
         let not_proved = told.split("### Not proved").nth(1).and_then(|t| t.split("###").next()).expect("not proved");
         assert!(not_proved.contains("did not prove the role's promises"), "{told}");
         assert!(told.contains("agent not recorded, low risk, engine 0.1.0+older\n"), "{told}");
+    }
+
+    #[test]
+    fn what_tools_run_or_obey_later_outside_any_box_is_named_apart_each_file_of_it() {
+        // a change of 14 files, two of them on the floor and among the smallest: past the ten largest, named all the same
+        let mut e = whole();
+        let mut changed: Vec<Changed> = (0..12).map(|i| Changed::file(format!("src/part{i:02}.go"), 40 + i)).collect();
+        changed.push(Changed::file(".github/workflows/ci.yml".into(), 2));
+        changed.push(Changed::file("Makefile".into(), 1));
+        changed.push(Changed::file("src/part00.go".into(), 5));
+        for (_, ev) in &mut e {
+            if let Event::StepDone { step, changed: c, .. } = ev
+                && step == "change"
+            {
+                *c = changed.clone();
+            }
+        }
+        let told = summarize(&e, &[], Promises::Unread).expect("summary").markdown();
+        let delivered = told.split("### Delivered").nth(1).and_then(|t| t.split("###").next()).expect("delivered");
+        assert!(delivered.contains("- and 4 more files\n"), "{told}");
+        assert!(
+            delivered.ends_with("\nOf these, 2 are run or obeyed later by tools outside any box, which alone makes a change risky:\n\n- `.github/workflows/ci.yml`\n- `Makefile`\n\n"),
+            "{delivered}"
+        );
+        // a file counted once, however many steps changed it
+        assert!(delivered.contains("- `src/part00.go`: 45 lines changed\n"), "{delivered}");
+        // none on the floor: nothing said of it
+        let plain = summarize(&whole(), &[], Promises::Unread).expect("summary").markdown();
+        assert!(!plain.contains("outside any box"), "{plain}");
+        // another target: what it changed that cannot be taken back or is obeyed later, in its own words
+        let mut s = summarize(&e, &[], Promises::Unread).expect("summary");
+        s.repository = false;
+        let other = s.markdown();
+        assert!(other.contains("\nOf these, 2 cannot be taken back or are obeyed later outside any box, which alone makes a change risky:\n\n- .github/workflows/ci.yml\n- Makefile\n"), "{other}");
     }
 
     #[test]
