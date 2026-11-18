@@ -48,9 +48,14 @@ pub const PAUSE_OVER: &str = "pause-over";
 const MAX_MOVES: usize = 10_000;
 
 pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
-    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention } = input {
+    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm } = input {
         if run.is_some() {
             return refuse("the run already started");
+        }
+        for (what, label) in [("task", task), ("arm", arm)] {
+            if label.as_deref().is_some_and(|l| !crate::io::is_label(l)) {
+                return refuse(format!("the {what} is a label: 1 to 64 letters, digits and hyphens, the first a letter or a digit"));
+            }
         }
         if let Err(errors) = manifest.validate() {
             return refuse(format!("the role is refused: {}", errors.join("; ")));
@@ -81,6 +86,8 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 .filter(|(step, c)| manifest.index(step).is_some_and(|i| c.key == crate::attention::stop_key(manifest, role_fingerprint, i)))
                 .map(|(s, c)| (s.clone(), c.clone()))
                 .collect(),
+            task: task.clone(),
+            arm: arm.clone(),
         };
         let Some(state) = Run::started(&start) else { return refuse("the run could not start") };
         let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() }, again: None };

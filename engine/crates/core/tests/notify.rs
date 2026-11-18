@@ -67,7 +67,7 @@ fn run() -> (Run, Vec<Command>) {
         role_fingerprint: Digest("f".into()),
         agent: "claude:m".into(),
         raise: None,
-        attention: Default::default(),
+        attention: Default::default(), task: None, arm: None
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("fold");

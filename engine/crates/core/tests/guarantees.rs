@@ -915,7 +915,7 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         role_fingerprint: fingerprint,
         agent: "claude:m1".to_string(),
         raise,
-        attention,
+        attention, task: None, arm: None
     });
     (manifest, started)
 }
@@ -933,7 +933,7 @@ fn simulate(seed: u64) {
         manifest,
         role_fingerprint: Digest("other".to_string()),
         agent: "claude:m1".to_string(), raise: None,
-        attention: BTreeMap::new()
+        attention: BTreeMap::new(), task: None, arm: None
     })
     .is_err());
     for _ in 0..400 {
@@ -1039,7 +1039,7 @@ fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
         manifest,
         role_fingerprint: Digest("f".to_string()),
         agent: "claude:m1".to_string(), raise: None,
-        attention: BTreeMap::new(),
+        attention: BTreeMap::new(), task: None, arm: None
     })
     .expect("start");
     (Run::fold(&out.events).expect("run"), out.commands)
@@ -1437,7 +1437,7 @@ fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
     let mut change = step("change", Executor::Agent);
     change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: jaynes_core::manifest::DeliveryKind::Merge };
-    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new() }).expect("start");
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None }).expect("start");
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
@@ -1652,7 +1652,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
     let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], target: Default::default(), delivery: Default::default() };
-    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new() });
+    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None });
     assert!(refused.is_err());
 }
 
@@ -1735,7 +1735,7 @@ fn simulate_logged(seed: u64) {
     let manifest = role(&mut w.rng);
     eprintln!("{}", serde_json::to_string_pretty(&manifest).expect("json"));
     let raise = if w.rng.chance(20) { Some(Risk::High) } else { None };
-    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new() });
+    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new(), task: None, arm: None });
 
     let mut printed = 0;
     for _ in 0..400 {
@@ -1836,7 +1836,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
         (at, r.clone(), Event::RunStarted {
             run: r.clone(), request: String::new(), manifest: manifest.clone(), role_fingerprint: Digest("f".to_string()),
             agent: "claude:m1".to_string(), engine: String::new(), protocol: 1, format: 1, risk: Risk::Low, reasons: Vec::new(), ceilings: c, ceiling: c.low,
-            attention: BTreeMap::new(),
+            attention: BTreeMap::new(), task: None, arm: None,
         }),
         (at, r.clone(), Event::QuestionOpened { question }),
         (at, r.clone(), Event::AnswerRecorded { answer, effects: Effects::default() }),
@@ -2005,7 +2005,7 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let key = stop_key(&manifest, &f, 0);
     let run_with = |id: &str, braked: bool| {
         let attention = [("change".to_string(), Count { key: key.clone(), n: 40, k: 0, pending: 0, braked })].into_iter().collect();
-        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention }).expect("start");
+        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention, task: None, arm: None }).expect("start");
         let mut run = Run::fold(&out.events).expect("run");
         let c = probe_ok(&mut run, out.commands);
         let _ = c;

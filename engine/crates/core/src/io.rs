@@ -27,6 +27,13 @@ pub enum Input {
         /// Each stop's count from the record (`attention::count`), by step.
         #[serde(default)]
         attention: std::collections::BTreeMap<String, crate::attention::Count>,
+        /// The partner's own id of the task, when the run is part of an evaluation: a label ([`is_label`]), never
+        /// a title. None: the export of numbers names the task by a fingerprint of the run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
+        /// The arm of the evaluation the run is in, a label too. None: none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arm: Option<String>,
     },
     /// Go on as far as the run can without anything from outside.
     Tick,
@@ -256,4 +263,13 @@ pub struct AgentTurn {
     pub back: Vec<Brought>,
     pub deadline_seconds: u64,
     pub tokens_left: u64,
+}
+
+/// Whether `text` is a label: what a run carries of an evaluation (its task's id, its arm), and so what the export of
+/// numbers takes out of the machine. 1 to 64 ASCII letters, digits and hyphens, the first a letter or a digit (so a
+/// flag is never taken for one): a label names, it cannot say.
+pub fn is_label(text: &str) -> bool {
+    (1..=64).contains(&text.len())
+        && text.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }

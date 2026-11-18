@@ -84,7 +84,7 @@ fn delivered(run: &mut Run, step: &str) -> (Vec<Event>, Vec<Command>) {
 
 fn started(steps: Vec<StepDecl>) -> Run {
     let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps, target: Default::default(), delivery: Default::default() };
-    let out = decide(None, &Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() }).expect("start");
+    let out = decide(None, &Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None }).expect("start");
     let mut run = Run::fold(&out.events).expect("fold");
     for c in out.commands {
         if let Command::Probe { step, .. } = c {

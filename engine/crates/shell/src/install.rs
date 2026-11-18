@@ -275,20 +275,27 @@ pub fn list(home: &Path) -> Vec<(String, String, String, String)> {
 /// Readable by its owner alone: whoever reads it answers as the person. A file an earlier version left readable by
 /// all is tightened when it is read.
 pub fn page_key(home: &Path) -> Result<String, String> {
-    let file = home.join("page.key");
-    if let Ok(k) = std::fs::read_to_string(&file)
+    secret(&home.join("page.key"))
+}
+
+/// A secret of this machine kept in `file`, readable by its owner alone: made of the system's randomness the first
+/// time it is asked for, then the same each time.
+pub fn secret(file: &Path) -> Result<String, String> {
+    if let Ok(k) = std::fs::read_to_string(file)
         && k.trim().len() >= 16 {
-            owner_only(&file);
+            owner_only(file);
             return Ok(k.trim().to_string());
         }
     let k = crate::page::key()?;
-    let _made = std::fs::create_dir_all(home);
+    if let Some(home) = file.parent() {
+        let _made = std::fs::create_dir_all(home);
+    }
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
-    let _written = open.open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, k.as_bytes()));
-    owner_only(&file);
+    let _written = open.open(file).and_then(|mut f| std::io::Write::write_all(&mut f, k.as_bytes()));
+    owner_only(file);
     Ok(k)
 }
 

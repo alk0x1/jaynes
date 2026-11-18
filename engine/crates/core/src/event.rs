@@ -104,6 +104,12 @@ pub enum Event {
         /// Each stop's count as it stood at the start, by step.
         #[serde(default)]
         attention: std::collections::BTreeMap<String, crate::attention::Count>,
+        /// The partner's id of the task, a label (`io::is_label`), when the run is part of an evaluation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
+        /// The arm of the evaluation the run is in, a label.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arm: Option<String>,
     },
     RiskRaised {
         to: Risk,

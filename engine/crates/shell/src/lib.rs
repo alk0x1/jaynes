@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod conformance;
 pub mod drive;
+pub mod export;
 pub mod index;
 pub mod install;
 pub mod listing;

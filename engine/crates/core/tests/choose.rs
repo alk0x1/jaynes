@@ -111,7 +111,7 @@ fn asked() -> (Run, Question) {
         role_fingerprint: Digest("f".into()),
         agent: "claude:m1".into(),
         raise: None,
-        attention: BTreeMap::new(),
+        attention: BTreeMap::new(), task: None, arm: None
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");

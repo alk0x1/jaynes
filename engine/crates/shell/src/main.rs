@@ -1,6 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-use jaynes_shell::{home, agent, conformance, drive, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
+use jaynes_shell::{home, agent, conformance, drive, export, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -18,6 +18,7 @@ use store::Store;
 const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
   start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
+        [--task ID] [--arm NAME]   in an evaluation: the task's id in your own list and the arm, letters, digits and hyphens
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you
@@ -28,6 +29,8 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   summary RUN             what a finished run did, in Markdown, to paste in a merge request or a note
+  export --numbers [--since YYYY-MM-DD]   each finished run's numbers as JSON lines, and no word of the record: task, arm,
+                          minutes of presence, stops, result, the agents' minutes and tokens (the day in UTC)
   page [--port N]         the page where you answer, at http://localhost:8750 (or the port given; 0: one the system gives, said in its first line)
   add NAME|SOURCE | remove NAME | roles   install a role (by name from the index, a folder, or URL#path), remove one, list them
   index check DIR [--write]   check an index: every role's content and promises, proved again
@@ -58,6 +61,14 @@ fn library() -> PathBuf {
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// A flag whose value is a label (`jaynes_core::io::is_label`), never a title.
+fn label(args: &[String], name: &str) -> Result<Option<String>, String> {
+    match flag(args, name) {
+        Some(l) if !jaynes_core::io::is_label(&l) => Err(format!("{name} is a label: 1 to 64 letters, digits and hyphens, the first a letter or a digit, such as T-12; never a title")),
+        given => Ok(given),
+    }
 }
 
 /// `jaynes uninstall [--yes] [--keep-data | --delete-data]`: show what goes and what stays, then remove it on a yes.
@@ -295,6 +306,20 @@ fn run(args: &[String]) -> Result<(), String> {
             print!("{}", summary::read(&home(), id, true)?.markdown());
             Ok(())
         }
+        "export" => {
+            if !rest.iter().any(|a| a == "--numbers") {
+                return Err("export what? --numbers: each finished run's numbers, as JSON lines, with no word of the record".into());
+            }
+            let since = flag(rest, "--since").map(|d| export::day(&d)).transpose()?;
+            let (lines, unfinished) = export::export(&home(), since)?;
+            for l in &lines {
+                println!("{}", serde_json::to_string(l).map_err(|e| e.to_string())?);
+            }
+            if unfinished > 0 {
+                say(&format!("{unfinished} run{} not finished {} left out: a run's numbers come once it is finished", if unfinished == 1 { "" } else { "s" }, if unfinished == 1 { "is" } else { "are" }));
+            }
+            Ok(())
+        }
         "cost" => cost(),
         "verify" => {
             let s = store()?;
@@ -429,6 +454,10 @@ fn start(args: &[String]) -> Result<(), String> {
         Some("low") | None => None,
         Some(other) => return Err(format!("--risk is low or high, not {other}")),
     };
+    // what a run carries of an evaluation leaves the machine in the export of numbers: labels only, said before
+    // anything of a run exists
+    let task = label(args, "--task")?;
+    let arm = label(args, "--arm")?;
     let id = flag(args, "--run").unwrap_or_else(|| {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         format!("r{t}-{}", std::process::id() % 1000)
@@ -504,7 +533,7 @@ fn start(args: &[String]) -> Result<(), String> {
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
-    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention })?;
+    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm })?;
     print_state(&end);
     Ok(())
 }

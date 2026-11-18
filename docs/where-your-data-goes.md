@@ -12,6 +12,11 @@ is said at the end, so nobody reads more into it.
   `JAYNES_KEEP_COPIES_SECONDS`); then what each step changed is saved as a diff in `runs/<run>/changes` and the copy
   is deleted. The caches the toolchains filled during a run (Go's builds and modules, npm's packages) are cleared
   when it finishes.
+- **The numbers you export.** `jaynes export --numbers` prints each finished run's numbers to your terminal, and
+  sends nothing: the task's id and the arm you gave at the start (`--task`, `--arm`, letters, digits and hyphens),
+  minutes on the stops' screens, stops, what became of the run, and the agents' minutes and tokens. No request,
+  note, name of a step or a file, path or run id is in it. A run started with no task's id is named by a fingerprint
+  of its id and a random salt kept in `~/.jaynes/engine/export.salt`, readable by you alone.
 - **The roles and their proofs.** Installed roles live in `~/.jaynes/engine/roles`; the promises proved of each role
   are kept in `~/.jaynes/engine/proofs`.
 - **The page.** The page where you answer is a server on `127.0.0.1`, on this machine only. It counts an answer as
