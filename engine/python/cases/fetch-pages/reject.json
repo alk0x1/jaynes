@@ -3,157 +3,391 @@
   "id": "loopback",
   "hole": "this machine's own address",
   "url": "https://127.0.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://127.0.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "loopback-other",
   "hole": "any address of 127.0.0.0/8 is this machine",
   "url": "https://127.8.9.10/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://127.8.9.10/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "loopback-short",
   "hole": "127.1 is 127.0.0.1 written short",
   "url": "https://127.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://127.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "loopback-decimal",
   "hole": "2130706433 is 127.0.0.1 written as one number",
   "url": "https://2130706433/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://2130706433/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "loopback-hex",
   "hole": "0x7f.0.0.1 is 127.0.0.1 written in hexadecimal",
   "url": "https://0x7f.0.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://0x7f.0.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "unspecified",
   "hole": "0.0.0.0 reaches this machine",
   "url": "https://0.0.0.0/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://0.0.0.0/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "localhost",
   "hole": "localhost is this machine by name",
   "url": "https://localhost/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://localhost/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "localhost-dot",
   "hole": "localhost. is localhost, with the root's dot",
   "url": "https://localhost./",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://localhost./": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "loopback-v6",
   "hole": "this machine's IPv6 address",
   "url": "https://[::1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[::1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "unspecified-v6",
   "hole": ":: reaches this machine",
   "url": "https://[::]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[::]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "mapped-loopback",
   "hole": "an IPv4 address carried in IPv6: ::ffff:127.0.0.1 is this machine",
   "url": "https://[::ffff:127.0.0.1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[::ffff:127.0.0.1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "mapped-hex",
   "hole": "::ffff:7f00:1 is ::ffff:127.0.0.1 written in hexadecimal",
   "url": "https://[::ffff:7f00:1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[::ffff:7f00:1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "nat64-loopback",
   "hole": "NAT64 carries 127.0.0.1 inside an IPv6 address",
   "url": "https://[64:ff9b::7f00:1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[64:ff9b::7f00:1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "sixtofour-loopback",
   "hole": "6to4 carries 127.0.0.1 inside an IPv6 address",
   "url": "https://[2002:7f00:1::]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[2002:7f00:1::]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "private-10",
   "hole": "a private network, 10.0.0.0/8",
   "url": "https://10.0.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://10.0.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "private-172",
   "hole": "a private network, 172.16.0.0/12",
   "url": "https://172.16.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://172.16.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "private-192",
   "hole": "a private network, 192.168.0.0/16",
   "url": "https://192.168.1.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://192.168.1.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "shared-100",
   "hole": "the network carriers share, 100.64.0.0/10",
   "url": "https://100.64.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://100.64.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "link-local",
   "hole": "link-local: where cloud machines keep their keys",
   "url": "https://169.254.169.254/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://169.254.169.254/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "link-local-decimal",
   "hole": "2852039166 is 169.254.169.254 written as one number",
   "url": "https://2852039166/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://2852039166/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "link-local-v6",
   "hole": "IPv6 link-local",
   "url": "https://[fe80::1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[fe80::1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "zone-v6",
   "hole": "an address with a zone names an interface of this machine",
   "url": "https://[fe80::1%25en0]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[fe80::1%25en0]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "unique-local-v6",
   "hole": "IPv6 unique local, a private network",
   "url": "https://[fc00::1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[fc00::1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "site-local-v6",
   "hole": "IPv6 site-local, a private network",
   "url": "https://[fec0::1]/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://[fec0::1]/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "multicast",
   "hole": "a multicast address is no page",
   "url": "https://224.0.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://224.0.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "broadcast",
   "hole": "the broadcast address is no page",
   "url": "https://255.255.255.255/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://255.255.255.255/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "name-to-loopback",
@@ -164,7 +398,15 @@
     "127.0.0.1"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -176,7 +418,15 @@
     "10.1.2.3"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -188,7 +438,15 @@
     "169.254.169.254"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -201,7 +459,15 @@
     "192.168.0.10"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -213,7 +479,15 @@
     "::ffff:10.0.0.1"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -225,7 +499,15 @@
     "fe80::1"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -424,55 +706,161 @@
   "id": "http",
   "hole": "plain http, which anyone on the way reads and changes",
   "url": "http://example.org/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "http://example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "resolve": {
+   "example.org": [
+    "93.184.215.14"
+   ]
+  }
  },
  {
   "id": "ftp",
   "hole": "a scheme that is not https",
   "url": "ftp://example.org/file",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "ftp://example.org/file": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "resolve": {
+   "example.org": [
+    "93.184.215.14"
+   ]
+  }
  },
  {
   "id": "file",
   "hole": "a file of this machine",
   "url": "file:///etc/passwd",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "file:///etc/passwd": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "data",
   "hole": "a page made up in its own address",
   "url": "data:text/html,<p>made up</p>",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "data:text/html,<p>made up</p>": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "javascript",
   "hole": "no page at all",
   "url": "javascript:alert(1)",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "javascript:alert(1)": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "no-scheme",
   "hole": "an address with no scheme",
   "url": "//example.org/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "//example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "resolve": {
+   "example.org": [
+    "93.184.215.14"
+   ]
+  }
  },
  {
   "id": "credentials",
   "hole": "an address carrying a name and password",
   "url": "https://user:secret@example.org/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://user:secret@example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "resolve": {
+   "example.org": [
+    "93.184.215.14"
+   ]
+  }
  },
  {
   "id": "user-only",
   "hole": "an address carrying a name",
   "url": "https://user@example.org/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://user@example.org/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "resolve": {
+   "example.org": [
+    "93.184.215.14"
+   ]
+  }
  },
  {
   "id": "userinfo-trick",
   "hole": "what stands before the @ is a name, and the host is this machine",
   "url": "https://example.org@127.0.0.1/",
-  "expect": "reject"
+  "expect": "reject",
+  "answers": {
+   "https://example.org@127.0.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  }
  },
  {
   "id": "port-other",
@@ -483,7 +871,15 @@
     "93.184.215.14"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org:8443/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -495,7 +891,15 @@
     "93.184.215.14"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org:80/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {
@@ -507,7 +911,15 @@
     "93.184.215.14"
    ]
   },
-  "answers": {},
+  "answers": {
+   "https://docs.example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
   "expect": "reject"
  },
  {

@@ -20,3 +20,10 @@ nothing was sent to an address off the public internet; an accept holds when the
 
 Not here yet: an address outside the origins a role declares, since fetch-pages has no list of origins until the
 proxy that holds a step to one exists.
+
+Every reject is answered at its own address with a page that would be read, so that only the rule it is for can
+refuse it: a case nobody answers would be refused whatever the rules. Taking each rule of the download away in turn
+lets through the cases written for it: the public address 34, https only 5, no name or password 3, the usual port
+3, the length of an address 1, the size said 1 and the size sent 1, the status 2. Two rules are held twice, and
+taking one away alone lets nothing through: the format, which the download and the reading of the text each refuse,
+and the clock, since an answer that never ends also passes the size a page may have.
