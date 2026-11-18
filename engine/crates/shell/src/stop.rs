@@ -91,7 +91,9 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
 
 /// A page the role kept, named by its fingerprint: nothing else is served.
 fn kept_page(name: &str) -> bool {
-    name.len() == 69 && name[..64].chars().all(|c| c.is_ascii_hexdigit()) && &name[64..] == ".html"
+    // by bytes: the name comes from what a role kept, and need not cut at a letter's edge
+    let b = name.as_bytes();
+    b.len() == 69 && b[..64].iter().all(u8::is_ascii_hexdigit) && &b[64..] == b".html"
 }
 
 /// The answer the person's marks make: a verdict per item, with their words for a change or a redo.

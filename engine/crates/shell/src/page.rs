@@ -66,7 +66,8 @@ impl Page {
         }
         say(&format!("the page: http://127.0.0.1:{}/?key={}", self.port, self.key));
         for stream in listener.incoming().flatten() {
-            let _done = self.handle(stream);
+            // a request that breaks its handler ends with its own connection, never with the page
+            let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(stream)));
         }
         Ok(())
     }
@@ -709,13 +710,16 @@ fn run_html(r: &Run, changes: &str, summary: &str) -> String {
 
 /// The name of a page Jaynes kept beside its photograph: its fingerprint, and nothing that could reach another file.
 fn kept_page(name: &str) -> bool {
-    name.len() == 69 && name[..64].chars().all(|c| c.is_ascii_hexdigit()) && &name[64..] == ".html"
+    // by bytes: a name from outside need not cut at a letter's edge
+    let b = name.as_bytes();
+    b.len() == 69 && b[..64].iter().all(u8::is_ascii_hexdigit) && &b[64..] == b".html"
 }
 
 /// A picture Jaynes kept, by its fingerprint, as an image inside the page: no address reaches a file.
 fn picture(home: &std::path::Path, name: &str) -> Option<String> {
+    // the name comes from what a role kept: its first 64 bytes are checked as bytes, and only then is it cut there
     let ok = name.len() > 65
-        && name[..64].chars().all(|c| c.is_ascii_hexdigit())
+        && name.as_bytes()[..64].iter().all(u8::is_ascii_hexdigit)
         && matches!(&name[64..], ".png" | ".jpg" | ".jpeg" | ".gif" | ".webp" | ".svg");
     if !ok {
         return None;
@@ -1408,3 +1412,19 @@ setInterval(async () => {
   } catch (_) {}
 }, 3000);
 </script></body></html>"##;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_from_outside_is_read_by_bytes_and_never_cut_inside_a_letter() {
+        let odd = format!("{}\u{e9}html", "a".repeat(63));
+        assert_eq!(odd.len(), 69);
+        assert!(!kept_page(&odd));
+        assert!(kept_page(&format!("{}.html", "a".repeat(64))));
+        let home = std::env::temp_dir().join(format!("jaynes-page-names-{}", std::process::id()));
+        assert_eq!(picture(&home, &format!("{}\u{e9}png", "a".repeat(63))), None);
+        assert_eq!(picture(&home, &format!("{}\u{e9}\u{e9}png", "b".repeat(62))), None);
+    }
+}
