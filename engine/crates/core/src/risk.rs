@@ -1,7 +1,7 @@
 //! How risky a run is, judged by rules in code from what the change touches. Never by an agent.
 
 use crate::glob;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, Target};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
@@ -74,8 +74,15 @@ pub fn of_role(m: &Manifest) -> (Risk, Vec<String>) {
     }
 }
 
-/// The risk of a run's change so far, with the reason for each rule that raised it.
-pub fn of_change(changed: &[Changed]) -> (Risk, Vec<String>) {
+/// The risk of a run's change so far on its target, with the reason for each rule that raised it.
+pub fn of_change(target: Target, changed: &[Changed]) -> (Risk, Vec<String>) {
+    match target {
+        Target::Repository => of_repository_change(changed),
+    }
+}
+
+/// A change to a repository is small while it stays under the lines and files above and touches nothing on the floor.
+fn of_repository_change(changed: &[Changed]) -> (Risk, Vec<String>) {
     let mut reasons = Vec::new();
     let floor = floor(changed.iter().map(|c| c.path.as_str()));
     if !floor.is_empty() {
@@ -135,15 +142,15 @@ mod tests {
 
     #[test]
     fn small_change_is_low() {
-        assert_eq!(of_change(&[c("src/a.py", 4)]).0, Risk::Low);
+        assert_eq!(of_change(Target::Repository, &[c("src/a.py", 4)]).0, Risk::Low);
     }
 
     #[test]
     fn floor_lines_and_files_raise_it() {
-        assert_eq!(of_change(&[c(".github/workflows/ci.yml", 1)]).0, Risk::High);
-        assert_eq!(of_change(&[c("PyProject.toml", 1)]).0, Risk::High);
-        assert_eq!(of_change(&[c("src/a.py", 31)]).0, Risk::High);
+        assert_eq!(of_change(Target::Repository, &[c(".github/workflows/ci.yml", 1)]).0, Risk::High);
+        assert_eq!(of_change(Target::Repository, &[c("PyProject.toml", 1)]).0, Risk::High);
+        assert_eq!(of_change(Target::Repository, &[c("src/a.py", 31)]).0, Risk::High);
         let many: Vec<Changed> = (0..6).map(|i| c(&format!("src/{i}.py"), 1)).collect();
-        assert_eq!(of_change(&many).0, Risk::High);
+        assert_eq!(of_change(Target::Repository, &many).0, Risk::High);
     }
 }

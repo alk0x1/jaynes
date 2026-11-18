@@ -138,7 +138,7 @@ fn role(rng: &mut Rng) -> Manifest {
             });
         }
         let delivery = if rng.chance(30) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };
-        let m = Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps, delivery };
+        let m = Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps, target: Default::default(), delivery };
         if m.validate().is_ok() {
             return m;
         }
@@ -158,7 +158,7 @@ fn role(rng: &mut Rng) -> Manifest {
         hidden: false,
         about: String::new(),
     };
-    Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one], delivery: Default::default() }
+    Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one], target: Default::default(), delivery: Default::default() }
 }
 
 // --- the world --------------------------------------------------------------------------------------------------
@@ -393,7 +393,7 @@ impl World {
         // G7: the risk is never below what the rules say of the change.
         let changed: Vec<Changed> =
             post.path().into_iter().filter_map(|i| post.steps[i].done.as_ref()).flat_map(|d| d.changed.clone()).collect();
-        assert!(post.risk >= risk::of_change(&changed).0, "seed {seed}: G7 the risk is below its rules");
+        assert!(post.risk >= risk::of_change(post.manifest.target, &changed).0, "seed {seed}: G7 the risk is below its rules");
         // G13: once delivered, every step kept used the values that hold now.
         if !post.halted && post.delivered.is_some() && post.delivering.is_none() && matches!(post.phase, Phase::Waiting { step: None, .. } | Phase::Finished { .. }) {
             for i in post.path() {
@@ -1003,7 +1003,7 @@ fn step(name: &str, executor: Executor) -> StepDecl {
 }
 
 fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
-    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps, delivery: Default::default() };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps, target: Default::default(), delivery: Default::default() };
     let out = decide(None, &Input::Start {
         run: "r".to_string(),
         request: "do it".to_string(),
@@ -1316,7 +1316,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     let mut a = step("a", Executor::Agent);
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
-    let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], delivery: Default::default() };
+    let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], target: Default::default(), delivery: Default::default() };
     let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new() });
     assert!(refused.is_err());
 }
@@ -1502,7 +1502,7 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
     use jaynes_core::attention::count;
     let mut change = step("change", Executor::Agent);
     change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
-    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], delivery: Default::default() };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
     let key = stop_key(&manifest, &Digest("f".to_string()), 0);
     let day = 24 * 3600;
     let mut h = Vec::new();
@@ -1540,7 +1540,7 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
 fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let mut change = step("change", Executor::Agent);
     change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
-    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], delivery: Default::default() };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
     let f = Digest("f".to_string());
     let key = stop_key(&manifest, &f, 0);
     let run_with = |id: &str, braked: bool| {

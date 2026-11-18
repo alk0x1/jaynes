@@ -15,9 +15,38 @@ pub struct Manifest {
     /// The major version of the protocol the role speaks.
     pub protocol: u32,
     pub steps: Vec<StepDecl>,
-    /// How the run delivers: a branch, or a merge into the branch the project had checked out when the run started.
+    /// What the run works on. A role that names none works on a repository, as every role did before targets.
+    #[serde(default, skip_serializing_if = "Target::is_repository")]
+    pub target: Target,
+    /// How the run delivers on a repository: a branch, or a merge into the branch the project had checked out when
+    /// the run started.
     #[serde(default)]
     pub delivery: DeliveryKind,
+}
+
+/// What a run works on, and so what it delivers, what its reach is given in, how its risk is judged and how its
+/// delivery is undone. One engine for every kind: the core's rules are the same, only these readings change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Target {
+    /// A repository: the run works in a clone of it at the commit it had, its reach is given in the repository's
+    /// paths, its risk is judged by the lines and files it changes, and it delivers a branch, or a merge that Undo
+    /// reverts.
+    #[default]
+    Repository,
+}
+
+impl Target {
+    pub fn is_repository(&self) -> bool {
+        *self == Target::Repository
+    }
+
+    /// The target in words, for what the person reads.
+    pub fn noun(self) -> &'static str {
+        match self {
+            Target::Repository => "a repository",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -236,6 +265,14 @@ impl Manifest {
         self.steps.iter().position(|s| s.name == name)
     }
 
+    /// Whether the delivery lands on the person's own thing, beyond a copy they may take or leave, so the person can
+    /// undo it: on a repository, a merge into their branch.
+    pub fn lands(&self) -> bool {
+        match self.target {
+            Target::Repository => self.delivery == DeliveryKind::Merge,
+        }
+    }
+
     /// The steps a run at `risk` takes, in order.
     pub fn path(&self, risk: Risk) -> Vec<usize> {
         (0..self.steps.len()).filter(|&i| self.steps[i].from_risk <= risk).collect()
@@ -392,5 +429,37 @@ impl Manifest {
             }
         }
         if errors.is_empty() { Ok(()) } else { Err(errors) }
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+
+    const OLD: &str = r#"{"role":"r","version":"1","protocol":1,"delivery":"merge","steps":[{"name":"change","executor":"agent"}]}"#;
+
+    #[test]
+    fn a_role_that_names_no_target_works_on_a_repository_and_is_written_as_before() {
+        let m: Manifest = serde_json::from_str(OLD).expect("an older role's manifest reads");
+        assert_eq!(m.target, Target::Repository);
+        let again = serde_json::to_value(&m).expect("json");
+        assert!(again.get("target").is_none(), "a repository is the default, so the manifest is written as before");
+        let named: Manifest = serde_json::from_str(&OLD.replace(r#""delivery""#, r#""target":"repository","delivery""#)).expect("named");
+        assert_eq!(named, m);
+    }
+
+    #[test]
+    fn a_target_this_engine_does_not_know_is_refused() {
+        let other = OLD.replace(r#""delivery""#, r#""target":"a-browser-session","delivery""#);
+        assert!(serde_json::from_str::<Manifest>(&other).is_err());
+    }
+
+    #[test]
+    fn a_repository_lands_on_the_person_s_branch_only_when_it_delivers_by_merge() {
+        let mut m: Manifest = serde_json::from_str(OLD).expect("reads");
+        assert!(m.lands());
+        m.delivery = DeliveryKind::Branch;
+        assert!(!m.lands());
+        assert_eq!(m.target.noun(), "a repository");
     }
 }

@@ -8,7 +8,7 @@ use crate::protocol::{Body, Call, Given};
 use crate::role::RoleProgram;
 use crate::store::Store;
 use jaynes_core::event::{Event, Read};
-use jaynes_core::manifest::ProjectAccess;
+use jaynes_core::manifest::{ProjectAccess, Target};
 use jaynes_core::question::{Answer, Question};
 use jaynes_core::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
 use serde_json::{json, Value};
@@ -90,6 +90,15 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
     let input = Input::Undo { note, by };
     jaynes_core::decide(Some(&state), &input).map_err(|r| r.0)?;
     let setup = Setup::load(store, home, run)?;
+    let reference = match state.manifest.target {
+        Target::Repository => undo_repository(&setup, run)?,
+    };
+    store.decide(run, &input)?;
+    Ok(reference)
+}
+
+/// Revert a repository run's merges on the branch they landed on.
+fn undo_repository(setup: &Setup, run: &str) -> Result<String, String> {
     let copy = setup.copy.as_ref().ok_or("the run has no project")?;
     if !copy.dir.join(".git").exists() {
         let merges = merges(&setup.dir);
@@ -99,9 +108,7 @@ pub fn undo(store: &mut Store, home: &Path, run: &str, note: String, by: jaynes_
         ));
     }
     let merges = merges(&setup.dir);
-    let reference = if merges.is_empty() { "nothing had been merged".to_string() } else { copy.undo(&merges, run)? };
-    store.decide(run, &input)?;
-    Ok(reference)
+    if merges.is_empty() { Ok("nothing had been merged".to_string()) } else { copy.undo(&merges, run) }
 }
 
 /// Give a run an input from outside its process (the page, an agent): recorded now and carried on in a process
@@ -661,40 +668,9 @@ impl<'a> Driver<'a> {
             }
             Command::Permit { .. } => None,
             Command::Deliver { digest, merge, .. } => {
-                let writers: Vec<String> = run
-                    .path()
-                    .into_iter()
-                    .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
-                    .map(|j| run.manifest.steps[j].name.clone())
-                    .collect();
-                let (ok, reference) = match &self.setup.copy {
-                    Some(copy) => match copy.deliver(&self.changes(&writers)) {
-                        Ok(r) => (true, r),
-                        Err(e) => (false, e),
-                    },
-                    None => (true, "no project; the outputs are the delivery".to_string()),
+                let (ok, reference) = match run.manifest.target {
+                    Target::Repository => self.deliver_repository(run, merge),
                 };
-                let mut reference = reference;
-                if ok && merge
-                    && let Some(copy) = &self.setup.copy {
-                        let head = copy.head().unwrap_or_default();
-                        let merged = copy.merge(&head, &self.setup.run);
-                        // For the tests of recovery: die where a kill can fall, once the merge landed.
-                        if std::env::var("JAYNES_DIE_AFTER_MERGE").is_ok() && matches!(merged, Ok(Some(_))) {
-                            std::process::exit(9);
-                        }
-                        match merged {
-                            Ok(Some(m)) => {
-                                let mut merges = self.merges();
-                                merges.retain(|x| *x != m);
-                                merges.push(m.clone());
-                                let _kept = std::fs::write(self.setup.dir.join("merges.json"), serde_json::to_string(&merges).unwrap_or_default());
-                                reference.push_str(&format!("; merged as {}", &m[..m.len().min(12)]));
-                            }
-                            Ok(None) => reference.push_str("; nothing new to merge"),
-                            Err(why) => reference.push_str(&format!("; not merged: {why}")),
-                        }
-                    }
                 if ok {
                     say(&format!("delivered: {reference}"));
                 }
@@ -705,6 +681,46 @@ impl<'a> Driver<'a> {
                 None
             }
         }
+    }
+
+    /// Deliver on a repository: the run's branch in the person's repository, and the merge into the branch it
+    /// started from when the role delivers by merge. Whether it was made, and what was made.
+    fn deliver_repository(&self, run: &Run, merge: bool) -> (bool, String) {
+        let writers: Vec<String> = run
+            .path()
+            .into_iter()
+            .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
+            .map(|j| run.manifest.steps[j].name.clone())
+            .collect();
+        let (ok, reference) = match &self.setup.copy {
+            Some(copy) => match copy.deliver(&self.changes(&writers)) {
+                Ok(r) => (true, r),
+                Err(e) => (false, e),
+            },
+            None => (true, "no project; the outputs are the delivery".to_string()),
+        };
+        let mut reference = reference;
+        if ok && merge
+            && let Some(copy) = &self.setup.copy {
+                let head = copy.head().unwrap_or_default();
+                let merged = copy.merge(&head, &self.setup.run);
+                // For the tests of recovery: die where a kill can fall, once the merge landed.
+                if std::env::var("JAYNES_DIE_AFTER_MERGE").is_ok() && matches!(merged, Ok(Some(_))) {
+                    std::process::exit(9);
+                }
+                match merged {
+                    Ok(Some(m)) => {
+                        let mut merges = self.merges();
+                        merges.retain(|x| *x != m);
+                        merges.push(m.clone());
+                        let _kept = std::fs::write(self.setup.dir.join("merges.json"), serde_json::to_string(&merges).unwrap_or_default());
+                        reference.push_str(&format!("; merged as {}", &m[..m.len().min(12)]));
+                    }
+                    Ok(None) => reference.push_str("; nothing new to merge"),
+                    Err(why) => reference.push_str(&format!("; not merged: {why}")),
+                }
+            }
+        (ok, reference)
     }
 
     fn cwd(&self, run: &Run, i: usize, attempt: u32) -> PathBuf {
@@ -1284,7 +1300,7 @@ mod tests {
             name: "change".into(), needs: vec![], executor: Executor::Agent, session: SessionKind::Fresh, reach: Reach::default(),
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: String::new(),
         };
-        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], delivery: Default::default() };
+        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
         let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };
         let out = jaynes_core::decide(None, &start).expect("start");
         let events: Vec<Event> = out

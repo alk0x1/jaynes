@@ -40,7 +40,7 @@ fn small_change() -> Manifest {
     change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], commands: true, ..Reach::default() };
     change.checks = vec![open("suite-passes")];
     change.stop = Some(StopDecl { release: true, ..stop(Risk::High, false) });
-    Manifest { role: "small-change".into(), version: "3.0.0".into(), protocol: 1, steps: vec![runner, change], delivery: DeliveryKind::Branch }
+    Manifest { role: "small-change".into(), version: "3.0.0".into(), protocol: 1, steps: vec![runner, change], target: Default::default(), delivery: DeliveryKind::Branch }
 }
 
 fn promise(says: &str, form: Form) -> Promise {
@@ -112,7 +112,7 @@ fn fix_bug() -> Manifest {
     fix.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into(), "!tests/**".into()], commands: true, ..Reach::default() };
     fix.checks = vec![open("tests-pass"), CheckDecl { name: "proof".into(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".into()] }];
     fix.stop = Some(stop(Risk::Low, false));
-    Manifest { role: "fix-bug".into(), version: "3.0.0".into(), protocol: 1, steps: vec![runner, cases, reproduce, found, fix], delivery: DeliveryKind::Merge }
+    Manifest { role: "fix-bug".into(), version: "3.0.0".into(), protocol: 1, steps: vec![runner, cases, reproduce, found, fix], target: Default::default(), delivery: DeliveryKind::Merge }
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn choosing() -> Manifest {
     });
     let mut tokens = step("tokens", Executor::Agent, &["directions"]);
     tokens.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], ..Reach::default() };
-    Manifest { role: "identity".into(), version: "1.0.0".into(), protocol: 1, steps: vec![directions, tokens], delivery: DeliveryKind::Branch }
+    Manifest { role: "identity".into(), version: "1.0.0".into(), protocol: 1, steps: vec![directions, tokens], target: Default::default(), delivery: DeliveryKind::Branch }
 }
 
 #[test]

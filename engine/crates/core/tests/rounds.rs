@@ -50,7 +50,7 @@ fn manifest(choose: bool, redo: bool) -> Manifest {
     let mut review = step("review", &["draw"]);
     review.stop = Some(stop(choose, redo.then_some("draw")));
     let apply = step("apply", &["review"]);
-    Manifest { role: "layouts".into(), version: "1".into(), protocol: 1, steps: vec![draw, review, apply], delivery: Default::default() }
+    Manifest { role: "layouts".into(), version: "1".into(), protocol: 1, steps: vec![draw, review, apply], target: Default::default(), delivery: Default::default() }
 }
 
 fn feed(run: &mut Run, input: Input) -> (Vec<Event>, Vec<Command>) {

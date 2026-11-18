@@ -329,7 +329,7 @@
         "delivery": {
           "$ref": "#/$defs/DeliveryKind",
           "default": "branch",
-          "description": "How the run delivers: a branch, or a merge into the branch the project had checked out when the run started."
+          "description": "How the run delivers on a repository: a branch, or a merge into the branch the project had checked out when\nthe run started."
         },
         "protocol": {
           "description": "The major version of the protocol the role speaks.",
@@ -345,6 +345,10 @@
             "$ref": "#/$defs/StepDecl"
           },
           "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/Target",
+          "description": "What the run works on. A role that names none works on a repository, as every role did before targets."
         },
         "version": {
           "type": "string"
@@ -1128,6 +1132,16 @@
         "verdicts"
       ],
       "type": "object"
+    },
+    "Target": {
+      "description": "What a run works on, and so what it delivers, what its reach is given in, how its risk is judged and how its\ndelivery is undone. One engine for every kind: the core's rules are the same, only these readings change.",
+      "oneOf": [
+        {
+          "const": "repository",
+          "description": "A repository: the run works in a clone of it at the commit it had, its reach is given in the repository's\npaths, its risk is judged by the lines and files it changes, and it delivers a branch, or a merge that Undo\nreverts.",
+          "type": "string"
+        }
+      ]
     },
     "Verdict": {
       "oneOf": [

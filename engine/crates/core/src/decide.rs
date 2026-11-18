@@ -181,7 +181,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             if !by.person() {
                 return refuse("only you undo what a run merged");
             }
-            if c.run.manifest.delivery != crate::manifest::DeliveryKind::Merge || c.run.delivered.is_none() {
+            if !c.run.manifest.lands() || c.run.delivered.is_none() {
                 return refuse("this run merged nothing");
             }
             if c.run.undone {
@@ -571,7 +571,7 @@ impl Ctx {
         let (digest, given) = self.run.delivery();
         if self.run.delivered.as_ref() != Some(&digest) {
             self.emit(Event::DeliveryAsked { digest: digest.clone() });
-            let merge = self.run.manifest.delivery == crate::manifest::DeliveryKind::Merge && !self.run.undone;
+            let merge = self.run.manifest.lands() && !self.run.undone;
             self.command(Command::Deliver { digest, given, merge });
             return false;
         }
@@ -752,7 +752,7 @@ impl Ctx {
             }
         }
         all.extend(changed.iter().cloned());
-        let (level, reasons) = risk::of_change(&all);
+        let (level, reasons) = risk::of_change(self.run.manifest.target, &all);
         if level > self.run.risk {
             let ceiling = higher(self.run.ceiling, self.run.ceilings.at(level));
             self.emit(Event::RiskRaised {
@@ -906,7 +906,7 @@ impl Ctx {
         }
         if let Some(digest) = self.run.delivering.clone() {
             let (_, given) = self.run.delivery();
-            let merge = self.run.manifest.delivery == crate::manifest::DeliveryKind::Merge && !self.run.undone;
+            let merge = self.run.manifest.lands() && !self.run.undone;
             self.command(Command::Deliver { digest, given, merge });
         }
         let open: Vec<Question> = self.run.open_questions().iter().map(|q| q.question.clone()).collect();

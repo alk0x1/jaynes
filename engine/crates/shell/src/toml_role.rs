@@ -12,6 +12,7 @@
 //! | role.toml                  | manifest                         |
 //! |----------------------------|----------------------------------|
 //! | `role`, `version`          | `role`, `version`                |
+//! | `target`                   | `target` (only `repository`, the default) |
 //! | `delivery`                 | `delivery`                       |
 //! | `[[step]] name`, `needs`   | `StepDecl::name`, `needs`        |
 //! | `by` = agent/jaynes/person | `executor` = agent/role/person   |
@@ -29,7 +30,7 @@
 use crate::protocol::{Body, Call, Given, Reply, Request, ShownItem, MAJOR};
 use jaynes_core::manifest::{
     CheckDecl, CheckKind, DeliveryKind, Effect, Executor, Manifest, Network, ProjectAccess, Rate, Reach, SessionKind,
-    StepDecl, StopDecl,
+    StepDecl, StopDecl, Target,
 };
 use jaynes_core::promise::{Condition, Form, On, Promise, Proof};
 use jaynes_core::question::VerdictKind;
@@ -48,6 +49,8 @@ pub const FILE: &str = "role.toml";
 struct RoleFile {
     role: String,
     version: String,
+    #[serde(default)]
+    target: Target,
     #[serde(default)]
     delivery: DeliveryKind,
     #[serde(default)]
@@ -785,7 +788,7 @@ impl TomlRole {
             extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, checks: impls, show: s.show.clone() });
             errors.extend(errs.into_iter().map(|e| at(Some(line), FILE, format!("step {} {e}", s.name))));
         }
-        let manifest = Manifest { role: file.role, version: file.version, protocol: MAJOR, steps, delivery: file.delivery };
+        let manifest = Manifest { role: file.role, version: file.version, protocol: MAJOR, steps, target: file.target, delivery: file.delivery };
         if let Err(found) = manifest.validate() {
             for e in found {
                 // the manifest names the step a rule is broken at: "step NAME ..."
@@ -891,6 +894,7 @@ pub fn template(name: &str) -> String {
 
 role = "{name}"
 version = "0.1.0"
+target = "repository"        # what the run works on; a repository is the only kind this engine knows
 delivery = "branch"          # "branch": a branch jaynes/RUN; "merge": merged into the person's branch, with Undo
 
 [[step]]
@@ -1237,6 +1241,18 @@ files = { type = "array", items = "string" }
         assert_eq!(x.schema["required"], json!(["summary", "files"]));
         assert_eq!(x.schema["properties"]["files"]["items"]["type"], "string");
         assert_eq!(x.checks["suite-passes"], CheckImpl::Menu { uses: "suite-passes".into(), with: json!({"suite_step": "runner"}).as_object().cloned().unwrap_or_default() });
+    }
+
+    #[test]
+    fn a_role_names_its_target_or_works_on_a_repository() {
+        let r = TomlRole::load(&role("no-target", GOOD)).expect("reads");
+        assert_eq!(r.manifest.target, jaynes_core::manifest::Target::Repository);
+        let named = GOOD.replacen("version = \"1.0.0\"", "version = \"1.0.0\"\ntarget = \"repository\"", 1);
+        let r = TomlRole::load(&role("repository", &named)).expect("reads");
+        assert_eq!(r.manifest.target, jaynes_core::manifest::Target::Repository);
+        let other = GOOD.replacen("version = \"1.0.0\"", "version = \"1.0.0\"\ntarget = \"a-browser-session\"", 1);
+        let e = errors("other-target", &other);
+        assert!(e.contains("role.toml:") && e.contains("a-browser-session"), "{e}");
     }
 
     #[test]

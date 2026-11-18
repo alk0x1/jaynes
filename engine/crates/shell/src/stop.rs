@@ -130,7 +130,7 @@ pub fn ahead(run: &Run, step: &str) -> Option<String> {
         return Some(format!("{} cannot be undone", run.manifest.steps[j].name));
     }
     let another_stop = later.iter().any(|&j| run.manifest.steps[j].stop.is_some() || run.manifest.steps[j].executor == jaynes_core::manifest::Executor::Person);
-    (run.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge && !another_stop).then(|| "the run merges into your branch".to_string())
+    (run.manifest.lands() && !another_stop).then(|| "the run merges into your branch".to_string())
 }
 
 /// How a verdict is offered, in a word.
@@ -160,7 +160,7 @@ mod tests {
             effect: if irreversible { Effect::Irreversible { idempotent: false } } else { Default::default() },
             checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: if name == "plan" { "Plans the work.".into() } else { String::new() },
         };
-        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: steps.iter().map(|(n, i)| decl(n, *i)).collect(), delivery };
+        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: steps.iter().map(|(n, i)| decl(n, *i)).collect(), target: Default::default(), delivery };
         let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };
         Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run")
     }

@@ -49,7 +49,7 @@ fn manifest() -> Manifest {
     let mut directions = step("directions", &[]);
     directions.stop = Some(choosing());
     let apply = step("apply", &["directions"]);
-    Manifest { role: "identity".into(), version: "1".into(), protocol: 1, steps: vec![directions, apply], delivery: Default::default() }
+    Manifest { role: "identity".into(), version: "1".into(), protocol: 1, steps: vec![directions, apply], target: Default::default(), delivery: Default::default() }
 }
 
 fn feed(run: &mut Run, input: Input) -> (Vec<Event>, Vec<Command>) {
