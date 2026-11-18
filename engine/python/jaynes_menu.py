@@ -8,6 +8,10 @@ serves a TOML role (``jaynes role-serve``) asks for one with a line of JSON on s
 and reads one line back: the body of the protocol's reply (``result``, ``refused``, ``verdict`` or ``error``).
 What a name means and which parameters it takes is checked before a run, by the engine; here a name is done.
 
+Every check comes with cases: inputs it must reject and inputs it must accept, in ``cases/NAME/reject.json`` and
+``accept.json`` (see ``cases/README.md``). ``{"kind": "case", "use": NAME, "with": {params}, "case": {a case}}``
+asks what the check says of one case, run as in a run.
+
 A check the menu lacks is a script of the role (``use: "script"``): it runs in the box on a copy of the project,
 reads ``{"output", "given", "project"}`` on standard input, and exits 0 to pass, 1 to fail with its reasons on
 standard output, 3 when it cannot judge.
@@ -22,6 +26,7 @@ what it tried, so a script says what happened in its own words and does not prin
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -1459,6 +1464,36 @@ def fetch_pages_case(case: dict[str, Any]) -> Any:
 CASE_READERS: dict[str, Callable[[dict[str, Any]], Any]] = {"quotes-found": quotes_found_case, "fetch-pages": fetch_pages_case}
 
 
+# --- the cases that come with a check ---------------------------------------------------------------------------
+
+def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
+    """What the check ``use`` says of one of its cases, run as in a run: ``Pass``, ``Fail``, or ``Blocked`` when it
+    could not judge. A case is the check's input: ``output``, the output it judges; ``given``, the outputs of the
+    steps its step uses; ``project``, a map of paths to text, the folder it sees (none: it sees no project); and
+    ``with``, the parameters a check of the menu takes. ``use`` is ``script`` for a role's own check, whose path is
+    in ``params``."""
+    files = case.get("project") or {}
+    if not isinstance(files, dict):
+        return Blocked("the case's project is a map of paths to text")
+    with tempfile.TemporaryDirectory(prefix="jaynes-case-") as folder:
+        for path, text in files.items():
+            if os.path.isabs(path) or ".." in Path(path).parts or not isinstance(text, str):
+                return Blocked(f"the case names {path}, which is not a text file inside its project")
+            target = Path(folder) / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        call = {"output": case.get("output"), "given": case.get("given") or [], "request": case.get("request") or "",
+                "project": folder if files else None, "source": None}
+        if use == "script":
+            return script(call, params)
+        if use not in CHECKS:
+            return Blocked(f"the menu has no check {use}")
+        try:
+            return CHECKS[use](call, {**params, **(case.get("with") or {})})
+        except Exception as e:  # a case the check cannot read is a case that did not run, never a rejection
+            return Blocked(f"{use} could not read the case: {type(e).__name__}: {e}")
+
+
 STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,
                                                        "fetch-pages": fetch_pages, "quote-windows": quote_windows,
                                                        "script": script_step}
@@ -1479,6 +1514,8 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
 
 def answer(ask: dict[str, Any]) -> dict[str, Any]:
     use, params, call = str(ask.get("use")), ask.get("with") or {}, ask.get("call") or {}
+    if ask.get("kind") == "case":
+        return {"reply": "verdict", "verdict": _verdict(judge_case(use, params, ask.get("case") or {}))}
     if ask.get("kind") == "step":
         if use not in STEPS:
             return {"reply": "error", "message": f"the menu has no step {use}"}

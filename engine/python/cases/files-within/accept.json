@@ -1,0 +1,50 @@
+[
+ {
+  "id": "inside",
+  "keeps": "a file under a folder the step may write",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/app.py"
+   ]
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "none",
+  "keeps": "a step that changed no file",
+  "with": {
+   "write": [
+    "src/**"
+   ]
+  },
+  "output": {
+   "files": []
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "another-field",
+  "keeps": "the files named in the field the role says",
+  "with": {
+   "field": "pages",
+   "write": [
+    "design/**"
+   ]
+  },
+  "output": {
+   "pages": [
+    "design/a.html"
+   ],
+   "files": [
+    "elsewhere.txt"
+   ]
+  },
+  "expect": "accept"
+ }
+]

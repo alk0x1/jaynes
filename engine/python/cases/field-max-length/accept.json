@@ -1,0 +1,24 @@
+[
+ {
+  "id": "at-the-limit",
+  "keeps": "a text of exactly the limit",
+  "with": {
+   "field": "summary",
+   "max": 5
+  },
+  "output": {
+   "summary": "12345"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "not-there",
+  "keeps": "a field that is not there has no length",
+  "with": {
+   "field": "summary",
+   "max": 5
+  },
+  "output": {},
+  "expect": "accept"
+ }
+]

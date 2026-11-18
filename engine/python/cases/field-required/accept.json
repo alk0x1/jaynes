@@ -1,0 +1,35 @@
+[
+ {
+  "id": "text",
+  "keeps": "a field with text in it",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "hello becomes hi"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "zero",
+  "keeps": "a number that is zero is a value all the same",
+  "with": {
+   "field": "count"
+  },
+  "output": {
+   "count": 0
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "false",
+  "keeps": "false is an answer, not a blank",
+  "with": {
+   "field": "found"
+  },
+  "output": {
+   "found": false
+  },
+  "expect": "accept"
+ }
+]

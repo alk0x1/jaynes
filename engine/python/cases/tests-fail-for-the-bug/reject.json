@@ -1,0 +1,206 @@
+[
+ {
+  "id": "passes-before-the-fix",
+  "hole": "a test that passes before any fix shows no bug",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hi\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "quote-never-printed",
+  "hole": "a failure quoted that the tests never print",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "expected hi, got hallo"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "quote-says-nothing",
+  "hole": "a quoted line that only says something failed, not why",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "Error"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "test-where-it-may-not-write",
+  "hole": "a test in a file the step may not write",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "spec/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "test-that-is-not-there",
+  "hole": "a test named that the project does not have",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hello.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "no-failure-quoted",
+  "hole": "a bug said to be reproduced with no failure quoted",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": ""
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ }
+]

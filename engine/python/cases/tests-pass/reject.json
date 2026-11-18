@@ -1,0 +1,36 @@
+[
+ {
+  "id": "still-fails",
+  "hole": "the tests that showed the bug still fail after the fix",
+  "with": {
+   "tests_from": "reproduce",
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   },
+   {
+    "step": "reproduce",
+    "output": {
+     "tests": [
+      "tests/says_hi.sh"
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ }
+]

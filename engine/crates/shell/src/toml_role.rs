@@ -434,7 +434,137 @@ fn menu_check(name: &str) -> Option<&'static MenuCheck> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CheckImpl {
     Menu { uses: String, with: Map<String, Value> },
-    Script { path: String },
+    /// A script of the role's folder, with the cases it comes with: none when the role names none, and the check
+    /// is then untested.
+    Script { path: String, cases: Option<Vec<Case>> },
+}
+
+/// One case that comes with a check: an input it must reject, or one it must accept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Case {
+    pub id: String,
+    /// Whether the check must reject it; otherwise it must accept it.
+    pub reject: bool,
+    /// The hole a reject closes, or what an accept keeps a check too strict from refusing.
+    pub why: String,
+    /// The case as written: the check's input.
+    pub input: Value,
+}
+
+/// The cases a check of the menu comes with, as Jaynes ships them: its rejects and its accepts, as written. A check
+/// added to the menu without them does not build, and one with none of either fails the menu's own test.
+fn menu_cases(name: &str) -> Option<(&'static str, &'static str)> {
+    macro_rules! cases {
+        ($name:literal) => {
+            (include_str!(concat!("../../../python/cases/", $name, "/reject.json")), include_str!(concat!("../../../python/cases/", $name, "/accept.json")))
+        };
+    }
+    Some(match name {
+        "suite-passes" => cases!("suite-passes"),
+        "tests-fail-for-the-bug" => cases!("tests-fail-for-the-bug"),
+        "tests-pass" => cases!("tests-pass"),
+        "hidden-cases-pass" => cases!("hidden-cases-pass"),
+        "output-follows-schema" => cases!("output-follows-schema"),
+        "field-required" => cases!("field-required"),
+        "field-empty" => cases!("field-empty"),
+        "field-max-length" => cases!("field-max-length"),
+        "files-within" => cases!("files-within"),
+        _ => return None,
+    })
+}
+
+/// The cases written in a check's `reject.json` and `accept.json`, or everything wrong with them: each has an id of
+/// its own, says what it expects as its file does, and says what it is for; and there is at least one of each.
+fn read_cases(reject: &str, accept: &str) -> Result<Vec<Case>, Vec<String>> {
+    let mut cases = Vec::new();
+    let mut errors = Vec::new();
+    for (file, text, rejects) in [("reject.json", reject, true), ("accept.json", accept, false)] {
+        let (expect, why) = if rejects { ("reject", "hole") } else { ("accept", "keeps") };
+        let list = match serde_json::from_str::<Value>(text) {
+            Ok(Value::Array(list)) => list,
+            Ok(_) => {
+                errors.push(format!("{file} is not a list of cases"));
+                continue;
+            }
+            Err(e) => {
+                errors.push(format!("{file} does not read: {e}"));
+                continue;
+            }
+        };
+        if list.is_empty() {
+            errors.push(format!("{file} has no case: a check comes with at least one case it must reject and one it must accept"));
+        }
+        for (n, case) in list.into_iter().enumerate() {
+            let id = case["id"].as_str().unwrap_or("").trim().to_string();
+            let at = if id.is_empty() { format!("{file}, case {}", n + 1) } else { format!("{file}, case {id:?}") };
+            if id.is_empty() {
+                errors.push(format!("{at} has no id"));
+            }
+            if cases.iter().any(|c: &Case| c.id == id) && !id.is_empty() {
+                errors.push(format!("{at} has the id of another case"));
+            }
+            if case["expect"].as_str() != Some(expect) {
+                errors.push(format!("{at} says expect = {}, and every case of {file} expects {expect}", case["expect"]));
+            }
+            let says = case[why].as_str().unwrap_or("").trim().to_string();
+            if says.is_empty() {
+                errors.push(format!("{at} does not say what it is for: {why} = \"...\""));
+            }
+            cases.push(Case { id, reject: rejects, why: says, input: case });
+        }
+    }
+    if errors.is_empty() { Ok(cases) } else { Err(errors) }
+}
+
+/// The cases a role's own check names: the folder `cases` of the role, with `reject.json` and `accept.json`. Besides
+/// what every check's cases are held to, each gives an output to judge, is given only steps the check is given
+/// (`given_to`), and keeps its project's files inside its project.
+fn role_cases(dir: &Path, cases: &str, given_to: &[String]) -> Result<Vec<Case>, Vec<String>> {
+    let folder = dir.join(cases);
+    let inside = !cases.is_empty()
+        && !cases.starts_with('/')
+        && !cases.split('/').any(|p| p == "..")
+        && matches!((std::fs::canonicalize(dir), std::fs::canonicalize(&folder)), (Ok(role), Ok(found)) if found.is_dir() && found.starts_with(&role));
+    let read = |file: &str| std::fs::read_to_string(folder.join(file)).ok();
+    let (Some(reject), Some(accept)) = (read("reject.json").filter(|_| inside), read("accept.json").filter(|_| inside)) else {
+        return Err(vec![format!("names the cases {cases}, which is not a folder of the role with reject.json and accept.json")]);
+    };
+    let found = read_cases(&reject, &accept)?;
+    let mut errors = Vec::new();
+    for case in &found {
+        let at = format!("case {:?}", case.id);
+        if case.input.get("output").is_none() {
+            errors.push(format!("{at} gives no output for the check to judge"));
+        }
+        match case.input.get("given") {
+            None => {}
+            Some(Value::Array(given)) => {
+                for g in given {
+                    match g["step"].as_str() {
+                        Some(step) if given_to.iter().any(|s| s == step) && g.get("output").is_some() => {}
+                        Some(step) if g.get("output").is_some() => errors.push(format!(
+                            "{at} gives the output of {step}, which the check is not given: it is given the steps its step needs and those it reads ({})",
+                            if given_to.is_empty() { "none".to_string() } else { given_to.join(", ") }
+                        )),
+                        _ => errors.push(format!("{at}: each entry of given is {{\"step\": NAME, \"output\": ...}}")),
+                    }
+                }
+            }
+            Some(_) => errors.push(format!("{at}: given is a list of {{\"step\": NAME, \"output\": ...}}")),
+        }
+        match case.input.get("project") {
+            None => {}
+            Some(Value::Object(files)) => {
+                for (path, text) in files {
+                    if path.starts_with('/') || path.split('/').any(|p| p == "..") || !text.is_string() {
+                        errors.push(format!("{at} names {path}, which is not a text file inside its project"));
+                    }
+                }
+            }
+            Some(_) => errors.push(format!("{at}: project is a map of paths to text")),
+        }
+    }
+    if errors.is_empty() { Ok(found) } else { Err(errors) }
 }
 
 /// What the role program keeps of a step besides its declaration.
@@ -965,6 +1095,9 @@ impl TomlRole {
                         for k in ["use", "name", "reads"] {
                             given.remove(k);
                         }
+                        if given.remove("cases").is_some() {
+                            errs.push(format!("the check {u} is on the menu: its cases come with Jaynes, so it names none"));
+                        }
                         let name = named.unwrap_or_else(|| u.to_string());
                         let mut with = params(&given, m.params, &s.needs, &format!("the check {name}"), &mut errs);
                         for auto in m.auto {
@@ -997,7 +1130,7 @@ impl TomlRole {
                     }
                     (None, Some(script)) => {
                         for k in table.keys() {
-                            if !["script", "kind", "about", "name", "reads"].contains(&k.as_str()) {
+                            if !["script", "kind", "about", "name", "reads", "cases"].contains(&k.as_str()) {
                                 errs.push(format!("the check {script} takes no {k}"));
                             }
                         }
@@ -1017,8 +1150,26 @@ impl TomlRole {
                             errs.push(format!("the check's script {script} is not a file in the role's folder"));
                         }
                         let name = named.unwrap_or_else(|| Path::new(script).file_stem().and_then(|s| s.to_str()).unwrap_or(script).to_string());
+                        // the cases the check comes with: inputs it must reject and inputs it must accept
+                        let cases = match table.get("cases") {
+                            None => None,
+                            Some(toml::Value::String(folder)) => {
+                                let given_to: Vec<String> = s.needs.iter().chain(reads.iter()).cloned().collect();
+                                match role_cases(dir, folder, &given_to) {
+                                    Ok(cases) => Some(cases),
+                                    Err(found) => {
+                                        errs.extend(found.into_iter().map(|e| format!("the check {name}: {e}")));
+                                        None
+                                    }
+                                }
+                            }
+                            Some(_) => {
+                                errs.push(format!("the check {name}: cases is the folder of its cases, such as cases = \"cases/{name}\""));
+                                None
+                            }
+                        };
                         checks.push(CheckDecl { name: name.clone(), kind, about, reads });
-                        impls.insert(name, CheckImpl::Script { path: script.to_string() });
+                        impls.insert(name, CheckImpl::Script { path: script.to_string(), cases });
                     }
                     _ => errs.push("a check has either use (a check on the menu) or script, not both and not neither".into()),
                 }
@@ -1163,6 +1314,10 @@ impl TomlRole {
                 ));
             }
         }
+        // a check that was never seen to refuse anything is said, here and in every run's summary
+        notes.extend(self.untested().into_iter().map(|c| {
+            format!("{c} has no cases: untested. Every run says so under Not proved, and the next version of the format refuses a check without them: cases = \"cases/NAME\", a folder with reject.json and accept.json")
+        }));
         notes
     }
 
@@ -1296,11 +1451,96 @@ impl TomlRole {
         told
     }
 
-    /// What no run of the role proves, as the engine reads it from the role's file, whatever a run did: a finite
-    /// list, a sentence each. A step's word that it changes nothing at a local port, which nothing checks; and each
-    /// way the project's content can reach the network, which nothing keeps closed.
-    pub fn not_proved(&self) -> Vec<String> {
+    /// Each check held to the cases it comes with, a line each, and whether every one held. A check of the menu
+    /// says the cases Jaynes ships it with, which the engine's own tests run. A role's own check is run on each of
+    /// its cases by `judge`, as in a run: a reject must fail and an accept must pass, and a case the check could not
+    /// judge did not run, which is said and never counted as a rejection. A check that names no cases is untested:
+    /// it is not told here but in [`TomlRole::notes`], and under what no run proves.
+    pub fn cases_told(&self, judge: &dyn Fn(&Path, &Case) -> jaynes_core::CheckVerdict) -> (Vec<String>, bool) {
+        use jaynes_core::CheckVerdict;
+        let (mut lines, mut all) = (Vec::new(), true);
+        for step in &self.manifest.steps {
+            let Some(extra) = self.extras.get(&step.name) else { continue };
+            for check in &step.checks {
+                let of = format!("check {} of {}", check.name, step.name);
+                match extra.checks.get(&check.name) {
+                    None | Some(CheckImpl::Script { cases: None, .. }) => {}
+                    Some(CheckImpl::Menu { uses, .. }) => match menu_cases(uses).map(|(reject, accept)| read_cases(reject, accept)) {
+                        Some(Ok(cases)) => {
+                            let rejects = cases.iter().filter(|c| c.reject).count();
+                            lines.push(format!("✔ {of}: comes with Jaynes, which holds it to {rejects} it rejects and {} it accepts", cases.len() - rejects));
+                        }
+                        _ => {
+                            all = false;
+                            lines.push(format!("✘ {of}: {uses} is on the menu without cases it must reject and accept, and Jaynes holds every check to them"));
+                        }
+                    },
+                    Some(CheckImpl::Script { path, cases: Some(cases) }) => {
+                        let script = self.dir.join(path);
+                        let (mut rejected, mut accepted, mut wrong) = (0, 0, Vec::new());
+                        let mut no_box = false;
+                        for case in cases {
+                            match (judge(&script, case), case.reject) {
+                                (CheckVerdict::Fail { .. }, true) => rejected += 1,
+                                (CheckVerdict::Pass, false) => accepted += 1,
+                                (CheckVerdict::Pass, true) => wrong.push(format!("it accepted {:?}, which it must reject: {}", case.id, case.why)),
+                                (CheckVerdict::Fail { reasons, .. }, false) => {
+                                    wrong.push(format!("it rejected {:?}, which it must accept ({}): {}", case.id, case.why, reasons.join("; ")))
+                                }
+                                (CheckVerdict::Blocked { reason }, _) => {
+                                    no_box |= reason.contains("there is no box");
+                                    wrong.push(format!("it could not judge {:?}, so the case did not run: {reason}", case.id));
+                                }
+                            }
+                        }
+                        let rejects = cases.iter().filter(|c| c.reject).count();
+                        if no_box {
+                            all = false;
+                            lines.push(format!("✘ {of}: cases not run: no box here"));
+                        } else if wrong.is_empty() {
+                            lines.push(format!("✔ {of}: rejected {rejected} of {rejects}, accepted {accepted} of {}", cases.len() - rejects));
+                        } else {
+                            all = false;
+                            lines.push(format!("✘ {of}: rejected {rejected} of {rejects}, accepted {accepted} of {}\n   {}", cases.len() - rejects, wrong.join("\n   ")));
+                        }
+                    }
+                }
+            }
+        }
+        (lines, all)
+    }
+
+    /// [`TomlRole::cases_told`] with each case run as in a run: by the check's script, in the box.
+    pub fn run_cases(&self, library: &Path) -> (Vec<String>, bool) {
+        self.cases_told(&|script, case| {
+            let ask = json!({"kind": "case", "use": "script", "with": {"path": script.display().to_string(), "role": self.dir.display().to_string()}, "case": case.input});
+            match menu(library, &self.dir, ask) {
+                Body::Verdict { verdict } => verdict,
+                Body::Error { message } => jaynes_core::CheckVerdict::Blocked { reason: message },
+                other => jaynes_core::CheckVerdict::Blocked { reason: format!("the menu answered a case with {other:?}") },
+            }
+        })
+    }
+
+    /// The role's own checks that name no cases, each as "check NAME of STEP".
+    fn untested(&self) -> Vec<String> {
         let mut out = Vec::new();
+        for step in &self.manifest.steps {
+            for check in &step.checks {
+                if let Some(CheckImpl::Script { cases: None, .. }) = self.extras.get(&step.name).and_then(|x| x.checks.get(&check.name)) {
+                    out.push(format!("check {} of {}", check.name, step.name));
+                }
+            }
+        }
+        out
+    }
+
+    /// What no run of the role proves, as the engine reads it from the role's file, whatever a run did: a finite
+    /// list, a sentence each. A check of the role's own that comes with no cases, and so was never seen to refuse
+    /// anything; a step's word that it changes nothing at a local port, which nothing checks; and each way the
+    /// project's content can reach the network, which nothing keeps closed.
+    pub fn not_proved(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.untested().into_iter().map(|c| format!("the {c} comes with no cases it must reject and accept: it is untested")).collect();
         for s in &self.manifest.steps {
             if !s.reach.local_ports.is_empty() && !s.effect.irreversible() {
                 out.push(format!("{} reaches the {}, and that it changes nothing there is the role's word: nothing checks it", s.name, local_ports_of(&s.reach)));
@@ -1378,9 +1618,14 @@ pub fn template(name: &str) -> String {
 # the person is asked, and what the role promises. `jaynes check .` reads it strictly and proves its promises.
 #
 {menu}# A check the menu lacks is a script of the role, run in a box on a copy of the project:
-#   {{ script = "checks/odd.sh", kind = "open", about = "what it holds the output to" }}
+#   {{ script = "checks/files-exist.sh", kind = "open", about = "every file named in files is in the project", cases = "cases/files-exist" }}
 #   It reads {{"output", "given", "project"}} as JSON on standard input and exits 0 to pass, 1 to fail with its
 #   reasons on standard output, 3 when it cannot judge.
+#   A check comes with cases: inputs it must reject (reject.json, each a near miss that names the hole it closes)
+#   and inputs it must accept (accept.json), in the folder cases names. `jaynes check` runs the check on each, in
+#   the box, and refuses the role when a reject passes or an accept fails. A check with no cases is untested, and
+#   every run says so. This folder comes with that check and its cases, to start from: add the line above to the
+#   checks of a step whose output names files.
 
 role = "{name}"
 version = "0.1.0"
@@ -1448,6 +1693,71 @@ never = "deliver"
 unless = "check suite-passes of make passed"
 "#, menu = menu_lines())
 }
+
+/// What a new role's folder holds besides `role.toml`: a check of the role's own with the cases it comes with, ready
+/// to be named in a step. Each file by its path, with its text and whether it is run by itself.
+pub fn scaffold() -> Vec<(&'static str, &'static str, bool)> {
+    vec![
+        ("checks/files-exist.sh", FILES_EXIST, true),
+        ("cases/files-exist/reject.json", FILES_EXIST_REJECT, false),
+        ("cases/files-exist/accept.json", FILES_EXIST_ACCEPT, false),
+    ]
+}
+
+const FILES_EXIST: &str = r#"#!/bin/sh
+# Holds a step's output to the project: every file it names in "files" is there.
+#
+# A check reads {"output", "given", "project"} as JSON on standard input, from the folder of the project, and exits
+# 0 to pass, 1 to fail with why (a line each, on standard output), 3 when it cannot judge. It comes with the cases
+# in cases/files-exist: `jaynes check` runs it on each, and it must fail every reject and pass every accept.
+exec python3 -c '
+import json, os, sys
+try:
+    named = (json.load(sys.stdin).get("output") or {}).get("files") or []
+except Exception as e:
+    print(f"the check could not read its input: {e}")
+    sys.exit(3)
+missing = [f for f in named if not os.path.isfile(f)]
+for f in missing:
+    print(f"{f} is named in files and is not a file of the project")
+sys.exit(1 if missing else 0)
+'
+"#;
+
+const FILES_EXIST_REJECT: &str = r#"[
+ {
+  "id": "one-missing",
+  "hole": "a file named that the project does not have, beside one it has",
+  "expect": "reject",
+  "output": {"summary": "two files changed", "files": ["a.txt", "b.txt"]},
+  "project": {"a.txt": "a\n"}
+ },
+ {
+  "id": "a-folder",
+  "hole": "a folder of the project is not a file of it",
+  "expect": "reject",
+  "output": {"files": ["src"]},
+  "project": {"src/a.txt": "a\n"}
+ }
+]
+"#;
+
+const FILES_EXIST_ACCEPT: &str = r#"[
+ {
+  "id": "all-there",
+  "keeps": "every file named is in the project, in a folder or not",
+  "expect": "accept",
+  "output": {"files": ["a.txt", "src/b.txt"]},
+  "project": {"a.txt": "a\n", "src/b.txt": "b\n"}
+ },
+ {
+  "id": "none-named",
+  "keeps": "an output that names no file",
+  "expect": "accept",
+  "output": {"summary": "nothing to change", "files": []}
+ }
+]
+"#;
 
 // --- filling instructions ------------------------------------------------------------------------------------
 
@@ -1603,7 +1913,7 @@ impl TomlRole {
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
-                        Some(CheckImpl::Script { path }) => menu(library, &self.dir, json!({
+                        Some(CheckImpl::Script { path, .. }) => menu(library, &self.dir, json!({
                             "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string(), "role": self.dir.display().to_string()}, "call": call,
                         })),
                     }
@@ -2359,6 +2669,159 @@ instructions = "Read the news about {{request}}."
         // a way names its ends, for what reads it after a run
         let first = &TomlRole::load(&role("flows-ends", FLOWING)).expect("reads").flows()[0];
         assert_eq!((first.from.as_str(), first.to.as_str(), first.network.as_str()), ("look", "search", "web"));
+    }
+
+    // --- the cases that come with a check ------------------------------------------------------------------------
+
+    /// A role whose one step has a check of the role's own, which comes with cases.
+    const CHECKED: &str = r#"
+role = "checked"
+version = "1.0.0"
+
+[[step]]
+name = "plan"
+instructions = "Plan {{request}}."
+
+[[step]]
+name = "write"
+needs = ["plan"]
+reach = { project = "write", write = ["**"] }
+instructions = "Write what {{plan}} says."
+checks = [{ script = "checks/fits.sh", about = "the files it names are in the project", cases = "cases/fits" }]
+
+[step.output]
+files = { type = "array", items = "string" }
+"#;
+    const REJECT: &str = r#"[{"id": "one-missing", "hole": "one file named that is not there, beside one that is", "expect": "reject", "output": {"files": ["a.txt", "b.txt"]}, "project": {"a.txt": "a"}}]"#;
+    const ACCEPT: &str = r#"[{"id": "all-there", "keeps": "every file named is there", "expect": "accept", "output": {"files": ["a.txt"]}, "given": [{"step": "plan", "output": {}}], "project": {"a.txt": "a"}}]"#;
+
+    /// The checked role in a folder, with its check's script and the cases given as its two files.
+    fn checked(name: &str, text: &str, reject: &str, accept: &str) -> PathBuf {
+        let dir = role(name, text);
+        std::fs::create_dir_all(dir.join("checks")).expect("dir");
+        std::fs::create_dir_all(dir.join("cases/fits")).expect("dir");
+        std::fs::write(dir.join("checks/fits.sh"), "").expect("write");
+        std::fs::write(dir.join("cases/fits/reject.json"), reject).expect("write");
+        std::fs::write(dir.join("cases/fits/accept.json"), accept).expect("write");
+        dir
+    }
+
+    #[test]
+    fn a_check_of_the_role_s_own_names_the_cases_it_must_reject_and_accept() {
+        let r = TomlRole::load(&checked("cases", CHECKED, REJECT, ACCEPT)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let CheckImpl::Script { path, cases: Some(cases) } = &r.extras["write"].checks["fits"] else { panic!("{:?}", r.extras["write"].checks) };
+        assert_eq!(path, "checks/fits.sh");
+        assert_eq!(cases.iter().map(|c| (c.id.as_str(), c.reject, c.why.as_str())).collect::<Vec<_>>(), [
+            ("one-missing", true, "one file named that is not there, beside one that is"),
+            ("all-there", false, "every file named is there"),
+        ]);
+        assert_eq!(cases[0].input["output"]["files"], json!(["a.txt", "b.txt"]), "a case is the check's input, as written");
+        assert!(r.notes().is_empty() && !r.not_proved().iter().any(|n| n.contains("untested")), "a check with cases is not untested");
+    }
+
+    #[test]
+    fn cases_that_are_not_well_formed_are_refused_at_the_step_s_line() {
+        let at = "role.toml:9: step write the check fits: ";
+        for (name, reject, accept, says) in [
+            ("cases-not-json", "[{", ACCEPT, "reject.json does not read"),
+            ("cases-not-a-list", "{}", ACCEPT, "reject.json is not a list of cases"),
+            ("cases-no-reject", "[]", ACCEPT, "reject.json has no case: a check comes with at least one case it must reject and one it must accept"),
+            ("cases-no-accept", REJECT, "[]", "accept.json has no case: a check comes with at least one case it must reject and one it must accept"),
+            ("cases-no-id", &REJECT.replace("\"id\": \"one-missing\", ", ""), ACCEPT, "reject.json, case 1 has no id"),
+            ("cases-same-id", REJECT, &ACCEPT.replace("all-there", "one-missing"), "accept.json, case \"one-missing\" has the id of another case"),
+            ("cases-no-hole", &REJECT.replace("\"hole\"", "\"keeps\""), ACCEPT, "reject.json, case \"one-missing\" does not say what it is for: hole = \"...\""),
+            ("cases-no-keeps", REJECT, &ACCEPT.replace("\"keeps\": \"every file named is there\", ", ""), "accept.json, case \"all-there\" does not say what it is for: keeps = \"...\""),
+            ("cases-expect", &REJECT.replace("\"expect\": \"reject\"", "\"expect\": \"accept\""), ACCEPT, "reject.json, case \"one-missing\" says expect = \"accept\", and every case of reject.json expects reject"),
+            ("cases-no-output", &REJECT.replace("\"output\": {\"files\": [\"a.txt\", \"b.txt\"]}, ", ""), ACCEPT, "case \"one-missing\" gives no output for the check to judge"),
+            ("cases-given", REJECT, &ACCEPT.replace("\"step\": \"plan\"", "\"step\": \"other\""), "case \"all-there\" gives the output of other, which the check is not given: it is given the steps its step needs and those it reads (plan)"),
+            ("cases-outside", &REJECT.replace("\"project\": {\"a.txt\"", "\"project\": {\"../a.txt\""), ACCEPT, "case \"one-missing\" names ../a.txt, which is not a text file inside its project"),
+        ] {
+            let e = TomlRole::load(&checked(name, CHECKED, reject, accept)).expect_err(name).join("\n");
+            assert!(e.contains(&format!("{at}{says}")), "{name}:\n{e}");
+        }
+        // the folder is the role's own
+        for (name, folder) in [("cases-missing", "cases/nope"), ("cases-outside-role", "../cases"), ("cases-file", "checks/fits.sh")] {
+            let e = TomlRole::load(&checked(name, &CHECKED.replace("cases/fits", folder), REJECT, ACCEPT)).expect_err(name).join("\n");
+            assert!(e.contains(&format!("{at}names the cases {folder}, which is not a folder of the role with reject.json and accept.json")), "{name}:\n{e}");
+        }
+        // a check of the menu comes with Jaynes's cases, and names none
+        let e = errors("cases-menu", &GOOD.replace("\"suite-passes\", {", "{ use = \"suite-passes\", cases = \"cases/suite\" }, {"));
+        assert!(e.contains("role.toml:10: step change the check suite-passes is on the menu: its cases come with Jaynes, so it names none"), "{e}");
+    }
+
+    #[test]
+    fn a_check_with_no_cases_loads_for_now_and_is_said_to_be_untested() {
+        let r = TomlRole::load(&checked("untested", &CHECKED.replace(", cases = \"cases/fits\"", ""), REJECT, ACCEPT)).expect("a check with no cases still reads");
+        assert_eq!(r.extras["write"].checks["fits"], CheckImpl::Script { path: "checks/fits.sh".into(), cases: None });
+        assert!(r.notes().iter().any(|n| n.starts_with("check fits of write has no cases: untested.") && n.contains("the next version of the format refuses")), "{:?}", r.notes());
+        assert!(r.not_proved().contains(&"the check fits of write comes with no cases it must reject and accept: it is untested".to_string()), "{:?}", r.not_proved());
+        // nothing is told of it as held: no line says it was
+        let (lines, held) = r.cases_told(&|_, _| panic!("a check with no cases has none to judge"));
+        assert!(lines.is_empty() && held, "{lines:?}");
+    }
+
+    #[test]
+    fn a_check_is_held_to_its_cases_and_what_it_got_wrong_is_said() {
+        use jaynes_core::CheckVerdict::{Blocked, Fail, Pass};
+        let r = TomlRole::load(&checked("held", CHECKED, REJECT, ACCEPT)).expect("reads");
+        let fails = || Fail { reasons: vec!["b.txt is not there".into()], detail: String::new() };
+        // a reject must fail and an accept must pass
+        let (lines, held) = r.cases_told(&|script, case| {
+            assert!(script.ends_with("checks/fits.sh"), "{}", script.display());
+            if case.reject { fails() } else { Pass }
+        });
+        assert_eq!((lines, held), (vec!["✔ check fits of write: rejected 1 of 1, accepted 1 of 1".to_string()], true));
+        // a check that accepts everything proves nothing
+        let (lines, held) = r.cases_told(&|_, _| Pass);
+        assert!(!held);
+        assert_eq!(lines, ["✘ check fits of write: rejected 0 of 1, accepted 1 of 1\n   it accepted \"one-missing\", which it must reject: one file named that is not there, beside one that is"]);
+        // nor one that refuses everything
+        let (lines, held) = r.cases_told(&|_, _| fails());
+        assert!(!held);
+        assert_eq!(lines, ["✘ check fits of write: rejected 1 of 1, accepted 0 of 1\n   it rejected \"all-there\", which it must accept (every file named is there): b.txt is not there"]);
+        // a check that broke has not rejected: the case did not run
+        let (lines, held) = r.cases_told(&|_, _| Blocked { reason: "fits.sh exited with 2".into() });
+        assert!(!held && lines[0].starts_with("✘ check fits of write: rejected 0 of 1, accepted 0 of 1") && lines[0].contains("it could not judge \"one-missing\", so the case did not run: fits.sh exited with 2"), "{lines:?}");
+        // and where there is no box, nothing ran, which is said and is no pass
+        let (lines, held) = r.cases_told(&|_, _| Blocked { reason: "there is no box to run the project's commands in: none on this system".into() });
+        assert_eq!((lines, held), (vec!["✘ check fits of write: cases not run: no box here".to_string()], false));
+    }
+
+    #[test]
+    fn every_check_of_the_menu_comes_with_cases_and_a_role_is_told_how_many() {
+        for m in MENU_CHECKS {
+            let (reject, accept) = menu_cases(m.name).unwrap_or_else(|| panic!("{} is on the menu with no cases", m.name));
+            let cases = read_cases(reject, accept).unwrap_or_else(|e| panic!("{}: {}", m.name, e.join("; ")));
+            assert!(cases.iter().any(|c| c.reject) && cases.iter().any(|c| !c.reject), "{}", m.name);
+        }
+        assert!(menu_cases("no-such-check").is_none());
+        let r = TomlRole::load(&role("menu-cases", GOOD)).expect("reads");
+        let (lines, held) = r.cases_told(&|_, _| panic!("the menu's cases are run by the engine's own tests"));
+        assert!(held);
+        assert_eq!(lines, [
+            "✔ check suite-passes of change: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts",
+            "✔ check field-max-length of change: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts",
+        ]);
+    }
+
+    #[test]
+    fn a_new_role_comes_with_a_check_of_its_own_and_its_cases_ready_to_name() {
+        let text = template("tidy");
+        let line = "{ script = \"checks/files-exist.sh\", kind = \"open\", about = \"every file named in files is in the project\", cases = \"cases/files-exist\" }";
+        assert!(text.contains(&format!("#   {line}")), "the template shows the line to add");
+        // the folder holds what the line names, and the role reads with it added
+        let named = text.replace("checks = [\"output-follows-schema\", \"suite-passes\"]", &format!("checks = [\"output-follows-schema\", \"suite-passes\", {line}]"));
+        let dir = role("new-scaffold", &named);
+        for (path, content, runs) in scaffold() {
+            let at = dir.join(path);
+            std::fs::create_dir_all(at.parent().expect("parent")).expect("dir");
+            std::fs::write(&at, content).expect("write");
+            assert_eq!(runs, content.starts_with("#!"), "{path}");
+        }
+        let r = TomlRole::load(&dir).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let CheckImpl::Script { cases: Some(cases), .. } = &r.extras["make"].checks["files-exist"] else { panic!("no cases") };
+        assert_eq!((cases.iter().filter(|c| c.reject).count(), cases.iter().filter(|c| !c.reject).count()), (2, 2));
+        assert!(r.notes().is_empty(), "{:?}", r.notes());
     }
 
     #[test]

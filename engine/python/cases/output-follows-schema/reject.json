@@ -1,0 +1,216 @@
+[
+ {
+  "id": "required-missing",
+  "hole": "a required field that is not there",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "files": [
+    "a"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "required-blank",
+  "hole": "a required text of spaces alone",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "  "
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "one-over",
+  "hole": "one character over the text's limit",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "eleven char"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "number-for-text",
+  "hole": "a number where the schema says text",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": 7
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "wrong-item",
+  "hole": "one item of a list of another type",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "ok",
+   "files": [
+    "a",
+    2
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "one-item-over",
+  "hole": "one item over the list's limit",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "ok",
+   "files": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "not-an-object",
+  "hole": "an output that is a list, not an object",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": [
+   "ok"
+  ],
+  "expect": "reject"
+ }
+]

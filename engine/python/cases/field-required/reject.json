@@ -1,0 +1,46 @@
+[
+ {
+  "id": "only-spaces",
+  "hole": "a field of spaces alone is not filled",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "   "
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "another-field",
+  "hole": "another field being there does not fill this one",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summery": "hello becomes hi"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "empty-list",
+  "hole": "a list with nothing in it is not filled",
+  "with": {
+   "field": "files"
+  },
+  "output": {
+   "files": []
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "null",
+  "hole": "a field set to nothing is not filled",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": null
+  },
+  "expect": "reject"
+ }
+]

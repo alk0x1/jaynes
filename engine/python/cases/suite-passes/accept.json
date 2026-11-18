@@ -1,0 +1,49 @@
+[
+ {
+  "id": "suite-passes",
+  "keeps": "a project whose suite passes",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n",
+   "greeting.txt": "hi\n"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "no-suite",
+  "keeps": "a project with no suite has none to fail",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "",
+     "suite": "",
+     "each": "",
+     "found": ""
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hello\n"
+  },
+  "expect": "accept"
+ }
+]

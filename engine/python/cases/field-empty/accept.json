@@ -1,0 +1,38 @@
+[
+ {
+  "id": "left-empty",
+  "keeps": "a field the agent left empty",
+  "with": {
+   "field": "in_the_way",
+   "says": "A test stands in the way"
+  },
+  "output": {
+   "in_the_way": ""
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "not-there",
+  "keeps": "a field that is not there is empty",
+  "with": {
+   "field": "in_the_way",
+   "says": "A test stands in the way"
+  },
+  "output": {
+   "summary": "done"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "only-spaces",
+  "keeps": "spaces alone put nothing before the person",
+  "with": {
+   "field": "in_the_way",
+   "says": "A test stands in the way"
+  },
+  "output": {
+   "in_the_way": "  "
+  },
+  "expect": "accept"
+ }
+]

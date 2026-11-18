@@ -107,6 +107,18 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             std::fs::write(dir.join(toml_role::FILE), toml_role::template(name)).map_err(|e| e.to_string())?;
+            // a check of the role's own with the cases it comes with, to start from
+            for (path, text, runs) in toml_role::scaffold() {
+                let at = dir.join(path);
+                if let Some(folder) = at.parent() {
+                    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(&at, text).map_err(|e| e.to_string())?;
+                if runs {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+                }
+            }
             println!("wrote {}: write the method in it, then `jaynes check {}` until every line is ✔", dir.join(toml_role::FILE).display(), dir.display());
             Ok(())
         }
@@ -123,11 +135,20 @@ fn run(args: &[String]) -> Result<(), String> {
                     for note in role.notes() {
                         println!("! {note}");
                     }
+                    // each check held to the cases it comes with, before anything is proved of the method
+                    let (lines, held) = role.run_cases(&library());
+                    for l in &lines {
+                        println!("{l}");
+                    }
                     let (lines, all) = role.prove();
                     for l in &lines {
                         println!("{l}");
                     }
-                    if all { Ok(()) } else { Err("a promise of the role does not hold".into()) }
+                    match (held, all) {
+                        (true, true) => Ok(()),
+                        (false, _) => Err("a check of the role does not hold to its cases".into()),
+                        (true, false) => Err("a promise of the role does not hold".into()),
+                    }
                 }
                 Err(errors) => Err(format!("✘ the role does not read:\n{}", errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n"))),
             }

@@ -1,0 +1,94 @@
+[
+ {
+  "id": "whole",
+  "keeps": "every field of its type and within its limits",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "ten chars!",
+   "files": [
+    "a",
+    "b"
+   ]
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "optional-left-out",
+  "keeps": "a field the schema does not require may be left out",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "ok"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "one-more-field",
+  "keeps": "a field the schema does not name is not refused",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 10
+     },
+     "files": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "ok",
+   "note": "extra"
+  },
+  "expect": "accept"
+ }
+]

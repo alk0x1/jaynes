@@ -1,0 +1,47 @@
+[
+ {
+  "id": "holds",
+  "keeps": "a case that holds on the changed project",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": [
+      {
+       "says": "the greeting says hi",
+       "run": "grep -q hi greeting.txt"
+      }
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hi\n"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "none-written",
+  "keeps": "a hidden step that wrote no case leaves none to fail",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": []
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hello\n"
+  },
+  "expect": "accept"
+ }
+]

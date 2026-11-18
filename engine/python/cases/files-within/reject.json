@@ -1,0 +1,49 @@
+[
+ {
+  "id": "kept-out",
+  "hole": "a path the role keeps out with ! is not one it may write, though its folder is",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/generated/api.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "beside",
+  "hole": "a folder whose name only starts the same",
+  "with": {
+   "write": [
+    "src/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src-old/app.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "one-outside",
+  "hole": "one file outside among files inside",
+  "with": {
+   "write": [
+    "src/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/app.py",
+    "README.md"
+   ]
+  },
+  "expect": "reject"
+ }
+]

@@ -1,0 +1,52 @@
+[
+ {
+  "id": "suite-fails",
+  "hole": "a suite that fails on the changed project",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "says-it-passed",
+  "hole": "an output that says the suite passed does not make it pass",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "summary": "all tests pass"
+  },
+  "project": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ }
+]

@@ -1,0 +1,40 @@
+[
+ {
+  "id": "one-word",
+  "hole": "a single word is a matter put before the person",
+  "with": {
+   "field": "in_the_way",
+   "says": "A test stands in the way"
+  },
+  "output": {
+   "in_the_way": "tests/old.py"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "list-of-one",
+  "hole": "a list with one entry is filled",
+  "with": {
+   "field": "in_the_way",
+   "says": "A test stands in the way"
+  },
+  "output": {
+   "in_the_way": [
+    "tests/old.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "false",
+  "hole": "false is something said, not an empty field",
+  "with": {
+   "field": "in_the_way",
+   "says": "A test stands in the way"
+  },
+  "output": {
+   "in_the_way": false
+  },
+  "expect": "reject"
+ }
+]

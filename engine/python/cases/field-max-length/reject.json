@@ -1,0 +1,29 @@
+[
+ {
+  "id": "one-over",
+  "hole": "one character over the limit",
+  "with": {
+   "field": "summary",
+   "max": 5
+  },
+  "output": {
+   "summary": "123456"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "long-list",
+  "hole": "a list is measured as it is written, so a long one does not slip by as no text",
+  "with": {
+   "field": "files",
+   "max": 5
+  },
+  "output": {
+   "files": [
+    "a.py",
+    "b.py"
+   ]
+  },
+  "expect": "reject"
+ }
+]

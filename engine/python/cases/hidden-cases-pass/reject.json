@@ -1,0 +1,56 @@
+[
+ {
+  "id": "does-not-hold",
+  "hole": "a case that does not hold on the changed project",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": [
+      {
+       "says": "the greeting says hi",
+       "run": "grep -q hi greeting.txt"
+      }
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "one-of-two",
+  "hole": "one case failing among cases that hold",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": [
+      {
+       "says": "the greeting says hi",
+       "run": "grep -q hi greeting.txt"
+      },
+      {
+       "says": "the greeting is one line",
+       "run": "test $(wc -l < greeting.txt) -eq 1"
+      }
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hi\nhi\n"
+  },
+  "expect": "reject"
+ }
+]

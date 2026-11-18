@@ -1,0 +1,66 @@
+[
+ {
+  "id": "fails-as-quoted",
+  "keeps": "a test that fails and prints the line the output quotes",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "not-reproduced",
+  "keeps": "an output that says no test shows the bug, which a later step puts before the person",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": false
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hi\n"
+  },
+  "expect": "accept"
+ }
+]
