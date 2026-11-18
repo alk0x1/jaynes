@@ -392,16 +392,21 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-fonts`, `copy-summary`, `close-window`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
         cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        // taken whole by a rename, so a line written while it is read is not lost: it lands in a new file
+        let taking = file.with_extension("taking");
+        if std::fs::rename(&file, &taking).is_err() {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&taking) else { continue };
+        let _emptied = std::fs::write(&file, "");
         if text.trim().is_empty() {
             continue;
         }
-        let _emptied = std::fs::write(&file, "");
         for line in text.lines() {
             let line = line.to_string();
             let Some(window) = cx.update(|cx| cx.windows().first().copied()) else { continue };
@@ -479,10 +484,25 @@ impl Island {
                 }
             }
             // the window's close button, as a click on it closes the window; and a panic, to see the app's log keep it
-            "close-window" => window.remove_window(),
+            // as the close button does; and the Dock's click, which opens it again
+            "close-window" => {
+                if let Some(Some(root)) = window.root::<crate::Root>() {
+                    root.update(cx, |r, cx| r.let_go(cx));
+                }
+                crate::hide_main(window);
+            }
+            // after this line, as the Dock's click comes: from outside the window's own update
+            "reopen" => cx.defer(crate::show_main),
+            "shown?" => {
+                let shown = crate::shown(window);
+                tracing::info!("the main window is {}", if shown { "on the screen" } else { "hidden" });
+            }
             "panic" => panic!("a test asked the app to panic"),
             // the Copy as Markdown button under a finished run's story
             "copy-summary" => window.dispatch_action(Box::new(crate::CopySummary), cx),
+            "settings-close" => {
+                crate::settings_window::with_open(cx, |_, window, _| window.remove_window());
+            }
             "settings-fonts" => {
                 crate::settings_window::with_open(cx, |v, _, cx| v.toggle_fonts(cx));
             }

@@ -3098,6 +3098,7 @@ dependencies = [
  "objc2-local-authentication",
  "objc2-user-notifications",
  "png 0.17.16",
+ "raw-window-handle",
  "security-framework",
  "serde",
  "serde_json",

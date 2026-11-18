@@ -92,9 +92,7 @@ impl Runs {
                         this.selected = Some(r.id.clone());
                     }
                     // a test that draws the window into a picture leaves the person's screen as it is
-                    if std::env::var_os("JAYNES_APP_SHOT").is_none() {
-                        cx.activate(true);
-                    }
+                    crate::show_main(cx);
                     cx.notify();
                 })
                 .is_err();

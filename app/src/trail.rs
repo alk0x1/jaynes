@@ -83,6 +83,11 @@ pub fn ending(why: Ending) {
     *ENDING.lock().unwrap() = Some(why);
 }
 
+/// The main window was closed: the app goes on, in the Dock and the menu bar.
+pub fn window_closed() {
+    tracing::info!("its window was closed, the app stays (the Dock, the menu bar item or a notice opens it again)");
+}
+
 /// The app's last line, as it ends: why, as said by `ending`, else that macOS asked.
 pub fn ended() {
     let why = ENDING.lock().unwrap().unwrap_or(Ending::Unknown);

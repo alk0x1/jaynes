@@ -94,7 +94,7 @@ fn folder() -> String {
     std::env::args().nth(1).filter(|a| !a.starts_with("-psn")).or(here).unwrap_or(home)
 }
 
-struct Root {
+pub(crate) struct Root {
     runs: Entity<model::Runs>,
     tabs: Entity<tabs::Tabs>,
     side: Entity<side::Side>,
@@ -138,6 +138,8 @@ struct Root {
     was_open: Option<String>,
     /// Whether the Inbox showed then.
     was_inbox: bool,
+    /// The window is hidden and its terminals let go, to be taken up again when it shows.
+    let_go: bool,
     _branch: Task<()>,
 }
 
@@ -268,7 +270,12 @@ impl Render for Root {
                     this.halt_picked(cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.tabs.update(cx, |t, cx| t.close(cx))))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                if !this.tabs.update(cx, |t, cx| t.close(cx)) {
+                    this.let_go(cx);
+                    hide_main(window);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewAgent, window, cx| this.new_agent(window, cx)))
             .on_action(cx.listener(|this, _: &Shortcuts, _, cx| {
                 this.help = !this.help;
@@ -358,6 +365,28 @@ enum Shown {
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
+    /// Lets go of every terminal the window shows, as it hides: a hidden app holds no terminal's size, and the
+    /// person's other viewers (Herdr) size them as they use them.
+    pub(crate) fn let_go(&mut self, cx: &App) {
+        for (_, v) in &self.panes {
+            v.read(cx).detach();
+        }
+        self.terminal.read(cx).detach();
+        self.let_go = true;
+    }
+
+    /// Takes the terminals up again, as the window shows.
+    fn take_up(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.let_go) {
+            return;
+        }
+        let core = self.core.clone();
+        for v in self.panes.iter().map(|(_, v)| v.clone()).chain([self.terminal.clone()]) {
+            v.update(cx, |v, cx| v.reattach(core.clone(), cx));
+        }
+        cx.notify();
+    }
+
     /// What the middle shows now, if it can stay over an agent while it opens (a run's story cannot).
     fn middle_shown(&self, cx: &App) -> Option<Shown> {
         if self.was_changes {
@@ -1243,7 +1272,10 @@ fn main() {
         trail::fail(&format!("this herdr-core cannot serve the app: {e:?}"));
     }
 
-    gpui_platform::application().run(move |cx| {
+    let app = gpui_platform::application();
+    // the Dock icon clicked while the app runs: its window comes back
+    app.on_reopen(show_main);
+    app.run(move |cx| {
         let fonts = settings::BUNDLED_FONTS.iter().map(|f| std::borrow::Cow::Borrowed(*f)).collect();
         if let Err(e) = cx.text_system().add_fonts(fonts) {
             tracing::warn!("bundled fonts not loaded: {e:#}");
@@ -1375,6 +1407,14 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         ..Default::default()
     };
     cx.open_window(options, move |window, cx| {
+        // its close button hides it: the app stays, in the Dock and the menu bar, and notices still come
+        window.on_window_should_close(cx, |window, cx| {
+            if let Some(Some(root)) = window.root::<Root>() {
+                root.update(cx, |r, cx| r.let_go(cx));
+            }
+            hide_main(window);
+            false
+        });
         let address = existing(&core).unwrap_or_else(|| {
             let labels = json!({LABEL.0: LABEL.1});
             core.run(vec!["claude".into()], Some(folder()), labels, None, None, terminal::initial_display(window))
@@ -1442,7 +1482,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             cx.spawn(async move |this, cx| {
                 while let Ok(about) = clicks.recv().await {
                     let opened = this.update(cx, |root: &mut Root, cx| {
-                        cx.activate(true);
+                        show_main(cx);
                         let agent = root.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == about).map(|a| a.title.clone());
                         match agent {
                             Some(title) => root.tabs.update(cx, |t, cx| t.show_agent(about, title, cx)),
@@ -1478,15 +1518,102 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, _branch: branch }
         })
     })
     .map(|handle| {
+        MAIN.with(|m| m.set(Some(handle.into())));
         if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {
             shots(handle.into(), path.into(), cx);
         }
     })
     .expect("cannot open the Jaynes window");
+}
+
+thread_local! {
+    /// The main window: hidden when the person closes it, never closed, so it comes back as it was.
+    static MAIN: std::cell::Cell<Option<AnyWindowHandle>> = const { std::cell::Cell::new(None) };
+}
+
+/// Hides the main window, as its close button and Command-W on its last tab do: the app stays in the Dock and the
+/// menu bar, its notices still come, and its tabs, the run open and the terminals stay as they are.
+pub(crate) fn hide_main(window: &mut Window) {
+    set_shown(window, false);
+    trail::window_closed();
+}
+
+/// Brings the main window back as it was, in front: a click on the Dock, on the menu bar item or on a notice.
+pub(crate) fn show_main(cx: &mut App) {
+    if let Some(main) = MAIN.with(|m| m.get()) {
+        let _ = main.update(cx, |_, window, cx| {
+            set_shown(window, true);
+            window.activate_window();
+            if let Some(Some(root)) = window.root::<Root>() {
+                root.update(cx, |r, cx| r.take_up(cx));
+            }
+        });
+    }
+    // a test that draws the window into a picture leaves the person's keyboard where it is
+    if std::env::var_os("JAYNES_APP_SHOT").is_none() {
+        cx.activate(true);
+    }
+}
+
+/// Whether this window is on the screen.
+pub(crate) fn shown(window: &mut Window) -> bool {
+    ns_window_visible(window)
+}
+
+/// Orders the window out of the screen, or back in front, without closing it (AppKit's orderOut: and
+/// makeKeyAndOrderFront:; GPUI hides only the whole app).
+#[cfg(target_os = "macos")]
+fn set_shown(window: &mut Window, shown: bool) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+    // SAFETY: the view AppKit gave GPUI for this window, alive while the window is; its window is an NSWindow.
+    unsafe {
+        let view: &AnyObject = &*h.ns_view.as_ptr().cast::<AnyObject>();
+        let ns: *mut AnyObject = msg_send![view, window];
+        if let Some(ns) = ns.as_ref() {
+            let none: *const AnyObject = std::ptr::null();
+            if shown {
+                let _: () = msg_send![ns, makeKeyAndOrderFront: none];
+            } else {
+                let _: () = msg_send![ns, orderOut: none];
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ns_window_visible(window: &mut Window) -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else { return false };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return false };
+    // SAFETY: as in set_shown.
+    unsafe {
+        let view: &AnyObject = &*h.ns_view.as_ptr().cast::<AnyObject>();
+        let ns: *mut AnyObject = msg_send![view, window];
+        ns.as_ref().is_some_and(|ns| {
+            let v: Bool = msg_send![ns, isVisible];
+            v.as_bool()
+        })
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_shown(window: &mut Window, _shown: bool) {
+    window.minimize_window();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ns_window_visible(_: &mut Window) -> bool {
+    true
 }
 
 /// The person's own key, paired with the engine; None when either fails, and the app then answers nothing.

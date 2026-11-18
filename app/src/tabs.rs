@@ -181,13 +181,14 @@ impl Tabs {
 
     /// Command-W: closes the run's tab that shows and moves to its neighbour, as a browser does; it stays closed until
     /// the run moves on. Claude Code's tab never closes.
-    pub fn close(&mut self, cx: &mut Context<Self>) {
+    /// Closes the tab that shows; false when there is none to close (Claude Code's own tab), and the window goes.
+    pub fn close(&mut self, cx: &mut Context<Self>) -> bool {
         // the Changes tab first: under it, the agent it was opened from
         if self.changes.take().is_some() || self.agent.take().is_some() || std::mem::take(&mut self.inbox) {
             cx.notify();
-            return;
+            return true;
         }
-        let Some(id) = self.open.clone() else { return };
+        let Some(id) = self.open.clone() else { return false };
         let keys: Vec<Option<String>> = self.shown(cx).into_iter().map(|(k, _, _)| k).collect();
         let at = keys.iter().position(|k| k.as_deref() == Some(id.as_str())).unwrap_or(0);
         let next = if at > 0 { keys.get(at - 1) } else { keys.get(at + 1) }.cloned().flatten();
@@ -196,6 +197,7 @@ impl Tabs {
             self.closed.insert(id, (r.mark, r.line.clone()));
         }
         self.show(next, cx);
+        true
     }
 
     /// The tabs as they stand in the bar, Claude Code's as None, with each run's title and mark.

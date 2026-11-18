@@ -594,9 +594,10 @@ impl TerminalView {
             && self.search_input.as_ref().is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
     }
 
+    /// Lets go of the terminal: herdr-core sizes it for its other viewers from now on; `reattach` takes it up again.
     pub fn detach(&self) {
-        let g = self.grid.borrow();
-        if let Some(ch) = g.channel {
+        let mut g = self.grid.borrow_mut();
+        if let Some(ch) = g.channel.take() {
             g.core.detach(ch);
         }
     }
