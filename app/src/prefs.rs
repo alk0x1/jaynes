@@ -1,5 +1,6 @@
-//! The person's settings: what the Settings screen shows, kept in a file of theirs (~/.jaynes/app-settings.json, or
-//! JAYNES_APP_SETTINGS) and read at start. Each is one the app applies; a change takes effect at once.
+//! The person's settings: what the Settings screen shows, kept in a file of theirs (app-settings.json in the engine's
+//! home, ~/.jaynes/engine, or JAYNES_APP_SETTINGS) and read at start. Each is one the app applies; a change takes
+//! effect at once.
 
 use crate::settings::{OptionAsAlt, Settings};
 use serde::{Deserialize, Serialize};
