@@ -95,7 +95,7 @@ fn get(port: u16, path: &str) -> String {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
     s.set_read_timeout(Some(PAGE_WAIT)).expect("timeout");
     s.set_write_timeout(Some(PAGE_WAIT)).expect("timeout");
-    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n").as_bytes()).expect("write");
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes()).expect("write");
     let mut out = String::new();
     if let Err(e) = s.read_to_string(&mut out) {
         panic!("the page on port {port} did not answer within {} s ({e}); what came: {}", PAGE_WAIT.as_secs(), out.chars().take(300).collect::<String>());
@@ -107,13 +107,16 @@ fn post(port: u16, path: &str, body: &str) -> serde_json::Value {
     post_as(port, path, body, "jaynes_key=k3y")
 }
 
-fn post_as(port: u16, path: &str, body: &str, cookie: &str) -> serde_json::Value {
+/// A POST from the page's own origin; `me` is "jaynes_key=KEY" for the person, sent as the page's script sends it
+/// (the key in its header), or "" for a client without the key.
+fn post_as(port: u16, path: &str, body: &str, me: &str) -> serde_json::Value {
     use std::io::{Read, Write};
+    let key = me.strip_prefix("jaynes_key=").map(|k| format!("X-Jaynes-Key: {k}\r\n")).unwrap_or_default();
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
     s.set_read_timeout(Some(PAGE_WAIT)).expect("timeout");
     s.set_write_timeout(Some(PAGE_WAIT)).expect("timeout");
     let raw = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\n{key}Content-Length: {}\r\n\r\n{body}",
         body.len()
     );
     s.write_all(raw.as_bytes()).expect("write");

@@ -310,7 +310,8 @@ pub fn ensure_page(home: &Path) -> String {
     if c.spawn().is_ok() {
         std::thread::sleep(std::time::Duration::from_millis(400));
         if std::env::var("JAYNES_NO_BROWSER").is_err() {
-            let _opened = Command::new("open").arg(format!("{address}?key={}", page_key(home))).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+            // the key in the fragment, which the browser keeps for the page and never sends to any server
+            let _opened = Command::new("open").arg(format!("{address}#key={}", page_key(home))).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
         }
     }
     address

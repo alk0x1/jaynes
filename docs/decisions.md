@@ -2,6 +2,31 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-17: The page's key leaves the cookie
+
+**Decided.** The link the page prints carries its key in the fragment
+(`/#key=...`), which a browser never sends to a server. The page keeps it for
+its own origin (scheme, host and port) and sends it only with its own requests,
+in the `X-Jaynes-Key` header. A request counts as the person's only with that
+key and the page's own origin; another origin is refused outright, and a
+program that sends no origin is an agent. An old `?key=` link goes on to the
+fragment once, and the page clears the old cookie wherever it still comes in.
+Only the page's own script runs on it: a content policy forbids inline scripts
+and scripts from elsewhere, and what agents write is shown as text.
+
+**Why.** A browser does not keep cookies apart by port. Every server on
+127.0.0.1 received the key with every request, including apps the agents start
+during runs, and a second page opened with another key replaced the person's.
+
+**Tradeoffs.**
+
+- A script on the page's origin can now read the key, which the cookie kept
+  from scripts; the content policy and the escaping are what pay for that.
+- A program that reads the key's file can still send both headers. The page
+  keeps other sites and apps out; it does not prove the person.
+
+**Open.** A refused attempt to answer as the person leaves no trace yet.
+
 ## 2026-11-11: A decision can be dropped for good or taken as the base
 
 **Decided.** Next to keep and redo, each decision at a stop can be dropped for

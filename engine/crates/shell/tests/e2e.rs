@@ -521,9 +521,12 @@ fn http(port: u16, raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn post(port: u16, path: &str, body: &str, cookie: &str) -> Value {
+/// A POST from the page's own origin; `me` is "jaynes_key=KEY" for the person, sent as the page's script sends it
+/// (the key in its header), or "" for a client without the key.
+fn post(port: u16, path: &str, body: &str, me: &str) -> Value {
+    let key = me.strip_prefix("jaynes_key=").map(|k| format!("X-Jaynes-Key: {k}\r\n")).unwrap_or_default();
     let raw = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\n{key}Content-Length: {}\r\n\r\n{body}",
         body.len()
     );
     let out = http(port, &raw);
@@ -551,13 +554,11 @@ fn the_page_answers_as_the_person_only_with_its_key() {
         .map(Page)
         .expect("page");
     page_up(port);
-    // another address is refused, the key sets a cookie, and the question is on the page
+    // another address is refused, an old link with the key goes on to the fragment, and the question is on the page
     assert!(http(port, &format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n")).starts_with("HTTP/1.1 403"));
     let keyed = http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
-    assert!(keyed.contains("Set-Cookie: jaynes_key=k3y"));
-    // the cookie outlives the browser's restarts, as the key outlives the page's: the link is opened once
-    assert!(keyed.contains("Max-Age=31536000"), "{keyed}");
-    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    assert!(keyed.contains("Location: /#key=k3y\r\n"), "{keyed}");
+    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
     assert!(home.contains("The change turned out bigger than a small one"), "{home}");
     // each run shows its steps as a strip, as the earlier page did
     assert!(home.contains("<div class=\"strip\"><i class=\"\" title=\"runner\"></i><i class=\"waiting\" title=\"change\"></i></div>"), "{home}");
@@ -586,9 +587,9 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let answered = events(&s, "page").into_iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
     assert_eq!(answered["answer"]["by"]["by"], "person");
     // with nothing waiting, the page opens on home: what was delivered, newest first, each a link to its run
-    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
     assert!(home.contains("<h2>Delivered</h2>") && home.contains("<a class=\"hrow\" href=\"/run/page\">") && home.contains("Nothing waits for you"), "{home}");
-    assert!(http(port, &format!("GET /home HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n")).contains("<a class=\"hrow\" href=\"/run/page\">"));
+    assert!(http(port, &format!("GET /home HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).contains("<a class=\"hrow\" href=\"/run/page\">"));
     assert_eq!(answered["answer"]["context"], "for accountants");
 }
 
@@ -922,7 +923,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
         .map(Page)
         .expect("page");
     page_up(port);
-    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
     assert!(html.contains("ink on newsprint"), "the item's sentence is shown");
     assert!(html.contains("<img src=\"data:image/svg+xml;base64,"), "the item's picture is shown");
     // the picture was kept by its fingerprint, apart from the run's copy
@@ -1281,7 +1282,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
         .map(Page)
         .expect("page");
     page_up(port);
-    let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
     assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
 }
 
@@ -1524,7 +1525,7 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
         .map(Page)
         .expect("page");
     page_up(port);
-    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
     let link = html.split("<a class=\"open\" href=\"/page/").nth(1).and_then(|r| r.split('"').next()).expect("a link to the page").to_string();
     assert!(pages.contains(&&link), "{link} {pages:?}");
     let served = http(port, &format!("GET /page/{link} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
