@@ -780,6 +780,7 @@ mod tests {
         let hidden = around(&git, &[git.join("objects")]);
         assert_eq!(hidden, vec![real.join("config"), real.join("hooks"), real.join("refs")]);
         assert_eq!(around(&git, &[]), vec![real.clone()]);
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -1444,6 +1444,7 @@ mod tests {
         assert!(read_inside(&root, &root.join("link.txt")).is_err_and(|e| e.is_some()));
         assert!(read_inside(&root, &root.join("up/outside.txt")).is_err_and(|e| e.is_some_and(|w| w.contains("out of the step's folder"))));
         assert!(read_inside(&root, &root.join("sub")).is_err_and(|e| e.is_some()));
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -1455,6 +1456,7 @@ mod tests {
         std::fs::write(base.join("secret.json"), "{}").expect("write");
         std::fs::hard_link(base.join("secret.json"), root.join("output.json")).expect("link");
         assert!(read_inside(&root, &root.join("output.json")).is_err_and(|e| e.is_some_and(|w| w.contains("link"))));
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -1484,6 +1486,7 @@ mod tests {
         // folders made on the way, inside
         write_inside(&root, &root.join(".jaynes/pictures/new/d.png"), b"d").expect("written");
         assert!(root.join(".jaynes/pictures/new/d.png").is_file());
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -646,6 +646,7 @@ mod git_tests {
         assert_eq!(git(&dir, &["status", "--porcelain"]).expect("status"), "");
         let copy = Copy { source: source.clone(), dir: dir.clone(), git: git_dir(&dir), branch: "jaynes/r".into() };
         deliver_merge_undo(&copy);
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -659,6 +660,7 @@ mod git_tests {
         std::fs::create_dir_all(base.join("lib/node_modules/x/.git")).expect("dir");
         std::fs::create_dir_all(base.join(".git")).expect("dir");
         assert_eq!(nested_git(&base), ["a/.GIT", "b/.Git"]);
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -677,6 +679,7 @@ mod git_tests {
         let refused = copy.stage(&["**".to_string()]);
         assert!(matches!(&refused, Err(Ok(paths)) if paths.iter().any(|p| p.starts_with("vendor/node_modules/inner"))), "{refused:?}");
         assert!(!inner.exists(), "the nested repository is left in the copy");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -690,6 +693,7 @@ mod git_tests {
         let w = warnings(&base);
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(w[0].contains("git-lfs") && w[1].contains("submodules"), "{w:?}");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -725,6 +729,7 @@ mod git_tests {
         assert_eq!(start_branch_of(&dir), "main");
         let copy = Copy { source: source.clone(), dir: dir.clone(), git: git_dir(&dir), branch: "jaynes/r".into() };
         deliver_merge_undo(&copy);
+        let _gone = std::fs::remove_dir_all(&base);
     }
 }
 
