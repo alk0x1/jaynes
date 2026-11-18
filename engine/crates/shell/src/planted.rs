@@ -68,30 +68,49 @@ pub fn hidden(e: &Event) -> bool {
     matches!(e, Event::DefectPlanted { .. } | Event::DefectRemoved { .. })
 }
 
+/// The answer the person gave at the stop of `step` after the defect `id` went into it, as the record holds it: the
+/// question, each item's verdict and whether it sent the work back. None while no such answer was given.
+fn answered_after(events: &[Event], id: &str, step: &str) -> Option<(String, serde_json::Map<String, Value>, bool, bool)> {
+    let from = events.iter().position(|e| matches!(e, Event::DefectPlanted { id: i, .. } if i == id))?;
+    events[from..].iter().find_map(|e| match e {
+        Event::AnswerRecorded { answer, .. } => {
+            let asked = events.iter().find_map(|q| match q {
+                Event::QuestionOpened { question } if question.id == answer.question => Some(question),
+                _ => None,
+            })?;
+            (asked.step == step && asked.kind == jaynes_core::question::QuestionKind::Decision).then(|| {
+                let verdicts = answer.verdicts.iter().map(|(item, v)| (item.clone(), serde_json::to_value(v.kind()).unwrap_or(Value::Null))).collect();
+                (answer.question.clone(), verdicts, answer.verdicts.values().any(|v| v.kind().sends_back()), answer.by.person())
+            })
+        }
+        _ => None,
+    })
+}
+
+/// The steps whose stop the person kept while a defect an evaluation planted was in it, once that defect is out: what
+/// a run's summary tells them after, read from the record alone. Before the defect is out, nothing says it.
+pub fn missed(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::DefectPlanted { id, step, .. } if events.iter().any(|r| matches!(r, Event::DefectRemoved { id: i, .. } if i == id)) => {
+                answered_after(events, id, step).filter(|(_, _, sent_back, person)| !sent_back && *person).map(|_| step.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// The evaluation's export of a run: each defect planted in it with what became of it, and the answer the person
-/// gave at the stop of its step after it went in, for the evaluator to judge.
+/// gave at the stop of its step after it went in, for the evaluator to judge: caught (sent back) or missed.
 pub fn export(dir: &Path, events: &[Event]) -> Value {
     let planted_at = |id: &str| events.iter().position(|e| matches!(e, Event::DefectPlanted { id: i, .. } if i == id));
     let defects: Vec<Value> = read(dir)
         .iter()
         .map(|d| {
-            let answered = planted_at(&d.id).and_then(|from| {
-                events[from..].iter().find_map(|e| match e {
-                    Event::AnswerRecorded { answer, .. } => {
-                        let asked = events.iter().find_map(|q| match q {
-                            Event::QuestionOpened { question } if question.id == answer.question => Some(question),
-                            _ => None,
-                        })?;
-                        (asked.step == d.step).then(|| {
-                            let verdicts: serde_json::Map<String, Value> =
-                                answer.verdicts.iter().map(|(item, v)| (item.clone(), serde_json::to_value(v.kind()).unwrap_or(Value::Null))).collect();
-                            // what the evaluation counts: the stop that showed it sent the work back, never "caught"
-                            let sent_back = answer.verdicts.values().any(|v| v.kind().sends_back());
-                            json!({"question": answer.question, "verdicts": verdicts, "sent_back": sent_back, "by_person": answer.by.person()})
-                        })
-                    }
-                    _ => None,
-                })
+            let answered = answered_after(events, &d.id, &d.step).map(|(question, verdicts, sent_back, by_person)| {
+                // what the evaluation counts: the stop that showed it sent the work back (caught), or did not (missed)
+                json!({"question": question, "verdicts": verdicts, "sent_back": sent_back, "result": if sent_back { "caught" } else { "missed" }, "by_person": by_person})
             });
             // nothing went out while it was in: no delivery between its planting and its taking out, nor after it while
             // it is still in. The core holds that; the record says it
@@ -101,9 +120,11 @@ pub fn export(dir: &Path, events: &[Event]) -> Value {
                     .take_while(|e| !matches!(e, Event::DefectRemoved { id, .. } if *id == d.id))
                     .all(|e| !matches!(e, Event::DeliveryAsked { .. } | Event::Delivered { .. }))
             });
+            // as the record holds it, which a process taking the defect out writes before this file
+            let still_in = !events.iter().any(|e| matches!(e, Event::DefectRemoved { id, .. } if *id == d.id));
             json!({
                 "id": d.id, "step": d.step, "planter": d.planter, "note": d.note, "files": d.files, "patch": d.patch,
-                "at": d.at, "removed": d.removed, "never_delivered": never_delivered, "answered": answered,
+                "at": d.at, "still_in": still_in, "removed": d.removed, "never_delivered": never_delivered, "answered": answered,
             })
         })
         .collect();

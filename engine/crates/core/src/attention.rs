@@ -190,6 +190,8 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
     let mut finished: BTreeMap<String, (u64, Outcome)> = BTreeMap::new();
     let mut corrected: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
     let mut undone: std::collections::BTreeSet<String> = Default::default();
+    // the defects an evaluation planted and has not taken out, by run, each with its step
+    let mut planted: BTreeMap<(String, String), String> = BTreeMap::new();
     for (at, run, e) in history {
         let key_of = |step: &str, runs: &BTreeMap<String, (Manifest, Digest)>| {
             runs.get(run).and_then(|(m, f)| m.index(step).map(|i| (stop_key(m, f, i), m.steps[i].executor, lineage(m, i))))
@@ -217,6 +219,12 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
                 // "I don't know" is no verdict: an answer that left any item unjudged is no accept, and counts for
                 // nothing, neither right nor error, leaving what the stop's record held before it as it was. A send-back
                 // is still an error, whatever else it skipped.
+                // a stop that showed a defect an evaluation planted, not yet taken out, measures the person who
+                // reviews, never the stop: whatever is answered there, it is out of the count, which does not guess
+                // whether a send-back was for the defect or for something else
+                if planted.iter().any(|((r, _), s)| r == run && *s == step) {
+                    continue;
+                }
                 if !answer.sends_back() && items.iter().any(|id| answer.verdict(id) == crate::question::Verdict::Skip) {
                     continue;
                 }
@@ -250,6 +258,12 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
             }
             Event::RunFinished { outcome, .. } => {
                 finished.insert(run.clone(), (*at, *outcome));
+            }
+            Event::DefectPlanted { id, step, .. } => {
+                planted.insert((run.clone(), id.clone()), step.clone());
+            }
+            Event::DefectRemoved { id, .. } => {
+                planted.remove(&(run.clone(), id.clone()));
             }
             Event::DeliveryCorrected { step, .. } => corrected.entry(run.clone()).or_default().push(step.clone()),
             // A delivery the person undid earns no right.

@@ -2009,6 +2009,63 @@ fn g17_i_do_not_know_counts_for_nothing() {
     assert_eq!((c.n, c.k, c.pending), (without.n, without.k, without.pending), "an answer with an item unjudged counted");
 }
 
+#[test]
+fn g17_a_stop_that_showed_a_planted_defect_is_out_of_the_count_whatever_is_answered() {
+    use jaynes_core::attention::count;
+    let manifest = released_stop();
+    let key = stop_key(&manifest, &Digest("f".to_string()), 0);
+    let lin = jaynes_core::attention::lineage(&manifest, 0);
+    let day = 24 * 3600;
+    // a run whose stop showed a defect an evaluation planted, answered with `verdict` while it was in, or after
+    let planted = |run: &str, verdict: Option<Verdict>, while_in: bool| {
+        let mut events = history_run(run, 1000, verdict, By::Person, &manifest);
+        let answered = events.iter().position(|(_, _, e)| matches!(e, Event::AnswerRecorded { .. })).expect("answered");
+        let out = if while_in { answered + 1 } else { answered };
+        events.insert(out, (1000, run.to_string(), Event::DefectRemoved { id: "d1".to_string(), by: By::Person }));
+        events.insert(answered, (1000, run.to_string(), Event::DefectPlanted { id: "d1".to_string(), step: "change".to_string(), by: By::Person }));
+        events
+    };
+    let mut plain = Vec::new();
+    for n in 0..10 {
+        plain.extend(history_run(&format!("k{n}"), 1000, None, By::Person, &manifest));
+    }
+    let without = count(&plain, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    // kept, sent back, changed, or not known, while the defect was in: none of it moves the count
+    let answers: [(&str, Option<Verdict>); 4] = [
+        ("keep", None),
+        ("redo", Some(Verdict::Redo { note: "no".to_string() })),
+        ("change", Some(Verdict::Change { text: "this instead".to_string() })),
+        ("skip", Some(Verdict::Skip)),
+    ];
+    for (name, verdict) in answers.iter() {
+        let mut with = plain.clone();
+        for n in 0..10 {
+            with.extend(planted(&format!("{name}{n}"), verdict.clone(), true));
+        }
+        let c = count(&with, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+        assert_eq!((c.n, c.k, c.pending, c.braked), (without.n, without.k, without.pending, without.braked), "{name} at a stop that showed a planted defect moved the count");
+    }
+    // a correction of that step's delivery while the defect is in finds no outcome of that stop to mark: none was counted
+    let mut corrected = plain.clone();
+    for n in 0..10 {
+        let mut run = planted(&format!("c{n}"), None, true);
+        let out = run.iter().position(|(_, _, e)| matches!(e, Event::DefectRemoved { .. })).expect("taken out");
+        run.insert(out, (1000, format!("c{n}"), Event::DeliveryCorrected { note: "wrong".to_string(), by: By::Person, step: Some("change".to_string()) }));
+        corrected.extend(run);
+    }
+    let c = count(&corrected, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.pending), (without.n, without.k, without.pending), "a correction while a planted defect was in moved the count");
+    // answered once it was out, each counts as any answer: a keep is an outcome, a send-back an error
+    let mut after = plain.clone();
+    for n in 0..10 {
+        after.extend(planted(&format!("a{n}"), None, false));
+    }
+    assert_eq!(count(&after, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05).n, without.n + 10, "a keep after the defect was out did not count");
+    let mut back = plain.clone();
+    back.extend(planted("b", Some(Verdict::Redo { note: "no".to_string() }), false));
+    assert_eq!(count(&back, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05).k, without.k + 1, "a send-back after the defect was out did not count");
+}
+
 fn released_stop() -> Manifest {
     let mut change = step("change", Executor::Agent);
     change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });

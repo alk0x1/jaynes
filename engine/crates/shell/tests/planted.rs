@@ -146,6 +146,12 @@ fn tree(dir: &Path, rev: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// The steps whose stop a person kept with a planted defect in it, once it is out, as the record says them.
+fn missed(s: &Scratch, run: &str) -> Vec<String> {
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("the record");
+    jaynes_shell::planted::missed(&store.events(run).expect("events"))
+}
+
 fn on(dir: &Path, rev: &str, file: &str) -> String {
     let out = Command::new("git").arg("-C").arg(dir).args(["show", &format!("{rev}:{file}")]).output().expect("git");
     String::from_utf8_lossy(&out.stdout).to_string()
@@ -184,6 +190,7 @@ fn nothing_is_delivered_while_a_planted_defect_is_in_and_unplanting_lets_it_go_w
     assert!(!out.contains("finished: delivered"), "{out}");
     let (_, shown) = engine(&s, &["show", "held"]);
     assert!(shown.contains("a planted defect is still in"), "{shown}");
+    assert!(missed(&s, "held").is_empty(), "the summary would say a defect was missed while it is still in");
     assert_eq!(on(&s.project, "main", "config.txt"), "retries = 3\n");
     assert_eq!(on(&s.project, "jaynes/held", "config.txt"), "retries = 3\n", "the run's branch went out with the defect");
     // taken out, the delivery goes on, without the defect and with the agent's change
@@ -194,6 +201,8 @@ fn nothing_is_delivered_while_a_planted_defect_is_in_and_unplanting_lets_it_go_w
     assert_eq!(on(&s.project, "main", "greeting.txt"), "hi\n");
     // the step's change is again exactly the one its checks judged, and that is what was delivered
     assert_eq!(tree(&s.project, "jaynes/held"), judged(&s, "held", "change"));
+    // and once it is out, the person may be told they kept the stop that showed it
+    assert_eq!(missed(&s, "held"), ["change"]);
     // the trail: who planted it, where, and that it came out before anything was delivered
     let (ok, export) = engine(&s, &["export", "--evaluation", "held"]);
     assert!(ok, "{export}");
@@ -204,8 +213,9 @@ fn nothing_is_delivered_while_a_planted_defect_is_in_and_unplanting_lets_it_go_w
     assert!(d["patch"].as_str().unwrap_or("").contains(PLANTED_LINE), "{d}");
     assert_eq!((d["removed"]["by"].as_str(), d["removed"]["verified"].as_bool()), (Some("Remover Name"), Some(true)), "{d}");
     assert_eq!(d["never_delivered"].as_bool(), Some(true), "{d}");
-    // the stop's answer where it was shown is there for the evaluator to judge
+    // the stop's answer where it was shown is there for the evaluator to judge: kept, so missed
     assert_eq!(d["answered"]["verdicts"]["change"], "keep", "{d}");
+    assert_eq!((d["answered"]["result"].as_str(), d["still_in"].as_bool()), (Some("missed"), Some(false)), "{d}");
     // the summary the reviewer reads does not say it either
     let (_, summary) = engine(&s, &["summary", "held"]);
     for word in [NOTE, "Planter Name", "Remover Name", "planted", "defect"] {
@@ -255,7 +265,8 @@ fn the_branch_never_has_the_defect_after_a_redo_and_the_run_does_not_end_while_i
     assert_eq!(on(&s.project, "jaynes/redo", "seen.txt"), "retries = 3\n", "the second round worked from the defect");
     let (_, export) = engine(&s, &["export", "--evaluation", "redo"]);
     let v: Value = serde_json::from_str(&export).expect("json");
-    assert_eq!((v["defects"][0]["answered"]["sent_back"].as_bool(), v["defects"][0]["never_delivered"].as_bool()), (Some(true), Some(true)), "{v}");
+    assert_eq!((v["defects"][0]["answered"]["result"].as_str(), v["defects"][0]["never_delivered"].as_bool()), (Some("caught"), Some(true)), "{v}");
+    assert!(missed(&s, "redo").is_empty(), "a stop that sent the defect back was told as missed");
 }
 
 #[test]
@@ -350,7 +361,8 @@ fn a_defect_taken_out_by_a_process_that_died_is_closed_by_a_second_unplant() {
     person_with(&s, &["unplant", "died", &id, "--by", "Remover Name"], &[("JAYNES_DIE_AFTER_UNPLANT", "1")]);
     let (_, export) = engine(&s, &["export", "--evaluation", "died"]);
     let v: Value = serde_json::from_str(&export).expect("json");
-    assert!(v["defects"][0]["removed"].is_null(), "{v}");
+    // the record says it is out before the file beside the run does
+    assert!(v["defects"][0]["removed"].is_null() && v["defects"][0]["still_in"] == false, "{v}");
     // a second unplant says it and the run goes on to its end
     let out = person(&s, &["unplant", "died", &id, "--by", "Remover Name"]);
     assert!(out.contains("finished: delivered"), "{out}");
