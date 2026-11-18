@@ -1709,6 +1709,9 @@ document.addEventListener("click", async e => {
 });
 document.addEventListener("keydown", e => { if (e.target.id === "ctx" && e.key === "Enter" && e.target.value.trim()) { e.preventDefault(); readWords(e.target.value.trim(), null); } });
 async function said(id, body, ulId, btn) {
+  // asked as the person, with the key a link brought, once the page knows it: asked before, the engine reads it as
+  // an agent's answer, refuses it, and the person's buttons go off
+  await window.jaynesKey;
   const r = await (await fetch("/api/effects", { method: "POST", headers: { "Content-Type": "application/json" }, body: body || choice(id) })).json();
   const ul = ulId ? document.getElementById(ulId) : document.querySelector(`.fx-row[data-i="${CSS.escape(id)}"]`);
   // what follows stays in front; what happens to each option is folded
