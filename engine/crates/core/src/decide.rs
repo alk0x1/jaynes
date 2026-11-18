@@ -493,7 +493,12 @@ impl Ctx {
         if decl.effect.irreversible() {
             let on = self.run.unconfirmed(i);
             if !on.is_empty() {
-                let why = format!("{name} cannot be undone, and rests on answers you have not given");
+                let unproved = on.iter().any(|id| self.run.questions.get(id).is_some_and(|q| q.answer.as_ref().is_some_and(|a| a.by.person())));
+                let why = if unproved {
+                    format!("{name} cannot be undone, and rests on answers you gave without your device's proof: answer them again in the Jaynes app")
+                } else {
+                    format!("{name} cannot be undone, and rests on answers you have not given")
+                };
                 self.wait(Some(name), on, why);
                 return false;
             }
@@ -1767,6 +1772,14 @@ pub fn requires(run: &Run, id: &str, lets_go: bool) -> crate::proof::Requires {
         QuestionKind::Acted if !lets_go && !run.person_keys.is_empty() => Requires::Presence,
         // G19, when it is in: merging what runs later outside any box takes the device's proof where one is paired
         // (QuestionKind::Merge if lets_go && !run.person_keys.is_empty() => Requires::Presence)
+        // G14: letting go on what a step that cannot be undone could rest on, the current output of its step
+        QuestionKind::Decision
+            if lets_go
+                && !run.person_keys.is_empty()
+                && run.manifest.index(&q.question.step).is_some_and(|j| run.steps[j].question.as_deref() == Some(id) && run.rests_act(j)) =>
+        {
+            Requires::Presence
+        }
         _ => Requires::Word,
     }
 }

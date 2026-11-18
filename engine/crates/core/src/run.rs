@@ -723,10 +723,46 @@ impl Run {
     }
 
     /// Whether the current output of step `i` waits for the person: its question is open, or only an agent
-    /// answered it.
+    /// answered it, or, with a device of theirs paired, their answer let it go on without the device's proof
+    /// (G14: what a step that cannot be undone rests on is confirmed only by that proof).
     pub fn awaits_person(&self, i: usize) -> Option<&QuestionState> {
         let id = self.steps[i].question.as_ref()?;
-        self.questions.get(id).filter(|q| !q.superseded && q.answer.as_ref().is_none_or(|a| !a.by.person()))
+        self.questions.get(id).filter(|q| {
+            !q.superseded
+                && match &q.answer {
+                    None => true,
+                    Some(a) if !a.by.person() => true,
+                    Some(a) => !self.person_keys.is_empty() && !a.sends_back() && !self.proved_by.contains_key(id),
+                }
+        })
+    }
+
+    /// Whether a step that cannot be undone could rest on step `j`'s output, in any path the run could take: one that
+    /// reads it, directly or through others, or works on the project after it wrote there.
+    pub fn rests_act(&self, j: usize) -> bool {
+        let m = &self.manifest;
+        let reads = |k: usize| -> Vec<usize> {
+            let d = &m.steps[k];
+            let mut out: Vec<usize> = d.needs.iter().filter_map(|n| m.index(n)).collect();
+            out.extend(d.checks.iter().flat_map(|c| c.reads.iter().filter_map(|r| m.index(r))));
+            if d.reach.project != ProjectAccess::None {
+                out.extend((0..k).filter(|&w| m.steps[w].reach.project == ProjectAccess::Write));
+            }
+            out
+        };
+        (0..m.steps.len()).filter(|&k| m.steps[k].effect.irreversible()).any(|k| {
+            let mut seen = vec![false; m.steps.len()];
+            let mut stack = reads(k);
+            while let Some(x) = stack.pop() {
+                if x == j {
+                    return true;
+                }
+                if !std::mem::replace(&mut seen[x], true) {
+                    stack.extend(reads(x));
+                }
+            }
+            false
+        })
     }
 
     /// The questions step `i`'s work rests on that the person has not answered: those of the steps it uses,

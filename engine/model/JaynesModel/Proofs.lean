@@ -486,3 +486,13 @@ theorem g18_box_first (r : Run) (hs : r.stopped = false) (hp : r.unboxPending = 
   simp [Run.move, hs, hp]
 
 end Jaynes
+
+namespace Jaynes
+
+/-- **G14.** With a device of the person's paired, an answer that lets go on what a step that cannot be undone could
+    rest on is taken only with a proof that holds for this run. -/
+theorem g14_needs_proof (a : AnswerCase) (hr : a.restsAct = true) (hl : a.letsGo = true) (hk : a.keysPaired = true)
+    (h : a.accepts = true) : a.proofGiven = true ∧ a.proofHolds = true :=
+  g18_needs_proof a (by simp [AnswerCase.needsProof, hr, hl, hk]) h
+
+end Jaynes

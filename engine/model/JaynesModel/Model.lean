@@ -270,6 +270,10 @@ structure AnswerCase where
   proofGiven : Bool
   /-- that proof holds: one of the run's keys, over this run's message, with a nonce not used before -/
   proofHolds : Bool
+  /-- a step that cannot be undone could rest on the output this question is about -/
+  restsAct : Bool
+  /-- the answer lets the work go on: it sends nothing back -/
+  letsGo : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 /-- An act already done is the person's alone to keep or to order again, once. -/
@@ -280,10 +284,10 @@ def AnswerCase.acceptsActed (a : AnswerCase) : Bool :=
 def AnswerCase.acceptsMerge (a : AnswerCase) : Bool :=
   a.who == .person && !a.answered && !a.superseded && a.current && a.shownMatches && a.verdictsValid
 
-/-- Whether the answer needs the device's proof (G14, G18): opening the box, and acting again after an act when a
-    device is paired. -/
+/-- Whether the answer needs the device's proof (G14, G18): opening the box; and, when a device is paired, acting
+    again after an act and letting go on what a step that cannot be undone could rest on. -/
 def AnswerCase.needsProof (a : AnswerCase) : Bool :=
-  (a.unbox && a.allKeep) || (a.acted && !a.allKeep && a.keysPaired)
+  (a.unbox && a.allKeep) || (a.acted && !a.allKeep && a.keysPaired) || (a.restsAct && a.letsGo && a.keysPaired)
 
 /-- Leaving the box is the person's answer alone, once. -/
 def AnswerCase.acceptsUnbox (a : AnswerCase) : Bool :=

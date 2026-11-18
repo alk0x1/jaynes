@@ -743,6 +743,10 @@ impl World {
                 (x.id.clone(), v)
             }).collect();
         }
+        // an act already done is kept as it acted half the time, so runs reach what follows a kept act
+        if q.kind == QuestionKind::Acted && self.rng.chance(50) {
+            verdicts = q.items.iter().map(|x| (x.id.clone(), Verdict::Keep)).collect();
+        }
         let wrong = self.rng.chance(5);
         let shown = if wrong { Digest("stale".to_string()) } else { q.shown() };
         // a merge and an act already done are the person's alone: most answers to them are theirs, so the runs held
@@ -769,8 +773,10 @@ impl World {
         // made for another run of the same id, or one used already
         self.proofs += 1;
         let nonce = format!("n{}", self.proofs);
+        // an answer that needs the proof gets a good one more often, so the runs still reach what lies beyond it
+        let needs = jaynes_core::decide::requires(&run, &q.id, !answer.sends_back()) != jaynes_core::proof::Requires::Word;
         let proof = if run.person_keys.is_empty() { None } else {
-            match self.rng.below(10) {
+            match if needs && self.rng.chance(70) { 0 } else { self.rng.below(10) } {
                 0..=4 => Some((proved_by(&run.id, &run.started, Input::Answer { answer: answer.clone() }, &nonce, KeyKind::Presence, &device(KeyKind::Presence)), true)),
                 5 => Some((proved_by(&run.id, &run.started, Input::Answer { answer: answer.clone() }, &nonce, KeyKind::Presence, &p256::ecdsa::SigningKey::from_bytes(&[9; 32].into()).expect("key")), false)),
                 6 => Some((proved_by(&run.id, &Digest("another start".to_string()), Input::Answer { answer: answer.clone() }, &nonce, KeyKind::Biometry, &device(KeyKind::Biometry)), false)),
@@ -2265,6 +2271,8 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool, proof: Option<bool>) -> 
         "keysPaired": !run.person_keys.is_empty(),
         "proofGiven": proof.is_some(),
         "proofHolds": proof == Some(true),
+        "restsAct": q.question.kind == QuestionKind::Decision && s.question.as_deref() == Some(q.question.id.as_str()) && run.rests_act(i),
+        "letsGo": !answer.sends_back(),
     });
     serde_json::json!({"kind": "answer", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
 }
