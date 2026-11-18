@@ -943,9 +943,23 @@ impl<'a> Driver<'a> {
             .map(|j| run.manifest.steps[j].name.clone())
             .collect();
         let (ok, reference) = match &self.setup.copy {
-            Some(copy) => match copy.deliver(&self.changes(&writers)) {
-                Ok(r) => (true, r),
+            // the copy is as its checks judged it, or something other than Jaynes changed it after them
+            Some(copy) => match copy.drifted() {
+                Ok(changed) if !changed.is_empty() => {
+                    let back = match copy.put_back() {
+                        Ok(()) => "Jaynes put the copy back as its checks judged it; continue to deliver that".to_string(),
+                        Err(e) => format!("Jaynes could not put the copy back: {e}"),
+                    };
+                    (false, format!(
+                        "the run's copy of the project changed after its checks judged it, which only a program the run started and left running could do: {}. {back}",
+                        changed.join(", ")
+                    ))
+                }
                 Err(e) => (false, e),
+                Ok(_) => match copy.deliver(&self.changes(&writers)) {
+                    Ok(r) => (true, r),
+                    Err(e) => (false, e),
+                },
             },
             None => (true, "no project; the outputs are the delivery".to_string()),
         };
@@ -1190,7 +1204,7 @@ impl<'a> Driver<'a> {
             Ok(other) => return AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
             Err(e) => return AttemptOutcome::Fault { reason: e },
         };
-        AttemptOutcome::Delivered { output: digest, items, changed, usage, session }
+        AttemptOutcome::Delivered { output: digest, items, changed, usage, session, tree: tree.as_str().map(str::to_string) }
     }
 
     /// A round of a stop that chooses, when the person chose without a note: the role keeps the chosen options of
@@ -1218,7 +1232,7 @@ impl<'a> Driver<'a> {
         }
         let items = self.keep_items(&shown, &self.cwd(run, i, turn.attempt))?;
         let changed = run.steps[i].done.as_ref().map(|d| d.changed.clone()).unwrap_or_default();
-        Ok(AttemptOutcome::Delivered { output: digest, items, changed, usage: Default::default(), session: None })
+        Ok(AttemptOutcome::Delivered { output: digest, items, changed, usage: Default::default(), session: None, tree: object["tree"].as_str().map(str::to_string) })
     }
 
     /// The items as the core knows them, after keeping a copy of each picture by its fingerprint and how each item
@@ -1371,6 +1385,7 @@ impl<'a> Driver<'a> {
                             changed,
                             usage: Default::default(),
                             session: None,
+                            tree: tree.as_str().map(str::to_string),
                         },
                         Ok(other) => AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
                         Err(e) => AttemptOutcome::Fault { reason: e },
@@ -1390,9 +1405,9 @@ impl<'a> Driver<'a> {
     }
 
     fn checks(&self, run: &Run, step: &str, output: &Digest, given: &[Read], checks: &[String]) -> Vec<CheckResult> {
-        let blocked = |check: &str, reason: String| CheckResult { check: check.to_string(), verdict: CheckVerdict::Blocked { reason } };
-        let output = match self.store.get(output) {
-            Ok(v) => v["output"].clone(),
+        let blocked = |check: &str, reason: String| CheckResult { check: check.to_string(), verdict: CheckVerdict::Blocked { reason }, tree: None };
+        let (output, tree) = match self.store.get(output) {
+            Ok(v) => (v["output"].clone(), v["tree"].as_str().map(str::to_string)),
             Err(e) => return checks.iter().map(|c| blocked(c, e.clone())).collect(),
         };
         let given = match self.given(given) {
@@ -1400,9 +1415,37 @@ impl<'a> Driver<'a> {
             Err(e) => return checks.iter().map(|c| blocked(c, e.clone())).collect(),
         };
         let i = run.manifest.index(step).unwrap_or(0);
-        let reaches = run.manifest.steps[i].reach.project != ProjectAccess::None;
-        let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir().display().to_string());
-        let source = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.source().display().to_string());
+        let decl = &run.manifest.steps[i];
+        let reaches = decl.reach.project != ProjectAccess::None;
+        let copy = self.setup.copy.as_ref().filter(|_| reaches);
+        // the checks judge the state the attempt was measured at, laid out apart, never the copy as it is by then: a
+        // program the step left running could have changed it
+        let laid = match (copy, &tree) {
+            (Some(c), Some(t)) => match c.lay_out(t) {
+                Ok(l) => Some(l),
+                Err(e) => return checks.iter().map(|c| blocked(c, e.clone())).collect(),
+            },
+            _ => None,
+        };
+        let judged = laid.as_ref().and(tree.clone());
+        let project = laid.as_ref().map(|l| l.dir.display().to_string()).or_else(|| copy.map(|c| c.dir().display().to_string()));
+        let source = copy.map(|c| c.source().display().to_string());
+        // what git ignores is in no state and no delivery: a check that fails or cannot judge says it was not given it
+        let not_given = laid.as_ref().and(copy).and_then(|c| crate::project::not_given(&c.left_out()));
+        let hidden = |name: &str| decl.checks.iter().any(|c| c.name == name && c.kind == jaynes_core::manifest::CheckKind::Hidden);
+        let told = |name: &str, verdict: CheckVerdict| match (verdict, &not_given) {
+            (CheckVerdict::Fail { mut reasons, mut detail }, Some(n)) => {
+                // a hidden check's agent gets only the sentence the check wrote (G3): the person reads it
+                if hidden(name) {
+                    detail = if detail.is_empty() { n.clone() } else { format!("{detail}\n{n}") };
+                } else {
+                    reasons.push(n.clone());
+                }
+                CheckVerdict::Fail { reasons, detail }
+            }
+            (CheckVerdict::Blocked { reason }, Some(n)) => CheckVerdict::Blocked { reason: format!("{reason}; {n}") },
+            (v, _) => v,
+        };
         checks
             .iter()
             .map(|name| {
@@ -1417,9 +1460,9 @@ impl<'a> Driver<'a> {
                     source: source.clone(),
                     any_port: self.setup.any_port,
                 }) {
-                    Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict },
-                    Ok(other) => blocked(name, format!("the role answered a check with {other:?}")),
-                    Err(e) => blocked(name, e),
+                    Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict: told(name, verdict), tree: judged.clone() },
+                    Ok(other) => CheckResult { tree: judged.clone(), ..blocked(name, format!("the role answered a check with {other:?}")) },
+                    Err(e) => CheckResult { tree: judged.clone(), ..blocked(name, e) },
                 }
             })
             .collect()
@@ -1769,7 +1812,7 @@ mod tests {
         let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };
         store.decide("w", &probe).expect("probe");
         let attempt = store.state("w").expect("state").expect("run").steps[0].attempt;
-        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None } };
+        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None, tree: None } };
         store.decide("w", &done).expect("done");
         let _ = run;
         let waiting = store.state("w").expect("state").expect("run");

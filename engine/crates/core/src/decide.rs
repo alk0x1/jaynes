@@ -732,7 +732,7 @@ impl Ctx {
         let decl = self.run.manifest.steps[i].clone();
         let role = decl.executor == Executor::Role;
         match outcome {
-            AttemptOutcome::Delivered { output, items, changed, usage, session } => {
+            AttemptOutcome::Delivered { output, items, changed, usage, session, tree } => {
                 self.emit(Event::AttemptDelivered {
                     step: step.to_string(),
                     attempt,
@@ -742,6 +742,7 @@ impl Ctx {
                     changed: changed.clone(),
                     usage: *usage,
                     session: session.clone(),
+                    tree: tree.clone(),
                 });
                 self.reassess(i, changed);
                 if decl.checks.is_empty() {
@@ -905,12 +906,38 @@ impl Ctx {
             return Ok(());
         }
         let decl = self.run.manifest.steps[i].clone();
+        // a check judged the step's output only if it was given the state of the project the output was measured
+        // at: one that judged another, or none where there was one, could not judge it
+        let measured = self.run.steps[i].pending.as_ref().and_then(|p| p.tree.clone());
+        let judged: Vec<CheckResult>;
+        let results = match &measured {
+            None => results,
+            Some(t) => {
+                judged = results
+                    .iter()
+                    .map(|r| match &r.tree {
+                        Some(x) if x == t => r.clone(),
+                        other => CheckResult {
+                            verdict: CheckVerdict::Blocked {
+                                reason: format!(
+                                    "it judged {}, not the state of the project the step left ({t})",
+                                    other.as_deref().map(|x| format!("another state of the project ({x})")).unwrap_or_else(|| "no state of the project Jaynes measured".to_string())
+                                ),
+                            },
+                            ..r.clone()
+                        },
+                    })
+                    .collect();
+                &judged[..]
+            }
+        };
         let sources: Vec<String> = self.run.sources(i).into_iter().map(|j| self.name(j)).collect();
         let checks = decl
             .checks
             .iter()
             .filter_map(|c| {
-                let verdict = &results.iter().find(|r| r.check == c.name)?.verdict;
+                let result = results.iter().find(|r| r.check == c.name)?;
+                let verdict = &result.verdict;
                 let mut read = sources.clone();
                 read.extend(c.reads.iter().filter(|r| !read.contains(r)).cloned().collect::<Vec<_>>());
                 Some(crate::event::CheckRecord {
@@ -919,6 +946,7 @@ impl Ctx {
                     passed: *verdict == CheckVerdict::Pass,
                     blocked: matches!(verdict, CheckVerdict::Blocked { .. }),
                     read,
+                    tree: result.tree.clone(),
                 })
             })
             .collect();

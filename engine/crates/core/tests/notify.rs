@@ -91,7 +91,7 @@ fn a_wait_for_the_person_tells_them_once() {
         step: "make".into(),
         attempt,
         fix: 0,
-        outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None },
+        outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None },
     });
     let told = notices(&cmds);
     assert_eq!(told.len(), 1, "the wait at make's stop tells the person: {cmds:?}");
@@ -108,7 +108,7 @@ fn a_new_wait_tells_the_person_of_the_questions_not_told_of_before_and_only_of_t
         step: "make".into(),
         attempt,
         fix: 0,
-        outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None },
+        outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None },
     });
     // the person answers make's stop; the run now waits on another answer of theirs, look's, and says so again
     let q = run.questions.values().find(|q| q.question.step == "make" && q.open()).expect("make asks").question.clone();

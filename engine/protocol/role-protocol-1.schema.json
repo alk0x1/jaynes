@@ -842,6 +842,7 @@
             },
             "output": true,
             "project": {
+              "description": "For a step that reaches the project: the files of the project as Jaynes measured them when the attempt\nended, and as the delivery carries them, laid out in a folder of their own beside the run's copy, with no\nrepository and with the copy's installed dependencies linked in; never the run's copy itself. What git\nignores is not there. The folder goes when the check is over.",
               "type": [
                 "string",
                 "null"

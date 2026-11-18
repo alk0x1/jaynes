@@ -303,6 +303,78 @@ fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
     assert_eq!(finished["cost"]["fixes"], 1);
 }
 
+/// A process the agent left behind, out of its process group (setsid after a double fork), that writes in the copy
+/// as soon as Jaynes has measured the attempt: it waits for the engine's index beside the copy to change.
+const LATE_WRITER: &str = r#"python3 -c '
+import os, sys, time
+if os.fork(): sys.exit(0)
+os.setsid()
+if os.fork(): sys.exit(0)
+for fd in (0, 1, 2): os.close(fd)
+index = sys.argv[1]
+before = os.stat(index).st_mtime_ns
+end = time.time() + 20
+while time.time() < end and os.stat(index).st_mtime_ns == before:
+    time.sleep(0.002)
+open("greeting.txt", "w").write("hello\n")
+' "../$(basename "$PWD").git/index""#;
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_checks_judge_the_tree_the_step_delivered_and_a_copy_changed_after_it_is_not_delivered() {
+    let s = scratch("late");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT} && {LATE_WRITER} && echo '{{\"session\":\"s1\"}}'");
+    let out = start(&s, "late", &agent);
+    let e = events(&s, "late");
+    // the suite judged what the attempt left, hi, and not what the process wrote after it: no fix was asked
+    let t = types(&e);
+    assert!(!t.contains(&"FixAsked".to_string()), "the check judged the copy as the process left it: {t:?}\n{out}");
+    let delivered: Vec<&Value> = e.iter().filter(|e| e["type"] == "AttemptDelivered" && e["step"] == "change").collect();
+    let tree = delivered.last().expect("delivered")["tree"].as_str().expect("the attempt's tree is recorded").to_string();
+    let judged = e.iter().rfind(|e| e["type"] == "ChecksJudged" && e["step"] == "change").expect("judged");
+    for c in judged["checks"].as_array().expect("checks") {
+        assert_eq!(c["tree"].as_str(), Some(tree.as_str()), "each check records the tree it judged: {judged}");
+    }
+    // the copy is not the tree its checks judged: no delivery, Jaynes says which file, and puts the copy back
+    assert!(!e.iter().any(|e| e["type"] == "Delivered"), "{t:?}");
+    let blocked = e.iter().rfind(|e| e["type"] == "Blocked").expect("blocked");
+    assert_eq!(blocked["fault"], "jaynes", "{blocked}");
+    assert!(blocked["reason"].as_str().is_some_and(|r| r.contains("greeting.txt")), "{blocked}");
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["rev-parse", "-q", "--verify", "jaynes/late"]).output().expect("git");
+    assert!(!shown.status.success(), "no branch was delivered");
+    assert_eq!(std::fs::read_to_string(copy_of(&s, "late").join("greeting.txt")).expect("read"), "hi\n", "the copy is back as judged");
+    // the person goes on at a terminal, and what is delivered is the tree the checks judged
+    let mut c = tty();
+    c.args([BIN, "continue", "late"]).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "");
+    let out = c.output().expect("continue");
+    let e = events(&s, "late");
+    assert!(e.iter().any(|e| e["type"] == "Delivered"), "{}\n{:?}", String::from_utf8_lossy(&out.stdout), types(&e));
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/late:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_check_is_not_given_the_files_git_ignores_and_its_failure_names_them() {
+    let s = scratch("ignored");
+    std::fs::write(s.project.join(".gitignore"), ".env\ndist/\n").expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tgrep -q hi greeting.txt\n\tgrep -q KEY .env\n").expect("write");
+    let ok = Command::new("git").arg("-C").arg(&s.project).args(["add", "-A"]).status().expect("git").success()
+        && Command::new("git").arg("-C").arg(&s.project).args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "reads .env"]).status().expect("git").success();
+    assert!(ok);
+    // the step writes a .env and a build, both ignored: the delivery carries neither, and the check is given neither
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && echo KEY=1 > .env && mkdir -p dist && echo x > dist/app.js && {OUTPUT} && echo '{{\"session\":\"s1\"}}'");
+    let out = start(&s, "ignored", &agent);
+    let e = events(&s, "ignored");
+    assert!(!e.iter().any(|e| e["type"] == "Delivered"), "{:?}\n{out}", types(&e));
+    let said = serde_json::to_string(&e).expect("json");
+    assert!(
+        said.contains("not given to this check, since git ignores them and the delivery does not carry them: .env, dist/"),
+        "{:?}\n{out}",
+        e.iter().filter(|e| e["type"] == "FixAsked" || e["type"] == "AttemptFailed").collect::<Vec<_>>()
+    );
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {

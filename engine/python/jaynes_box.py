@@ -712,6 +712,28 @@ def link_dependencies(source: Path, dest: Path, depth: int = 4) -> list[str]:
     return linked
 
 
+# The engine lays out the state a check judges beside the run's copy, as .COPY-judged-PID-N: its files, with the
+# packages a step installed in the copy linked from the copy.
+LAID_OUT = "-judged-"
+
+
+def own_dependencies(project: Path, linked: list[str]) -> tuple[Path, ...]:
+    """Where the dependency folders ``linked`` from ``project`` really are, for a box to read them, when ``project``
+    is a state the engine laid out beside a run's copy and they are inside that copy. A link that leads anywhere
+    else adds nothing the box may read: the copy is the agent's to write, and it may point one at ~/.ssh or at the
+    run's own folders, where hidden steps keep what the agent never sees."""
+    name = project.name
+    if not name.startswith(".") or LAID_OUT not in name:
+        return ()
+    copy = (project.parent / name[1:].rsplit(LAID_OUT, 1)[0]).resolve()
+    out = []
+    for rel in linked:
+        real = (project / rel).resolve()
+        if (real == copy or copy in real.parents) and real not in out:
+            out.append(real)
+    return tuple(out)
+
+
 # --- which command runs the tests -------------------------------------------------------------------------------
 
 PYTHON = "python3"  # without a virtualenv in the project
@@ -1059,7 +1081,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
         scratch.mkdir()
         # what a step installed in the run's copy first, then what the person's own folder has
-        link_dependencies(project, work)
+        installed = own_dependencies(project, link_dependencies(project, work))
         if source is not None:
             link_dependencies(source, work)
         for path, text in (over or {}).items():
@@ -1075,8 +1097,8 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         ports, declared = reserve(), tuple(sorted({int(p) for p in local_ports} - {PAGE_PORT}))
         # the run's say, from its setup, in the engine's call: the person opened this project's local ports
         anyone = any_port is True
-        box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *readable), reserved=ports, local_ports=declared,
-                  any_port=anyone)
+        box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *installed, *readable), reserved=ports,
+                  local_ports=declared, any_port=anyone)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
         code, out, _, late = _wait_in_box(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {}), **given},
@@ -1146,6 +1168,7 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
         scratch.mkdir()
         out.mkdir()
         readonly: tuple[Path, ...] = ()
+        installed: tuple[Path, ...] = ()
         if project is None:
             work = Path(tmp) / "empty"
             work.mkdir()
@@ -1155,11 +1178,12 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
         else:
             work = Path(tmp) / "project"
             shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
-            link_dependencies(project, work)
+            installed = own_dependencies(project, link_dependencies(project, work))
             if source is not None:
                 link_dependencies(source, work)
         # what it reads is said, so the engine's runs are hidden from it but for its role's folder
         reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
+        reads += installed
         argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads))
         env = {**os.environ, **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
         code, said, _, late = _wait_in_box(argv, cwd=work, env=env, stdin=stdin, timeout=timeout)

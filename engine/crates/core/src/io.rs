@@ -128,6 +128,10 @@ pub enum AttemptOutcome {
         usage: Usage,
         #[serde(default)]
         session: Option<String>,
+        /// The state of the project the output was measured at (on a repository, its tree): what its checks judge
+        /// and what the delivery carries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tree: Option<String>,
     },
     /// The agent's fault: no output, an output that does not parse, a write outside its reach, its deadline.
     Failed { reasons: Vec<String>, usage: Usage },
@@ -158,6 +162,16 @@ pub enum AttemptOutcome {
 pub struct CheckResult {
     pub check: String,
     pub verdict: CheckVerdict,
+    /// The state of the project the check was given to judge, when it was given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
+}
+
+impl CheckResult {
+    /// A verdict on no state of the project in particular.
+    pub fn new(check: impl Into<String>, verdict: CheckVerdict) -> CheckResult {
+        CheckResult { check: check.into(), verdict, tree: None }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

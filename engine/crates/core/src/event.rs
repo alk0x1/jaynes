@@ -147,6 +147,9 @@ pub enum Event {
         changed: Vec<Changed>,
         usage: Usage,
         session: Option<String>,
+        /// The state of the project the output was measured at: what its checks must judge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tree: Option<String>,
     },
     AttemptFailed {
         step: String,
@@ -352,6 +355,9 @@ pub struct CheckRecord {
     /// The earlier steps whose outputs it read.
     #[serde(default)]
     pub read: Vec<String>,
+    /// The state of the project it judged, when it was given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
 }
 
 /// What an agent program says, in the first message of a turn, it runs with: what actually held, beside what Jaynes

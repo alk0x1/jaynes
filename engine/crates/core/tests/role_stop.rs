@@ -158,16 +158,16 @@ impl World {
                     let n = self.turns.entry(t.step.clone()).or_default();
                     *n += 1;
                     let output = Digest(format!("{}-{n}", t.step));
-                    self.feed(Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: t.fix, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: Some("s".into()) } })
+                    self.feed(Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: t.fix, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: Some("s".into()), tree: None } })
                 }
                 Command::RunRole { step, attempt, given, .. } => {
                     *self.turns.entry(step.clone()).or_default() += 1;
                     let from: Vec<String> = given.iter().map(|r| r.output.0.clone()).collect();
                     let output = Digest(format!("{step}({})", from.join(",")));
-                    self.feed(Input::AttemptEnded { step, attempt, fix: 0, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None } })
+                    self.feed(Input::AttemptEnded { step, attempt, fix: 0, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None } })
                 }
                 Command::RunChecks { step, attempt, fix, checks, .. } => {
-                    let results = checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass }).collect();
+                    let results = checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None }).collect();
                     self.feed(Input::ChecksEnded { step, attempt, fix, results })
                 }
                 Command::Deliver { digest, .. } => self.feed(Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into() }),

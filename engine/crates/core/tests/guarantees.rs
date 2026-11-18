@@ -623,6 +623,7 @@ impl World {
                         changed: Vec::new(),
                         usage: Usage::default(),
                         session: None,
+                        tree: None,
                     },
                     0..=71 => AttemptOutcome::Delivered {
                         output: digest_pool(&mut self.rng),
@@ -630,6 +631,7 @@ impl World {
                         changed: if turn.reach.project == ProjectAccess::Write { changed(&mut self.rng) } else { Vec::new() },
                         usage: usage(&mut self.rng),
                         session: Some(format!("session-{}", turn.step)),
+                        tree: None,
                     },
                     72..=85 => AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: usage(&mut self.rng) },
                     86..=88 => AttemptOutcome::Impossible { reason: "the request contradicts itself".to_string(), usage: usage(&mut self.rng), session: Some(format!("session-{}", turn.step)) },
@@ -646,6 +648,7 @@ impl World {
                         changed: Vec::new(),
                         usage: Usage::default(),
                         session: None,
+                        tree: None,
                     },
                     80..=91 => AttemptOutcome::NeedsInput {
                         items: vec![Item { id: "which".to_string(), label: "which test".to_string(), digest: Digest("w".to_string()) }],
@@ -666,7 +669,7 @@ impl World {
                         96..=97 => CheckVerdict::Blocked { reason: "the tool did not start".to_string() },
                         _ => continue,
                     };
-                    results.push(CheckResult { check: name, verdict });
+                    results.push(CheckResult { check: name, verdict, tree: None });
                 }
                 self.send(Input::ChecksEnded { step, attempt, fix, results });
             }
@@ -850,7 +853,7 @@ impl World {
                     step,
                     attempt: s.attempt - 1,
                     fix: 0,
-                    outcome: AttemptOutcome::Delivered { output: Digest("late".to_string()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None },
+                    outcome: AttemptOutcome::Delivered { output: Digest("late".to_string()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None },
                 });
                 assert!(self.log.len() <= before + 1, "seed {}: G6 a late report did more than being recorded", self.seed);
             }
@@ -1076,6 +1079,7 @@ fn deliver(run: &mut Run, step: &str, attempt: u32, output: &str, items: Vec<Ite
             changed: Vec::new(),
             usage: Usage { seconds: 5, tokens: 100, cached: 0 },
             session: Some("s".to_string()),
+            tree: None,
         },
     })
 }
@@ -1352,7 +1356,7 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
         let c = deliver(&mut run, "send", attempt, "sent", Vec::new());
         assert!(c.iter().any(|c| matches!(c, Command::RunChecks { .. })), "{c:?}");
         let attempt = run.steps[0].attempt;
-        feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: verdict.clone() }] });
+        feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: verdict.clone(), tree: None }] });
         assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
         let c = feed(&mut run, Input::Continue { by: By::Person });
         let c = probe_ok(&mut run, c);
@@ -1392,7 +1396,7 @@ fn a_failed_shape_check_is_fixed_in_the_same_session() {
         step: "build".to_string(),
         attempt: 1,
         fix: 0,
-        results: vec![CheckResult { check: "short".to_string(), verdict: CheckVerdict::Fail { reasons: vec!["93 characters".to_string()], detail: String::new() } }],
+        results: vec![CheckResult { check: "short".to_string(), verdict: CheckVerdict::Fail { reasons: vec!["93 characters".to_string()], detail: String::new() }, tree: None }],
     });
     let Some(Command::RunAgent(turn)) = c.first() else { panic!("a fix: {c:?}") };
     assert_eq!((turn.attempt, turn.fix, turn.session.as_deref()), (1, 1, Some("s")));
@@ -1425,7 +1429,7 @@ fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
             step: "change".to_string(),
             attempt: t,
             fix: 0,
-            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false, ..Default::default() }], usage: Usage::default(), session: None },
+            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false, ..Default::default() }], usage: Usage::default(), session: None, tree: None },
         });
         assert_eq!(run.risk, Risk::High, "G7 {path} left the run at low risk");
     }
@@ -1441,7 +1445,7 @@ fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
-    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None } });
+    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None } });
     (run, c)
 }
 
@@ -1506,6 +1510,7 @@ fn g7_touching_ci_raises_the_risk_and_owes_the_full_path() {
             changed: vec![Changed::file(".github/workflows/ci.yml".to_string(), 1)],
             usage: Usage::default(),
             session: None,
+            tree: None,
         },
     });
     assert_eq!(run.risk, Risk::High);
@@ -1613,8 +1618,8 @@ fn every_check_leaves_its_kind_its_verdict_and_what_it_read_in_the_record() {
         attempt: 1,
         fix: 0,
         results: vec![
-            CheckResult { check: "suite".to_string(), verdict: CheckVerdict::Pass },
-            CheckResult { check: "proof".to_string(), verdict: CheckVerdict::Pass },
+            CheckResult { check: "suite".to_string(), verdict: CheckVerdict::Pass, tree: None },
+            CheckResult { check: "proof".to_string(), verdict: CheckVerdict::Pass, tree: None },
         ],
     })
     .expect("checked");

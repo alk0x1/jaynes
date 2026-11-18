@@ -158,6 +158,9 @@ pub struct Pending {
     pub output: Digest,
     pub items: Vec<Item>,
     pub changed: Vec<Changed>,
+    /// The state of the project the output was measured at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -293,13 +296,13 @@ impl Run {
                     }
                 }
             }
-            Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session } => {
+            Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session, tree } => {
                 self.spent.add(*usage);
                 let acts = self.manifest.index(step).is_some_and(|i| self.manifest.steps[i].effect.acts() && !self.manifest.steps[i].repeats_safely());
                 if let Some(s) = self.step_mut(step) {
                     s.acted |= acts;
                     s.resume = None;
-                    s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone() });
+                    s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone(), tree: tree.clone() });
                     s.status = Status::Checking { attempt: *attempt, fix: *fix };
                     if session.is_some() {
                         s.session = session.clone();

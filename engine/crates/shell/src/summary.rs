@@ -672,7 +672,7 @@ mod tests {
     }
 
     fn delivered(step: &str, attempt: u32, seconds: u64, tokens: u64) -> Event {
-        Event::AttemptDelivered { step: step.into(), attempt, fix: 0, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage { seconds, tokens, cached: 0 }, session: None }
+        Event::AttemptDelivered { step: step.into(), attempt, fix: 0, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage { seconds, tokens, cached: 0 }, session: None, tree: None }
     }
 
     fn done(step: &str) -> Event {
@@ -702,8 +702,8 @@ mod tests {
         let judged = |passed: bool| Event::ChecksJudged {
             step: "change".into(), attempt: if passed { 2 } else { 1 }, fix: 0,
             checks: vec![
-                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: true, blocked: false, read: vec![] },
-                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed, blocked: false, read: vec![] },
+                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: true, blocked: false, read: vec![], tree: None },
+                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed, blocked: false, read: vec![], tree: None },
             ],
         };
         e.extend([

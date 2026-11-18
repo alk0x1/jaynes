@@ -15,6 +15,12 @@ use std::process::Command;
 pub const DEPENDENCIES: &[&str] = &[".venv", "node_modules"];
 /// The folder in the copy where Jaynes and the agent exchange files. Never part of the change.
 pub const EXCHANGE: &str = ".jaynes";
+/// The folders of installed packages the box of a project's commands links rather than copies, by name, as it names
+/// them (DEPENDENCIES in jaynes_box.py), and how deep below the top it looks for them.
+const LINKED: &[&str] = &["node_modules", ".venv", "venv", "vendor", "bower_components"];
+const LINKED_DEPTH: usize = 4;
+/// How many files a check's failure names of those it was not given; the rest are counted.
+const LEFT_OUT_NAMED: usize = 20;
 
 /// git with nothing of its environment from outside: no GIT_DIR, GIT_CONFIG*, GIT_EXEC_PATH, GIT_ASKPASS or any other
 /// variable that would point it at another repository, configuration or program.
@@ -49,7 +55,15 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 /// writes in the copy's .git (hooks, configuration that runs a program, refs) is the agent's and is never read here.
 /// Hooks and the file monitor are off besides, whatever the configuration of this machine says.
 fn git_on(git_dir: &Path, work: &Path, args: &[&str]) -> Result<String, String> {
+    git_on_index(git_dir, work, None, args)
+}
+
+/// [`git_on`], with an index of its own when `index` names one.
+fn git_on_index(git_dir: &Path, work: &Path, index: Option<&Path>, args: &[&str]) -> Result<String, String> {
     let mut c = git_command();
+    if let Some(i) = index {
+        c.env("GIT_INDEX_FILE", i);
+    }
     c.arg("--git-dir").arg(git_dir).arg("--work-tree").arg(work);
     c.args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]);
     // nor the person's own configuration, nor the system's: a filter they set up (git-lfs) would run on the agent's
@@ -174,6 +188,44 @@ pub trait Workspace {
     fn undo(&self, landed: &[String], run: &str) -> Result<String, String>;
     /// Folders outside the copy the target's own commands must read.
     fn reads(&self) -> Vec<PathBuf>;
+    /// Lay out the state `id` in a folder of its own, beside the copy and out of every agent's reach, for the checks
+    /// that judge it: its files and no repository, with the installed dependencies of the copy linked as they are.
+    /// The folder goes when what is returned is dropped.
+    fn lay_out(&self, id: &str) -> Result<LaidOut, String>;
+    /// The files the copy has that git ignores, and so no state holds and no delivery carries (installed
+    /// dependencies and the folder Jaynes and the agent exchange files in aside), a folder all of whose files it
+    /// ignores as the folder.
+    fn left_out(&self) -> Vec<String>;
+    /// What in the copy is not as Jaynes last measured it or put it there: changed since by something other than
+    /// Jaynes. Empty when it is as it was.
+    fn drifted(&self) -> Result<Vec<String>, String>;
+    /// Put the copy back as Jaynes last measured it or put it there.
+    fn put_back(&self) -> Result<(), String>;
+}
+
+/// A state of the copy laid out for its checks ([`Workspace::lay_out`]), removed when dropped.
+#[derive(Debug)]
+pub struct LaidOut {
+    pub dir: PathBuf,
+}
+
+impl Drop for LaidOut {
+    fn drop(&mut self) {
+        let _gone = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The sentence a check that failed, or could not judge, ends with when the copy has files git ignores: what it was
+/// not given and why. None when there are none.
+pub fn not_given(left_out: &[String]) -> Option<String> {
+    if left_out.is_empty() {
+        return None;
+    }
+    let mut named = left_out.iter().take(LEFT_OUT_NAMED).cloned().collect::<Vec<_>>().join(", ");
+    if left_out.len() > LEFT_OUT_NAMED {
+        named.push_str(&format!(" and {} more", left_out.len() - LEFT_OUT_NAMED));
+    }
+    Some(format!("files the run made that were not given to this check, since git ignores them and the delivery does not carry them: {named}"))
 }
 
 /// Make the copy a run of `target` works in, from the person's `source`, named `name` (a repository's branch).
@@ -238,6 +290,18 @@ impl Workspace for Copy {
     }
     fn reads(&self) -> Vec<PathBuf> {
         Copy::reads(self)
+    }
+    fn lay_out(&self, id: &str) -> Result<LaidOut, String> {
+        Copy::lay_out(self, id)
+    }
+    fn left_out(&self) -> Vec<String> {
+        Copy::left_out(self)
+    }
+    fn drifted(&self) -> Result<Vec<String>, String> {
+        Copy::drifted(self)
+    }
+    fn put_back(&self) -> Result<(), String> {
+        Copy::put_back(self)
     }
 }
 
@@ -528,6 +592,73 @@ impl Copy {
         Ok(reverted)
     }
 
+    /// A name beside the copy, out of every agent's reach, for a folder or a file of this process alone.
+    fn aside(&self, what: &str) -> (PathBuf, PathBuf) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = self.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into());
+        let tag = format!("{what}-{}-{n}", std::process::id());
+        (self.dir.with_file_name(format!(".{name}-{tag}")), self.git.join(format!("jaynes-{tag}-index")))
+    }
+
+    /// The files of `id` in a fresh folder beside the copy, read from the engine's repository with an index of its
+    /// own: no .git, so no hook, configuration or file monitor of the copy's comes with it. The copy's installed
+    /// dependencies are linked in at the same places, as the box links them.
+    pub fn lay_out(&self, id: &str) -> Result<LaidOut, String> {
+        let (dir, index) = self.aside("judged");
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Jaynes cannot lay out the project for its checks: {e}"))?;
+        let laid = LaidOut { dir };
+        let made = git_on_index(&self.git, &laid.dir, Some(&index), &["read-tree", id])
+            .and_then(|_| git_on_index(&self.git, &laid.dir, Some(&index), &["checkout-index", "-a", "-f"]));
+        let _gone = std::fs::remove_file(&index);
+        made.map_err(|e| format!("Jaynes cannot lay out the project for its checks: {e}"))?;
+        link_installed(&self.dir, &laid.dir, Path::new(""));
+        Ok(laid)
+    }
+
+    /// What git ignores in the copy, as `git add -A` ignored it when Jaynes measured, but for what is never part of a
+    /// change: the exchange folder, Claude Code's scratch and installed dependencies.
+    pub fn left_out(&self) -> Vec<String> {
+        let listed = self.g(&["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"]).unwrap_or_default();
+        listed
+            .lines()
+            .filter(|l| !l.is_empty())
+            .filter(|l| {
+                let parts: Vec<&str> = l.trim_end_matches('/').split('/').collect();
+                parts.first() != Some(&EXCHANGE) && !l.starts_with(".claude/.cc-writes") && !parts.iter().any(|p| LINKED.contains(p))
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The copy now against the engine's index, which holds what Jaynes last measured (an attempt's add) or put
+    /// there (a reset): read with an index of its own, so the engine's stays as it is.
+    pub fn drifted(&self) -> Result<Vec<String>, String> {
+        let (_, index) = self.aside("drift");
+        let kept = self.git.join("index");
+        if kept.exists() {
+            std::fs::copy(&kept, &index).map_err(|e| e.to_string())?;
+        }
+        let now = git_on_index(&self.git, &self.dir, Some(&index), &["add", "-A"])
+            .and_then(|_| git_on_index(&self.git, &self.dir, Some(&index), &["write-tree"]));
+        let _gone = std::fs::remove_file(&index);
+        let now = now?;
+        let then = self.g(&["write-tree"])?;
+        if now == then {
+            return Ok(Vec::new());
+        }
+        let names = self.g(&["diff-tree", "-r", "--name-only", "--no-renames", &then, &now])?;
+        Ok(names.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+    }
+
+    /// The copy as the engine's index has it: its files written back, and what is in neither it nor ignored removed.
+    pub fn put_back(&self) -> Result<(), String> {
+        self.g(&["checkout-index", "-a", "-f"])?;
+        self.g(&["clean", "-fdq", "-e", EXCHANGE])?;
+        Ok(())
+    }
+
     /// The folders the project's own commands must read through its linked dependencies: their real places,
     /// and the Python each virtualenv runs.
     pub fn reads(&self) -> Vec<PathBuf> {
@@ -561,6 +692,37 @@ impl Copy {
         out.sort();
         out.dedup();
         out
+    }
+}
+
+/// Link into `to` each folder of installed packages `from` has at `rel` and below, where `to` has the folder that
+/// holds it and nothing by its name: the link points where the copy's entry really is (the person's packages the copy
+/// links, or a folder a step installed in the copy), so a check reads the packages as the copy has them, and a box
+/// that hides the run's folders need not read the copy's own link to get there. Like the box, it looks
+/// [`LINKED_DEPTH`] folders deep and never into a repository or the exchange.
+fn link_installed(from: &Path, to: &Path, rel: &Path) {
+    if rel.components().count() >= LINKED_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(from.join(rel)) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let n = name.to_string_lossy();
+        if n == ".git" || (rel.as_os_str().is_empty() && n == EXCHANGE) {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(e.path()) else { continue };
+        if LINKED.contains(&n.as_ref()) && e.path().is_dir() {
+            let at = to.join(rel).join(&name);
+            if to.join(rel).is_dir() && std::fs::symlink_metadata(&at).is_err()
+                && let Ok(real) = std::fs::canonicalize(e.path()) {
+                    let _linked = std::os::unix::fs::symlink(real, &at);
+                }
+            continue;
+        }
+        if meta.is_dir() {
+            link_installed(from, to, &rel.join(&name));
+        }
     }
 }
 

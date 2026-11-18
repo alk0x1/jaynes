@@ -81,6 +81,10 @@ pub enum Call {
         request: String,
         output: Value,
         given: Vec<Given>,
+        /// For a step that reaches the project: the files of the project as Jaynes measured them when the attempt
+        /// ended, and as the delivery carries them, laid out in a folder of their own beside the run's copy, with no
+        /// repository and with the copy's installed dependencies linked in; never the run's copy itself. What git
+        /// ignores is not there. The folder goes when the check is over.
         project: Option<String>,
         source: Option<String>,
         /// The person opened this project's checks to every local port (`jaynes project open-ports`), as the run's
