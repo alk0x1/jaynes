@@ -97,8 +97,9 @@ fn role(rng: &mut Rng) -> Manifest {
                 let stop_risk = if from_risk == Risk::High || rng.chance(20) { Risk::High } else { Risk::Low };
                 let release = executor != Executor::Person && rng.chance(40);
                 let budget = (executor != Executor::Person && rng.chance(50)).then_some(jaynes_core::manifest::Rate(0.2));
-                // the step that made the work this one reviews: what the person sends back may go there
-                let maker = if executor == Executor::Agent && rng.chance(40) {
+                // the step that made the work this one reviews, or that one of the role's own shows: what the person
+                // sends back may go there
+                let maker = if matches!(executor, Executor::Agent | Executor::Role) && rng.chance(40) {
                     needs.iter().find(|n| steps.iter().any(|s: &StepDecl| &s.name == *n && s.executor == Executor::Agent && !s.hidden && s.from_risk <= from_risk)).cloned()
                 } else {
                     None
@@ -1332,6 +1333,7 @@ fn unused(_: QuestionKind) {}
 #[test]
 fn the_random_runs_reach_what_the_guarantees_are_about() {
     let mut seen: BTreeMap<&'static str, u32> = BTreeMap::new();
+    let mut role_makers = 0;
     for seed in 1..=1000u64 {
         let seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let mut w = World::new(seed);
@@ -1342,6 +1344,11 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 break;
             }
         }
+        let run = w.run().clone();
+        let from_role = |q: &String| {
+            run.questions.get(q).and_then(|q| run.manifest.index(&q.question.step)).is_some_and(|i| run.manifest.steps[i].executor == Executor::Role)
+        };
+        role_makers += w.log.iter().filter(|e| matches!(e, Event::StepInvalidated { from: Some(q), .. } if from_role(q))).count();
         let mut hit = |k: &'static str| *seen.entry(k).or_default() += 1;
         if w.run().finished() {
             hit("finished");
@@ -1367,6 +1374,8 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         }
     }
     eprintln!("{seen:#?}");
+    eprintln!("sent back to its maker from a step of the role's own: {role_makers}");
+    assert!(role_makers >= 5, "the random runs sent work back from a step of the role's own to its maker only {role_makers} times");
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",

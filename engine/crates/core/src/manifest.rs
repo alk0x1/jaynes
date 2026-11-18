@@ -375,10 +375,16 @@ impl Manifest {
                 if stop.from_risk < s.from_risk {
                     errors.push(format!("{at} asks at a risk the step does not run at"));
                 }
+                // A stop sends the work back to the agent that made it from an agent's step that reviews it, or from a
+                // step of the role's own that shows it, such as quotes in the pages they came from; never from the
+                // person's step.
                 if let Some(r) = &stop.redo {
+                    let asks = matches!(s.executor, Executor::Agent | Executor::Role);
                     match self.index(r) {
-                        Some(j) if s.needs.contains(r) && self.steps[j].executor == Executor::Agent && !self.steps[j].hidden && s.executor == Executor::Agent => {}
-                        _ => errors.push(format!("{at} sends back to {r}, which is not an agent's step it needs")),
+                        Some(j) if asks && s.needs.contains(r) && self.steps[j].executor == Executor::Agent && !self.steps[j].hidden => {}
+                        _ => errors.push(format!(
+                            "{at} sends back to {r}: a stop sends work back only from an agent's step or one of Jaynes's own, to an agent's step it needs that is not hidden"
+                        )),
                     }
                 }
                 if stop.rounds == Some(0) {
