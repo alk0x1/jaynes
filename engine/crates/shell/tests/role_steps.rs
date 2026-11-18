@@ -658,6 +658,51 @@ fn jaynes_check_refuses_a_script_step_that_is_not_well_formed_with_its_line() {
     assert!(!ok && out.contains("✘ the role does not read") && out.contains("role.toml:4: step act has the effect \"permanent\": an effect is \"none\" or \"irreversible\""), "{out}");
 }
 
+/// A new role from `jaynes new`, with its example check named in the step that makes the change.
+fn new_role_with_its_check(s: &Scratch, name: &str) -> PathBuf {
+    let dir = s.base.join(name);
+    let (ok, out) = engine(s, &["new", name, dir.to_str().expect("path")]);
+    assert!(ok, "{out}");
+    let line = "{ script = \"checks/files-exist.sh\", kind = \"open\", about = \"every file named in files is in the project\", cases = \"cases/files-exist\" }";
+    let text = std::fs::read_to_string(dir.join("role.toml")).expect("role.toml");
+    let named = text.replace("checks = [\"output-follows-schema\", \"suite-passes\"]", &format!("checks = [\"output-follows-schema\", \"suite-passes\", {line}]"));
+    assert_ne!(named, text, "the template's checks line moved");
+    std::fs::write(dir.join("role.toml"), named).expect("write");
+    dir
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn jaynes_check_runs_a_check_of_the_role_s_own_on_its_cases_in_the_box() {
+    let s = scratch("cases", "http://127.0.0.1:1");
+    let dir = new_role_with_its_check(&s, "tidy");
+    let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
+    assert!(ok, "{out}");
+    assert!(out.contains("✔ check files-exist of make: rejected 2 of 2, accepted 2 of 2"), "{out}");
+    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts"), "{out}");
+    // a check that accepts everything is refused, with the hole it left open
+    std::fs::write(dir.join("checks/files-exist.sh"), "#!/bin/sh\nexit 0\n").expect("write");
+    let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
+    assert!(!ok && out.contains("✘ check files-exist of make: rejected 0 of 2, accepted 2 of 2"), "{out}");
+    assert!(out.contains("it accepted \"one-missing\", which it must reject: a file named that the project does not have, beside one it has"), "{out}");
+    assert!(out.contains("a check of the role does not hold to its cases"), "{out}");
+    // a check that breaks has rejected nothing: its cases did not run
+    std::fs::write(dir.join("checks/files-exist.sh"), "#!/bin/sh\necho broke\nexit 2\n").expect("write");
+    let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
+    assert!(!ok && out.contains("rejected 0 of 2, accepted 0 of 2") && out.contains("so the case did not run"), "{out}");
+}
+
+#[test]
+fn a_check_with_no_cases_is_said_to_be_untested_and_the_role_still_reads() {
+    let s = scratch("untested", "http://127.0.0.1:1");
+    let dir = new_role_with_its_check(&s, "loose");
+    let text = std::fs::read_to_string(dir.join("role.toml")).expect("read").replace(", cases = \"cases/files-exist\"", "");
+    std::fs::write(dir.join("role.toml"), text).expect("write");
+    let (_, out) = engine(&s, &["check", dir.to_str().expect("path")]);
+    assert!(out.contains("! check files-exist of make has no cases: untested."), "{out}");
+    assert!(!out.contains("✔ check files-exist"), "nothing is told of it as held: {out}");
+}
+
 #[test]
 fn the_roles_written_before_still_pass_jaynes_check_as_they_are() {
     // fix-bug is left to the reader's own test, which holds it to the manifest it read into before: proving its
