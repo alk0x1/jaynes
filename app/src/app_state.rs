@@ -62,11 +62,22 @@ pub struct State {
     pub changes: bool,
     pub closed: Vec<Closed>,
     pub frame: Option<Frame>,
+    /// The bars' widths as the person dragged them (bars.rs); none is the bar's own.
+    pub widths: Widths,
+}
+
+/// How wide the person left each bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Widths {
+    pub column: Option<f32>,
+    pub steps: Option<f32>,
+    pub changes: Option<f32>,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { open: Open::Main, column: true, steps: true, changes: false, closed: Vec::new(), frame: None }
+        State { open: Open::Main, column: true, steps: true, changes: false, closed: Vec::new(), frame: None, widths: Widths::default() }
     }
 }
 
@@ -183,6 +194,7 @@ mod tests {
             changes: true,
             closed: vec![Closed { run: "r1".into(), mark: "needs".into(), line: fingerprint("Pick one") }],
             frame: Some(Frame { x: 10., y: 20., width: 1200., height: 800., screen: Some(2) }),
+            widths: Widths { column: Some(52.), steps: Some(410.), changes: None },
         };
         save(&p, &s).unwrap();
         assert_eq!(load(&p), (s, None));

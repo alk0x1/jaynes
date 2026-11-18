@@ -11,6 +11,7 @@
 
 mod agents;
 mod app_state;
+mod bars;
 mod ask;
 mod inbox;
 mod answer;
@@ -667,7 +668,8 @@ impl Root {
             (None, false, None) => app_state::Open::Main,
         };
         let frame = Some(app_state::frame_of(window.window_bounds().get_bounds(), window.display(cx).map(|d| d.id().into())));
-        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame }
+        // the bars' widths join when their edges can be dragged (bars.rs): until then each is its own
+        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: app_state::Widths::default() }
     }
 
     /// Keeps what the window shows when it changed, once what stood was shown again.
