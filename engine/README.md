@@ -42,4 +42,7 @@ monitor off and none of the person's own or the system's git configuration: noth
 - files kept in git-lfs are pointers in the copy, and submodules come without their content: the start says so;
 - `.gitattributes`, `.gitmodules` and `.lfsconfig`, in any folder, are on the floor of the risk, since the person's own
   git obeys them when the delivery lands.
+- the agent's git in the copy reads its history (the engine's objects are readable to it, never writable) and none of
+  the person's git configuration; what it commits there is the agent's, as "Jaynes agent", and never the delivery;
+- a run started before 0.2.2 goes on in the engine it started with (kept in `engines/`), with that engine's copy.
 

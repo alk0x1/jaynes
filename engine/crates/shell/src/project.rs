@@ -72,10 +72,16 @@ fn nested_git(dir: &Path) -> Vec<String> {
             let path = e.path();
             let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
             let rel = path.strip_prefix(root).map(|r| r.display().to_string()).unwrap_or_default();
-            if e.file_name() == ".git" {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            // compared without case: on a file system that ignores it, as macOS's does, .GIT is .git to git
+            if name == ".git" {
                 if at != root {
                     out.push(rel);
                 }
+                continue;
+            }
+            // installed dependencies, with a .git of their own or not, are never part of the change
+            if DEPENDENCIES.iter().any(|d| name == *d) {
                 continue;
             }
             if meta.is_dir() && rel != EXCHANGE {
@@ -305,6 +311,22 @@ impl Copy {
             return Err(Ok(nested.iter().map(|n| format!("{n} (a repository nested in the copy: a run creates or changes no submodule)")).collect()));
         }
         self.g(&["add", "-A"]).map_err(Err)?;
+        // and after: a repository that came in anyway, between the look and the add, is a gitlink in the index
+        let raw = self.g(&["diff", "--cached", "--raw", "--no-renames"]).map_err(Err)?;
+        let links: Vec<String> = raw
+            .lines()
+            .filter(|l| l.split_whitespace().nth(1) == Some("160000"))
+            .filter_map(|l| l.split('\t').nth(1).map(|p| format!("{p} (a repository nested in the copy: a run creates or changes no submodule)")))
+            .collect();
+        if !links.is_empty() {
+            self.g(&["reset", "-q"]).map_err(Err)?;
+            for l in &links {
+                let p = self.dir.join(l.split(' ').next().unwrap_or_default());
+                let _gone = std::fs::remove_dir_all(&p);
+            }
+            self.discard().map_err(Err)?;
+            return Err(Ok(links));
+        }
         let stat = self.g(&["diff", "--cached", "--numstat", "--no-renames"]).map_err(Err)?;
         let mut changed = Vec::new();
         for line in stat.lines() {
@@ -454,6 +476,10 @@ impl Copy {
     /// and the Python each virtualenv runs.
     pub fn reads(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
+        // the agent's git reads its history through the engine's objects, which it may read and never write
+        if !self.git.starts_with(&self.dir) {
+            out.push(self.git.join("objects"));
+        }
         for d in DEPENDENCIES {
             let link = self.source.join(d);
             if let Ok(real) = std::fs::canonicalize(&link) {
@@ -551,6 +577,37 @@ mod git_tests {
     }
 
     #[test]
+    fn a_nested_repository_is_found_whatever_its_case_and_installed_dependencies_are_not_looked_in() {
+        let base = std::env::temp_dir().join(format!("jaynes-nested-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("a/.GIT")).expect("dir");
+        std::fs::create_dir_all(base.join("b")).expect("dir");
+        std::fs::write(base.join("b/.Git"), "gitdir: /elsewhere").expect("write");
+        std::fs::create_dir_all(base.join("node_modules/pkg/.git")).expect("dir");
+        std::fs::create_dir_all(base.join("lib/node_modules/x/.git")).expect("dir");
+        std::fs::create_dir_all(base.join(".git")).expect("dir");
+        assert_eq!(nested_git(&base), ["a/.GIT", "b/.Git"]);
+    }
+
+    #[test]
+    fn a_repository_that_reaches_the_index_anyway_is_refused() {
+        let base = std::env::temp_dir().join(format!("jaynes-gitlink-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        // a repository under a dependency's name, which the look before the add passes over
+        let inner = copy.dir.join("vendor/node_modules/inner");
+        std::fs::create_dir_all(&inner).expect("dir");
+        git(&inner, &["init", "-q"]).expect("init");
+        std::fs::write(inner.join("f"), "f").expect("write");
+        git(&inner, &["add", "-A"]).expect("add");
+        git(&inner, &["commit", "-q", "-m", "inner"]).expect("commit");
+        let refused = copy.stage(&["**".to_string()]);
+        assert!(matches!(&refused, Err(Ok(paths)) if paths.iter().any(|p| p.starts_with("vendor/node_modules/inner"))), "{refused:?}");
+        assert!(!inner.exists(), "the nested repository is left in the copy");
+    }
+
+    #[test]
     fn the_person_is_told_what_of_their_project_the_copy_does_not_hold() {
         let base = std::env::temp_dir().join(format!("jaynes-git-warn-{}", std::process::id()));
         let _gone = std::fs::remove_dir_all(&base);
@@ -565,7 +622,8 @@ mod git_tests {
 
     #[test]
     fn no_git_of_the_engine_runs_on_a_copy_but_through_its_own_repository() {
-        // only project.rs runs git on a run's copy; install.rs and index.rs clone roles and indexes, never a copy
+        // only project.rs runs git on a run's copy; install.rs and index.rs clone roles and indexes, never a copy. A net,
+        // not a proof: it reads the text, so git started another way (a shell, a name held in a variable) passes it
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for e in std::fs::read_dir(&src).expect("src").flatten() {
             let name = e.file_name().to_string_lossy().into_owned();

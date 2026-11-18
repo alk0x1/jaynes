@@ -383,6 +383,25 @@ fn beside(runs: &Path, cwd: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// `p` to hide, or, when it holds one of `reads`, everything in it but the way down to each of them.
+fn around(p: &Path, reads: &[PathBuf]) -> Vec<PathBuf> {
+    let canon = |x: &Path| std::fs::canonicalize(x).unwrap_or_else(|_| x.to_path_buf());
+    let p = canon(p);
+    let inside: Vec<PathBuf> = reads.iter().map(|r| canon(r)).filter(|r| r.starts_with(&p)).collect();
+    if inside.is_empty() {
+        return vec![p];
+    }
+    if inside.contains(&p) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(&p).into_iter().flatten().flatten() {
+        out.extend(around(&e.path(), &inside));
+    }
+    out.sort();
+    out
+}
+
 /// What the engine keeps under its home that no step reads, as the project commands' box hides it
 /// (`ENGINE_SECRETS` in jaynes_box.py).
 pub const ENGINE_SECRETS: &[&str] =
@@ -432,7 +451,10 @@ impl Claude {
         let mut hide: Vec<String> = vec!["~/".into()];
         let home = crate::home();
         hide.extend(ENGINE_SECRETS.iter().map(|f| home.join(f).display().to_string()));
-        hide.extend(beside(&home.join("runs"), cwd).iter().map(|p| p.display().to_string()));
+        // what the step may read is never hidden: a folder that holds one is hidden around it, one entry at a time
+        for p in beside(&home.join("runs"), cwd) {
+            hide.extend(around(&p, reads).iter().map(|p| p.display().to_string()));
+        }
         json!({
             "permissions": {"defaultMode": if asks { "default" } else { "dontAsk" }, "allow": allow, "deny": deny,
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
@@ -742,6 +764,21 @@ mod tests {
         cmd.arg("-c").arg("sleep 2");
         let w = run(cmd, "", Duration::from_secs(1), None, None, Some(&mark), None, None).expect("ran");
         assert!(w.timed_out);
+    }
+
+    #[test]
+    fn what_a_step_may_read_beside_it_stays_readable_and_the_rest_around_it_hidden() {
+        let base = std::env::temp_dir().join(format!("jaynes-around-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let git = base.join("project.git");
+        for d in ["objects/ab", "hooks", "refs"] {
+            std::fs::create_dir_all(git.join(d)).expect("dir");
+        }
+        std::fs::write(git.join("config"), "").expect("write");
+        let real = std::fs::canonicalize(&git).expect("canon");
+        let hidden = around(&git, &[git.join("objects")]);
+        assert_eq!(hidden, vec![real.join("config"), real.join("hooks"), real.join("refs")]);
+        assert_eq!(around(&git, &[]), vec![real.clone()]);
     }
 
     #[test]

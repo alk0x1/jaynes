@@ -1857,3 +1857,26 @@ fn the_start_says_when_the_copy_lacks_git_lfs_content_or_submodules() {
     assert!(out.contains("note: the project has submodules"), "{out}");
     assert!(out.contains("delivered"), "the run is not refused: {out}");
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_agent_s_git_reads_none_of_the_person_s_configuration_and_its_commits_are_not_the_delivery() {
+    let s = scratch("agent-git");
+    let said = s.home.parent().expect("base").join("said.txt");
+    // the agent reads its history, asks for the person's identity, and commits in its own repository
+    let agent = format!(
+        "perl -pi -e 's/hello/hi/' greeting.txt && (git log -1 --format=%s; git config --global user.email || echo no-global; \
+         git commit -qam mine && git log -1 --format='%an <%ae>') > {} 2>&1 && {OUTPUT}",
+        said.display()
+    );
+    let out = start(&s, "agentgit", &agent);
+    assert!(out.contains("delivered"), "{out}");
+    let said = std::fs::read_to_string(&said).expect("said");
+    let lines: Vec<&str> = said.lines().collect();
+    assert_eq!(lines, ["start", "no-global", "Jaynes agent <agent@jaynes.invalid>"], "{said}");
+    // what the agent committed is not what is delivered: the delivery is the change Jaynes measured
+    let log = Command::new("git").arg("-C").arg(&s.project).args(["log", "--format=%an %s", "jaynes/agentgit"]).output().expect("git");
+    assert!(!String::from_utf8_lossy(&log.stdout).contains("Jaynes agent mine"), "{}", String::from_utf8_lossy(&log.stdout));
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/agentgit:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}

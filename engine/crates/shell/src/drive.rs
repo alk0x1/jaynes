@@ -277,6 +277,16 @@ pub fn act_here(home: &Path, exe: &Path, run_id: &str, act: &Value) -> Value {
 
 // --- what a run changed, and clearing its copy ----------------------------------------------------------------
 
+/// The git settings of every agent's turn: no configuration of the person or of the system, and an identity of its own.
+pub const AGENT_GIT_ENV: &[(&str, &str)] = &[
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_AUTHOR_NAME", "Jaynes agent"),
+    ("GIT_AUTHOR_EMAIL", "agent@jaynes.invalid"),
+    ("GIT_COMMITTER_NAME", "Jaynes agent"),
+    ("GIT_COMMITTER_EMAIL", "agent@jaynes.invalid"),
+];
+
 /// The most Jaynes reads of a file an agent left in its folder.
 const MOST_READ: u64 = 1 << 20;
 
@@ -292,6 +302,10 @@ fn read_inside(root: &Path, path: &Path) -> Result<String, Option<String>> {
     if !meta.is_file() {
         return Err(Some("is not a plain file: a link or a folder is not read".to_string()));
     }
+    // a hard link shares a file of this account that may be anywhere, without the agent reading it
+    if std::os::unix::fs::MetadataExt::nlink(&meta) > 1 {
+        return Err(Some("is a hard link to another file, and is not read".to_string()));
+    }
     let (Ok(real), Ok(base)) = (std::fs::canonicalize(path), std::fs::canonicalize(root)) else { return Err(Some("does not read".to_string())) };
     if !real.starts_with(&base) {
         return Err(Some("is reached through a link out of the step's folder, and is not read".to_string()));
@@ -300,6 +314,47 @@ fn read_inside(root: &Path, path: &Path) -> Result<String, Option<String>> {
         return Err(Some(format!("is larger than {MOST_READ} bytes")));
     }
     std::fs::read_to_string(&real).map_err(|e| Some(format!("does not read: {e}")))
+}
+
+/// `path`, under `root`, when it is a plain file there reached through no link at all and is not a hard link: what Jaynes
+/// may read of it, outside any box.
+fn plain_inside(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !meta.is_file() || std::os::unix::fs::MetadataExt::nlink(&meta) > 1 {
+        return Err(format!("{} is a link or not a plain file, and is not read", path.display()));
+    }
+    let base = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let rel = path.strip_prefix(root).map_err(|_| format!("{} is not inside the step's folder", path.display()))?;
+    let real = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    if real != base.join(rel) {
+        return Err(format!("{} is reached through a link, and is not read", path.display()));
+    }
+    Ok(real)
+}
+
+/// Write `bytes` at `path` under `root`, a folder an agent wrote in: every folder on the way from `root` is a folder, never
+/// a link (made where it is missing), and the file is made anew, never written through what was there. Jaynes writes
+/// outside any box, so a link left in the way would carry the write anywhere this account may write.
+fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let rel = path.strip_prefix(root).map_err(|_| format!("{} is not inside {}", path.display(), root.display()))?;
+    let mut at = root.to_path_buf();
+    let parts: Vec<_> = rel.components().collect();
+    let Some((last, folders)) = parts.split_last() else { return Err("no file to write".to_string()) };
+    for c in folders {
+        at.push(c);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => return Err(format!("{} is a link or a file, not a folder: Jaynes does not write through it", at.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&at).map_err(|e| e.to_string())?,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    at.push(last);
+    if std::fs::symlink_metadata(&at).is_ok() {
+        std::fs::remove_file(&at).map_err(|e| format!("Jaynes could not replace {}: {e}", at.display()))?;
+    }
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&at).map_err(|e| format!("Jaynes could not write {}: {e}", at.display()))?;
+    std::io::Write::write_all(&mut f, bytes).map_err(|e| e.to_string())
 }
 
 /// What step `step` of a run changed in the project, as git shows it: from the run's copy while it is kept, or from
@@ -842,6 +897,11 @@ impl<'a> Driver<'a> {
         }
         env.push(("GOTOOLCHAIN".into(), "local".into()));
         env.push(("GOTELEMETRY".into(), "off".into()));
+        // the agent's git reads none of the person's configuration (their identity, filters, global hooks), which the
+        // box hides anyway, and commits in the copy as Jaynes's agent: what it commits there is never what is delivered
+        for (k, v) in AGENT_GIT_ENV {
+            env.push((k.to_string(), v.to_string()));
+        }
         // offline, unless the step installs packages from their registries
         if turn.reach.network != jaynes_core::manifest::Network::Packages {
             env.push(("GOPROXY".into(), "off".into()));
@@ -995,11 +1055,9 @@ impl<'a> Driver<'a> {
             let mut pages = serde_json::Map::new();
             for p in &x.pictures {
                 let path = root.join(p);
-                let real = std::fs::canonicalize(&path).map_err(|e| format!("the picture {p} of {} does not read: {e}", x.id))?;
+                // a picture is read only as a plain file of the step's folder, reached through no link
+                let real = plain_inside(root, &path).map_err(|e| format!("the picture {p} of {} does not read: {e}", x.id))?;
                 let base = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
-                if !real.starts_with(&base) {
-                    return Err(format!("the picture {p} of {} is outside the step's folder", x.id));
-                }
                 let mut ext = real.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
                 let mut page_kept = None;
                 // a page is photographed by Jaynes, and the photograph left beside the copy's files for later agents
@@ -1014,15 +1072,16 @@ impl<'a> Driver<'a> {
                     std::fs::write(shelf.join(&name), &source).map_err(|e| e.to_string())?;
                     page_kept = Some(name);
                     let of = photo.with_extension("png.of");
-                    // Jaynes writes these in the copy, where an agent may have left a link to anywhere: never through one
-                    for f in [&photo, &of] {
-                        if std::fs::symlink_metadata(f).is_ok_and(|m| !m.is_file()) {
-                            std::fs::remove_file(f).map_err(|e| e.to_string())?;
-                        }
-                    }
-                    if !(photo.is_file() && read_inside(&base, &of).is_ok_and(|d| d == page)) {
-                        self.photograph(&real, &photo).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
-                        std::fs::write(&of, &page).map_err(|e| e.to_string())?;
+                    // Jaynes writes these in the copy, where an agent may have left a link to anywhere: the photograph is
+                    // made in the run's own folder, out of the agent's reach, and put in place without following a link
+                    let made = plain_inside(&base, &photo).is_ok();
+                    if !(made && read_inside(&base, &of).is_ok_and(|d| d == page)) {
+                        let shot = self.setup.dir.join("photograph.png");
+                        let _gone = std::fs::remove_file(&shot);
+                        self.photograph(&real, &shot).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
+                        let bytes = std::fs::read(&shot).map_err(|e| e.to_string())?;
+                        write_inside(&base, &photo, &bytes).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
+                        write_inside(&base, &of, page.as_bytes()).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
                     }
                     ext = "png".into();
                     photo
@@ -1385,6 +1444,46 @@ mod tests {
         assert!(read_inside(&root, &root.join("link.txt")).is_err_and(|e| e.is_some()));
         assert!(read_inside(&root, &root.join("up/outside.txt")).is_err_and(|e| e.is_some_and(|w| w.contains("out of the step's folder"))));
         assert!(read_inside(&root, &root.join("sub")).is_err_and(|e| e.is_some()));
+    }
+
+    #[test]
+    fn a_hard_link_an_agent_left_is_not_read() {
+        let base = std::env::temp_dir().join(format!("jaynes-hard-link-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let root = base.join("step");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(base.join("secret.json"), "{}").expect("write");
+        std::fs::hard_link(base.join("secret.json"), root.join("output.json")).expect("link");
+        assert!(read_inside(&root, &root.join("output.json")).is_err_and(|e| e.is_some_and(|w| w.contains("link"))));
+    }
+
+    #[test]
+    fn jaynes_writes_in_a_copy_only_where_no_link_leads_out_of_it() {
+        let base = std::env::temp_dir().join(format!("jaynes-write-inside-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let root = base.join("copy");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(root.join(".jaynes")).expect("dir");
+        std::fs::create_dir_all(&outside).expect("dir");
+        // a folder on the way that is a link out
+        std::os::unix::fs::symlink(&outside, root.join(".jaynes/pictures")).expect("link");
+        assert!(write_inside(&root, &root.join(".jaynes/pictures/a.png"), b"x").is_err());
+        assert!(!outside.join("a.png").exists(), "Jaynes wrote out of the copy");
+        // a link deeper in the way
+        std::fs::remove_file(root.join(".jaynes/pictures")).expect("rm");
+        std::fs::create_dir_all(root.join(".jaynes/pictures")).expect("dir");
+        std::os::unix::fs::symlink(&outside, root.join(".jaynes/pictures/deep")).expect("link");
+        assert!(write_inside(&root, &root.join(".jaynes/pictures/deep/b.png"), b"x").is_err());
+        assert!(!outside.join("b.png").exists());
+        // the file itself a link: replaced, and what it pointed at untouched
+        std::fs::write(outside.join("c.txt"), "theirs").expect("write");
+        std::os::unix::fs::symlink(outside.join("c.txt"), root.join(".jaynes/pictures/c.png")).expect("link");
+        write_inside(&root, &root.join(".jaynes/pictures/c.png"), b"ours").expect("written");
+        assert_eq!(std::fs::read_to_string(outside.join("c.txt")).expect("read"), "theirs");
+        assert_eq!(std::fs::read(root.join(".jaynes/pictures/c.png")).expect("read"), b"ours");
+        // folders made on the way, inside
+        write_inside(&root, &root.join(".jaynes/pictures/new/d.png"), b"d").expect("written");
+        assert!(root.join(".jaynes/pictures/new/d.png").is_file());
     }
 
     #[test]
