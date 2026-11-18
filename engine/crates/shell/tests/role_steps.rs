@@ -236,7 +236,6 @@ printf '{"done": true}' > "$JAYNES_OUTPUT"
 // --- the acceptance: three scripts, no agent ------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn three_scripts_of_a_role_run_to_the_end_with_no_agent() {
     let world = World::open();
     let s = scratch("whole", &world.address());
@@ -295,7 +294,6 @@ fn three_scripts_of_a_role_run_to_the_end_with_no_agent() {
 // --- what a script may reach ----------------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_that_only_reads_leaves_nothing_in_the_run_s_copy() {
     let s = scratch("reads", "http://127.0.0.1:1");
     let role = one_script(&s, "reads", "reach = { project = \"read\" }", &format!("test -f VERSION || exit 1\necho left > LEFT.txt\n{DONE}\n"));
@@ -308,7 +306,6 @@ fn a_script_that_only_reads_leaves_nothing_in_the_run_s_copy() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_with_no_reach_sees_nothing_of_the_project() {
     let s = scratch("blind", "http://127.0.0.1:1");
     let role = one_script(&s, "blind", "", &format!("test -e VERSION && {{ echo 'the project is here'; exit 1; }}\n{DONE}\n"));
@@ -317,7 +314,6 @@ fn a_script_with_no_reach_sees_nothing_of_the_project() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn what_a_script_writes_raises_the_risk_as_an_agent_s_change_does() {
     // G7: rules in code set how risky a run is, from what the change touches, whoever made the change
     let s = scratch("risky", "http://127.0.0.1:1");
@@ -334,7 +330,6 @@ fn what_a_script_writes_raises_the_risk_as_an_agent_s_change_does() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_that_writes_what_its_step_may_not_is_the_role_s_fault_and_the_copy_goes_back() {
     let s = scratch("outside", "http://127.0.0.1:1");
     let role = one_script(&s, "outside", "reach = { project = \"write\", write = [\"notes/**\"] }", &format!("mkdir -p notes && echo a > notes/a.txt && echo b > README.md\n{DONE}\n"));
@@ -348,7 +343,6 @@ fn a_script_that_writes_what_its_step_may_not_is_the_role_s_fault_and_the_copy_g
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_cannot_write_where_git_keeps_the_run_s_copy() {
     // Jaynes runs git in the copy later, outside the box: a hook or a setting a script left there would run then.
     let s = scratch("git", "http://127.0.0.1:1");
@@ -363,7 +357,6 @@ fn a_script_cannot_write_where_git_keeps_the_run_s_copy() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_reads_nothing_the_engine_keeps_but_its_own_role() {
     // another run, whose folder is under the engine's runs, and the record of every run
     let s = scratch("keeps", "http://127.0.0.1:1");
@@ -388,7 +381,6 @@ fn a_script_reads_nothing_the_engine_keeps_but_its_own_role() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_reaches_only_the_local_ports_its_step_names() {
     let world = World::open();
     let s = scratch("ports", &world.address());
@@ -407,7 +399,6 @@ fn a_script_reaches_only_the_local_ports_its_step_names() {
 // --- a script that fails ---------------------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_that_fails_is_the_role_s_fault_spends_nothing_and_is_not_tried_again() {
     let s = scratch("fails", "http://127.0.0.1:1");
     for (name, script, fault, says) in [
@@ -438,7 +429,6 @@ fn a_script_that_fails_is_the_role_s_fault_spends_nothing_and_is_not_tried_again
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_person_continues_a_run_a_script_stopped_and_the_script_runs_again() {
     let s = scratch("again", "http://127.0.0.1:1");
     // the first time the project lacks what the script needs; the person puts it there and continues
@@ -455,7 +445,6 @@ fn the_person_continues_a_run_a_script_stopped_and_the_script_runs_again() {
 // --- what cannot be undone -------------------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn what_cannot_be_undone_waits_for_the_person_s_answer_and_then_acts_once() {
     // G14, for a role written in a file: the announcement rests on the changelog's entry, which the person is asked about
     let world = World::open();
@@ -478,7 +467,6 @@ fn what_cannot_be_undone_waits_for_the_person_s_answer_and_then_acts_once() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_script_that_cannot_be_undone_and_fails_says_whether_it_may_have_acted() {
     let s = scratch("acted", "http://127.0.0.1:1");
     let keys = "effect = \"irreversible\"";
@@ -504,7 +492,6 @@ fn a_script_that_cannot_be_undone_and_fails_says_whether_it_may_have_acted() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_step_that_cannot_be_undone_run_again_in_the_same_round_carries_the_same_key() {
     let world = World::open();
     let s = scratch("key", &world.address());
@@ -546,7 +533,6 @@ fn draft_send_close(s: &Scratch, world: &World, name: &str, send_more: &str, clo
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_step_that_cannot_be_undone_runs_once_when_an_answer_before_it_changes_after_it_acted() {
     // The one way a role in a file can still reach it: the person keeps the draft, the step acts, and then, the run
     // still open, the person sends the draft back. What the step used comes out different. It has acted, and does
@@ -584,7 +570,6 @@ fn a_step_that_cannot_be_undone_runs_once_when_an_answer_before_it_changes_after
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_second_act_happens_only_when_the_person_orders_it_and_carries_a_key_of_its_own() {
     let world = World::open();
     let s = scratch("second-act", &world.address());
@@ -682,7 +667,6 @@ fn new_role_with_its_check(s: &Scratch, name: &str) -> PathBuf {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn jaynes_check_runs_a_check_of_the_role_s_own_on_its_cases_in_the_box() {
     let s = scratch("cases", "http://127.0.0.1:1");
     let dir = new_role_with_its_check(&s, "tidy");
@@ -720,7 +704,6 @@ fn a_check_with_no_cases_is_said_to_be_untested_and_the_role_still_reads() {
 // --- a role that does not fit the project says so before a run starts ---------------------------------------
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_that_does_not_fit_the_project_says_why_before_any_run_starts() {
     let s = scratch("fits", "http://127.0.0.1:1");
     let needs = "[[requires]]\nsays = \"The project is a Rust crate\"\nfile = \"Cargo.toml\"\n\n[[requires]]\nsays = \"The project says which version it is at\"\nscript = \"requires/version.sh\"\n";
@@ -748,7 +731,6 @@ fn a_role_that_does_not_fit_the_project_says_why_before_any_run_starts() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_that_needs_tests_says_so_when_the_project_has_none() {
     let s = scratch("needs-suite", "http://127.0.0.1:1");
     let role = one_script(&s, "suited", "", &format!("{DONE}\n"));
@@ -957,7 +939,6 @@ fn act_role(s: &Scratch, world: &World, name: &str, stop: &str, more: &str) -> P
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn killed_before_or_after_it_acts_a_step_that_cannot_be_undone_is_never_started_again_on_its_own() {
     for stop in ["before", "after"] {
         let world = World::open();
@@ -989,7 +970,6 @@ fn killed_before_or_after_it_acts_a_step_that_cannot_be_undone_is_never_started_
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn killed_after_it_acts_a_step_safe_to_repeat_starts_again_by_itself_with_the_same_key() {
     let world = World::open();
     let s = scratch("killed-safe", &world.address());
@@ -1004,7 +984,6 @@ fn killed_after_it_acts_a_step_safe_to_repeat_starts_again_by_itself_with_the_sa
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn killed_while_its_check_runs_or_once_it_is_done_an_act_is_not_done_again() {
     // while its check runs: the act is recorded, and only the check runs again
     let world = World::open();
@@ -1084,7 +1063,6 @@ fn commit_in_project(s: &Scratch, file: &str, text: &str) {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn undo_goes_back_only_from_what_the_run_left_and_only_once() {
     // the person changed the file the run merged: Undo refuses, and their change stays as they made it
     let s = scratch("undo-touched", "http://127.0.0.1:1");

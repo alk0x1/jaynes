@@ -124,7 +124,6 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_s_key_never_rides_in_a_cookie() {
     let (_page, port, base) = page("cookie");
     // the page says where its key is, never the key, and the way in it names carries it in the fragment, which a
@@ -157,7 +156,6 @@ fn the_page_s_key_never_rides_in_a_cookie() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn only_a_request_from_the_page_s_own_origin_with_its_key_counts_as_the_person() {
     let (_page, port, _base) = page("origin");
     let ours = format!("Origin: http://localhost:{port}\r\n");
@@ -196,7 +194,6 @@ fn only_a_request_from_the_page_s_own_origin_with_its_key_counts_as_the_person()
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn nothing_an_agent_writes_runs_as_a_script_on_the_page() {
     let (_page, port, _base) = page("script");
     let (_, log) = (0, Command::new(BIN).args(["log", "marked"]).env("JAYNES_ENGINE_HOME", _base.join("home")).output().expect("log"));
@@ -237,7 +234,6 @@ fn nothing_an_agent_writes_runs_as_a_script_on_the_page() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_is_reached_by_localhost_on_both_of_its_addresses() {
     let (_page, port, _base) = page("both");
     for address in ["127.0.0.1", "::1"] {
