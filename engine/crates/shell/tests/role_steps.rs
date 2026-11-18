@@ -712,6 +712,48 @@ fn a_check_with_no_cases_is_said_to_be_untested_and_the_role_still_reads() {
     assert!(!out.contains("✔ check files-exist"), "nothing is told of it as held: {out}");
 }
 
+// --- a role that does not fit the project says so before a run starts ---------------------------------------
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_role_that_does_not_fit_the_project_says_why_before_any_run_starts() {
+    let s = scratch("fits", "http://127.0.0.1:1");
+    let needs = "[[requires]]\nsays = \"The project is a Rust crate\"\nfile = \"Cargo.toml\"\n\n[[requires]]\nsays = \"The project says which version it is at\"\nscript = \"requires/version.sh\"\n";
+    let role = one_script(&s, "fits", "", &format!("{DONE}\n"));
+    std::fs::create_dir_all(role.join("requires")).expect("dir");
+    let check = "test -f VERSION || { echo 'there is no VERSION file'; exit 1; }\necho touched > TOUCHED\n";
+    std::fs::write(role.join("requires/version.sh"), check).expect("write");
+    std::fs::write(role.join("role.toml"), format!("{}\n{needs}", std::fs::read_to_string(role.join("role.toml")).expect("read"))).expect("write");
+    // the project has a VERSION and no Cargo.toml: refused in the role's words, and no run exists
+    let (ok, out) = engine(&s, &["start", "--run", "unfit", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", "go", "--agent", NO_AGENT]);
+    assert!(!ok && out.contains("the role fits does not fit this project, so no run started and nothing was spent:\n- The project is a Rust crate: the project has no file Cargo.toml"), "{out}");
+    assert!(!out.contains("says which version"), "a need that is met is not said: {out}");
+    let (_, log) = engine(&s, &["log", "unfit"]);
+    assert!(log.trim().is_empty() || !log.contains("RunStarted"), "a run was recorded: {log}");
+    assert!(!s.home.join("runs/unfit").exists(), "the run's folder was made");
+    assert!(!s.project.join("TOUCHED").exists(), "a requirement's script wrote the person's project");
+    // with what the role needs, the run starts
+    std::fs::write(s.project.join("Cargo.toml"), "[package]\n").expect("write");
+    let out = start(&s, "fit", &role, "go");
+    assert!(out.contains("finished: delivered"), "{out}");
+    // what Jaynes could not judge is not the project's fault
+    std::fs::write(role.join("requires/version.sh"), "echo 'it broke'\nexit 2\n").expect("write");
+    let (ok, out) = engine(&s, &["start", "--run", "unknown", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", "go", "--agent", NO_AGENT]);
+    assert!(!ok && out.contains("Jaynes could not tell whether the role fits fits this project, so no run started") && out.contains("not the project's"), "{out}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_role_that_needs_tests_says_so_when_the_project_has_none() {
+    let s = scratch("needs-suite", "http://127.0.0.1:1");
+    let role = one_script(&s, "suited", "", &format!("{DONE}\n"));
+    std::fs::write(role.join("role.toml"), format!("{}\n[[requires]]\nsays = \"The project has tests Jaynes can run\"\nuse = \"suite\"\n", std::fs::read_to_string(role.join("role.toml")).expect("read"))).expect("write");
+    let (ok, out) = engine(&s, &["start", "--run", "nosuite", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", "go", "--agent", NO_AGENT]);
+    assert!(!ok && out.contains("- The project has tests Jaynes can run: no test runner was found in the project"), "{out}");
+    std::fs::write(s.project.join("Makefile"), "test:\n\ttrue\n").expect("write");
+    assert!(start(&s, "suite", &role, "go").contains("finished: delivered"));
+}
+
 #[test]
 fn the_roles_written_before_still_pass_jaynes_check_as_they_are() {
     // fix-bug is left to the reader's own test, which holds it to the manifest it read into before: proving its

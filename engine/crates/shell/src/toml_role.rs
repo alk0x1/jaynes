@@ -104,6 +104,100 @@ struct RoleFile {
     promise: Vec<toml::Spanned<PromiseFile>>,
     #[serde(default)]
     claim: Vec<toml::Spanned<ClaimFile>>,
+    #[serde(default)]
+    requires: Vec<toml::Spanned<RequiresFile>>,
+}
+
+/// What a role needs of the project, in its words, and how Jaynes finds whether the project has it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequiresFile {
+    says: String,
+    file: Option<String>,
+    #[serde(rename = "use")]
+    uses: Option<String>,
+    script: Option<String>,
+}
+
+/// What a role needs of the project, said before a run starts so that a role that does not fit says why before
+/// anything is spent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Requirement {
+    pub line: usize,
+    pub says: String,
+    pub by: NeedBy,
+}
+
+/// How Jaynes finds whether the project has what a role needs, reading it only.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NeedBy {
+    /// A file the project has, by its path or a glob.
+    File(String),
+    /// Tests Jaynes can find and run, as find-suite finds them.
+    Suite,
+    /// A script of the role's folder, run in the box on a throwaway copy of the project, with no network: exit 0
+    /// when the project has it, 1 when it has not (with why, printed).
+    Script(String),
+}
+
+/// Whether the project has one thing a role needs.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Need {
+    Met,
+    /// It has not, and why.
+    Unmet(String),
+    /// Jaynes could not tell: no box, a script that broke or ran out of time. Never the project's fault.
+    Unknown(String),
+}
+
+/// Why a run of a role does not start on a project.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unfit {
+    /// The project lacks what the role needs: each need, in the role's words, with why.
+    Unmet { role: String, needs: Vec<String> },
+    /// Jaynes could not tell whether it has it.
+    Unknown { role: String, why: String },
+}
+
+impl std::fmt::Display for Unfit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unfit::Unmet { role, needs } => write!(
+                f,
+                "the role {role} does not fit this project, so no run started and nothing was spent:\n{}",
+                needs.iter().map(|n| format!("- {n}")).collect::<Vec<_>>().join("\n")
+            ),
+            Unfit::Unknown { role, why } => {
+                write!(f, "Jaynes could not tell whether the role {role} fits this project, so no run started: {why}. That is the machine's to fix, not the project's")
+            }
+        }
+    }
+}
+
+/// The seconds a requirement's script may take: it reads the project and says yes or no.
+pub const REQUIRES_SECONDS: u64 = 60;
+
+/// Whether `project` has a file at `pattern`, a path or a glob, outside git's own folder and installed dependencies.
+pub fn has_file(project: &Path, pattern: &str) -> Need {
+    fn walk(root: &Path, dir: &Path, pattern: &str) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else { return false };
+        for e in entries.flatten() {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() {
+                if name != ".git" && !crate::project::DEPENDENCIES.contains(&name.as_str()) && walk(root, &path, pattern) {
+                    return true;
+                }
+            } else if let Ok(rel) = path.strip_prefix(root)
+                && jaynes_core::glob::matches(&rel.to_string_lossy(), pattern)
+            {
+                return true;
+            }
+        }
+        false
+    }
+    if walk(project, project, pattern) { Need::Met } else { Need::Unmet(format!("the project has no file {pattern}")) }
 }
 
 /// A claim of the role about what a run delivers, and what proves it in a run: a condition, or nothing, with why.
@@ -618,6 +712,8 @@ pub struct TomlRole {
     pub promises: Vec<(usize, Promise)>,
     /// What the role claims of what a run delivers, in order.
     pub claims: Vec<Claim>,
+    /// What the role needs of the project, in order.
+    pub requires: Vec<Requirement>,
 }
 
 /// An error in a role's files, with where it is.
@@ -637,6 +733,19 @@ fn in_folder(dir: &Path, path: &str) -> bool {
     match (std::fs::canonicalize(dir), std::fs::canonicalize(dir.join(path))) {
         (Ok(folder), Ok(file)) => file.is_file() && file.starts_with(folder),
         _ => false,
+    }
+}
+
+/// For a run of the role in `dir` on `project`, before it starts: Ok when the role fits the project or is not
+/// written as a file, or the sentence that says why no run starts.
+pub fn fits_or_says(dir: &Path, library: &Path, project: &Path) -> Result<(), String> {
+    if !dir.join(FILE).is_file() {
+        return Ok(());
+    }
+    match TomlRole::load(dir) {
+        Ok(role) => role.fits_project(library, project).map_err(|u| u.to_string()),
+        // a role that does not read is refused, with its errors, where it is read for the run
+        Err(_) => Ok(()),
     }
 }
 
@@ -1358,7 +1467,39 @@ impl TomlRole {
                 claims.push(Claim { line, says, by });
             }
         }
-        if errors.is_empty() { Ok(TomlRole { dir: dir.to_path_buf(), manifest, extras, promises, claims }) } else { Err(errors) }
+        let mut requires: Vec<Requirement> = Vec::new();
+        for spanned in &file.requires {
+            let line = line_of(&text, spanned.span().start);
+            let q = spanned.get_ref();
+            let says = q.says.trim().to_string();
+            if says.is_empty() {
+                errors.push(at(Some(line), FILE, "the requirement says nothing: write in says what the role needs of the project, as the person reads it"));
+                continue;
+            }
+            let by = match (&q.file, &q.uses, &q.script) {
+                (Some(path), None, None) if path.starts_with('/') || path.split('/').any(|p| p == "..") || path.trim().is_empty() => {
+                    errors.push(at(Some(line), FILE, format!("the requirement {says:?} names {path}, which is not a path inside the project")));
+                    continue;
+                }
+                (Some(path), None, None) => NeedBy::File(path.clone()),
+                (None, Some(u), None) if u == "suite" => NeedBy::Suite,
+                (None, Some(u), None) => {
+                    errors.push(at(Some(line), FILE, format!("the requirement {says:?} uses {u}: what Jaynes finds is suite")));
+                    continue;
+                }
+                (None, None, Some(script)) if in_folder(dir, script) => NeedBy::Script(script.clone()),
+                (None, None, Some(script)) => {
+                    errors.push(at(Some(line), FILE, format!("the requirement {says:?} names the script {script}, which is not a file in the role's folder")));
+                    continue;
+                }
+                _ => {
+                    errors.push(at(Some(line), FILE, "a requirement is one of file (a path or glob the project has), use = \"suite\", or script, and names one"));
+                    continue;
+                }
+            };
+            requires.push(Requirement { line, says, by });
+        }
+        if errors.is_empty() { Ok(TomlRole { dir: dir.to_path_buf(), manifest, extras, promises, claims, requires }) } else { Err(errors) }
     }
 }
 
@@ -1621,6 +1762,24 @@ impl TomlRole {
             .collect()
     }
 
+    /// What the role needs of the project as `jaynes check` prints it, a line each.
+    pub fn requires_listed(&self) -> Vec<String> {
+        self.requires
+            .iter()
+            .map(|q| {
+                format!(
+                    "needs of the project: {} ({})",
+                    q.says,
+                    match &q.by {
+                        NeedBy::File(p) => format!("a file {p}"),
+                        NeedBy::Suite => "tests Jaynes finds".to_string(),
+                        NeedBy::Script(s) => format!("{s} says so"),
+                    }
+                )
+            })
+            .collect()
+    }
+
     /// The role's claims as `jaynes check` prints them, a line each: what each says and what will prove it in a run.
     pub fn claims_listed(&self) -> Vec<String> {
         self.claims
@@ -1643,6 +1802,42 @@ impl TomlRole {
     /// The role's claims that `run` did not prove: [`TomlRole::claims_told`] over the run as it ended.
     pub fn claims_not_proved(&self, run: &jaynes_core::Run) -> Vec<String> {
         self.claims_told(&|c| c.holds(run))
+    }
+
+    /// Whether the project has all the role needs, each judged by `judge`: Ok, or why no run starts. One need Jaynes
+    /// could not judge makes the answer unknown, whatever the others say, so the project is never blamed for what
+    /// the machine could not tell.
+    pub fn fits(&self, judge: &dyn Fn(&Requirement) -> Need) -> Result<(), Unfit> {
+        let role = self.manifest.role.clone();
+        let mut needs = Vec::new();
+        for q in &self.requires {
+            match judge(q) {
+                Need::Met => {}
+                Need::Unmet(why) => needs.push(format!("{}: {why}", q.says)),
+                Need::Unknown(why) => return Err(Unfit::Unknown { role, why: format!("{}: {why}", q.says) }),
+            }
+        }
+        if needs.is_empty() { Ok(()) } else { Err(Unfit::Unmet { role, needs }) }
+    }
+
+    /// [`TomlRole::fits`] on the person's `project`, reading it only: a file by its path or glob here, the suite and
+    /// a script by the menu, in the box, with no network and a short time.
+    pub fn fits_project(&self, library: &Path, project: &Path) -> Result<(), Unfit> {
+        self.fits(&|q| match &q.by {
+            NeedBy::File(pattern) => has_file(project, pattern),
+            NeedBy::Suite | NeedBy::Script(_) => {
+                let with = match &q.by {
+                    NeedBy::Script(path) => json!({"script": self.dir.join(path).display().to_string(), "role": self.dir.display().to_string(), "seconds": REQUIRES_SECONDS}),
+                    _ => json!({"use": "suite"}),
+                };
+                match menu(library, &self.dir, json!({"kind": "requires", "with": with, "project": project.display().to_string()})) {
+                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Pass } => Need::Met,
+                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Fail { reasons, .. } } => Need::Unmet(reasons.join("; ")),
+                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Blocked { reason } } | Body::Error { message: reason } => Need::Unknown(reason),
+                    other => Need::Unknown(format!("the menu answered with {other:?}")),
+                }
+            }
+        })
     }
 
     /// The role's own checks that name no cases, each as "check NAME of STEP".
@@ -3028,6 +3223,81 @@ unchecked = "only the person can say, and the role asks them only whether it is 
         let r = TomlRole::load(&checked("claims-none", CHECKED, REJECT, ACCEPT)).expect("a role with no claim still reads");
         assert!(r.notes().iter().any(|n| n.starts_with("the role claims nothing of what it delivers:") && n.contains("the next version of the format refuses")), "{:?}", r.notes());
         assert!(TomlRole::load(&checked("claims-some", &claiming(CLAIMS), REJECT, ACCEPT)).expect("reads").notes().is_empty());
+    }
+
+    // --- what a role needs of the project, said before a run starts -------------------------------------------
+
+    const NEEDS: &str = r#"
+[[requires]]
+says = "The project is a Rust crate"
+file = "Cargo.toml"
+
+[[requires]]
+says = "The project has tests Jaynes can run"
+use = "suite"
+
+[[requires]]
+says = "The project keeps a changelog Jaynes can write to"
+script = "requires/changelog.sh"
+"#;
+
+    fn needing(name: &str, more: &str) -> Result<TomlRole, String> {
+        let dir = role(name, &format!("{GOOD}\n{more}"));
+        std::fs::create_dir_all(dir.join("requires")).expect("dir");
+        std::fs::write(dir.join("requires/changelog.sh"), "").expect("write");
+        TomlRole::load(&dir).map_err(|e| e.join("\n"))
+    }
+
+    #[test]
+    fn a_role_says_what_it_needs_of_the_project_in_its_own_words() {
+        let r = needing("requires", NEEDS).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.requires.iter().map(|q| (q.says.as_str(), q.by.clone())).collect::<Vec<_>>(), [
+            ("The project is a Rust crate", NeedBy::File("Cargo.toml".into())),
+            ("The project has tests Jaynes can run", NeedBy::Suite),
+            ("The project keeps a changelog Jaynes can write to", NeedBy::Script("requires/changelog.sh".into())),
+        ]);
+        for (name, need, says) in [
+            ("requires-two", "says = \"x\"\nfile = \"a\"\nuse = \"suite\"", "a requirement is one of file (a path or glob the project has), use = \"suite\", or script, and names one"),
+            ("requires-none", "says = \"x\"", "a requirement is one of file (a path or glob the project has), use = \"suite\", or script, and names one"),
+            ("requires-silent", "says = \"\"\nfile = \"a\"", "the requirement says nothing: write in says what the role needs of the project, as the person reads it"),
+            ("requires-use", "says = \"x\"\nuse = \"tests\"", "the requirement \"x\" uses tests: what Jaynes finds is suite"),
+            ("requires-script", "says = \"x\"\nscript = \"../x.sh\"", "the requirement \"x\" names the script ../x.sh, which is not a file in the role's folder"),
+            ("requires-file", "says = \"x\"\nfile = \"../outside\"", "the requirement \"x\" names ../outside, which is not a path inside the project"),
+        ] {
+            let e = needing(name, &format!("[[requires]]\n{need}\n")).expect_err(name);
+            assert!(e.contains("role.toml:") && e.contains(says), "{name}:\n{e}");
+        }
+    }
+
+    #[test]
+    fn what_the_project_lacks_is_said_and_what_could_not_be_judged_is_the_machine_s() {
+        let r = needing("requires-judged", NEEDS).expect("reads");
+        // every need met: the run may start
+        assert_eq!(r.fits(&|_| Need::Met), Ok(()));
+        // what is not met is said in the role's words, with why, and no run starts
+        let unmet = r.fits(&|q| if matches!(q.by, NeedBy::File(_)) { Need::Unmet("there is no Cargo.toml".into()) } else { Need::Met }).expect_err("unmet");
+        assert_eq!(unmet, Unfit::Unmet { role: "tiny".into(), needs: vec!["The project is a Rust crate: there is no Cargo.toml".into()] });
+        assert_eq!(unmet.to_string(), "the role tiny does not fit this project, so no run started and nothing was spent:\n- The project is a Rust crate: there is no Cargo.toml");
+        // what could not be judged is never blamed on the project: it is the machine's, said as such
+        let unknown = r.fits(&|q| if matches!(q.by, NeedBy::Script(_)) { Need::Unknown("there is no box here".into()) } else { Need::Unmet("no".into()) }).expect_err("unknown");
+        assert!(matches!(unknown, Unfit::Unknown { .. }), "one need Jaynes could not judge makes the answer unknown, whatever the others say: {unknown:?}");
+        assert_eq!(unknown.to_string(), "Jaynes could not tell whether the role tiny fits this project, so no run started: The project keeps a changelog Jaynes can write to: there is no box here. That is the machine's to fix, not the project's");
+    }
+
+    #[test]
+    fn a_file_the_role_needs_is_found_by_its_path_or_its_glob() {
+        let project = std::env::temp_dir().join(format!("jaynes-toml-needs-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(project.join("src/deep")).expect("dir");
+        std::fs::create_dir_all(project.join(".git")).expect("dir");
+        std::fs::write(project.join("Cargo.toml"), "").expect("write");
+        std::fs::write(project.join("src/deep/a.rs"), "").expect("write");
+        std::fs::write(project.join(".git/HEAD"), "").expect("write");
+        assert_eq!(has_file(&project, "Cargo.toml"), Need::Met);
+        assert_eq!(has_file(&project, "**/*.rs"), Need::Met);
+        assert_eq!(has_file(&project, "src/**"), Need::Met);
+        assert_eq!(has_file(&project, "package.json"), Need::Unmet("the project has no file package.json".into()));
+        assert_eq!(has_file(&project, "**/HEAD"), Need::Unmet("the project has no file **/HEAD".into()), "git's own folder is not the project's");
     }
 
     #[test]

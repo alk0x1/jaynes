@@ -228,6 +228,34 @@ class ACheckOfAStepThatReachesNoProject(unittest.TestCase):
         self.assertIsInstance(menu._box({"project": None}, "true"), Blocked)
 
 
+class WhatARoleNeedsOfTheProject(unittest.TestCase):
+    def test_tests_it_needs_are_found_as_find_suite_finds_them(self):
+        with tempfile.TemporaryDirectory() as project:
+            got = menu.requires({"use": "suite"}, Path(project))
+            self.assertIsInstance(got, menu.Fail)
+            self.assertIn("no test runner was found", got.reasons[0])
+            (Path(project) / "Makefile").write_text("test:\n\ttrue\n")
+            with mock.patch.object(menu.box, "missing", return_value=None):
+                self.assertIsInstance(menu.requires({"use": "suite"}, Path(project)), Pass)
+            with mock.patch.object(menu.box, "missing", side_effect=box.Unavailable("no box")):
+                self.assertIsInstance(menu.requires({"use": "suite"}, Path(project)), Blocked)
+
+    def test_a_script_says_yes_or_no_and_anything_else_is_not_known(self):
+        params = {"script": "/roles/r/requires/x.sh", "seconds": 60}
+        for code, kind, says in [(0, Pass, None), (1, menu.Fail, "there is no VERSION file"), (2, Blocked, "exited with 2"),
+                                 (124, Blocked, "took more than 60 seconds")]:
+            with mock.patch.object(menu.box, "run_step", return_value=ended(code, "there is no VERSION file\n")) as ran:
+                got = menu.requires(params, Path("/home/me/project"))
+            self.assertIsInstance(got, kind, code)
+            if says:
+                self.assertIn(says, got.reasons[0] if isinstance(got, menu.Fail) else got.reason)
+            # it reads a throwaway copy of the project, reaches no port and has a short time
+            self.assertEqual((ran.call_args.kwargs["project"], ran.call_args.kwargs.get("write", False), ran.call_args.kwargs.get("ports", ()), ran.call_args.kwargs["timeout"]),
+                             (Path("/home/me/project"), False, (), 60.0))
+        with mock.patch.object(menu.box, "run_step", side_effect=box.Unavailable("no box here")):
+            self.assertIsInstance(menu.requires(params, Path("/p")), Blocked)
+
+
 @unittest.skipUnless(box.available(), "Jaynes has no box to open here")
 class InTheBox(unittest.TestCase):
     def test_a_step_that_writes_works_in_the_run_s_copy_and_not_where_git_keeps_it(self):

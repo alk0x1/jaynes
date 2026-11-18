@@ -1464,6 +1464,43 @@ def fetch_pages_case(case: dict[str, Any]) -> Any:
 CASE_READERS: dict[str, Callable[[dict[str, Any]], Any]] = {"quotes-found": quotes_found_case, "fetch-pages": fetch_pages_case}
 
 
+# --- what a role needs of the project, before a run ------------------------------------------------------------
+
+def requires(params: Params, project: Path) -> Any:
+    """Whether the person's ``project`` has what a role needs, reading it only: ``Pass``, ``Fail`` with why, or
+    ``Blocked`` when Jaynes could not tell. ``use: "suite"``: tests find-suite finds and the machine can run.
+    ``script``: a script of the role, run in the box on a throwaway copy of the project, with no network and at most
+    ``seconds``; exit 0 when the project has it, 1 when it has not, with why."""
+    if params.get("use") == "suite":
+        found = box.detect(project, "")
+        if found is None:
+            return Fail(NO_RUNNER)
+        try:
+            why = box.missing(project, found)
+        except box.Unavailable as e:
+            return Blocked(f"there is no box to find whether the project's tests run: {e}")
+        return Fail(why) if why else Pass()
+    path = str(params.get("script") or "")
+    name = Path(path).name
+    try:
+        done = box.run_step(_quote(path) if _executable(path) else f"sh {_quote(path)}", project=project,
+                            timeout=float(params.get("seconds") or 60), stdin=json.dumps({"project": "."}),
+                            role=Path(str(params["role"])) if params.get("role") else None)
+    except box.Unavailable as e:
+        return Blocked(f"there is no box to run {name} in: {e}")
+    ran = done.ran
+    said = [line.strip() for line in ran.printed.splitlines() if line.strip()]
+    if box.refused(ran):
+        return Blocked(f"the box refused what {name} tried: " + "; ".join(box.refused(ran)[:3]))
+    if ran.code == 0:
+        return Pass()
+    if ran.code == 1:
+        return Fail(" ".join(said[-5:]) or f"{name} says the project lacks it, and not why")
+    if ran.code == 124:
+        return Blocked(f"{name} took more than {params.get('seconds') or 60} seconds")
+    return Blocked(f"{name} exited with {ran.code}" + (": " + " ".join(said[-5:]) if said else ""))
+
+
 # --- the cases that come with a check ---------------------------------------------------------------------------
 
 def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
@@ -1514,6 +1551,8 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
 
 def answer(ask: dict[str, Any]) -> dict[str, Any]:
     use, params, call = str(ask.get("use")), ask.get("with") or {}, ask.get("call") or {}
+    if ask.get("kind") == "requires":
+        return {"reply": "verdict", "verdict": _verdict(requires(params, Path(str(ask.get("project") or "."))))}
     if ask.get("kind") == "case":
         return {"reply": "verdict", "verdict": _verdict(judge_case(use, params, ask.get("case") or {}))}
     if ask.get("kind") == "step":

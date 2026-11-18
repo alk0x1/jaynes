@@ -128,7 +128,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 Ok(role) => {
                     println!("✔ {} {} reads: {}", role.manifest.role, role.manifest.version, role.manifest.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
                     // what each step does to the world as resolved, and each way the project's content can reach the network
-                    for line in role.effects().into_iter().chain(role.flows_told()).chain(role.claims_listed()) {
+                    for line in role.effects().into_iter().chain(role.flows_told()).chain(role.claims_listed()).chain(role.requires_listed()) {
                         println!("  {line}");
                     }
                     // what the author should know and is no error: a key that limits nothing, a step that makes every run risky
@@ -365,6 +365,10 @@ fn start(args: &[String]) -> Result<(), String> {
     let role_dir = install::find_role(&home(), &role_given)?.display().to_string();
     let request = flag(args, "--request").ok_or("--request TEXT is needed")?;
     let project = flag(args, "--project").map(|p| std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))).transpose()?;
+    // a role that does not fit the project says why before anything of a run exists
+    if let Some(p) = &project {
+        toml_role::fits_or_says(Path::new(&role_dir), &library(), p)?;
+    }
     let agent = flag(args, "--agent").or_else(|| std::env::var("JAYNES_AGENT").ok()).unwrap_or_else(|| "claude".into());
     drive::known_agent(&agent)?;
     // the model is fixed for the run here, so every process that carries the run on uses the same one

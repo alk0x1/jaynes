@@ -85,7 +85,10 @@ pub fn merges(dir: &Path) -> Vec<String> {
 /// Start a run in a process of its own, which goes on by itself; what it says goes to `start-<run>.log` in the
 /// engine's home. The run's id is returned before the run is recorded.
 pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, high: bool) -> Result<String, String> {
-    crate::install::find_role(home, role)?;
+    let dir = crate::install::find_role(home, role)?;
+    // a role that does not fit the project says why here, to the page or the agent that asked, before a run exists
+    let folder = std::fs::canonicalize(project).map_err(|e| format!("{project}: {e}"))?;
+    crate::toml_role::fits_or_says(&dir, &crate::install::library(home), &folder)?;
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?;
     let run = format!("r{}-{:03}", t.as_secs(), t.subsec_millis());
     let mut argv = vec!["start", "--run", &run, "--role", role, "--project", project, "--request", request];
