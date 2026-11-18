@@ -118,7 +118,9 @@ impl Island {
         })
         .detach();
         cx.observe(&compare, |_, _, cx| cx.notify()).detach();
-        if let Some(file) = std::env::var_os("JAYNES_APP_TEST_DO") {
+        // only in a build for tests: the driver acts as the person (testing.rs)
+        #[cfg(feature = "test-driver")]
+        if let Some(file) = crate::testing::var("JAYNES_APP_TEST_DO") {
             drive_from(PathBuf::from(file), cx);
         }
         Island {
@@ -391,6 +393,7 @@ impl Island {
     }
 }
 
+#[cfg(feature = "test-driver")]
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
 /// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
@@ -419,6 +422,7 @@ fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     .detach();
 }
 
+#[cfg(feature = "test-driver")]
 impl Island {
     fn driven(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));

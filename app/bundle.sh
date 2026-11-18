@@ -11,7 +11,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-$here/dist}
 target=${CARGO_TARGET_DIR:-$here/target}
 profile=${PROFILE:-debug}
-if [ "$profile" = release ]; then cargo build --release --manifest-path "$here/Cargo.toml"; else cargo build --manifest-path "$here/Cargo.toml"; fi
+# TEST=1: a build for tests, with the driver that acts as the person (src/testing.rs); never for people
+features=""
+[ -n "${TEST:-}" ] && features="--features test-driver"
+if [ "$profile" = release ]; then cargo build --release $features --manifest-path "$here/Cargo.toml"; else cargo build $features --manifest-path "$here/Cargo.toml"; fi
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$here/Cargo.toml" | head -1)
 app="$out/Jaynes.app"
 rm -rf "$app"

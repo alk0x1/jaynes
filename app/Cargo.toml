@@ -23,6 +23,10 @@ publish.workspace = true
 name = "jaynes-app"
 path = "src/main.rs"
 
+[features]
+# the test driver and the other variables only a test reads (testing.rs); never in a build for people
+test-driver = []
+
 [dependencies]
 ghostty-sys = { path = "crates/ghostty-sys" }
 gpui = { package = "gpui-pre", version = "=0.3.8", features = ["render-to-image"] }

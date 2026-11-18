@@ -85,7 +85,7 @@ pub fn open(cx: &mut App) {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some("Settings".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         is_resizable: false,
-        focus: std::env::var_os("JAYNES_APP_SHOT").is_none(),
+        focus: crate::testing::var("JAYNES_APP_SHOT").is_none(),
         ..Default::default()
     };
     let opened = cx.open_window(options, |window, cx| cx.new(|cx| SettingsView::new(window, cx)));
@@ -93,7 +93,7 @@ pub fn open(cx: &mut App) {
         Ok(handle) => {
             OPEN.with(|o| *o.borrow_mut() = Some(handle));
             // a test sees it as it sees the main window: drawn into a picture beside the main one's
-            if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {
+            if let Some(path) = crate::testing::var("JAYNES_APP_SHOT") {
                 let path = std::path::PathBuf::from(path.to_string_lossy().replace(".png", "-settings.png"));
                 crate::shots(handle.into(), path, cx);
             }

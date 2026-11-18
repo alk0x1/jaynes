@@ -32,6 +32,7 @@ mod news;
 mod notify;
 mod prefs;
 mod settings_window;
+mod testing;
 mod trail;
 mod presence;
 mod rail;
@@ -1387,7 +1388,7 @@ fn main() {
         prefs::start();
         open(core.clone(), cx);
         // A test that draws the window into a picture leaves the person's keyboard where it is.
-        if std::env::var_os("JAYNES_APP_SHOT").is_none() {
+        if crate::testing::var("JAYNES_APP_SHOT").is_none() {
             cx.activate(true);
         }
     });
@@ -1400,7 +1401,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         // the window draws its own top bar, the macOS buttons inside it
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         app_id: Some("jaynes-app".into()),
-        focus: std::env::var_os("JAYNES_APP_SHOT").is_none(),
+        focus: crate::testing::var("JAYNES_APP_SHOT").is_none(),
         // the top bar is the app's own: a tab dragged there moves the tab, not the window, which the bar's empty
         // parts move themselves (start_window_move); otherwise AppKit drags the window from the whole titlebar strip
         app_owns_titlebar_drag: true,
@@ -1518,12 +1519,12 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: std::env::var_os("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: std::env::var_os("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, _branch: branch }
         })
     })
     .map(|handle| {
         MAIN.with(|m| m.set(Some(handle.into())));
-        if let Some(path) = std::env::var_os("JAYNES_APP_SHOT") {
+        if let Some(path) = crate::testing::var("JAYNES_APP_SHOT") {
             shots(handle.into(), path.into(), cx);
         }
     })
@@ -1554,7 +1555,7 @@ pub(crate) fn show_main(cx: &mut App) {
         });
     }
     // a test that draws the window into a picture leaves the person's keyboard where it is
-    if std::env::var_os("JAYNES_APP_SHOT").is_none() {
+    if crate::testing::var("JAYNES_APP_SHOT").is_none() {
         cx.activate(true);
     }
 }
@@ -1619,7 +1620,7 @@ fn ns_window_visible(_: &mut Window) -> bool {
 /// The person's own key, paired with the engine; None when either fails, and the app then answers nothing.
 fn the_key() -> Option<Arc<key::Key>> {
     // a test's key is paired only with a test's engine, never with the person's own
-    if std::env::var_os("JAYNES_APP_TEST_KEY").is_some() && std::env::var_os("JAYNES_ENGINE_HOME").is_none() {
+    if crate::testing::var("JAYNES_APP_TEST_KEY").is_some() && std::env::var_os("JAYNES_ENGINE_HOME").is_none() {
         tracing::warn!("a test key pairs only with an engine named in JAYNES_ENGINE_HOME");
         return None;
     }
@@ -1633,7 +1634,7 @@ fn the_key() -> Option<Arc<key::Key>> {
 /// With JAYNES_APP_SHOT_MS=<ms> it draws that often instead, and a `{n}` in the file's name numbers the pictures, so
 /// a test can watch something that lasts less than a second.
 pub(crate) fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut App) {
-    let every = std::env::var("JAYNES_APP_SHOT_MS").ok().and_then(|ms| ms.parse().ok()).unwrap_or(1000);
+    let every = crate::testing::var("JAYNES_APP_SHOT_MS").and_then(|ms| ms.to_str().and_then(|ms| ms.parse().ok())).unwrap_or(1000);
     cx.spawn(async move |cx| {
         // The app quits with its window, so the loop ends with it.
         for n in 0u64.. {

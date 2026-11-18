@@ -10,7 +10,7 @@ pub fn post(news: &[News], looking: bool) {
     if !crate::prefs::get().notifications {
         return;
     }
-    if let Some(file) = std::env::var_os("JAYNES_APP_TEST_NOTES") {
+    if let Some(file) = crate::testing::var("JAYNES_APP_TEST_NOTES") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
             for n in news {

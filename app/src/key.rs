@@ -18,7 +18,7 @@ impl Key {
     pub fn load() -> Result<Key, String> {
         use security_framework::passwords::{get_generic_password, set_generic_password};
         // A test keeps its key in a file of its own: the keychain would ask the person about each new build.
-        if let Some(file) = std::env::var_os("JAYNES_APP_TEST_KEY") {
+        if let Some(file) = crate::testing::var("JAYNES_APP_TEST_KEY") {
             let seed = match std::fs::read(&file) {
                 Ok(seed) => seed,
                 Err(_) => {
