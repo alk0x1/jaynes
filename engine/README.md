@@ -24,7 +24,7 @@ JAYNES_PYTHON=../.venv/bin/python PYTHONPATH=../src \
 | `protocol/role-protocol-1.schema.json` | the protocol's schema, generated (`jaynes schema`) and checked by a test |
 | `crates/core/src/promise.rs` | a role's promises, proved by exploring every way its runs go through `decide` |
 | `crates/shell/src/toml_role.rs` | a role written as `role.toml`: read strictly, served over the protocol (`jaynes role-serve`) |
-| `python/jaynes_menu.py` | the menu of steps and checks a TOML role picks by name, run in the box of `jaynes_box.py` |
+| `python/jaynes_menu.py` | the menu of steps and checks a TOML role picks by name, run in the box of `jaynes_box.py`; what its checks of quotes against sources prove and do not: `docs/source-checks.md` |
 | `python/jaynes_role.py` | the small library for writing a role in Python |
 | `crates/shell/tests/roles` | the roles the tests run: copies of the official ones, which live with the index in [jaynes-roles](https://github.com/alk0x1/jaynes-roles) |
 | `crates/shell/src/index.rs` | the index: `jaynes add NAME`, and `jaynes index check` for its CI |
