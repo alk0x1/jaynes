@@ -428,9 +428,10 @@ impl Claude {
         let web = reach.network == Network::Web;
         let mut allow: Vec<String> = vec!["Read(./**)".into()];
         if reach.project == ProjectAccess::Write || reach.project == ProjectAccess::None {
-            allow.extend(["Edit(./**)".into(), "Write(./**)".into()]);
+            // Edit(path) is the rule of every tool that writes a file; Claude Code matches no Write(path) rule
+            allow.push("Edit(./**)".into());
         } else {
-            allow.extend([format!("Edit(./{}/**)", crate::project::EXCHANGE), format!("Write(./{}/**)", crate::project::EXCHANGE)]);
+            allow.push(format!("Edit(./{}/**)", crate::project::EXCHANGE));
         }
         if reach.commands {
             allow.push("Bash".into());
@@ -795,6 +796,23 @@ mod tests {
         // a step that works outside the runs reads none of them
         assert_eq!(beside(&runs, &base), vec![runs.clone()]);
         let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn every_path_rule_is_one_claude_code_matches() {
+        // Claude Code matches a file's path rule as Read(path) or Edit(path), Edit for every tool that writes a file
+        // (Write, Edit, NotebookEdit); a Write(path), NotebookEdit(path) or Glob(path) rule matches nothing
+        for project in [ProjectAccess::Read, ProjectAccess::Write] {
+            let reach = Reach { project, write: vec!["**".into()], network: Network::None, commands: true };
+            let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
+            for list in ["allow", "deny", "ask"] {
+                for rule in s["permissions"][list].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    for never in ["Write(", "NotebookEdit(", "Glob("] {
+                        assert!(!rule.starts_with(never), "{list} has {rule}, a path rule Claude Code never matches");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
