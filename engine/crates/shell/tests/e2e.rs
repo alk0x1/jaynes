@@ -1638,4 +1638,7 @@ sys.exit(1 if holes else 0)
     let _gone = holder.kill();
     let _reaped = holder.wait();
     assert_eq!(held["verdict"], "pass", "{held}");
+    // the planted files are not a record: CI compares the Lean model with every jaynes-e2e-*/home/record.sqlite3
+    // the tests leave, so this test leaves none
+    let _gone = std::fs::remove_dir_all(s.home.parent().expect("base"));
 }
