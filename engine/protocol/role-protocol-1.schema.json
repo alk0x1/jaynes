@@ -1020,6 +1020,10 @@
           "description": "Proof the maker never sees: the step reads only the request, and no agent step reads it.",
           "type": "boolean"
         },
+        "idempotent": {
+          "description": "Doing the step's act again does no harm (the far side keeps the act's key, or the act sets a state rather than\nadding one): only then may Jaynes start it again after a fault, with the same key. Any step that acts, whatever\ncan undo it; for an effect that cannot be undone it may also be said inside the effect, as before.",
+          "type": "boolean"
+        },
         "name": {
           "type": "string"
         },

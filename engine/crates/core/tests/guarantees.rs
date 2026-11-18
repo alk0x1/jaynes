@@ -134,7 +134,7 @@ fn role(rng: &mut Rng) -> Manifest {
                 from_risk,
                 attempts: 1 + rng.below(3) as u32,
                 fixes: rng.below(3) as u32,
-                hidden,
+                hidden, idempotent: false,
                 about: String::new(),
             });
         }
@@ -156,7 +156,7 @@ fn role(rng: &mut Rng) -> Manifest {
         from_risk: Risk::Low,
         attempts: 1,
         fixes: 0,
-        hidden: false,
+        hidden: false, idempotent: false,
         about: String::new(),
     };
     Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one], target: Default::default(), delivery: Default::default() }
@@ -723,10 +723,14 @@ impl World {
                     .map(|x| serde_json::json!({"back": answer.verdict(&x.id).sends_back(), "standsFor": if person { run.manifest.index(&x.id) } else { None }}))
                     .collect();
                 // the step the work goes back to: the stop's maker, unless the choice was kept alone
-                let back_to = if person { i } else {
+                let back_to = if person || q.kind == QuestionKind::Acted { i } else {
                     run.manifest.steps[i].stop.as_ref().and_then(|st| st.redo.as_ref()).and_then(|r| run.manifest.index(r))
                         .filter(|_| answer.kept_alone(&q).is_none()).unwrap_or(i)
                 };
+                // an answer that sends back an act already done holds the run at it, which the model of effects
+                // leaves out: the core's own check of G11 covers it, just below
+                let held_target = q.kind != QuestionKind::Acted && answer.sends_back() && (run.acted(back_to)
+                    || (person && q.items.iter().any(|x| answer.verdict(&x.id).sends_back() && run.manifest.index(&x.id).is_some_and(|j| run.acted(j)))));
                 let case = serde_json::json!({
                     "step": back_to, "personStep": person, "input": run.steps[i].inputs.contains(&q.id),
                     "permission": q.kind == QuestionKind::Permission, "items": items,
@@ -748,9 +752,10 @@ impl World {
                     })
                     .collect();
                 let expected = format!("{}|{}", show(said), show(did));
-                if let Some(cases) = self.cases.as_mut() {
-                    cases.push(serde_json::json!({"kind": "effects", "case": case, "expected": expected}).to_string());
-                }
+                if let Some(cases) = self.cases.as_mut()
+                    && !held_target {
+                        cases.push(serde_json::json!({"kind": "effects", "case": case, "expected": expected}).to_string());
+                    }
             }
         }
         // G9 and G10: only for what was shown, only while it stands; an agent only to let a release go on.
@@ -1002,7 +1007,7 @@ fn step(name: &str, executor: Executor) -> StepDecl {
         from_risk: Risk::Low,
         attempts: 3,
         fixes: 2,
-        hidden: false,
+        hidden: false, idempotent: false,
         about: String::new(),
     }
 }
@@ -1117,47 +1122,182 @@ fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     assert!(c.iter().any(|c| matches!(c, Command::RunRole { key: Some(_), .. })), "push runs once answered, with a key");
 }
 
-/// A run whose plan the person kept, and whose push (which cannot be undone) is done on it; with the plan's question.
-fn pushed() -> (Run, Question) {
+fn stop_of(verdicts: Vec<VerdictKind>, holds: bool) -> StopDecl {
+    StopDecl { verdicts, holds, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None }
+}
+
+fn asked_in(cmds: &[Command]) -> Option<Question> {
+    cmds.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None })
+}
+
+fn answer_to(q: &Question, verdicts: &[(&str, Verdict)]) -> Input {
+    Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: verdicts.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(), by: By::Person, context: String::new() } }
+}
+
+fn redo(note: &str) -> Verdict {
+    Verdict::Redo { note: note.to_string() }
+}
+
+/// The keys of the push's acts among `cmds`.
+fn pushes(cmds: &[Command]) -> Vec<Option<String>> {
+    cmds.iter().filter_map(|c| if let Command::RunRole { step, key, .. } = c { (step == "push").then(|| key.clone()) } else { None }).collect()
+}
+
+/// A run whose plan the person kept and whose push, which cannot be undone, acted on it; the person's own step look,
+/// after it, keeps the run open. With the plan's question, the push's own question and the key it acted with.
+fn pushed() -> (Run, Question, Question, String) {
     let mut plan = step("plan", Executor::Agent);
-    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
+    plan.stop = Some(stop_of(vec![VerdictKind::Keep, VerdictKind::Redo], false));
     let mut push = step("push", Executor::Role);
     push.needs = vec!["plan".to_string()];
     push.effect = Effect::Irreversible { idempotent: false };
-    // the person looks at what was pushed afterwards: the run is still open while they do
+    push.stop = Some(stop_of(vec![VerdictKind::Keep, VerdictKind::Redo], false));
     let mut look = step("look", Executor::Person);
     look.needs = vec!["push".to_string()];
-    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
+    look.stop = Some(stop_of(vec![VerdictKind::Keep, VerdictKind::Redo], true));
     let (mut run, cmds) = start(vec![plan, push, look]);
     probe_ok(&mut run, cmds);
     let asked = deliver(&mut run, "plan", 1, "p", vec![item("a", "a1")]);
-    let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
-    let keep = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person, context: String::new() };
-    let c = feed(&mut run, Input::Answer { answer: keep });
+    let plan_q = asked_in(&asked).expect("plan asked");
+    let c = feed(&mut run, answer_to(&plan_q, &[]));
     let c = probe_ok(&mut run, c);
-    assert!(c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "push runs: {c:?}");
-    deliver(&mut run, "push", 1, "pushed", Vec::new());
-    let push = run.manifest.index("push").expect("push");
-    assert_eq!(run.steps[push].status, Status::Done, "push is done");
-    (run, q)
+    let key = pushes(&c).first().cloned().flatten().expect("push acts, with a key");
+    let asked = deliver(&mut run, "push", 1, "pushed", vec![item("x", "x1")]);
+    let push_q = asked_in(&asked).expect("push asked");
+    assert_eq!(run.steps[run.manifest.index("push").expect("push")].status, Status::Done, "push is done");
+    (run, plan_q, push_q, key)
+}
+
+/// (a) An answer above it changes what it rested on: it is not run again; the run holds at it and asks the person.
+#[test]
+fn g14_when_what_an_act_rested_on_changes_the_run_holds_there_and_asks() {
+    let (mut run, plan_q, _, _) = pushed();
+    let c = feed(&mut run, answer_to(&plan_q, &[("a", redo("another plan"))]));
+    let c = probe_ok(&mut run, c);
+    let t = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("the plan is made again");
+    let asked = deliver(&mut run, "plan", t, "p2", vec![item("a", "a2")]);
+    let q = asked_in(&asked).expect("the new plan is asked about");
+    let c = feed(&mut run, answer_to(&q, &[]));
+    let c = probe_ok(&mut run, c);
+    assert!(pushes(&c).is_empty(), "push acted again on its own: {c:?}");
+    let held = held_at_push(&run, &c);
+    assert_eq!(held.step, "push");
+    assert!(matches!(run.phase, Phase::Waiting { step: Some(ref s), .. } if s == "push"), "{:?}", run.phase);
+    // kept as it is: push stays done, and the run goes on to the person's look
+    let c = feed(&mut run, answer_to(&held, &[]));
+    assert!(pushes(&c).is_empty(), "{c:?}");
+    assert_eq!(run.steps[run.manifest.index("push").expect("push")].status, Status::Done);
+    assert!(asked_in(&c).is_some_and(|q| q.step == "look") || run.open_questions().iter().any(|q| q.question.step == "look"), "{c:?}");
+}
+
+/// Acting again is the person's order, a second act with its own key.
+#[test]
+fn g14_acting_again_is_a_second_act_the_person_orders_with_a_new_key() {
+    let (mut run, plan_q, _, first) = pushed();
+    let c = feed(&mut run, answer_to(&plan_q, &[("a", redo("another plan"))]));
+    let c = probe_ok(&mut run, c);
+    let t = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("plan again");
+    let asked = deliver(&mut run, "plan", t, "p2", vec![item("a", "a2")]);
+    let c = feed(&mut run, answer_to(&asked_in(&asked).expect("asked"), &[]));
+    let c = probe_ok(&mut run, c);
+    let held = held_at_push(&run, &c);
+    let c = feed(&mut run, answer_to(&held, &[("push", redo("act on the new plan"))]));
+    let c = probe_ok(&mut run, c);
+    let again = pushes(&c);
+    assert_eq!(again.len(), 1, "{c:?}");
+    assert_ne!(again[0].as_deref(), Some(first.as_str()), "a second act has its own key");
+}
+
+/// The question the run holds at, about push's act, among `cmds` or still open.
+fn held_at_push(run: &Run, cmds: &[Command]) -> Question {
+    asked_in(cmds).filter(|q| q.kind == QuestionKind::Acted).or_else(|| {
+        run.open_questions().iter().find(|q| q.question.kind == QuestionKind::Acted).map(|q| q.question.clone())
+    }).expect("the run asks about push's act")
+}
+
+/// (b) Sending it back at its own stop does not do it again: the run holds there and asks.
+#[test]
+fn g14_sending_an_act_back_at_its_own_stop_holds_the_run_there() {
+    let (mut run, _, push_q, _) = pushed();
+    let c = feed(&mut run, answer_to(&push_q, &[("x", redo("again"))]));
+    let c = probe_ok(&mut run, c);
+    assert!(pushes(&c).is_empty(), "push acted again on its own: {c:?}");
+    let held = held_at_push(&run, &c);
+    assert_eq!(held.step, "push");
+    assert_eq!(run.steps[run.manifest.index("push").expect("push")].status, Status::Done);
+}
+
+/// (c) A person's step after it sending it back: the same.
+#[test]
+fn g14_sending_an_act_back_from_a_later_step_of_the_person_holds_the_run_there() {
+    let (mut run, _, push_q, _) = pushed();
+    let c = feed(&mut run, answer_to(&push_q, &[]));
+    let look = asked_in(&c).or_else(|| run.open_questions().iter().find(|q| q.question.step == "look").map(|q| q.question.clone())).expect("look asks");
+    let c = feed(&mut run, answer_to(&look, &[("push", redo("again"))]));
+    let c = probe_ok(&mut run, c);
+    assert!(pushes(&c).is_empty(), "push acted again on its own: {c:?}");
+    assert_eq!(held_at_push(&run, &c).step, "push");
+    assert_eq!(run.steps[run.manifest.index("push").expect("push")].status, Status::Done);
+}
+
+/// (a) Raising the risk after the act cannot change what it rests on: a role with a step that cannot be undone on its
+/// short path starts every run at high risk, the full path, so the risk has nowhere to go after the act.
+#[test]
+fn g14_raising_the_risk_after_an_act_cannot_change_what_it_rested_on() {
+    let (run, _, _, _) = pushed();
+    assert_eq!(run.risk, Risk::High, "a run with an act starts on the full path");
+    let raise = Input::RaiseRisk { to: Risk::High, by: By::Person };
+    let Err(r) = decide(Some(&run), &raise) else { panic!("raised") };
+    assert!(r.to_string().contains("already at high"), "{r}");
+    // and a rule raising it from what the change touches leaves it where it was: nothing of the path moves
+    assert_eq!(run.path(), (0..run.manifest.steps.len()).collect::<Vec<_>>());
+}
+
+/// A run whose one step acts on something real (`effect`), started and under way.
+fn acting(effect: Effect, idempotent: bool) -> (Run, String) {
+    let mut send = step("send", Executor::Role);
+    send.effect = effect;
+    send.idempotent = idempotent;
+    let (mut run, cmds) = start(vec![send]);
+    let c = probe_ok(&mut run, cmds);
+    let key = c.iter().find_map(|c| if let Command::RunRole { key, .. } = c { Some(key.clone().unwrap_or_default()) } else { None }).expect("send runs");
+    (run, key)
 }
 
 #[test]
-#[ignore = "red until the step that cannot be undone is never invalidated (the reinforced G14 waits for the owner)"]
-fn g14_a_step_that_cannot_be_undone_acts_at_most_once_in_a_run() {
-    let (mut run, q) = pushed();
-    let starts = |r: &Run| r.steps[r.manifest.index("push").expect("push")].attempt;
-    let before = starts(&run);
-    // sending the plan back would make push act again on a new plan: refused, and it says why
-    let redo = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: [("a".to_string(), Verdict::Redo { note: "another plan".to_string() })].into_iter().collect(), by: By::Person, context: String::new() };
-    let refused = decide(Some(&run), &Input::Answer { answer: redo }).err().map(|r| r.to_string());
-    assert!(refused.as_deref().is_some_and(|r| r.contains("push") && r.contains("cannot be undone")), "taken, or refused for another reason: {refused:?}");
-    // and whatever comes, push is never started again
-    for _ in 0..3 {
-        let c = feed(&mut run, Input::Tick);
-        assert!(!c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "push acted twice: {c:?}");
+fn g14_an_act_whose_outcome_was_not_recorded_is_not_started_again_on_its_own() {
+    for effect in [Effect::Irreversible { idempotent: false }, Effect::Compensable { undo: "revert".to_string() }] {
+        // Jaynes stopped while it ran
+        let (mut run, _) = acting(effect.clone(), false);
+        let c = feed(&mut run, Input::Recovered);
+        assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })), "{effect:?} started again after a stop: {c:?}");
+        assert!(matches!(run.phase, Phase::Blocked { fault: Fault::MayHaveActed, .. }), "{effect:?}: {:?}", run.phase);
+        // stopped from outside
+        let (mut run, _) = acting(effect.clone(), false);
+        let attempt = run.steps[0].attempt;
+        let c = feed(&mut run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { reason: "halted".to_string() } });
+        assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })));
+        assert!(matches!(run.phase, Phase::Blocked { fault: Fault::MayHaveActed, .. }), "{effect:?}: {:?}", run.phase);
+        // a fault: Jaynes's, and the person is told the act may have happened
+        let (mut run, _) = acting(effect.clone(), false);
+        let attempt = run.steps[0].attempt;
+        feed(&mut run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the box died".to_string() } });
+        assert!(matches!(&run.phase, Phase::Blocked { fault: Fault::Jaynes, reason, .. } if reason.contains("may have acted")), "{effect:?}: {:?}", run.phase);
     }
-    assert_eq!(starts(&run), before);
+}
+
+#[test]
+fn g14_an_act_that_repeats_safely_starts_again_after_a_stop_with_the_same_key() {
+    let (mut run, key) = acting(Effect::Compensable { undo: "revert".to_string() }, true);
+    let c = feed(&mut run, Input::Recovered);
+    let c = probe_ok(&mut run, c);
+    assert!(!matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
+    let (mut run2, key2) = acting(Effect::Irreversible { idempotent: true }, false);
+    let c2 = feed(&mut run2, Input::Recovered);
+    let c2 = probe_ok(&mut run2, c2);
+    let again = c2.iter().find_map(|c| if let Command::RunRole { key, .. } = c { key.clone() } else { None }).expect("started again");
+    assert_eq!(again, key2, "the same intent keeps its key");
+    let _ = (c, key);
 }
 
 #[test]
@@ -1417,6 +1557,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         }
         for e in &w.log {
             match e {
+                Event::StepInvalidated { because, .. } if because.iter().any(|b| b.contains("second act")) => hit("a second act ordered"),
                 Event::StepInvalidated { because, .. } if because.iter().any(|b| b.contains("came out different")) => hit("rerun because an input changed"),
                 Event::StepInvalidated { narrow: Some(_), .. } => hit("a choice kept alone"),
                 Event::StepInvalidated { from: Some(_), .. } => hit("sent back to its maker"),
@@ -1431,6 +1572,8 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::QuestionSuperseded { .. } => hit("question superseded"),
                 Event::Delivered { .. } => hit("delivered"),
                 Event::StopSkipped { .. } => hit("a certified stop skipped"),
+                Event::QuestionOpened { question } if question.kind == QuestionKind::Acted => hit("an act held, not done again"),
+                Event::ActKept { .. } => hit("an act kept as it acted"),
                 _ => {}
             }
         }
@@ -1441,7 +1584,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
-        "a choice kept alone", "sent back to its maker",
+        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -1828,6 +1971,7 @@ fn model_case(run: &Run) -> String {
                 "holds": holds,
                 "skipped": s.skipped == Some(s.round),
                 "irreversible": d.effect.irreversible(),
+                "held": run.held(i).is_some(),
                 "probed": s.probed,
                 "attemptsLeft": s.spent < d.attempts,
                 "certified": run.attention.get(&d.name).is_some_and(|c| {
@@ -1881,11 +2025,14 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
     let i = run.manifest.index(&q.question.step).expect("step");
     let d = &run.manifest.steps[i];
     let s = &run.steps[i];
-    let valid = answer.verdicts.iter().all(|(id, v)| {
+    let acted = q.question.kind == QuestionKind::Acted;
+    let valid = if acted {
+        answer.verdicts.keys().all(|id| *id == q.question.step) && matches!(answer.verdict(&q.question.step), Verdict::Keep | Verdict::Redo { .. }) && answer.back.is_empty()
+    } else { answer.verdicts.iter().all(|(id, v)| {
         q.question.items.iter().any(|x| &x.id == id)
             && q.question.offered.contains(&v.kind())
             && !matches!(v, Verdict::Change { text } if text.trim().is_empty())
-    });
+    }) };
     let case = serde_json::json!({
         "who": match answer.by { By::Person => "person", By::Rule { .. } => "rule", By::Agent { .. } => "agent" },
         "decision": q.question.kind == QuestionKind::Decision,
@@ -1904,6 +2051,7 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
         "revisable": q.question.kind == QuestionKind::Decision && d.executor != Executor::Person
             && s.question.as_deref() == Some(q.question.id.as_str()) && s.status == Status::Done
             && s.done.as_ref().is_some_and(|x| x.round == q.question.round),
+        "acted": acted,
     });
     serde_json::json!({"kind": "answer", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
 }

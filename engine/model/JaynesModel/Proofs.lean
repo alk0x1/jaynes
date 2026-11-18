@@ -61,10 +61,12 @@ theorem rests_false (r : Run) :
 
 theorem moveAt_cases (r : Run) (i : Nat) :
     ((r.get i).status = .awaiting ∧ r.moveAt i = .waitAt i) ∨
-    ((r.get i).status = .done ∧ r.moveAt i = .invalidate i) ∨
+    ((r.get i).status = .done ∧ (r.get i).irreversible = false ∧ r.moveAt i = .invalidate i) ∨
     ((r.get i).status = .idle ∧ r.moveAt i = r.idleMove i) ∨
-    r.moveAt i = .none := by
+    r.moveAt i = .none ∨
+    ((r.get i).status = .done ∧ (r.moveAt i = .waitAt i ∨ r.moveAt i = .ask i)) := by
   cases hst : (r.get i).status <;> simp [Run.moveAt, hst]
+  cases hirr : (r.get i).irreversible <;> cases hh : (r.get i).held <;> simp [hirr, hh]
 
 theorem idleMove_cases (r : Run) (i : Nat) :
     r.idleMove i = .waitAt i ∨ r.idleMove i = .ask i ∨ r.idleMove i = .block ∨ r.idleMove i = .probe i ∨
@@ -146,12 +148,14 @@ theorem next_start {r : Run} {i : Nat} (h : r.next = .start i) :
   rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
   · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
   · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
-  · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hm⟩ | ⟨hst, hm⟩ | hm <;> rw [hm] at he
+  · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨hst, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
     · simp at he
     · have hj := (idleMove_start he.symm).1
       subst hj
       exact ⟨hb, hk, hst, he.symm⟩
+    · simp at he
+    · simp at he
     · simp at he
 
 /-! ## The guarantees -/
@@ -197,12 +201,32 @@ theorem g13_invalidate {r : Run} {i : Nat} (h : r.next = .invalidate i) :
   · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
   · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
   · obtain ⟨hnf, _⟩ := firstWhere_some hk
-    rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨hst, hm⟩ | ⟨_, hm⟩ | hm <;> rw [hm] at he
+    rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨hst, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
     · simp at he
       subst he
       exact ⟨by simpa using hnf, hst⟩
     · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+    · simp at he
+    · simp at he
+    · simp at he
+
+/-- **G14**, at most once: the core's next move never makes a step that cannot be undone do its act again. A done
+    step that is not done on what holds now runs again only when it can be undone; one that cannot holds the run, and
+    the person is asked. -/
+theorem g14_never_redone {r : Run} {i : Nat} (h : r.next = .invalidate i) : (r.get i).irreversible = false := by
+  obtain ⟨_, _, hc⟩ := next_cases h (by simp)
+  rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, _, he⟩⟩
+  · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hirr, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
+    · simp at he
+    · simp at he
+      subst he
+      exact hirr
+    · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+    · simp at he
+    · simp at he
     · simp at he
 
 /-- **G13**, the second half: the run delivers, finishes, or waits only for answers, only when every step of its
@@ -216,10 +240,12 @@ theorem g13_settled {r : Run} (h : r.next = .deliver ∨ r.next = .finish ∨ r.
       · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
       · exact hz
       · exfalso
-        rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hm⟩ | ⟨_, hm⟩ | hm <;> rw [hm] at he
+        rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
         · simp at he
         · simp at he
         · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+        · simp at he
+        · simp at he
         · simp at he
   intro j hj
   simpa using firstWhere_none key j hj
@@ -232,23 +258,31 @@ namespace Jaynes
 
 /-- **G9.** A rule never answers from outside the core. -/
 theorem g9_no_rule (a : AnswerCase) (h : a.who = .rule) : a.accepts = false := by
-  simp [AnswerCase.accepts, h]
+  simp [AnswerCase.accepts, AnswerCase.acceptsActed, h]
 
 /-- **G9.** An agent's answer is taken only to let a result go on as it is, at a stop the role marks a release,
     never at the person's own step nor at a braked stop, never carrying context, and never over an answer. -/
 theorem g9_agent (a : AnswerCase) (h : a.accepts = true) (ha : a.who = .agent) :
     a.decision = true ∧ a.personStep = false ∧ a.input = false ∧ a.release = true ∧ a.allKeep = true ∧
       a.braked = false ∧ a.hasContext = false ∧ a.answered = false := by
-  unfold AnswerCase.accepts at h
+  unfold AnswerCase.accepts AnswerCase.acceptsActed at h
   simp only [ha] at h
   repeat' (split at h <;> try simp at h)
   all_goals simp_all
 
 /-- **G10.** An answer is taken only for the question as it stands: not replaced, and as it was shown. -/
 theorem g10_shown (a : AnswerCase) (h : a.accepts = true) : a.shownMatches = true ∧ a.superseded = false := by
-  unfold AnswerCase.accepts at h
+  unfold AnswerCase.accepts AnswerCase.acceptsActed at h
   repeat' (split at h <;> try simp at h)
   all_goals simp_all
+
+/-- **G14**, the person's order: what becomes of an act already done is the person's alone to decide, once. -/
+theorem g14_acted_answer (a : AnswerCase) (hx : a.acted = true) (h : a.accepts = true) :
+    a.who = .person ∧ a.answered = false := by
+  unfold AnswerCase.accepts at h
+  simp only [hx, ↓reduceIte] at h
+  unfold AnswerCase.acceptsActed at h
+  cases hw : a.who <;> cases ha : a.answered <;> simp_all
 
 /-! ## What the person kept -/
 
@@ -308,10 +342,12 @@ theorem g17_skip {r : Run} {i : Nat} (h : r.next = .skip i) :
       exact ⟨hs.1.1, hs.1.2, hs.2⟩
     · simp at he
   · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
-  · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hm⟩ | ⟨_, hm⟩ | hm <;> rw [hm] at he
+  · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
     · simp at he
     · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+    · simp at he
+    · simp at he
     · simp at he
 
 /-- **G11.** What an answer says will run again is what runs again: the same steps, when every item at the

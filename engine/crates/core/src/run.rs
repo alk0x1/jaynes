@@ -101,6 +101,13 @@ pub struct StepState {
     /// What the checks said of the last attempt they judged. For the person: an agent's turn never carries it.
     #[serde(default)]
     pub checks: Vec<crate::event::CheckRecord>,
+    /// The open question about this step's act, when it cannot be undone, already acted and was sent back or what it
+    /// rested on changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
+    /// Acts the person ordered again: part of the act's key, so a second act is a new intent.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub repeat: u32,
     /// The question whose choice this round keeps alone: once done, its output is what that question was about.
     #[serde(default)]
     pub narrow: Option<String>,
@@ -154,7 +161,22 @@ impl QuestionState {
     }
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 impl Run {
+    /// Whether step `i` cannot be undone and already acted on what it rests on: from then on it is never done again on
+    /// its own (G14).
+    pub fn acted(&self, i: usize) -> bool {
+        self.manifest.steps[i].effect.irreversible() && self.steps[i].status == Status::Done && self.steps[i].done.is_some()
+    }
+
+    /// The open question about step `i`'s act, if any.
+    pub fn held(&self, i: usize) -> Option<&QuestionState> {
+        self.steps[i].held.as_ref().and_then(|id| self.questions.get(id)).filter(|q| q.open())
+    }
+
     /// The state a record gives, or none for a record that does not start with `RunStarted`.
     pub fn fold<'a>(events: impl IntoIterator<Item = &'a Event>) -> Option<Run> {
         let mut run: Option<Run> = None;
@@ -370,6 +392,11 @@ impl Run {
                     id.clone(),
                     QuestionState { question: question.clone(), answer: None, effects: None, superseded: false },
                 );
+                if question.kind == QuestionKind::Acted {
+                    if let Some(s) = self.step_mut(&question.step.clone()) {
+                        s.held = Some(id.clone());
+                    }
+                }
                 if question.kind == QuestionKind::Decision {
                     let step = question.step.clone();
                     if let Some(s) = self.step_mut(&step) {
@@ -382,9 +409,28 @@ impl Run {
                     q.superseded = true;
                 }
             }
+            Event::ActKept { step, reads } => {
+                if let Some(s) = self.step_mut(step)
+                    && let Some(d) = s.done.as_mut() {
+                        d.reads = reads.clone();
+                    }
+            }
             Event::AnswerRecorded { answer, effects } => {
                 self.unwait();
                 let Some(q) = self.questions.get_mut(&answer.question) else { return };
+                if q.question.kind == QuestionKind::Acted {
+                    q.answer = Some(answer.clone());
+                    q.effects = Some(effects.clone());
+                    let step = q.question.step.clone();
+                    let again = answer.verdict(&step).sends_back();
+                    if let Some(s) = self.step_mut(&step) {
+                        s.held = None;
+                        if again {
+                            s.repeat += 1;
+                        }
+                    }
+                    return;
+                }
                 let first = q.answer.is_none();
                 q.answer = Some(answer.clone());
                 q.effects = Some(effects.clone());

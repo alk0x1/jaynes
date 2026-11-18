@@ -87,6 +87,11 @@ pub struct StepDecl {
     /// Proof the maker never sees: the step reads only the request, and no agent step reads it.
     #[serde(default)]
     pub hidden: bool,
+    /// Doing the step's act again does no harm (the far side keeps the act's key, or the act sets a state rather than
+    /// adding one): only then may Jaynes start it again after a fault, with the same key. Any step that acts, whatever
+    /// can undo it; for an effect that cannot be undone it may also be said inside the effect, as before.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub idempotent: bool,
     #[serde(default)]
     pub about: String,
 }
@@ -190,6 +195,18 @@ pub enum Effect {
 impl Effect {
     pub fn irreversible(&self) -> bool {
         matches!(self, Effect::Irreversible { .. })
+    }
+
+    /// Whether the effect lands on something real, beyond Jaynes's own copies.
+    pub fn acts(&self) -> bool {
+        matches!(self, Effect::Compensable { .. } | Effect::Irreversible { .. })
+    }
+}
+
+impl StepDecl {
+    /// Whether doing the step's act again does no harm, said on the step or inside an effect that cannot be undone.
+    pub fn repeats_safely(&self) -> bool {
+        self.idempotent || matches!(self.effect, Effect::Irreversible { idempotent: true })
     }
 }
 

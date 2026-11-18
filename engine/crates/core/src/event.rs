@@ -203,6 +203,12 @@ pub enum Event {
         reads: Vec<Read>,
         changed: Vec<Changed>,
     },
+    /// The person kept an act that cannot be undone as it was, though what it rested on changed: it stands on what
+    /// holds now, as it acted, and is not done again.
+    ActKept {
+        step: String,
+        reads: Vec<Read>,
+    },
     StepInvalidated {
         step: String,
         round: u32,
@@ -300,6 +306,7 @@ impl Event {
             Event::SessionStarted { .. } => "SessionStarted",
             Event::ChecksJudged { .. } => "ChecksJudged",
             Event::StepDone { .. } => "StepDone",
+            Event::ActKept { .. } => "ActKept",
             Event::StepInvalidated { .. } => "StepInvalidated",
             Event::QuestionOpened { .. } => "QuestionOpened",
             Event::QuestionSuperseded { .. } => "QuestionSuperseded",

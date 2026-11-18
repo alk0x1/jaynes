@@ -64,6 +64,9 @@ pub enum QuestionKind {
     Decision,
     /// Leave for an agent to reach something: a routine one may be answered by a rule in code.
     Permission,
+    /// A step that cannot be undone already acted, and something sent it back or what it rested on changed: it is not
+    /// done again on its own. The person keeps the act as it is, or orders a second act.
+    Acted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

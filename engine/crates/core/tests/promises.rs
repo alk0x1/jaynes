@@ -18,7 +18,7 @@ fn step(name: &str, executor: Executor, needs: &[&str]) -> StepDecl {
         from_risk: Risk::Low,
         attempts: 3,
         fixes: 2,
-        hidden: false,
+        hidden: false, idempotent: false,
         about: String::new(),
     }
 }

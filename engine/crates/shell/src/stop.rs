@@ -160,7 +160,7 @@ mod tests {
         let decl = |name: &str, irreversible: bool| StepDecl {
             name: name.into(), needs: vec![], executor: if irreversible { Executor::Role } else { Executor::Agent }, session: SessionKind::Fresh, reach: Reach::default(),
             effect: if irreversible { Effect::Irreversible { idempotent: false } } else { Default::default() },
-            checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, about: if name == "plan" { "Plans the work.".into() } else { String::new() },
+            checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: if name == "plan" { "Plans the work.".into() } else { String::new() },
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: steps.iter().map(|(n, i)| decl(n, *i)).collect(), target: Default::default(), delivery };
         let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };

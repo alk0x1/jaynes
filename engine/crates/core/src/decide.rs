@@ -83,12 +83,12 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 .collect(),
         };
         let Some(state) = Run::started(&start) else { return refuse("the run could not start") };
-        let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() } };
+        let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() }, again: None };
         c.advance();
         return Ok(c.out);
     }
     let Some(run) = run else { return refuse("there is no such run") };
-    let mut c = Ctx { run: run.clone(), out: Decided::default() };
+    let mut c = Ctx { run: run.clone(), out: Decided::default(), again: None };
     if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. }) {
         return refuse("the run is finished");
     }
@@ -212,6 +212,8 @@ fn higher(a: Ceiling, b: Ceiling) -> Ceiling {
 struct Ctx {
     run: Run,
     out: Decided,
+    /// The person ordered a second act of this step: the one invalidation of a step that already acted.
+    again: Option<usize>,
 }
 
 impl Ctx {
@@ -289,7 +291,13 @@ impl Ctx {
                 let now = self.run.reads(i);
                 let then = self.run.steps[i].done.as_ref().map(|d| d.reads.clone()).unwrap_or_default();
                 let changed: Vec<String> = now.iter().filter(|r| !then.contains(r)).map(|r| r.step.clone()).collect();
-                self.invalidate(i, changed.iter().map(|s| format!("{s} came out different")).collect(), Vec::new());
+                let because: Vec<String> = changed.iter().map(|s| format!("{s} came out different")).collect();
+                // G14: an act is never done again on its own; the run holds at it and asks the person
+                if self.run.acted(i) {
+                    self.hold_act(i, &because);
+                    return false;
+                }
+                self.invalidate(i, because, Vec::new());
                 true
             }
             Status::Idle => self.start(i, &decl.executor, name),
@@ -379,6 +387,11 @@ impl Ctx {
 
     /// Run the step again, bringing back what the person names of what they dropped.
     fn invalidate_bringing(&mut self, i: usize, because: Vec<String>, notes: Vec<String>, narrow: Option<String>, from: Option<String>, bring: Vec<crate::io::Brought>) {
+        // G14: a step that cannot be undone and already acted is done again only on the person's order of a second act
+        if self.run.acted(i) && self.again != Some(i) {
+            self.hold_act(i, &because);
+            return;
+        }
         if let Some(q) = self.run.open_question(i) {
             let id = q.question.id.clone();
             self.emit(Event::QuestionSuperseded { question: id });
@@ -392,6 +405,15 @@ impl Ctx {
         let decl = self.run.manifest.steps[i].clone();
         if *executor == Executor::Person {
             return self.ask_person(i);
+        }
+        // nothing goes on from an act the person is asked about until they answer
+        for j in self.run.sources(i) {
+            if let Some(q) = self.run.held(j) {
+                let on = vec![q.question.id.clone()];
+                let why = format!("{name} waits for your answer about what {} did", self.name(j));
+                self.wait(Some(name), on, why);
+                return false;
+            }
         }
         for j in self.run.sources(i) {
             // The question as asked says whether it holds: a braked stop holds even when its role says it need not.
@@ -431,7 +453,9 @@ impl Ctx {
             return false;
         }
         let attempt = s.attempt + 1;
-        let key = decl.effect.irreversible().then(|| Digest::of_json(&(&self.run.id, &name, s.round)).0);
+        // The act's key is its intent: the run, the step, what it acts on, and how many second acts the person ordered.
+        // The same on every attempt and recovery of that intent; never the round, which other steps' changes move.
+        let key = decl.effect.irreversible().then(|| Digest::of_json(&(&self.run.id, &name, self.run.reads(i), s.repeat)).0);
         // after the person answered the agent's "it cannot be done", it goes on in that session
         let answered = decl.executor == Executor::Agent && !s.inputs.is_empty() && s.session.is_some();
         let session = match decl.session {
@@ -659,12 +683,22 @@ impl Ctx {
                     usage: Default::default(),
                     spent: false,
                 });
-                let reason = format!("a fault of Jaynes or of the machine stopped {step}: {reason}. No attempt was spent");
-                self.block(Some(step.to_string()), Fault::Jaynes, reason);
+                // G4: the fault is Jaynes's either way; an act may have happened, and the person is told to look first
+                if self.may_have_acted(i) {
+                    let reason = format!("a fault of Jaynes or of the machine stopped {step}: {reason}. No attempt was spent. {step} acts on something real and its outcome is not known, so it may have acted: look before you continue, which starts it again with the same key");
+                    self.block(Some(step.to_string()), Fault::Jaynes, reason);
+                } else {
+                    let reason = format!("a fault of Jaynes or of the machine stopped {step}: {reason}. No attempt was spent");
+                    self.block(Some(step.to_string()), Fault::Jaynes, reason);
+                }
             }
             AttemptOutcome::Interrupted { reason } => {
                 self.emit(Event::AttemptInterrupted { step: step.to_string(), attempt, reason: reason.clone() });
-                self.block(Some(step.to_string()), Fault::Paused, format!("{step} was stopped from outside: {reason}"));
+                if self.may_have_acted(i) {
+                    self.block(Some(step.to_string()), Fault::MayHaveActed, format!("{step}, which acts on something real, was stopped from outside before its outcome was known: it may have acted ({reason}). Look, then continue or abandon the run"));
+                } else {
+                    self.block(Some(step.to_string()), Fault::Paused, format!("{step} was stopped from outside: {reason}"));
+                }
             }
             AttemptOutcome::NeedsInput { items, offered, about } => {
                 if !role {
@@ -726,6 +760,13 @@ impl Ctx {
             }
         }
         Ok(())
+    }
+
+    /// An attempt of step `i` ended with no outcome recorded: whether it may have acted, so that nothing starts it again
+    /// on its own (G14). A step whose act repeats safely is started again, with the same key.
+    fn may_have_acted(&self, i: usize) -> bool {
+        let d = &self.run.manifest.steps[i];
+        d.effect.acts() && !d.repeats_safely()
     }
 
     fn after_spent(&mut self, i: usize) {
@@ -884,9 +925,11 @@ impl Ctx {
             let decl = self.run.manifest.steps[i].clone();
             match self.run.steps[i].status.clone() {
                 Status::Running { attempt, .. } => {
-                    if decl.effect.irreversible() {
+                    // G14: an act with no recorded outcome may have happened: never started again on its own, unless
+                    // repeating it does no harm, and then with the same key
+                    if decl.effect.acts() && !decl.repeats_safely() {
                         let reason = format!(
-                            "{name} cannot be undone and was under way when Jaynes stopped, so it may have acted. Look, then continue or abandon the run"
+                            "{name} acts on something real and was under way when Jaynes stopped, so it may have acted. Look, then continue or abandon the run"
                         );
                         self.block(Some(name), Fault::MayHaveActed, reason);
                     } else {
@@ -983,6 +1026,9 @@ impl Ctx {
         let Some(q) = self.run.questions.get(&answer.question).cloned() else {
             return refuse(format!("there is no question {}", answer.question));
         };
+        if q.question.kind == QuestionKind::Acted {
+            return self.answer_acted(&q, answer);
+        }
         if let By::Rule { .. } = &answer.by {
             return refuse("a rule answers only inside the engine, and only routine leaves");
         }
@@ -1076,6 +1122,8 @@ impl Ctx {
                     self.command(Command::Permit { step: q.question.step.clone(), attempt, allow });
                 }
             }
+            // answered in answer_acted, never here
+            QuestionKind::Acted => {}
             QuestionKind::Decision if executor == Executor::Person => self.answered_person(i, &q, answer),
             QuestionKind::Decision => {
                 let input = self.run.steps[i].inputs.contains(&q.question.id);
@@ -1096,6 +1144,77 @@ impl Ctx {
                     }
                 }
             }
+        }
+        self.advance();
+        Ok(())
+    }
+
+    /// Hold the run at step `i`, which cannot be undone and already acted, and ask the person about the act: keep it as
+    /// it is, or act again, a second act they order as such. Asked once while open.
+    fn hold_act(&mut self, i: usize, because: &[String]) {
+        let name = self.name(i);
+        if let Some(q) = self.run.held(i) {
+            let on = vec![q.question.id.clone()];
+            self.wait(Some(name.clone()), on, format!("{name} cannot be undone and already acted: it waits for you to keep it or act again"));
+            return;
+        }
+        let output = self.run.steps[i].done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
+        let why = if because.is_empty() { "it was sent back".to_string() } else { because.join("; ") };
+        let about = format!(
+            "{name} cannot be undone, and it already acted. Since then {why}. It is not done again on its own: keep the act as it is, or act again, a second act with its own key."
+        );
+        let question = Question {
+            back: Default::default(),
+            id: self.question_id(&name),
+            step: name.clone(),
+            round: self.run.steps[i].round,
+            kind: QuestionKind::Acted,
+            items: vec![Item { id: name.clone(), label: format!("what {name} did"), digest: output }],
+            offered: vec![VerdictKind::Keep, VerdictKind::Redo],
+            holds: true,
+            about,
+            choose: false,
+            pass: 0,
+            passes: 0,
+        };
+        let on = vec![question.id.clone()];
+        self.emit(Event::QuestionOpened { question: question.clone() });
+        self.command(Command::Ask { question });
+        self.wait(Some(name.clone()), on, format!("{name} cannot be undone and already acted: it waits for you to keep it or act again"));
+    }
+
+    /// The person's answer about an act: keep it as it is, on what holds now, or order a second act.
+    fn answer_acted(&mut self, q: &QuestionState, answer: &Answer) -> Result<(), Refusal> {
+        if !q.open() {
+            return refuse("this act was already answered, and that answer stands");
+        }
+        if !answer.by.person() {
+            return refuse("only you decide about an act that cannot be undone");
+        }
+        if answer.shown != q.question.shown() {
+            return refuse("the question changed since it was shown to you; look at it again");
+        }
+        let step = q.question.step.clone();
+        if answer.verdicts.keys().any(|id| *id != step) || !answer.back.is_empty() {
+            return refuse(format!("the question has one item, {step}"));
+        }
+        let v = answer.verdict(&step);
+        if !matches!(v, Verdict::Keep | Verdict::Redo { .. }) {
+            return refuse("keep the act as it is, or act again; nothing else is offered");
+        }
+        let i = self.index(&step)?;
+        let effects = effects(&self.run, &q.question, answer);
+        self.emit(Event::AnswerRecorded { answer: answer.clone(), effects });
+        if v == Verdict::Keep {
+            // kept as it acted: it stands on what holds now, and what comes after reads what it did
+            if !self.run.fresh(i) {
+                let reads = self.run.reads(i);
+                self.emit(Event::ActKept { step: step.clone(), reads });
+            }
+        } else {
+            self.again = Some(i);
+            self.invalidate(i, vec![format!("it is being done again: you ordered a second act of {step}")], notes(&q.question, answer));
+            self.again = None;
         }
         self.advance();
         Ok(())
@@ -1233,6 +1352,16 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
 pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     let mut sentences = Vec::new();
     let Some(i) = run.manifest.index(&q.step) else { return Effects::default() };
+    if q.kind == QuestionKind::Acted {
+        let again = answer.verdict(&q.step).sends_back();
+        sentences.push(if again {
+            format!("{} acts again: a second act, with its own key, which you order now as such.", q.step)
+        } else {
+            format!("{} stays as it acted, and the steps after it read what it did. Nothing runs again.", q.step)
+        });
+        let reruns = if again { vec![q.step.clone()] } else { Vec::new() };
+        return Effects { sentences, reruns, may_rerun: Vec::new() };
+    }
     if q.kind == QuestionKind::Permission {
         let about = &q.about;
         sentences.push(match answer.verdict("leave") {
@@ -1306,6 +1435,15 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             "{who} lets the result go on as it is. It counts as the agent's, not yours, and nothing that cannot be undone rests on it. You can still change it while the run is open, or correct the delivery later."
         ));
     }
+    // G14: an act already done is never done again on its own; the run holds at it and asks
+    let held: Vec<usize> = reruns.iter().copied().filter(|&k| run.acted(k)).collect();
+    reruns.retain(|k| !held.contains(k));
+    for &k in &held {
+        sentences.push(format!(
+            "{} cannot be undone and already acted: it is not done again on its own. The run holds at it and asks you whether it acts again.",
+            run.manifest.steps[k].name
+        ));
+    }
     let mut may: Vec<usize> = Vec::new();
     for &r in &reruns {
         for d in run.dependents(r) {
@@ -1314,10 +1452,11 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             }
         }
     }
-    if person && !reruns.is_empty() && !reruns.contains(&i) {
+    if person && (!reruns.is_empty() || !held.is_empty()) && !reruns.contains(&i) {
         reruns.push(i);
         may.retain(|&d| d != i);
     }
+    may.retain(|&k| !run.acted(k));
     reruns.sort_unstable();
     may.sort_unstable();
     let names = |v: &[usize]| v.iter().map(|&k| run.manifest.steps[k].name.clone()).collect::<Vec<_>>();

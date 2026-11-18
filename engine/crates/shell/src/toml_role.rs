@@ -831,7 +831,7 @@ impl TomlRole {
                 from_risk: s.from_risk,
                 attempts: s.attempts.unwrap_or(default_attempts),
                 fixes: s.fixes.unwrap_or(2),
-                hidden: s.hidden,
+                hidden: s.hidden, idempotent: false,
                 about: if s.about.is_empty() { s.uses.as_deref().and_then(menu_step).map(|m| m.about.to_string()).unwrap_or_default() } else { s.about.clone() },
             });
             extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, checks: impls, show: s.show.clone() });

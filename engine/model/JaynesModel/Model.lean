@@ -59,6 +59,8 @@ structure Step where
   skipped : Bool
   /-- what it does cannot be undone -/
   irreversible : Bool
+  /-- it cannot be undone, already acted, and the person is asked about the act (keep it, or act again) -/
+  held : Bool
   /-- Jaynes tested what it reaches -/
   probed : Bool
   /-- the agent has attempts left this round -/
@@ -143,7 +145,7 @@ def busy (r : Run) : Bool :=
     s == .running || s == .checking || s == .probing
 
 def holdsAbove (r : Run) (i : Nat) : Bool :=
-  (r.get i).sources.any fun j => (r.get j).question == .waiting && (r.get j).holds
+  (r.get i).sources.any fun j => ((r.get j).question == .waiting && (r.get j).holds) || (r.get j).held
 
 end Run
 
@@ -168,7 +170,8 @@ def idleMove (r : Run) (i : Nat) : Move :=
 def moveAt (r : Run) (i : Nat) : Move :=
   match (r.get i).status with
   | .awaiting => .waitAt i
-  | .done => .invalidate i
+  -- G14: an act already done is never done again on its own: the run asks the person, then waits for them
+  | .done => if (r.get i).irreversible then (if (r.get i).held then .waitAt i else .ask i) else .invalidate i
   | .idle => r.idleMove i
   | _ => .none
 
@@ -227,10 +230,17 @@ structure AnswerCase where
   answered : Bool
   /-- that earlier answer may still be changed: the step is done on it and it is the step's current question -/
   revisable : Bool
+  /-- the question is about an act that cannot be undone and already acted -/
+  acted : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
+/-- An act already done is the person's alone to keep or to order again, once. -/
+def AnswerCase.acceptsActed (a : AnswerCase) : Bool :=
+  a.who == .person && !a.answered && !a.superseded && a.shownMatches && a.verdictsValid
+
 def AnswerCase.accepts (a : AnswerCase) : Bool :=
-  if a.who == .rule then false
+  if a.acted then a.acceptsActed
+  else if a.who == .rule then false
   else if a.superseded then false
   else if !a.shownMatches then false
   else if !a.verdictsValid then false

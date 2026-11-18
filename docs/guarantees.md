@@ -1,10 +1,10 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
-G1, G2, G3, G4, G5, G9, G10, G11, G12, G13 and G14, and the rule of G17 (when a stop may skip asking), are also
+G1, G2, G3, G4, G5, G9, G10, G11, G12, G13 and G14 (its order, and that the core never does an act again), and the rule of G17 (when a stop may skip asking), are also
 proved, in Lean, for a model of the core's rules that a test compares with the core on every state of 800 random
 runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,000 streams checks it.
 
@@ -65,7 +65,13 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 - **G13.** When you change an answer, only the steps that used what changed run again. Every
   step kept as it was used the values that hold now.
 - **G14.** Nothing that cannot be undone runs while it depends on an answer you have not
-  given: the run waits just before it.
+  given: the run waits just before it. And it acts at most once in a run: once done, no answer,
+  correction or recovery runs it again on its own. When what it rested on changes, the run holds
+  there and shows you what was done and what would be done now; only you decide to keep it as it
+  is, to act again (a second act, which you approve as such), or to run the correction the role
+  declares. After a fault, an act whose outcome was not recorded counts as one that may have
+  happened: it is never started again on its own, unless the role marks it safe to repeat, and
+  then only with the same key.
 
 ## The record
 
