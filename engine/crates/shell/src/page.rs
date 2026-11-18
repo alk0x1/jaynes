@@ -403,7 +403,7 @@ impl Page {
             if Self::old_cookie(req) {
                 headers.push(("Set-Cookie".into(), CLEAR.into()));
             }
-            return match self.render(view) {
+            return match self.render(view, crate::store::now()) {
                 Ok(html) => ("200 OK", "text/html; charset=utf-8", html, headers),
                 Err(e) => ("500 Internal Server Error", "text/plain", e, vec![]),
             };
@@ -441,6 +441,8 @@ impl Page {
                     .map(|recorded| json!({"ok": true, "recorded": recorded})),
                 // whether this page counts what comes from here as the person's: the page says so when it does not
                 "/api/whoami" => Ok(json!({"ok": true, "person": by.person()})),
+                // the person saw the reminders the page showed them, at a pause of theirs: the next come a day later
+                "/api/reminded" => reminded_in(&self.home, &body, &by, crate::store::now()),
                 _ => Err("no such action".to_string()),
             };
             let reply = match out {
@@ -691,7 +693,7 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
 }
 
 impl Page {
-    fn render(&self, view: View) -> Result<String, String> {
+    fn render(&self, view: View, now: u64) -> Result<String, String> {
         let store = self.store()?;
         let mut waiting: Vec<(Run, QuestionState)> = Vec::new();
         let mut released: Vec<(Run, QuestionState)> = Vec::new();
@@ -765,6 +767,14 @@ impl Page {
         if !done.is_empty() {
             aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Finished</div>{}", done.iter().map(run_link).collect::<String>()));
         }
+        // at a pause of the person's (the page opened, or the page they land on after an answer), the questions they
+        // were told of a day ago or more and that nobody answered
+        let remind = if matches!(view, View::Home | View::Overview) {
+            let on = current.as_ref().map(|(r, q)| (r.id.as_str(), q.question.id.as_str()));
+            reminders_html(&drive::reminders_due(&self.home, &store, now).unwrap_or_default(), &runs, on)
+        } else {
+            String::new()
+        };
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
                 Some(r) => run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r))),
@@ -779,7 +789,7 @@ impl Page {
                 new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last)
             }
             (View::Setup, _) => setup_html(&self.home),
-            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home),
+            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home, &remind),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
                     let d = store.display(&it.digest);
@@ -813,7 +823,7 @@ impl Page {
                     html
                 };
                 let i = run.manifest.index(&q.question.step);
-                question_html(run, q, &shown, &changes_html(&self.home, run, i))
+                remind.clone() + &question_html(run, q, &shown, &changes_html(&self.home, run, i))
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
@@ -1391,7 +1401,7 @@ fn ago(seconds: u64) -> String {
 
 /// Home: what waits, what runs, and what was delivered, newest first, the last week in front and the rest folded;
 /// the runs that delivered nothing at the end.
-fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, home: &std::path::Path) -> String {
+fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, home: &std::path::Path, remind: &str) -> String {
     use jaynes_core::event::Outcome;
     let now = crate::store::now();
     let at = |r: &Run| times.get(&r.id).map(|t| t.1).unwrap_or(0);
@@ -1446,11 +1456,59 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
     let fold = |title: &str, n: usize, rows: &str| if n == 0 { String::new() } else { format!("<details class=\"fold\"><summary>{title} <span>{n}</span></summary><div class=\"rows\">{rows}</div></details>") };
     let wait = if waiting == 0 { "Nothing waits for you.".to_string() } else { format!("{waiting} question{} wait{} for you, in the list beside.", if waiting == 1 { "" } else { "s" }, if waiting == 1 { "s" } else { "" }) };
     format!(
-        "<h1>Home</h1><p class=\"sub\">{wait}</p>{}{}{}",
+        "<h1>Home</h1><p class=\"sub\">{wait}</p>{remind}{}{}{}",
         part("Running", "Runs not finished: working, or waiting for you.", &moving, "Nothing runs."),
         part("Delivered", "The last 7 days, newest first. Undo and Correct are on each run's page.", &delivered(&new), "Nothing was delivered this week.") + &fold("Earlier", earlier.len(), &delivered(&earlier)),
         fold("Abandoned", abandoned, &dropped),
     )
+}
+
+/// The reminders due, in a section at the top of what the page shows at a pause, each a link to its question. The
+/// question on the screen is not listed again. Every one shown is named in `data-due`, which the page's script sends
+/// back (`/api/reminded`) once it knows the person holds the key: only then were they reminded.
+fn reminders_html(due: &[drive::Reminder], runs: &[Run], on: Option<(&str, &str)>) -> String {
+    if due.is_empty() {
+        return String::new();
+    }
+    let rows: String = due
+        .iter()
+        .filter(|d| on != Some((d.run.as_str(), d.question.as_str())))
+        .map(|d| {
+            let run = runs.iter().find(|r| r.id == d.run);
+            let request = run.map(|r| short(&r.request)).unwrap_or_default();
+            let role = run.map(|r| r.manifest.role.clone()).unwrap_or_default();
+            let about = if d.about.trim().is_empty() { String::new() } else { format!(": {}", d.about.trim()) };
+            format!(
+                "<a class=\"hrow\" href=\"/q/{}/{}\"><div class=\"t\">{}</div><div class=\"hq\">at {}{}</div><div class=\"hm\"><span>{}</span></div></a>",
+                esc(&d.run), esc(&d.question), esc(&request), esc(&d.step), esc(&about), esc(&role)
+            )
+        })
+        .collect();
+    let named: Vec<[&str; 2]> = due.iter().map(|d| [d.run.as_str(), d.question.as_str()]).collect();
+    let data = esc(&serde_json::to_string(&named).unwrap_or_default());
+    if rows.is_empty() {
+        return format!("<div id=\"remind\" data-due=\"{data}\" hidden></div>");
+    }
+    format!(
+        "<section class=\"part remind\" id=\"remind\" data-due=\"{data}\"><h2>Still waiting for you</h2><p class=\"sub\">Asked a day ago or more, and nobody answered.</p><div class=\"rows\">{rows}</div></section>"
+    )
+}
+
+/// The person read the reminders named in `due` (pairs of run and question), at `now`. Only the person's reading
+/// counts, and only a reminder due now is marked: a name the request brings is never a path to write.
+pub fn reminded_in(home: &std::path::Path, body: &Value, by: &By, now: u64) -> Result<Value, String> {
+    if !by.person() {
+        return Err("only the person is reminded: open the link the page printed".into());
+    }
+    let store = Store::open(&home.join("record.sqlite3"))?;
+    let due = drive::reminders_due(home, &store, now)?;
+    let named: Vec<(&str, &str)> = body["due"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_str()?, p[1].as_str()?))).collect();
+    let mut marked = 0;
+    for d in due.iter().filter(|d| named.contains(&(d.run.as_str(), d.question.as_str()))) {
+        drive::mark_reminded(home, &d.run, &d.question, now)?;
+        marked += 1;
+    }
+    Ok(json!({"ok": true, "marked": marked}))
 }
 
 /// Tokens as a person reads them: 950, 12k, 1.4M.
@@ -1783,14 +1841,26 @@ if (sf) sf.addEventListener("submit", async ev => {
   else document.getElementById("startmsg").textContent = r.refused;
 });
 let seen = null;
+const busy = () => Object.keys(verdicts).length || [...document.querySelectorAll("input")].some(i => i.value) || document.activeElement.tagName === "INPUT";
 setInterval(async () => {
   try {
     const v = (await (await fetch("/api/version")).json()).seq;
-    const busy = Object.keys(verdicts).length || [...document.querySelectorAll("input")].some(i => i.value) || document.activeElement.tagName === "INPUT";
-    if (seen !== null && v !== seen && !busy) location.reload();
+    if (seen !== null && v !== seen && !busy()) location.reload();
     seen = v;
   } catch (_) {}
 }, 3000);
+// The reminders this page shows: the person read them once the page knows they hold the key, never before.
+const remind = document.getElementById("remind");
+if (remind) window.jaynesKey.then(person => {
+  if (person) fetch("/api/reminded", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ due: JSON.parse(remind.dataset.due || "[]") }) }).catch(() => {});
+});
+// Coming back after ten minutes away is a pause too: the first page shows again what waits, reminders with it.
+let away = null;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { away = Date.now(); return; }
+  if (away !== null && Date.now() - away >= 600000 && location.pathname === "/" && !busy()) location.reload();
+  away = null;
+});
 "##;
 
 /// What a page of Jaynes may load and run. Only its own script runs: what agents write is shown as text, and a script
@@ -1907,6 +1977,7 @@ pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius
 .diff > .hunk { color:var(--blue); }
 .diff > .file { color:var(--ink); font-weight:600; margin-top:12px; } .diff > .file:first-child { margin-top:0; }
 .part { margin-top:26px; } .part h2 { font-size:15px; font-weight:600; margin:0; } .part .sub { margin:2px 0 10px; font-size:13px; }
+.part.remind { margin:0 0 34px; }
 .rows { border:1px solid var(--line); border-radius:8px; overflow:hidden; } .none { color:var(--faint); font-size:13px; }
 .hrow { display:block; padding:11px 16px; border-top:1px solid var(--line); color:inherit; text-decoration:none; } .hrow:first-child { border-top:0; }
 .hrow:hover { background:var(--panel); } .hrow .t { font-size:14px; } .hrow .hq { font-size:13px; color:var(--dim); }
@@ -2062,6 +2133,78 @@ mod tests {
         events.push(Event::QuestionOpened { question });
         Store::open(&home.join("record.sqlite3")).expect("store").append("r1", &events).expect("append");
         home
+    }
+
+    /// Two runs, each waiting on its question q1, which the person was told of.
+    fn told(name: &str) -> PathBuf {
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-remind-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        for run in ["w1", "w2"] {
+            std::fs::create_dir_all(home.join("runs").join(run)).expect("dir");
+            let manifest: Manifest = serde_json::from_value(json!({
+                "role": "r", "version": "1", "protocol": 1,
+                "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
+            }))
+            .expect("manifest");
+            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+            let mut events = decide(None, &start).expect("start").events;
+            let question = Question {
+                id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+                offered: vec![VerdictKind::Keep], holds: true, about: "Is the plan right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            };
+            events.push(Event::QuestionOpened { question });
+            events.push(Event::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: String::new() });
+            let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+            store.append(run, &events).expect("append");
+            store.put_setup(run, &json!({})).expect("setup");
+        }
+        home
+    }
+
+    /// The section of reminders a page shows, or "" when it shows none.
+    fn reminders_in(html: &str) -> &str {
+        html.split("id=\"remind\"").nth(1).and_then(|r| r.split("</section>").next()).unwrap_or("")
+    }
+
+    #[test]
+    fn a_reminder_shows_at_a_pause_and_only_the_person_reading_it_puts_it_off_a_day() {
+        let page = Page { home: told("page"), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        // told just now: nothing to remind of yet
+        assert!(!page.render(View::Home, now).expect("home").contains("id=\"remind\""));
+        let later = now + drive::REMIND_EVERY + 1;
+        // the first page shows w1's question; the reminders list the other, and name both as shown
+        let first = page.render(View::Home, later).expect("home");
+        let shown = reminders_in(&first);
+        assert!(shown.contains("<h2>Still waiting for you</h2>") && shown.contains("href=\"/q/w2/q1\"") && !shown.contains("href=\"/q/w1/q1\""), "{shown}");
+        assert!(shown.contains("the request of w2") && shown.contains("at plan: Is the plan right?"), "{shown}");
+        assert!(shown.contains("data-due=\"[[&quot;w1&quot;,&quot;q1&quot;],[&quot;w2&quot;,&quot;q1&quot;]]\""), "{shown}");
+        // Home, with no question on the screen, lists both; a run's page and the setup are no pause
+        let home = page.render(View::Overview, later).expect("overview");
+        assert!(reminders_in(&home).contains("href=\"/q/w1/q1\"") && reminders_in(&home).contains("href=\"/q/w2/q1\""), "{home}");
+        for view in [View::Run("w1".into()), View::Setup, View::Question("w1".into(), "q1".into())] {
+            assert!(!page.render(view, later).expect("page").contains("id=\"remind\""));
+        }
+        // an agent's reading reminds nobody, and nothing is put off
+        let both = json!({"due": [["w1", "q1"], ["w2", "q1"]]});
+        let refused = reminded_in(&page.home, &both, &By::Agent { who: "an agent".into() }, later).expect_err("an agent");
+        assert!(refused.contains("only the person is reminded"), "{refused}");
+        assert_eq!(drive::reminders_due(&page.home, &page.store().expect("store"), later).expect("due").len(), 2);
+        // a name that is not a reminder due now is never written, a path least of all
+        let odd = json!({"due": [["../../escaped", "q1"], ["w9", "q1"], ["w2", "q9"], "w1", [1, 2]]});
+        assert_eq!(reminded_in(&page.home, &odd, &By::Person, later), Ok(json!({"ok": true, "marked": 0})));
+        assert!(!page.home.join("../escaped").exists() && !page.home.join("runs/w9").exists());
+        // the person read w2's: it is off for a day, and w1's, on the screen, is still named to be marked
+        assert_eq!(reminded_in(&page.home, &json!({"due": [["w2", "q1"]]}), &By::Person, later), Ok(json!({"ok": true, "marked": 1})));
+        let after = page.render(View::Home, later + 1).expect("home");
+        assert!(after.contains("<div id=\"remind\" data-due=\"[[&quot;w1&quot;,&quot;q1&quot;]]\" hidden></div>") && !after.contains("Still waiting for you"), "{after}");
+        assert_eq!(reminded_in(&page.home, &both, &By::Person, later + 1), Ok(json!({"ok": true, "marked": 1})));
+        assert!(!page.render(View::Overview, later + 2).expect("overview").contains("id=\"remind\""));
+        // and again a day later
+        assert!(reminders_in(&page.render(View::Overview, later + 2 + drive::REMIND_EVERY).expect("overview")).contains("href=\"/q/w2/q1\""));
+        let _gone = std::fs::remove_dir_all(&page.home);
     }
 
     #[test]
