@@ -1,0 +1,353 @@
+[
+ {
+  "id": "starts-inside-a-word",
+  "hole": "a quote may not start inside a word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>It is unsafe to cache this response at all.</p>",
+  "quote": "safe to cache this response at all.",
+  "expect": "reject"
+ },
+ {
+  "id": "ends-inside-a-word",
+  "hole": "a quote may not end inside a word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The limit applies to caches and caching proxies alike.</p>",
+  "quote": "The limit applies to cache",
+  "expect": "reject"
+ },
+ {
+  "id": "number-cut-short",
+  "hole": "a quote may not end inside a number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The rate limit is 1000 requests per minute.</p>",
+  "quote": "The rate limit is 100",
+  "expect": "reject"
+ },
+ {
+  "id": "number-cut-at-its-start",
+  "hole": "a quote may not start inside a number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Only 25% of users were affected by the bug.</p>",
+  "quote": "5% of users were affected by the bug.",
+  "expect": "reject"
+ },
+ {
+  "id": "number-cut-at-a-thousands-separator",
+  "hole": "12,500 is one number: a quote may not end at its comma",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>In total the cache served 12,500 requests.</p>",
+  "quote": "In total the cache served 12",
+  "expect": "reject"
+ },
+ {
+  "id": "number-cut-at-a-decimal-point",
+  "hole": "1.5 is one number: a quote may not end at its point",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The median latency of the service is 1.5 seconds.</p>",
+  "quote": "The median latency of the service is 1",
+  "expect": "reject"
+ },
+ {
+  "id": "number-cut-after-a-decimal-point",
+  "hole": "0.25 is one number: a quote may not start after its point",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The error rate of the service fell to 0.25 percent last year.</p>",
+  "quote": "25 percent last year.",
+  "expect": "reject"
+ },
+ {
+  "id": "hyphenated-negation-dropped",
+  "hole": "non-compliant is one word: a quote may not start after its hyphen",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Only non-compliant caches are allowed to store nothing.</p>",
+  "quote": "compliant caches are allowed to store nothing.",
+  "expect": "reject"
+ },
+ {
+  "id": "hyphenated-negation-dropped-at-a-line-wrap",
+  "hole": "a word wrapped at its hyphen is still one word",
+  "url": "https://example.org/a.txt",
+  "type": "text/plain",
+  "page": "FILL\n\nSuch a response comes only from non-\ncompliant caches, which are allowed to store nothing.\n",
+  "quote": "compliant caches, which are allowed to store nothing.",
+  "expect": "reject"
+ },
+ {
+  "id": "hyphenated-prefix-dropped",
+  "hole": "un-cacheable is one word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Responses to this method are un-cacheable by default in every shared cache.</p>",
+  "quote": "cacheable by default in every shared cache.",
+  "expect": "reject"
+ },
+ {
+  "id": "contraction-cut",
+  "hole": "isn't is one word: a quote may not end before its apostrophe",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>A stored response that is stale isn't reusable without validation.</p>",
+  "quote": "A stored response that is stale is",
+  "expect": "reject"
+ },
+ {
+  "id": "superscript-read-as-digits",
+  "hole": "10 to the 6th is not 106",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The service handles up to 10<sup>6</sup> requests per day.</p>",
+  "quote": "The service handles up to 106 requests per day.",
+  "expect": "reject"
+ },
+ {
+  "id": "across-unrelated-blocks",
+  "hole": "a quote may not be put together from separate blocks",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><h2>Not</h2><table><tr><td>recommended</td></tr></table><p>for production use</p>",
+  "quote": "Not recommended for production use",
+  "expect": "reject"
+ },
+ {
+  "id": "hidden-attribute",
+  "hole": "text the page does not show is not what it says",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p hidden>The vendor guarantees one hundred percent uptime forever.</p>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "display-none",
+  "hole": "text the page does not show is not what it says",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><div style=\"display: none\">The vendor guarantees one hundred percent uptime forever.</div>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "display-none-inherited",
+  "hole": "what is inside a hidden element is hidden too",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><div style=\"display:none\"><section><p>The vendor guarantees one hundred percent uptime forever.</p></section></div>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "struck-out",
+  "hole": "text the page struck out is not what it says",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p><del>The vendor guarantees one hundred percent uptime forever.</del> The vendor makes no promise.</p>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "struck-out-s-tag",
+  "hole": "text the page struck out is not what it says",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p><s>The vendor guarantees one hundred percent uptime forever.</s> The vendor makes no promise.</p>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "html-comment",
+  "hole": "a comment is not text of the page",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><!-- The vendor guarantees one hundred percent uptime forever. --><p>Nothing else.</p>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "template-element",
+  "hole": "a template is not shown",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><template><p>The vendor guarantees one hundred percent uptime forever.</p></template>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "script-of-another-type",
+  "hole": "a script element is not text, whatever its type",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><script type=\"text/plain\">The vendor guarantees one hundred percent uptime forever.</script>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "image-alt-text",
+  "hole": "an attribute is not text of the page",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><img src=\"x.png\" alt=\"The vendor guarantees one hundred percent uptime forever.\">",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ },
+ {
+  "id": "word-split-by-an-empty-tag",
+  "hole": "un<span></span>safe shows as unsafe",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>It is un<span></span>safe to cache this response at all.</p>",
+  "quote": "safe to cache this response at all.",
+  "expect": "reject"
+ },
+ {
+  "id": "word-split-by-a-comment",
+  "hole": "un<!-- -->safe shows as unsafe",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>It is un<!-- x -->safe to cache this response at all.</p>",
+  "quote": "safe to cache this response at all.",
+  "expect": "reject"
+ },
+ {
+  "id": "word-split-by-a-zero-width-space",
+  "hole": "a character that does not show does not end a word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>It is un​safe to cache this response at all.</p>",
+  "quote": "safe to cache this response at all.",
+  "expect": "reject"
+ },
+ {
+  "id": "word-split-by-a-soft-hyphen",
+  "hole": "a soft hyphen does not end a word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>It is un­safe to cache this response at all.</p>",
+  "quote": "safe to cache this response at all.",
+  "expect": "reject"
+ },
+ {
+  "id": "word-split-by-wbr",
+  "hole": "<wbr> does not end a word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>It is un<wbr>safe to cache this response at all.</p>",
+  "quote": "safe to cache this response at all.",
+  "expect": "reject"
+ },
+ {
+  "id": "keyword-case-changed",
+  "hole": "case counts: MAY is not may",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>A cache MUST NOT store the response to such a request.</p>",
+  "quote": "A cache must not store the response to such a request.",
+  "expect": "reject"
+ },
+ {
+  "id": "address-carries-the-quote-in-its-query",
+  "hole": "a page that repeats its own address proves nothing",
+  "url": "https://example.org/search?q=a+shared+cache+must+store+every+response+forever",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Results for: a shared cache must store every response forever</p>",
+  "quote": "a shared cache must store every response forever",
+  "expect": "reject"
+ },
+ {
+  "id": "address-carries-the-quote-in-its-path",
+  "hole": "words in the path, joined by hyphens, are the address too",
+  "url": "https://example.org/wiki/A-shared-cache-must-store-every-response-forever",
+  "type": "text/html",
+  "page": "<p>FILL</p><h1>A shared cache must store every response forever</h1>",
+  "quote": "A shared cache must store every response forever",
+  "expect": "reject"
+ },
+ {
+  "id": "address-carries-the-quote-encoded-twice",
+  "hole": "an address decoded once more still carries the words",
+  "url": "https://example.org/search?q=a%2520shared%2520cache%2520must%2520store%2520every%2520response%2520forever",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Results for: a shared cache must store every response forever</p>",
+  "quote": "a shared cache must store every response forever",
+  "expect": "reject"
+ },
+ {
+  "id": "address-carries-the-quote-with-underscores",
+  "hole": "words in the address joined by underscores are the address too",
+  "url": "https://example.org/wiki/A_shared_cache_must_store_every_response_forever",
+  "type": "text/html",
+  "page": "<p>FILL</p><h1>A shared cache must store every response forever</h1>",
+  "quote": "A shared cache must store every response forever",
+  "expect": "reject"
+ },
+ {
+  "id": "address-carries-part-of-a-longer-quote",
+  "hole": "padding the quote with words of the page does not hide what the address carries",
+  "url": "https://example.org/search?q=must+store+every+response+forever",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>You searched this site for must store every response forever</p>",
+  "quote": "You searched this site for must store every response forever",
+  "expect": "reject"
+ },
+ {
+  "id": "contraction-read-as-its-stem",
+  "hole": "can't is one word: a quote may not end before its apostrophe",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>A response of this kind can't be stored by a shared cache.</p>",
+  "quote": "A response of this kind can",
+  "expect": "reject"
+ },
+ {
+  "id": "fraction-read-as-digits",
+  "hole": "five and a half is not 51",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The reported median latency is about 5½ seconds per request.</p>",
+  "quote": "The reported median latency is about 51",
+  "expect": "reject"
+ },
+ {
+  "id": "minus-sign-dropped",
+  "hole": "minus five is not five: a quote may not start after the sign of a number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Overnight the temperature fell to -5 degrees in the valley.</p>",
+  "quote": "5 degrees in the valley.",
+  "expect": "reject"
+ },
+ {
+  "id": "percent-sign-dropped",
+  "hole": "10% is not 10: a quote may not end between a number and its percent sign",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Over the year the throughput of the cluster improved by 10% overall.</p>",
+  "quote": "Over the year the throughput of the cluster improved by 10",
+  "expect": "reject"
+ },
+ {
+  "id": "number-cut-before-its-unit-prefix",
+  "hole": "3.5 million is not 5 million",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>The project received 3.5 million dollars in public funding.</p>",
+  "quote": "5 million dollars in public funding.",
+  "expect": "reject"
+ },
+ {
+  "id": "strike-tag",
+  "hole": "text the page struck out is not what it says",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p><strike>The vendor guarantees one hundred percent uptime forever.</strike> The vendor makes no promise.</p>",
+  "quote": "The vendor guarantees one hundred percent uptime forever.",
+  "expect": "reject"
+ }
+]

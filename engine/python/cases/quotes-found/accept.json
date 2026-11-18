@@ -1,0 +1,139 @@
+[
+ {
+  "id": "whole-sentence",
+  "keeps": "a quote that is a whole sentence of a paragraph",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>A cache MUST NOT store a response when the no-store directive is present.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "A cache MUST NOT store a response when the no-store directive is present.",
+  "expect": "accept"
+ },
+ {
+  "id": "part-of-sentence",
+  "keeps": "a quote that is part of a sentence, starting and ending at words",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>A cache MUST NOT store a response when the no-store directive is present.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "MUST NOT store a response",
+  "expect": "accept"
+ },
+ {
+  "id": "inline-markup",
+  "keeps": "a quote across inline markup, as a reader sees it",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>A cache MUST NOT store a response when the <code>no-store</code> directive is <em>present</em>.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "when the no-store directive is present.",
+  "expect": "accept"
+ },
+ {
+  "id": "wrapped-hyphen",
+  "keeps": "a word that plain text wraps at its hyphen, as RFC 9111 wraps best-effort",
+  "url": "https://example.org/rfc.txt",
+  "type": "text/plain",
+  "page": "   store the information in non-volatile storage and MUST make a best-\n   effort attempt to remove the information from volatile storage as\n",
+  "quote": "MUST make a best-effort attempt to remove the information",
+  "expect": "accept"
+ },
+ {
+  "id": "hanging-hyphen",
+  "keeps": "a hyphen left hanging before the next word, at a line break",
+  "url": "https://example.org/a.txt",
+  "type": "text/plain",
+  "page": "we do both pre-\nand post-processing of the data\n",
+  "quote": "both pre- and post-processing of the data",
+  "expect": "accept"
+ },
+ {
+  "id": "spaces",
+  "keeps": "spaces, tabs, line breaks and no-break spaces are one space",
+  "url": "https://example.org/a.txt",
+  "type": "text/plain",
+  "page": "A cache  MUST\tNOT\n   store a response.\n",
+  "quote": "A cache MUST NOT store a response.",
+  "expect": "accept"
+ },
+ {
+  "id": "quotation-marks",
+  "keeps": "curly and straight quotation marks and apostrophes are the same mark",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>Note that no-cache does not mean “don’t cache”.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "Note that no-cache does not mean \"don't cache\".",
+  "expect": "accept"
+ },
+ {
+  "id": "modifier-apostrophe",
+  "keeps": "the modifier letter apostrophe and the prime that pages use as an apostrophe",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>The serverʼs answer is final, and the client′s copy is stale.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "The server's answer is final, and the client's copy is stale.",
+  "expect": "accept"
+ },
+ {
+  "id": "direction-marks",
+  "keeps": "marks that set the direction of text, which do not show",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>The ‎server's answer is final.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "The server's answer is final.",
+  "expect": "accept"
+ },
+ {
+  "id": "section-of-address",
+  "keeps": "a quote cited by its page's address with a section after #",
+  "url": "https://example.org/a",
+  "cite": "https://example.org/a#section-3",
+  "type": "text/html",
+  "page": "<p>A cache MUST NOT store a response when asked.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "A cache MUST NOT store a response",
+  "expect": "accept"
+ },
+ {
+  "id": "short-page",
+  "keeps": "a short page with no scripts is read as it is",
+  "url": "https://example.org/",
+  "type": "text/html",
+  "page": "<html><body><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission.</p></body></html>",
+  "quote": "This domain is for use in documentation examples",
+  "expect": "accept"
+ },
+ {
+  "id": "template-left-open",
+  "keeps": "an element whose content is filled in later, left open at the top, does not hide the page",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<template><p>x</p><p>A cache MUST NOT store a response when asked.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "A cache MUST NOT store a response",
+  "expect": "accept"
+ },
+ {
+  "id": "western-charset",
+  "keeps": "a page in a western character set the server names",
+  "url": "https://example.org/a.txt",
+  "type": "text/plain; charset=windows-1252",
+  "page_charset": "cp1252",
+  "page": "The café keeps a copy of every response it serves.\n",
+  "quote": "The café keeps a copy of every response",
+  "expect": "accept"
+ },
+ {
+  "id": "number-at-edge",
+  "keeps": "a number that ends a quote at the edge of the number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>The rate limit is 100 requests per minute.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "The rate limit is 100",
+  "expect": "accept"
+ },
+ {
+  "id": "same-words-in-address",
+  "keeps": "a quote that shares a few words with its page's address",
+  "url": "https://example.org/docs/no-store-directive",
+  "type": "text/html",
+  "page": "<p>The no-store directive indicates that a cache MUST NOT store any part of the response.</p><p>Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. Caches keep copies of responses so that later requests are answered faster. </p>",
+  "quote": "The no-store directive indicates that a cache MUST NOT store any part of the response.",
+  "expect": "accept"
+ }
+]

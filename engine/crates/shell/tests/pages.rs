@@ -163,7 +163,11 @@ fn a_quote_is_held_to_the_text_jaynes_downloaded() {
     // an invented quote is refused, with the quote and its page
     let invented = verdict(json!([{"url": "https://example.org/caching", "quote": "A cache MAY store anything it likes, forever."}]), &fetched);
     assert_eq!(invented["verdict"], "fail", "{invented}");
-    assert_eq!(invented["reasons"], json!(["\"A cache MAY store anything it likes, forever.\": these words are not in the text Jaynes downloaded from https://example.org/caching"]));
+    let said = invented["reasons"][0].as_str().unwrap_or("");
+    assert_eq!(invented["reasons"].as_array().map(Vec::len), Some(1), "{invented}");
+    assert!(said.starts_with("\"A cache MAY store anything it likes, forever.\": these words are not in the text Jaynes downloaded from https://example.org/caching"), "{said}");
+    // and what Jaynes read nearest to it, for the agent to copy what stands there
+    assert!(said.contains("the nearest text Jaynes read there: \"HTTP Caching A cache MUST NOT store a response when the no-store directive is present.\""), "{said}");
     // a page that could not be read proves nothing, and the reason is said
     let blocked = verdict(json!([{"url": "https://example.org/blocked", "quote": "Whatever the page may have said."}]), &fetched);
     assert_eq!(blocked["verdict"], "fail", "{blocked}");
