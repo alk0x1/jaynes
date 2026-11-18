@@ -61,6 +61,9 @@ structure Step where
   irreversible : Bool
   /-- it cannot be undone, already acted, and the person is asked about the act (keep it, or act again) -/
   held : Bool
+  /-- it acts on something real, is not safe to repeat, and acted in this intent without being done: its checks did
+      not pass after the act -/
+  actedPending : Bool
   /-- Jaynes tested what it reaches -/
   probed : Bool
   /-- the agent has attempts left this round -/
@@ -159,6 +162,8 @@ namespace Run
 /-- What to do with a step that has not run yet in this round. -/
 def idleMove (r : Run) (i : Nat) : Move :=
   if (r.get i).exec == .person then (if (r.get i).question == .waiting then .waitAt i else .ask i)
+  -- G14: a step that acted is not started again on its own: the run asks the person, then waits for them
+  else if (r.get i).actedPending then (if (r.get i).held then .waitAt i else .ask i)
   else if r.holdsAbove i then .waitAt i
   else if (r.get i).irreversible && r.rests (r.steps.length + 1) (r.get i).sources then .waitAt i
   else if r.ceilingReached then .block

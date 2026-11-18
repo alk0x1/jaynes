@@ -95,6 +95,9 @@ theorem idleMove_start {r : Run} {i j : Nat} (h : r.idleMove i = .start j) :
   · split at h <;> simp at h
   rename_i hp
   split at h
+  · split at h <;> simp at h
+  rename_i _hap
+  split at h
   · simp at h
   rename_i hh
   split at h
@@ -228,6 +231,18 @@ theorem g14_never_redone {r : Run} {i : Nat} (h : r.next = .invalidate i) : (r.g
     · simp at he
     · simp at he
     · simp at he
+
+/-- **G14**, no recovery acts again: a step that acted in this intent and is not done (its checks did not pass after
+    the act) is never started again by the core's move; only the person's order of a second act does. -/
+theorem g14_acted_not_restarted {r : Run} {i : Nat} (h : r.next = .start i) : (r.get i).actedPending = false := by
+  have hi := (next_start h).2.2.2
+  unfold Run.idleMove at hi
+  split at hi
+  · split at hi <;> simp at hi
+  split at hi
+  · split at hi <;> simp at hi
+  rename_i hap
+  simpa using hap
 
 /-- **G13**, the second half: the run delivers, finishes, or waits only for answers, only when every step of its
     path is done on what holds now. -/

@@ -1300,6 +1300,42 @@ fn g14_an_act_that_repeats_safely_starts_again_after_a_stop_with_the_same_key() 
     let _ = (c, key);
 }
 
+/// A step that acts, delivered (so it acted) and whose check then failed or could not judge: continuing does not act
+/// again; the run asks the person, and only their order is a second act.
+#[test]
+fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
+    for verdict in [CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new() }, CheckVerdict::Blocked { reason: "could not look".to_string() }] {
+        let mut send = step("send", Executor::Role);
+        send.effect = Effect::Irreversible { idempotent: false };
+        send.checks = vec![CheckDecl { name: "landed".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }];
+        let (mut run, cmds) = start(vec![send]);
+        let c = probe_ok(&mut run, cmds);
+        let first = pushes_of(&c, "send");
+        assert_eq!(first.len(), 1, "{c:?}");
+        let attempt = run.steps[0].attempt;
+        let c = deliver(&mut run, "send", attempt, "sent", Vec::new());
+        assert!(c.iter().any(|c| matches!(c, Command::RunChecks { .. })), "{c:?}");
+        let attempt = run.steps[0].attempt;
+        feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: verdict.clone() }] });
+        assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
+        let c = feed(&mut run, Input::Continue { by: By::Person });
+        let c = probe_ok(&mut run, c);
+        assert!(pushes_of(&c, "send").is_empty(), "{verdict:?}: continuing acted again: {c:?}");
+        let held = asked_in(&c).filter(|q| q.kind == QuestionKind::Acted).expect("the run asks about the act");
+        assert_eq!(held.offered, vec![VerdictKind::Redo], "an act whose check did not pass cannot be kept as it is");
+        // the person orders a second act: it acts, with a key of its own
+        let c = feed(&mut run, answer_to(&held, &[("send", redo("send it again"))]));
+        let c = probe_ok(&mut run, c);
+        let again = pushes_of(&c, "send");
+        assert_eq!(again.len(), 1, "{c:?}");
+        assert_ne!(again, first, "a second act has its own key");
+    }
+}
+
+fn pushes_of(cmds: &[Command], name: &str) -> Vec<Option<String>> {
+    cmds.iter().filter_map(|c| if let Command::RunRole { step, key, .. } = c { (step == name).then(|| key.clone()) } else { None }).collect()
+}
+
 #[test]
 fn g4_a_box_that_refuses_spends_no_attempt() {
     let (mut run, cmds) = start(vec![step("build", Executor::Agent)]);
@@ -1972,6 +2008,7 @@ fn model_case(run: &Run) -> String {
                 "skipped": s.skipped == Some(s.round),
                 "irreversible": d.effect.irreversible(),
                 "held": run.held(i).is_some(),
+                "actedPending": run.acted_unfinished(i),
                 "probed": s.probed,
                 "attemptsLeft": s.spent < d.attempts,
                 "certified": run.attention.get(&d.name).is_some_and(|c| {
@@ -2027,7 +2064,8 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
     let s = &run.steps[i];
     let acted = q.question.kind == QuestionKind::Acted;
     let valid = if acted {
-        answer.verdicts.keys().all(|id| *id == q.question.step) && matches!(answer.verdict(&q.question.step), Verdict::Keep | Verdict::Redo { .. }) && answer.back.is_empty()
+        answer.verdicts.keys().all(|id| *id == q.question.step) && matches!(answer.verdict(&q.question.step), Verdict::Keep | Verdict::Redo { .. })
+            && q.question.offered.contains(&answer.verdict(&q.question.step).kind()) && answer.back.is_empty()
     } else { answer.verdicts.iter().all(|(id, v)| {
         q.question.items.iter().any(|x| &x.id == id)
             && q.question.offered.contains(&v.kind())

@@ -406,6 +406,11 @@ impl Ctx {
         if *executor == Executor::Person {
             return self.ask_person(i);
         }
+        // G14: a step that acted in this intent is not started again on its own, whatever its checks said after
+        if self.run.acted_unfinished(i) {
+            self.hold_act(i, &["its checks did not pass after it acted".to_string()]);
+            return false;
+        }
         // nothing goes on from an act the person is asked about until they answer
         for j in self.run.sources(i) {
             if let Some(q) = self.run.held(j) {
@@ -1158,7 +1163,7 @@ impl Ctx {
             self.wait(Some(name.clone()), on, format!("{name} cannot be undone and already acted: it waits for you to keep it or act again"));
             return;
         }
-        let output = self.run.steps[i].done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
+        let output = self.run.steps[i].done.as_ref().map(|d| d.output.clone()).or_else(|| self.run.steps[i].pending.as_ref().map(|p| p.output.clone())).unwrap_or_default();
         let why = if because.is_empty() { "it was sent back".to_string() } else { because.join("; ") };
         let about = format!(
             "{name} cannot be undone, and it already acted. Since then {why}. It is not done again on its own: keep the act as it is, or act again, a second act with its own key."
@@ -1170,7 +1175,8 @@ impl Ctx {
             round: self.run.steps[i].round,
             kind: QuestionKind::Acted,
             items: vec![Item { id: name.clone(), label: format!("what {name} did"), digest: output }],
-            offered: vec![VerdictKind::Keep, VerdictKind::Redo],
+            // an act whose checks did not pass cannot be kept as done: only a second act, or the person stops the run
+            offered: if self.run.steps[i].status == Status::Done { vec![VerdictKind::Keep, VerdictKind::Redo] } else { vec![VerdictKind::Redo] },
             holds: true,
             about,
             choose: false,
@@ -1199,8 +1205,8 @@ impl Ctx {
             return refuse(format!("the question has one item, {step}"));
         }
         let v = answer.verdict(&step);
-        if !matches!(v, Verdict::Keep | Verdict::Redo { .. }) {
-            return refuse("keep the act as it is, or act again; nothing else is offered");
+        if !matches!(v, Verdict::Keep | Verdict::Redo { .. }) || !q.question.offered.contains(&v.kind()) {
+            return refuse("that is not offered here: keep the act as it is when it is done, or act again");
         }
         let i = self.index(&step)?;
         let effects = effects(&self.run, &q.question, answer);

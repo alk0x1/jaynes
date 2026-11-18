@@ -105,6 +105,10 @@ pub struct StepState {
     /// rested on changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// The step acts on something real, is not safe to repeat, and delivered in this intent: it acted, whatever its
+    /// checks say after; nothing but the person's order of a second act starts it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub acted: bool,
     /// Acts the person ordered again: part of the act's key, so a second act is a new intent.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub repeat: u32,
@@ -170,6 +174,11 @@ impl Run {
     /// its own (G14).
     pub fn acted(&self, i: usize) -> bool {
         self.manifest.steps[i].effect.irreversible() && self.steps[i].status == Status::Done && self.steps[i].done.is_some()
+    }
+
+    /// Whether step `i` acted in this intent and is not done: its checks did not pass, or could not judge, after the act.
+    pub fn acted_unfinished(&self, i: usize) -> bool {
+        self.steps[i].acted && self.steps[i].status != Status::Done
     }
 
     /// The open question about step `i`'s act, if any.
@@ -275,7 +284,9 @@ impl Run {
             }
             Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session } => {
                 self.spent.add(*usage);
+                let acts = self.manifest.index(step).is_some_and(|i| self.manifest.steps[i].effect.acts() && !self.manifest.steps[i].repeats_safely());
                 if let Some(s) = self.step_mut(step) {
+                    s.acted |= acts;
                     s.resume = None;
                     s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone() });
                     s.status = Status::Checking { attempt: *attempt, fix: *fix };
@@ -426,6 +437,7 @@ impl Run {
                         s.held = None;
                         if again {
                             s.repeat += 1;
+                            s.acted = false;
                         }
                     }
                     return;
