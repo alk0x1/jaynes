@@ -61,6 +61,8 @@ const SCROLL_STEP: f32 = 0.25;
 pub struct SettingsView {
     section: Section,
     font_open: bool,
+    /// When a click outside last closed the font list: the same click on the font itself must not open it again.
+    fonts_closed_at: Option<std::time::Instant>,
     new_agent: Entity<InputState>,
     editor: Entity<InputState>,
     focus: FocusHandle,
@@ -125,7 +127,7 @@ impl SettingsView {
         }
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        SettingsView { section: Section::Terminal, font_open: false, new_agent, editor, focus, note: None }
+        SettingsView { section: Section::Terminal, font_open: false, fonts_closed_at: None, new_agent, editor, focus, note: None }
     }
 
     /// What a click on a control does: the setting changes, at once, and is kept.
@@ -137,7 +139,8 @@ impl SettingsView {
 
     /// The font list, opened or closed as a click on the font does.
     pub fn toggle_fonts(&mut self, cx: &mut Context<Self>) {
-        self.font_open = !self.font_open;
+        let just_closed = self.fonts_closed_at.take().is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(400));
+        self.font_open = !self.font_open && !just_closed;
         cx.notify();
     }
 
@@ -230,6 +233,7 @@ impl SettingsView {
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.font_open = false;
+                this.fonts_closed_at = Some(std::time::Instant::now());
                 cx.notify();
             }));
         for f in fonts_offered(&current) {
