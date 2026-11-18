@@ -545,6 +545,54 @@ fn a_listed_port_of_this_machine_is_reached_through_the_relay_and_nothing_else_i
 }
 
 #[test]
+fn a_command_that_runs_local_servers_reaches_the_services_of_this_machine_it_names_and_no_other() {
+    // a test suite that serves on its own port and reaches a database of this machine its step names
+    let p = place("reach");
+    let net = local_network(&p);
+    if net == "refused" {
+        return;
+    }
+    let (_named, port) = service();
+    let (_other, unnamed) = service();
+    let (_page, page) = service();
+    let own = 20000 + (std::process::id() % 20000) as u16;
+    let both = format!("{} && {}", serve_and_reach(own), read_from("127.0.0.1", port));
+    let o = boxed(&p, &both, &["--local", "--port", &own.to_string(), "--reach", &port.to_string()]);
+    assert!(o.status.success() && said(&o).contains("served and reached") && said(&o).contains("hello from outside"),
+            "its own server and the service it names, in one command: {}", said(&o));
+    for (what, script, args) in [
+        ("a service it does not name", read_from("127.0.0.1", unnamed), vec!["--reach".to_string(), port.to_string()]),
+        ("the page's port, named and never", read_from("127.0.0.1", page), vec!["--reach".to_string(), page.to_string(), "--never-port".to_string(), page.to_string()]),
+        ("another address at a named port", read_from("10.255.255.1", port), vec!["--reach".to_string(), port.to_string()]),
+    ] {
+        let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
+        args.insert(0, "--local");
+        let o = boxed(&p, &script, &args);
+        assert!(!o.status.success() && !said(&o).contains("hello from outside"), "the box reached {what}: {}", said(&o));
+    }
+}
+
+#[test]
+fn with_every_port_opened_a_command_reaches_the_services_of_this_machine_but_the_page() {
+    // the person opened every local port for the project: a service of this machine is reached, the page never; and
+    // where the machine's network has a way out, the box refuses, since its rules hold a port and not an address
+    let p = place("any-reach");
+    opens();
+    let (_service, port) = service();
+    let (_page, page) = service();
+    let any = ["--local", "--any-port", "--never-port", &page.to_string()].map(str::to_string);
+    let any: Vec<&str> = any.iter().map(String::as_str).collect();
+    let o = boxed(&p, &read_from("127.0.0.1", port), &any);
+    if let Some(out) = jaynes_shell::sandbox::way_out() {
+        assert!(!o.status.success() && said(&o).contains("refuses to open local ports"), "{out}, and it opened every port: {}", said(&o));
+        return;
+    }
+    assert!(o.status.success() && said(&o).contains("hello from outside"), "every port opened, and a service of this machine was not reached: {}", said(&o));
+    let o = boxed(&p, &read_from("127.0.0.1", page), &any);
+    assert!(!o.status.success() && !said(&o).contains("hello from outside"), "the box reached the page's port: {}", said(&o));
+}
+
+#[test]
 fn the_relay_s_helper_connects_only_for_the_ports_it_was_started_with() {
     // the helper as the box starts it, asked from its channel as the forwarder asks it
     opens();
