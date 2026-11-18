@@ -275,12 +275,17 @@ impl Store {
         rows.map(|r| r.map_err(|e| e.to_string())).collect()
     }
 
-    /// A refused attempt on a run, kept outside the chain: a trace, not evidence.
-    pub fn put_refusal(&self, at: u64, run: &str, what: &str, who: &str, reason: &str) -> Result<(), String> {
-        self.db
-            .execute("insert into refusals (ts, run, what, who, reason) values (?1, ?2, ?3, ?4, ?5)", params![at as i64, run, what, who, reason])
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+    /// A refused attempt on a run, kept outside the chain: a trace, not evidence. The run keeps its latest `most`.
+    pub fn put_refusal(&mut self, at: u64, run: &str, what: &str, who: &str, reason: &str, most: usize) -> Result<(), String> {
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        tx.execute("insert into refusals (ts, run, what, who, reason) values (?1, ?2, ?3, ?4, ?5)", params![at as i64, run, what, who, reason])
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "delete from refusals where run = ?1 and id not in (select id from refusals where run = ?1 order by id desc limit ?2)",
+            params![run, most as i64],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
     }
 
     /// Every refused attempt on the run, oldest first: (when, what, who, why).
