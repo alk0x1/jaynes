@@ -41,7 +41,8 @@ a box), and the local TCP ports it declares. The person's home, the engine's fol
 and a declaration of them is refused before the program starts. A shim of /usr/bin is refused too: it finds its
 program through xcrun, which reads the whole disk.
 The box is proved on the person's machine before any program runs in it (``program-proof``, at install and when
-macOS changes): a sample program does its work and tries nine escapes in it, and the macOS it held on is kept in the
+macOS changes): a sample program does its work and tries eleven escapes in it, and what only an opened app could
+try (lsopen, Apple events, the last denial of secrets) is read in the profile, and the macOS it held on is kept in the
 engine's home. On another macOS the proof is made again first; when it does not hold, no role's program runs, and
 the refusal says what got through.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
@@ -462,6 +463,9 @@ home = a["real_home"]
 try_("escape: list the person's home", lambda: os.listdir(home) and "listed")
 try_("escape: know whether ~/.ssh exists", lambda: "knows" if os.path.exists(os.path.join(home, ".ssh")) else "PermissionError")
 try_("escape: read the engine's folder", lambda: os.listdir(a["engine"]) and "listed")
+# secrets planted inside a folder it may read: the rule that denies them again, last, is what keeps them out
+try_("escape: an ssh key inside a folder it reads", lambda: open(os.path.join(a["role_dir"], ".ssh", "id")).read() and "read")
+try_("escape: cloud credentials inside a folder it reads", lambda: open(os.path.join(a["role_dir"], ".aws", "credentials")).read() and "read")
 try_("escape: write outside its call", lambda: open(os.path.join(a["role_dir"], "x"), "w").write("x") and "wrote")
 try_("escape: run a program it did not declare", lambda: subprocess.run(["/bin/ls", "/"], capture_output=True) and "ran")
 t = socket.socket(); t.settimeout(3)
@@ -486,10 +490,27 @@ def macos() -> str:
     return " ".join(out)
 
 
-def program_selftest(interpreter: Path) -> list[str]:
-    """Run the sample program in a program's box as program_profile writes it, on this machine: what failed, each in
-    a sentence; nothing when the box holds. The program is the engine's own, in a folder of its own; nothing of the
-    person's is read or written, no app is opened, the pasteboard and the keychain are not touched."""
+# The rules a live probe cannot try without opening an app or asking the person to let one be controlled: the proof
+# reads them in the profile instead, and fails when one is missing.
+PROFILE_MUST = ("(deny default)", "(deny lsopen)", "(deny appleevent-send)")
+
+
+def _profile_lacks(prof: str, box: ProgramBox) -> list[str]:
+    lacks = [f"the profile lacks {rule}, which no probe can try without opening an app" for rule in PROFILE_MUST
+             if rule not in prof.splitlines()]
+    secrets = [_lit(box.home / s) for s in SECRETS] + [_lit(engine_home() / f) for f in ENGINE_SECRETS]
+    denied = [line for line in prof.splitlines() if line.startswith("(deny file-read*")]
+    if not denied or any(x not in denied[-1] for x in secrets):
+        lacks.append("the profile does not deny, last, every place secrets live")
+    return lacks
+
+
+def program_selftest(interpreter: Path, make=None) -> list[str]:
+    """Run the sample program in a program's box as ``make`` (program_profile) writes it, on this machine: what
+    failed, each in a sentence; nothing when the box holds. What only an app opened could try is read in the profile
+    itself. The program is the engine's own, in a folder of its own; nothing of the person's is read or written, no app
+    is opened, the pasteboard and the keychain are not touched."""
+    make = make or program_profile
     import socket as _socket
     with tempfile.TemporaryDirectory(prefix="jaynes-program-proof-") as d:
         base = Path(os.path.realpath(d))
@@ -498,6 +519,10 @@ def program_selftest(interpreter: Path) -> list[str]:
             p.mkdir()
         (role_dir / "role.toml").write_text("role")
         (role_dir / "sample.py").write_text(SAMPLE)
+        # the role's folder stands for a home here, with secrets where secrets live
+        for secret in (".ssh/id", ".aws/credentials"):
+            (role_dir / secret).parent.mkdir()
+            (role_dir / secret).write_text("secret")
         (fake_engine / "page.key").write_text("secret")
         broker = tmp / "broker.sock"
         listener = _socket.socket(_socket.AF_UNIX)
@@ -508,7 +533,8 @@ def program_selftest(interpreter: Path) -> list[str]:
         undeclared.listen()
         try:
             needs = program_needs(interpreter)
-            prof = program_profile(ProgramBox(role_dir, role_dir, tmp, needs, broker=broker))
+            box = ProgramBox(role_dir, role_dir, tmp, needs, broker=broker, home=role_dir)
+            prof = make(box)
             args = json.dumps({"role_dir": str(role_dir), "broker": str(broker), "real_home": str(Path.home()),
                                "engine": str(fake_engine), "port": undeclared.getsockname()[1]})
             env = {"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp), "HOME": str(tmp), "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
@@ -527,7 +553,8 @@ def program_selftest(interpreter: Path) -> list[str]:
             return [f"the sample program said nothing it could be judged by: {ran.stderr.strip()[-300:]}"]
         wrong = [f"{k}: {v}" for k, v in got.items()
                  if (k.startswith("work:") and v != "ok") or (k.startswith("escape:") and v not in ("PermissionError", "gaierror"))]
-        return wrong or ([] if len(got) == 14 else [f"the sample program judged {len(got)} things, not 14"])
+        wrong += _profile_lacks(prof, box)
+        return wrong or ([] if len(got) == 16 else [f"the sample program judged {len(got)} things, not 16"])
 
 
 def program_proof(interpreter: Path, again: bool = False) -> dict:

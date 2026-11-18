@@ -2613,3 +2613,43 @@ fn a_program_s_box_is_proved_on_this_macos_before_use_and_stays_shut_when_the_pr
     assert!(!said.contains("(version 1)"), "{said}");
     let _gone = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box of a role's program is macOS's sandbox-exec here")]
+fn the_proof_of_a_program_s_box_fails_when_any_one_rule_of_the_profile_is_taken_away() {
+    // the proof holds on the profile as written, and fails on each profile with one rule taken away or one door
+    // opened: nothing it guards can be lost without the proof saying so
+    let script = format!(r#"
+import json, sys
+sys.path.insert(0, {lib:?})
+import jaynes_box as b
+from pathlib import Path
+def without(rule):
+    return lambda box: "\n".join(l for l in b.program_profile(box).splitlines() if l != rule) + "\n"
+def without_secrets(box):
+    lines = b.program_profile(box).splitlines()
+    last = max(i for i, l in enumerate(lines) if l.startswith("(deny file-read*"))
+    return "\n".join(lines[:last] + lines[last + 1:]) + "\n"
+def adding(rule):
+    return lambda box: b.program_profile(box) + rule(box) + "\n"
+cases = {{
+    "as written": b.program_profile,
+    "without (deny default)": lambda box: b.program_profile(box).replace("(deny default)", "(allow default)"),
+    "without (deny lsopen)": without("(deny lsopen)"),
+    "without (deny appleevent-send)": without("(deny appleevent-send)"),
+    "without the last denial of secrets": without_secrets,
+    "with ~/.aws opened": adding(lambda box: f"(allow file-read* (subpath \"{{box.home / '.aws'}}\"))"),
+    "with every local port opened": adding(lambda box: '(allow network-outbound (remote tcp "localhost:*"))'),
+    "with any program allowed to run": adding(lambda box: "(allow process-exec)"),
+}}
+print(json.dumps({{name: b.program_selftest(Path(sys.executable), make=make) for name, make in cases.items()}}))
+"#, lib = root().join("python"));
+    let out = Command::new(python()).args(["-c", &script]).output().expect("python");
+    let got: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+    assert_eq!(got["as written"], serde_json::json!([]), "{got}");
+    for (case, wrong) in got.as_object().expect("cases") {
+        if case != "as written" {
+            assert!(wrong.as_array().is_some_and(|w| !w.is_empty()), "the proof did not notice the profile {case}: {got}");
+        }
+    }
+}
