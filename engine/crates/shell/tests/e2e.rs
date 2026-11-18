@@ -1664,3 +1664,17 @@ except b.Unavailable as e:
     assert!(said.contains("refused: Jaynes was started inside another program's sandbox and cannot put its own box around your project's commands"), "{said}");
     assert!(said.contains("mcp__plugin_jaynes_jaynes__start") && said.contains("in an ordinary terminal"), "both ways out, each named: {said}");
 }
+
+/// A role that is a program runs with the person's rights, outside any box: jaynes add says so, and says nothing of
+/// the kind for a role in role.toml, whose commands stay in the box.
+#[test]
+fn adding_a_role_that_is_a_program_says_it_runs_with_your_rights() {
+    let s = scratch("add-program");
+    let add = |role: &str| engine(&s, &["add", root().join("crates/shell/tests/roles").join(role).to_str().expect("path")]);
+    let (ok, out) = add("looks");
+    assert!(ok, "{out}");
+    assert!(out.contains("looks is a program, not a role.toml") && out.contains("runs with your rights, outside any box"), "{out}");
+    let (ok, out) = add("small-change");
+    assert!(ok, "{out}");
+    assert!(!out.contains("runs with your rights"), "a role in role.toml is not told so: {out}");
+}

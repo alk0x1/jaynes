@@ -135,7 +135,10 @@ way a run can go, or shows the run that breaks it:
 `jaynes add` installs only roles whose promises hold. A role can also be a
 program (`role.py` with the Python library, or any executable named `role`);
 `jaynes conformance <folder>` says whether it answers the protocol as it
-should. The protocol's schema is
+should. Such a program is code of whoever wrote it, and it runs with your
+rights, outside any box: only a role in `role.toml` keeps every command it
+runs on your project in Jaynes's box. Install a program role only from someone
+you trust. The protocol's schema is
 [engine/protocol/role-protocol-1.schema.json](engine/protocol/role-protocol-1.schema.json).
 
 ## Commands

@@ -285,6 +285,12 @@ fn run(args: &[String]) -> Result<(), String> {
             let source = rest.first().ok_or("which role? a name from the index, a folder, or URL#path/in/the/repository")?;
             let name = install::add(&home(), source)?;
             say(&format!("role {name} installed"));
+            // a role that is a program runs with the person's rights, outside any box: they are told so
+            if let Ok(dir) = install::find_role(&home(), &name)
+                && !dir.join(toml_role::FILE).is_file()
+            {
+                say(&format!("{name} is a program, not a role.toml: it is code of whoever wrote it and runs with your rights, outside any box; only a role in role.toml keeps the commands it runs on your project in Jaynes's box"));
+            }
             Ok(())
         }
         "remove" => {
