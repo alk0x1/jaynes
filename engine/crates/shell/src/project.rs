@@ -462,19 +462,17 @@ impl Copy {
         // compare, then swap: undo starts only from the state the run left in what it touches; already undone, it does
         // nothing, so doing it again does no harm
         let blob = |rev: &str, path: &str| self.g(&["rev-parse", "--verify", "-q", &format!("{rev}:{path}")]).ok();
-        let (mut undone, mut changed) = (true, Vec::new());
+        // each file, as it was before the first merge that touched it and as the last one left it
+        let mut touched: std::collections::BTreeMap<String, (Option<String>, Option<String>)> = Default::default();
         for m in merges {
             let paths = self.g(&["diff", "--name-only", "--no-renames", &format!("{m}^1"), m])?;
             for path in paths.lines().filter(|p| !p.is_empty()) {
-                let now = blob(&tip, path);
-                if now != blob(&format!("{m}^1"), path) {
-                    undone = false;
-                }
-                if now != blob(m, path) && !changed.contains(&path.to_string()) {
-                    changed.push(path.to_string());
-                }
+                let left = blob(m, path);
+                touched.entry(path.to_string()).and_modify(|e| e.1 = left.clone()).or_insert_with(|| (blob(&format!("{m}^1"), path), left));
             }
         }
+        let undone = touched.iter().all(|(path, (before, _))| blob(&tip, path) == *before);
+        let changed: Vec<String> = touched.iter().filter(|(path, (_, left))| blob(&tip, path) != *left).map(|(p, _)| p.clone()).collect();
         if undone {
             return Ok(format!("already undone: {branch} has none of what the run merged"));
         }
@@ -609,6 +607,32 @@ mod git_tests {
         assert!(refused.as_ref().is_err_and(|e| e.contains("a.txt") && e.contains("changed since")), "{refused:?}");
         assert_eq!(git(&copy.source, &["rev-parse", "HEAD"]).expect("tip"), tip, "undo touched the branch");
         assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "theirs\n");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn undo_of_a_run_that_merged_the_same_file_twice_undoes_both() {
+        let base = std::env::temp_dir().join(format!("jaynes-undo-twice-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        std::fs::write(source.join("a.txt"), "1\n2\n3\n").expect("write");
+        git(&source, &["commit", "-qam", "lines"]).expect("commit");
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        let deliver_merge = |text: &str| -> String {
+            copy.compose(&[]).expect("at the base");
+            std::fs::write(copy.dir.join("a.txt"), text).expect("write");
+            let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
+            let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+            copy.deliver(&[("change".to_string(), c)]).expect("delivered");
+            copy.merge(&copy.head().expect("head"), "r").expect("merged").expect("a merge")
+        };
+        // the run merges line 1; corrected, it delivers again with line 3 too, and the second merge lands clean
+        let first = deliver_merge("one\n2\n3\n");
+        let second = deliver_merge("one\n2\nthree\n");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "one\n2\nthree\n");
+        // nobody touched the branch since: both merges are undone
+        Workspace::undo(&copy, &[first, second], "r").expect("undone");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "1\n2\n3\n");
         let _gone = std::fs::remove_dir_all(&base);
     }
 
