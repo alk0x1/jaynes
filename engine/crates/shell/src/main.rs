@@ -385,8 +385,11 @@ fn run(args: &[String]) -> Result<(), String> {
                 Err(_) => install::page_key(&home())?,
             };
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            // where the Jaynes app pairs the person's device keys
-            jaynes_shell::person_socket::serve(&home())?;
+            // where the Jaynes app pairs the person's device keys. The page comes up without it: then nothing pairs
+            // a device while it runs, which grants nothing
+            if let Err(why) = jaynes_shell::person_socket::serve(&home()) {
+                eprintln!("the Jaynes app cannot pair a device while this page runs: {why}");
+            }
             page::Page { home: home(), port, key, exe }.serve()
         }
         "permit" => {

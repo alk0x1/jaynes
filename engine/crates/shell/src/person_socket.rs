@@ -46,6 +46,8 @@ pub fn requirement(home: &Path) -> Result<String, String> {
 /// and reads one, {"recorded": true} or {"refused": why}.
 pub fn serve(home: &Path) -> Result<(), String> {
     let path = home.join(SOCKET);
+    // the page may be the first of the engine to run on this home
+    std::fs::create_dir_all(home).map_err(|e| format!("cannot make {}: {e}", home.display()))?;
     let _gone = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     use std::os::unix::fs::PermissionsExt;
@@ -70,10 +72,11 @@ fn answer(home: &Path, conn: &UnixStream) -> Value {
 
 fn take(home: &Path, conn: &UnixStream) -> Result<(), String> {
     let _timed = conn.set_read_timeout(Some(std::time::Duration::from_secs(10)));
-    let requirement = requirement(home)?;
-    let caller = peer(conn, &requirement)?;
+    // what was sent is read first, so a refusal reaches the sender instead of a broken pipe
     let mut line = String::new();
     BufReader::new(conn.take(64 * 1024)).read_line(&mut line).map_err(|e| e.to_string())?;
+    let requirement = requirement(home)?;
+    let caller = peer(conn, &requirement)?;
     let v: Value = serde_json::from_str(&line).map_err(|e| format!("not JSON: {e}"))?;
     let mut change: Change = serde_json::from_value(v["pair"].clone()).map_err(|e| format!("not a change of keys: {e}"))?;
     change.came_from("app", &caller);
@@ -135,6 +138,18 @@ mod tests {
         std::fs::write(home.join(PINNED), "ab\" or anchor apple\n").expect("pin");
         assert!(requirement(&home).is_err(), "a line that is not a cdhash never enters the requirement");
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_socket_opens_on_a_home_not_made_yet_and_answers() {
+        // the page may be the first thing the engine runs on a home: it makes the folder, and the socket answers
+        let base = std::env::temp_dir().join(format!("jaynes-person-socket-new-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        serve(&home).expect("the socket opens");
+        let said = send(&home, &json!({"pairing": "paired", "keys": [], "nonce": "n"}));
+        assert!(said.as_ref().is_err_and(|e| e.contains("no Jaynes app is recorded")), "{said:?}");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[cfg(target_os = "macos")]

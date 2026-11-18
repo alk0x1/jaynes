@@ -2878,6 +2878,22 @@ fn pair(s: &Scratch) {
     change_keys(s, json!({"pairing": "paired", "keys": [public(5, "biometry"), public(6, "presence")], "nonce": "first"})).expect("paired");
 }
 
+/// The page comes up even where the pairing socket cannot open (here, a home whose path is longer than a socket's
+/// address may be): no device is paired while it runs, which is the side that grants nothing.
+#[test]
+fn the_page_comes_up_where_the_pairing_socket_cannot_open() {
+    let s = scratch("long-home");
+    let home = s.base.join("h".repeat(90));
+    let (_page, port) = page_on_any_port(
+        jaynes()
+            .arg("page")
+            .env("JAYNES_ENGINE_HOME", &home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .env("JAYNES_PAGE_KEY", "k3y"),
+    );
+    assert!(port > 0);
+    assert!(!home.join("person.sock").exists(), "no socket where its address does not fit");
+}
+
 #[test]
 fn the_keys_are_paired_in_the_record_and_only_a_proof_by_them_changes_them() {
     let s = scratch("pairing");
