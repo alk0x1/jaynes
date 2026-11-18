@@ -80,6 +80,28 @@ http://127.0.0.1:8750, which Jaynes opens in your browser.
 The plugin also brings a guard: before a git or GitHub action that cannot be
 undone, such as a push, it asks you.
 
+## MCP, and your instruction files
+
+The plugin brings three things to Claude Code: the `jaynes` skill, which hands an approved plan to Jaynes; the
+guard; and an MCP server, `jaynes mcp`, which Claude Code starts over stdio. The server offers seven tools:
+
+| Tool | What it does |
+|---|---|
+| `home` | What waits for you, what is blocked and what runs, across every run |
+| `roles` | The roles installed, by name |
+| `start` | Starts a run of a role on a project, with the agreed plan as its request |
+| `run` | Where a run is: its steps, what it waits for, what it spent |
+| `answer` | Lets a result go on as it is, at a stop the role marks as a release, and nothing else |
+| `halt` | Halts a run at once; only you resume it |
+| `correct` | Records that a delivered run was wrong, so the rework counts |
+
+What comes through the server is an agent's: the engine refuses there what only you may do.
+
+Your own Claude Code session keeps your project's instruction files (`CLAUDE.md` and its settings) as they are:
+Jaynes does not write them. Inside a run, the agent does not read them: Jaynes starts it with them turned off and
+writes each step's settings itself, so what a run must know goes in the request or in the role. Where your code
+and data go: [docs/where-your-data-goes.md](docs/where-your-data-goes.md).
+
 ## Roles
 
 Roles are listed in an index, [jaynes-roles](https://github.com/alk0x1/jaynes-roles), and installed by name with
@@ -148,6 +170,10 @@ terminals and stops in one window, Linux.
 The same change that took the earlier engine three runs and 1 h 35 min without
 delivering was delivered by this one in under ten minutes, in one attempt
 ([the design record](docs/specs/2026-11-12-engine-redesign-design.md)).
+
+## Maintenance
+
+Jaynes has one maintainer today, @alk0x1.
 
 ## From a clone
 

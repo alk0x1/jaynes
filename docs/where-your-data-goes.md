@@ -64,8 +64,10 @@ A role declares, per step, what the step may reach on the network:
 - **Packages**: its commands may reach only the package registries (npm, Yarn, Go's proxy and checksum database,
   PyPI and its files, crates.io), and nothing else.
 
-A step's agent reads nothing in your home folder but the run's copy, the folders the role names, and the folders
-of the toolchains it needs.
+Jaynes sets these as the agent program's own guards, for each step: they also keep a step's commands from reading
+your home folder beyond the run's copy, the folders the role names and the toolchains' folders. Those guards are
+partial (in Claude Code the sandbox covers shell commands only); [what the engine guarantees](guarantees.md#what-this-page-does-not-promise)
+says how far they go.
 
 The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS: it
 denies the network, except local ports. **The known limit:** to run a test suite with its own servers and
