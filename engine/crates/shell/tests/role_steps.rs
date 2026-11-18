@@ -578,21 +578,21 @@ fn a_step_that_cannot_be_undone_runs_once_when_an_answer_before_it_changes_after
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_second_act_happens_only_when_the_person_orders_it_and_carries_a_key_of_its_own() {
     let world = World::open();
-    let s = scratch("again", &world.address());
-    let role = draft_send_close(&s, &world, "again", "", "needs = [\"send\"]\nstop = { ask = \"Close the run?\", verdicts = [\"keep\"] }");
-    start(&s, "again", &role, "tell them");
-    let asked = |step: &str| events(&s, "again").iter().rev().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == step).expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let s = scratch("second-act", &world.address());
+    let role = draft_send_close(&s, &world, "second-act", "", "needs = [\"send\"]\nstop = { ask = \"Close the run?\", verdicts = [\"keep\"] }");
+    start(&s, "second-act", &role, "tell them");
+    let asked = |step: &str| events(&s, "second-act").iter().rev().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == step).expect("asked")["question"]["id"].as_str().expect("id").to_string();
     let draft = asked("draft");
-    person(&s, &["answer", "again", &draft, "--send"]);
-    person(&s, &["answer", "again", &draft, "draft=redo:again", "--send"]);
+    person(&s, &["answer", "second-act", &draft, "--send"]);
+    person(&s, &["answer", "second-act", &draft, "draft=redo:again", "--send"]);
     let redone = asked("draft");
-    person(&s, &["answer", "again", &redone, "--send"]);
+    person(&s, &["answer", "second-act", &redone, "--send"]);
     // the person orders a second act: it happens once more, with a key of its own, so the registry counts it apart
-    let out = person(&s, &["answer", "again", &asked("send"), "send=redo:send the new draft", "--send"]);
+    let out = person(&s, &["answer", "second-act", &asked("send"), "send=redo:send the new draft", "--send"]);
     let sent = world.announcements();
     assert_eq!(sent.len(), 2, "{out}");
     assert!(!sent[0].key.is_empty() && sent[0].key != sent[1].key, "{sent:?}");
-    assert_eq!(started(&events(&s, "again")).iter().filter(|step| *step == "send").count(), 2, "{out}");
+    assert_eq!(started(&events(&s, "second-act")).iter().filter(|step| *step == "send").count(), 2, "{out}");
 }
 
 #[test]
