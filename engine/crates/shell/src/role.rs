@@ -176,6 +176,21 @@ impl RoleProgram {
     }
 
     /// A copy of the role and its library under `into`, so a run stays on the version it started with.
+    /// Copy the role where the run keeps it, and the fingerprint of that copy: what the run records is what it runs,
+    /// whatever happens to the role's own folder meanwhile.
+    pub fn pinned(&self, into: &Path) -> Result<(RoleProgram, Digest), String> {
+        self.pin_then_fingerprint(into, || {})
+    }
+
+    /// `pinned`, with `between` run after the copy and before its fingerprint, where a change of the role's folder
+    /// would fall.
+    fn pin_then_fingerprint(&self, into: &Path, between: impl FnOnce()) -> Result<(RoleProgram, Digest), String> {
+        let role = self.pin(into)?;
+        between();
+        let fingerprint = role.fingerprint()?;
+        Ok((role, fingerprint))
+    }
+
     pub fn pin(&self, into: &Path) -> Result<RoleProgram, String> {
         let dir = into.join("role");
         let lib = into.join("library");
@@ -246,6 +261,27 @@ pub fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_run_records_the_fingerprint_of_the_role_it_runs_and_an_unchanged_role_keeps_its_own() {
+        let base = std::env::temp_dir().join(format!("jaynes-pin-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let (dir, lib) = (base.join("role"), base.join("lib"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::create_dir_all(&lib).expect("lib");
+        std::fs::write(dir.join("role.toml"), "role = \"a\"\n").expect("write");
+        let given = RoleProgram::new(&dir, &lib);
+        // unchanged: the copy's fingerprint is the role's own, so the records kept under it still count
+        let (_, same) = given.pinned(&base.join("run1")).expect("pinned");
+        assert_eq!(same, given.fingerprint().expect("fp"));
+        // changed between the copy and the fingerprint: what is recorded is what was copied, which is what runs
+        let (pinned, recorded) = given
+            .pin_then_fingerprint(&base.join("run2"), || std::fs::write(dir.join("role.toml"), "role = \"b\"\n").expect("write"))
+            .expect("pinned");
+        assert_eq!(recorded, pinned.fingerprint().expect("fp"));
+        assert_eq!(recorded, same, "the run runs the role as it was copied");
+        assert_ne!(recorded, given.fingerprint().expect("fp"));
+    }
 
     #[test]
     fn a_call_ends_even_when_what_the_role_left_running_holds_its_output() {

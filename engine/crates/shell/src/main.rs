@@ -367,8 +367,8 @@ fn start(args: &[String]) -> Result<(), String> {
     let building = runs.join(format!(".building-{id}-{}", std::process::id()));
     let _gone = std::fs::remove_dir_all(&building);
     let given = RoleProgram::new(Path::new(&role_dir), &library());
-    let fingerprint = given.fingerprint()?;
-    let role = given.pin(&building)?;
+    // the fingerprint of the copy the run runs, never of the folder, which may change before the copy is made
+    let (role, fingerprint) = given.pinned(&building)?;
     match role.call(Call::Hello { engine: jaynes_core::ENGINE.into(), features: protocol::FEATURES.iter().map(|s| s.to_string()).collect(), extensions: Default::default() })? {
         Body::Hello { required, .. } => {
             let unknown: Vec<String> = required.into_iter().filter(|r| !protocol::FEATURES.contains(&r.as_str())).collect();
