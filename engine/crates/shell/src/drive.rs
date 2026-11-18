@@ -277,6 +277,31 @@ pub fn act_here(home: &Path, exe: &Path, run_id: &str, act: &Value) -> Value {
 
 // --- what a run changed, and clearing its copy ----------------------------------------------------------------
 
+/// The most Jaynes reads of a file an agent left in its folder.
+const MOST_READ: u64 = 1 << 20;
+
+/// A file an agent left under `root`, read only when it is a plain file there, not a link nor anything reached through
+/// one, and of at most a megabyte: Jaynes reads it outside any box, and a link could point at anything this account
+/// may read. Err(None) when there is none.
+fn read_inside(root: &Path, path: &Path) -> Result<String, Option<String>> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(None),
+        Err(e) => return Err(Some(format!("does not read: {e}"))),
+    };
+    if !meta.is_file() {
+        return Err(Some("is not a plain file: a link or a folder is not read".to_string()));
+    }
+    let (Ok(real), Ok(base)) = (std::fs::canonicalize(path), std::fs::canonicalize(root)) else { return Err(Some("does not read".to_string())) };
+    if !real.starts_with(&base) {
+        return Err(Some("is reached through a link out of the step's folder, and is not read".to_string()));
+    }
+    if meta.len() > MOST_READ {
+        return Err(Some(format!("is larger than {MOST_READ} bytes")));
+    }
+    std::fs::read_to_string(&real).map_err(|e| Some(format!("does not read: {e}")))
+}
+
 /// What step `step` of a run changed in the project, as git shows it: from the run's copy while it is kept, or from
 /// what was saved of it when the copy was cleared. None when the step changed nothing.
 pub fn step_diff(home: &Path, run: &str, step: &str) -> Option<String> {
@@ -289,11 +314,20 @@ pub fn step_diff(home: &Path, run: &str, step: &str) -> Option<String> {
     };
     let commit = read("project-steps.json").get(step)?.clone();
     let copy = dir.join("project");
+    let git = crate::project::git_dir(&copy);
     let parent = read("project-parents.json")
         .get(step)
         .cloned()
-        .unwrap_or_else(|| std::fs::read_to_string(copy.join(".git/jaynes-base")).unwrap_or_default().trim().to_string());
-    let out = std::process::Command::new("git").arg("-C").arg(&copy).args(["diff", "--no-color", &parent, &commit]).output().ok()?;
+        .unwrap_or_else(|| std::fs::read_to_string(git.join("jaynes-base")).unwrap_or_default().trim().to_string());
+    // the engine's own repository for the copy, never one an agent wrote in, with nothing set up that runs a program
+    let out = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(&git)
+        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "diff.external=", "diff", "--no-color", "--no-ext-diff", "--no-textconv", &parent, &commit])
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .env_remove("GIT_DIR")
+        .output()
+        .ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -327,7 +361,11 @@ pub fn sweep_copies(home: &Path, store: &Store) -> Result<(), String> {
                 std::fs::write(saved.join(format!("{}.diff", d.name)), text).map_err(|e| e.to_string())?;
             }
         }
+        let git = crate::project::git_dir(&copy);
         remove_all(&copy).map_err(|e| format!("Jaynes could not clear the copy of run {id}: {e}"))?;
+        if git.exists() {
+            remove_all(&git).map_err(|e| format!("Jaynes could not clear the copy of run {id}: {e}"))?;
+        }
     }
     Ok(())
 }
@@ -875,16 +913,18 @@ impl<'a> Driver<'a> {
     fn delivered(&self, run: &Run, i: usize, turn: &AgentTurn, exchange: &Path, usage: jaynes_core::event::Usage, session: Option<String>) -> AttemptOutcome {
         let failed = |why: String| AttemptOutcome::Failed { reasons: vec![why], usage };
         // the agent's way out: it says the step cannot be done as asked, and the person answers
-        if let Ok(why) = std::fs::read_to_string(exchange.join(IMPOSSIBLE))
+        let root = exchange.parent().unwrap_or(exchange);
+        if let Ok(why) = read_inside(root, &exchange.join(IMPOSSIBLE))
             && !why.trim().is_empty()
         {
             let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
             let reason: String = why.trim().chars().take(2000).collect();
             return AttemptOutcome::Impossible { reason, usage, session };
         }
-        let text = match std::fs::read_to_string(exchange.join("output.json")) {
+        let text = match read_inside(root, &exchange.join("output.json")) {
             Ok(t) => t,
-            Err(_) => return failed(format!("there is no output: write it as JSON to {EXCHANGE}/output.json")),
+            Err(None) => return failed(format!("there is no output: write it as JSON to {EXCHANGE}/output.json")),
+            Err(Some(why)) => return failed(format!("{EXCHANGE}/output.json {why}")),
         };
         let output: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
@@ -983,7 +1023,13 @@ impl<'a> Driver<'a> {
                     std::fs::write(shelf.join(&name), &source).map_err(|e| e.to_string())?;
                     page_kept = Some(name);
                     let of = photo.with_extension("png.of");
-                    if !(photo.is_file() && std::fs::read_to_string(&of).is_ok_and(|d| d == page)) {
+                    // Jaynes writes these in the copy, where an agent may have left a link to anywhere: never through one
+                    for f in [&photo, &of] {
+                        if std::fs::symlink_metadata(f).is_ok_and(|m| !m.is_file()) {
+                            std::fs::remove_file(f).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    if !(photo.is_file() && read_inside(&base, &of).is_ok_and(|d| d == page)) {
                         self.photograph(&real, &photo).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
                         std::fs::write(&of, &page).map_err(|e| e.to_string())?;
                     }
@@ -1331,6 +1377,23 @@ mod tests {
         }
         let refused = Setup::load(&store, &home, "unknown").err().expect("refused");
         assert!(refused.contains("a-browser-session"), "{refused}");
+    }
+
+    #[test]
+    fn a_file_an_agent_left_is_read_only_as_a_plain_file_inside_its_folder() {
+        let base = std::env::temp_dir().join(format!("jaynes-read-inside-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let root = base.join("step");
+        std::fs::create_dir_all(root.join("sub")).expect("dir");
+        std::fs::write(base.join("outside.txt"), "outside").expect("write");
+        std::fs::write(root.join("plain.txt"), "plain").expect("write");
+        std::os::unix::fs::symlink(base.join("outside.txt"), root.join("link.txt")).expect("link");
+        std::os::unix::fs::symlink(&base, root.join("up")).expect("link");
+        assert_eq!(read_inside(&root, &root.join("plain.txt")), Ok("plain".to_string()));
+        assert_eq!(read_inside(&root, &root.join("none.txt")), Err(None));
+        assert!(read_inside(&root, &root.join("link.txt")).is_err_and(|e| e.is_some()));
+        assert!(read_inside(&root, &root.join("up/outside.txt")).is_err_and(|e| e.is_some_and(|w| w.contains("out of the step's folder"))));
+        assert!(read_inside(&root, &root.join("sub")).is_err_and(|e| e.is_some()));
     }
 
     #[test]

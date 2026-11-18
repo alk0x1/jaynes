@@ -1042,7 +1042,7 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
         if r.undone {
             ("reverted by you".into(), "<span class=\"chip red\">undone</span>")
         } else if !merges.is_empty() {
-            let into = std::fs::read_to_string(home.join("runs").join(&r.id).join("project/.git/jaynes-start")).unwrap_or_default();
+            let into = crate::project::start_branch_of(&home.join("runs").join(&r.id).join("project"));
             let into = into.trim();
             (if into.is_empty() { "merged into your branch".into() } else { format!("merged into {into}") }, "<span class=\"chip green\">merged</span>")
         } else {

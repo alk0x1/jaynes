@@ -1678,3 +1678,88 @@ fn adding_a_role_that_is_a_program_says_it_runs_with_your_rights() {
     assert!(ok, "{out}");
     assert!(!out.contains("runs with your rights"), "a role in role.toml is not told so: {out}");
 }
+
+/// An agent that writes in the copy's .git what git runs: every hook git knows, and the configuration keys that run a
+/// program. Each one that runs leaves a mark.
+fn planting_agent(marks: &Path) -> String {
+    let hooks = [
+        "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg",
+        "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive",
+        "post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate",
+        "fsmonitor-watchman", "post-index-change",
+    ];
+    let m = marks.display();
+    let mut s = String::new();
+    s.push_str(&format!("mkdir -p .git/hooks .git/info {m} && "));
+    for h in hooks {
+        s.push_str(&format!("printf '#!/bin/sh\\ntouch {m}/hook-{h}\\n' > .git/hooks/{h} && chmod +x .git/hooks/{h} && "));
+    }
+    let run = |name: &str| format!("{m}/run-{name}.sh");
+    for key in ["fsmonitor", "clean", "smudge", "diff", "pager", "ssh", "askpass"] {
+        s.push_str(&format!("printf '#!/bin/sh\\ntouch {m}/config-{key}\\ncat\\n' > {} && chmod +x {} && ", run(key), run(key)));
+    }
+    s.push_str(&format!(
+        "git config core.fsmonitor {} && git config filter.evil.clean {} && git config filter.evil.smudge {} && git config diff.external {} && \
+         git config core.pager {} && git config core.sshCommand {} && git config core.askPass {} && git config core.hooksPath .git/hooks && ",
+        run("fsmonitor"), run("clean"), run("smudge"), run("diff"), run("pager"), run("ssh"), run("askpass")
+    ));
+    s.push_str("printf '* filter=evil diff=evil\\n' > .git/info/attributes && printf 'greeting.txt filter=evil\\n' > .gitattributes && ");
+    s.push_str(&format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
+    s
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn nothing_an_agent_writes_in_the_copy_s_git_runs_outside_its_box() {
+    let s = scratch("git-hooks");
+    let marks = s.home.parent().expect("base").join("marks");
+    let out = start(&s, "hooks", &planting_agent(&marks));
+    // the attributes file in the tree is on the floor, so the run is high risk and delivers with its stop open
+    assert!(out.contains("delivered"), "{out}");
+    let ran: Vec<String> = std::fs::read_dir(&marks).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| !n.starts_with("run-")).collect()).unwrap_or_default();
+    assert!(ran.is_empty(), "the engine's git ran what the agent wrote in the copy's .git: {ran:?}");
+    // the change is measured as it is: the greeting and the attributes file the agent wrote in the tree
+    let e = events(&s, "hooks");
+    let done = e.iter().find(|e| e["type"] == "StepDone" && e["step"] == "change").expect("done");
+    let mut paths: Vec<String> = done["changed"].as_array().expect("changed").iter().map(|c| c["what"].as_str().unwrap_or("").to_string()).collect();
+    paths.sort();
+    assert_eq!(paths, [".gitattributes", "greeting.txt"]);
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/hooks:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn what_an_agent_writes_in_the_copy_s_git_is_not_what_is_delivered() {
+    let s = scratch("git-refs");
+    // the agent commits a file of its own in the copy's .git and moves every branch there to it
+    let agent = format!(
+        "perl -pi -e 's/hello/hi/' greeting.txt && echo planted > planted.txt && git add planted.txt && \
+         git -c user.name=a -c user.email=a@a commit -q -m planted && for r in $(git for-each-ref --format='%(refname)' refs/heads); do git update-ref $r HEAD; done && \
+         git rm -q --cached planted.txt && rm planted.txt && {OUTPUT}"
+    );
+    let out = start(&s, "refs", &agent);
+    assert!(out.contains("finished: delivered"), "{out}");
+    let files = Command::new("git").arg("-C").arg(&s.project).args(["ls-tree", "-r", "--name-only", "jaynes/refs"]).output().expect("git");
+    let files = String::from_utf8_lossy(&files.stdout);
+    assert!(!files.contains("planted.txt"), "the delivery carries what the agent committed in the copy's .git:\n{files}");
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/refs:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn an_output_that_is_a_link_out_of_the_copy_is_not_read() {
+    let s = scratch("output-link");
+    // what the agent points at: a file of this account outside the copy, which Jaynes must never take in
+    let secret = s.home.parent().expect("base").join("secret.json");
+    std::fs::write(&secret, r#"{"summary":"a secret of the account","files":["greeting.txt"]}"#).expect("write");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && ln -sf {} .jaynes/output.json", secret.display());
+    let (_, out) = engine(&s, &[
+        "start", "--run", "link", "--role", root().join("crates/shell/tests/roles/small-change").to_str().expect("path"),
+        "--project", s.project.to_str().expect("path"), "--request", "say hi", "--agent", &format!("command:{agent}"),
+    ]);
+    assert!(out.contains("is not a plain file"), "{out}");
+    let (_, log) = engine(&s, &["log", "link"]);
+    assert!(!log.contains("a secret of the account"), "the record holds what the link pointed at");
+}

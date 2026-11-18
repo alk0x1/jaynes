@@ -16,18 +16,60 @@ pub const DEPENDENCIES: &[&str] = &[".venv", "node_modules"];
 /// The folder in the copy where Jaynes and the agent exchange files. Never part of the change.
 pub const EXCHANGE: &str = ".jaynes";
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=Jaynes", "-c", "user.email=jaynes@localhost", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .output()
-        .map_err(|e| format!("git did not start: {e}"))?;
+/// git with nothing of its environment from outside: no GIT_DIR, GIT_CONFIG*, GIT_EXEC_PATH, GIT_ASKPASS or any other
+/// variable that would point it at another repository, configuration or program.
+fn git_command() -> Command {
+    let mut c = Command::new("git");
+    for (k, _) in std::env::vars_os() {
+        if k.to_string_lossy().starts_with("GIT_") {
+            c.env_remove(&k);
+        }
+    }
+    c.env_remove("SSH_ASKPASS");
+    c.args(["-c", "user.name=Jaynes", "-c", "user.email=jaynes@localhost", "-c", "commit.gpgsign=false"]);
+    c
+}
+
+fn run(mut c: Command, args: &[&str]) -> Result<String, String> {
+    let out = c.args(args).output().map_err(|e| format!("git did not start: {e}"))?;
     if !out.status.success() {
         return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// git in the person's own repository, as they set it up.
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let mut c = git_command();
+    c.arg("-C").arg(dir);
+    run(c, args)
+}
+
+/// git on a run's copy, through the engine's own repository for it (`git_dir`), never one the copy holds: what an agent
+/// writes in the copy's .git (hooks, configuration that runs a program, refs) is the agent's and is never read here.
+/// Hooks and the file monitor are off besides, whatever the configuration of this machine says.
+fn git_on(git_dir: &Path, work: &Path, args: &[&str]) -> Result<String, String> {
+    let mut c = git_command();
+    c.arg("--git-dir").arg(git_dir).arg("--work-tree").arg(work);
+    c.args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]);
+    run(c, args)
+}
+
+/// The engine's own repository for the copy in `copy`, beside it in the run's folder, out of every agent's reach.
+/// A copy made before it lived there holds it in its own .git, which is read as it was.
+pub fn git_dir(copy: &Path) -> PathBuf {
+    let beside = beside(copy);
+    if beside.exists() || !copy.join(".git").is_dir() { beside } else { copy.join(".git") }
+}
+
+fn beside(copy: &Path) -> PathBuf {
+    let name = copy.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into());
+    copy.with_file_name(format!("{name}.git"))
+}
+
+/// The branch the person had checked out when the run started, where a run that delivers by merge merges.
+pub fn start_branch_of(copy: &Path) -> String {
+    std::fs::read_to_string(git_dir(copy).join("jaynes-start")).unwrap_or_default().trim().to_string()
 }
 
 /// The run's copy of its target, as the shell works it. Every change, state and landing is named by an id the
@@ -75,7 +117,7 @@ pub fn make(target: Target, source: &Path, dir: &Path, name: &str) -> Result<Box
 /// The copy a run of `target` already made.
 pub fn open(target: Target, source: &Path, dir: &Path, name: &str) -> Box<dyn Workspace> {
     match target {
-        Target::Repository => Box::new(Copy { source: source.to_path_buf(), dir: dir.to_path_buf(), branch: name.to_string() }),
+        Target::Repository => Box::new(Copy { source: source.to_path_buf(), dir: dir.to_path_buf(), git: git_dir(dir), branch: name.to_string() }),
     }
 }
 
@@ -117,7 +159,7 @@ impl Workspace for Copy {
         self.merge(head, run)
     }
     fn undo(&self, landed: &[String], run: &str) -> Result<String, String> {
-        if !self.dir.join(".git").exists() {
+        if !self.git.exists() {
             return Err(format!(
                 "the run's copy of the project was cleared a week after it finished; revert its merge in your repository with git revert -m 1 {}",
                 landed.last().map(String::as_str).unwrap_or("<the merge>")
@@ -135,55 +177,77 @@ impl Workspace for Copy {
 pub struct Copy {
     pub source: PathBuf,
     pub dir: PathBuf,
+    /// The engine's own repository for the copy.
+    pub git: PathBuf,
     pub branch: String,
 }
 
 impl Copy {
-    /// Clone the person's repository at its current commit, with their dependencies linked in.
+    /// Clone the person's repository at its current commit, with their dependencies linked in. The engine's
+    /// repository for it lives beside it; the copy gets a repository of its own for the agent (git status, git diff),
+    /// which the engine never reads.
     pub fn make(source: &Path, dir: &Path, branch: &str) -> Result<Copy, String> {
-        if !dir.join(".git").exists() {
-            if let Some(parent) = dir.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            let out = Command::new("git")
-                .args(["clone", "-q", "--no-hardlinks"])
-                .arg(source)
-                .arg(dir)
-                .output()
-                .map_err(|e| format!("git did not start: {e}"))?;
-            if !out.status.success() {
-                return Err(format!("the project could not be copied: {}", String::from_utf8_lossy(&out.stderr).trim()));
-            }
-            git(dir, &["checkout", "-q", "-b", branch])?;
-            let base = git(dir, &["rev-parse", "HEAD"])?;
-            std::fs::write(dir.join(".git/jaynes-base"), base).map_err(|e| e.to_string())?;
-            // The branch the person had checked out: where a run that delivers by merge merges.
-            let start = git(source, &["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default();
-            std::fs::write(dir.join(".git/jaynes-start"), start).map_err(|e| e.to_string())?;
-            // Claude Code leaves its own scratch in every folder it works in; it is never part of the change.
-            let mut exclude = format!("{EXCHANGE}/\n/.claude/.cc-writes\n");
-            for d in DEPENDENCIES {
-                let from = source.join(d);
-                if from.is_dir() {
-                    std::os::unix::fs::symlink(&from, dir.join(d)).map_err(|e| e.to_string())?;
-                }
-                // installed here or linked, dependencies are never part of the change
-                exclude.push_str(&format!("/{d}\n"));
-            }
-            std::fs::write(dir.join(".git/info/exclude"), exclude).map_err(|e| e.to_string())?;
+        let g = beside(dir);
+        let copy = Copy { source: source.to_path_buf(), dir: dir.to_path_buf(), git: g.clone(), branch: branch.to_string() };
+        if g.exists() {
+            return Ok(copy);
         }
-        Ok(Copy { source: source.to_path_buf(), dir: dir.to_path_buf(), branch: branch.to_string() })
+        if let Some(parent) = dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut c = git_command();
+        c.args(["clone", "-q", "--bare", "--no-hardlinks"]).arg(source).arg(&g);
+        run(c, &[]).map_err(|e| format!("the project could not be copied: {e}"))?;
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        copy.g(&["config", "core.bare", "false"])?;
+        copy.g(&["checkout", "-q", "-b", branch])?;
+        let base = copy.g(&["rev-parse", "HEAD"])?;
+        std::fs::write(g.join("jaynes-base"), base).map_err(|e| e.to_string())?;
+        // The branch the person had checked out: where a run that delivers by merge merges.
+        let start = git(source, &["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default();
+        std::fs::write(g.join("jaynes-start"), start).map_err(|e| e.to_string())?;
+        // Claude Code leaves its own scratch in every folder it works in; it is never part of the change.
+        let mut exclude = format!("{EXCHANGE}/\n/.claude/.cc-writes\n");
+        for d in DEPENDENCIES {
+            let from = source.join(d);
+            if from.is_dir() {
+                std::os::unix::fs::symlink(&from, dir.join(d)).map_err(|e| e.to_string())?;
+            }
+            // installed here or linked, dependencies are never part of the change
+            exclude.push_str(&format!("/{d}\n"));
+        }
+        std::fs::create_dir_all(g.join("info")).map_err(|e| e.to_string())?;
+        std::fs::write(g.join("info/exclude"), &exclude).map_err(|e| e.to_string())?;
+        // The agent's own repository: the same history, read through the engine's objects and never written to them.
+        let tmp = dir.with_file_name(format!(".{}-agent", dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+        let _gone = std::fs::remove_dir_all(&tmp);
+        let mut c = git_command();
+        c.args(["clone", "-q", "--shared", "--no-checkout"]).arg(&g).arg(&tmp);
+        run(c, &[])?;
+        std::fs::rename(tmp.join(".git"), dir.join(".git")).map_err(|e| e.to_string())?;
+        let _gone = std::fs::remove_dir_all(&tmp);
+        // read from the engine's objects by a path relative to the copy, so the run's folder may move whole
+        let name = g.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        std::fs::write(dir.join(".git/objects/info/alternates"), format!("../../../{name}/objects\n")).map_err(|e| e.to_string())?;
+        git_on(&dir.join(".git"), dir, &["reset", "-q"])?;
+        std::fs::write(dir.join(".git/info/exclude"), &exclude).map_err(|e| e.to_string())?;
+        Ok(copy)
+    }
+
+    /// git on the copy, through the engine's repository for it.
+    fn g(&self, args: &[&str]) -> Result<String, String> {
+        git_on(&self.git, &self.dir, args)
     }
 
     pub fn head(&self) -> Result<String, String> {
-        git(&self.dir, &["rev-parse", "HEAD"])
+        self.g(&["rev-parse", "HEAD"])
     }
 
     /// Stage what an attempt changed and say what it changed, with the fingerprint of the whole tree. Paths
     /// `write` does not let through are refused: the copy goes back to where it was, and the paths come back.
     pub fn stage(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
-        git(&self.dir, &["add", "-A"]).map_err(Err)?;
-        let stat = git(&self.dir, &["diff", "--cached", "--numstat", "--no-renames"]).map_err(Err)?;
+        self.g(&["add", "-A"]).map_err(Err)?;
+        let stat = self.g(&["diff", "--cached", "--numstat", "--no-renames"]).map_err(Err)?;
         let mut changed = Vec::new();
         for line in stat.lines() {
             let mut parts = line.splitn(3, '\t');
@@ -197,24 +261,24 @@ impl Copy {
             self.discard().map_err(Err)?;
             return Err(Ok(outside));
         }
-        let tree = git(&self.dir, &["write-tree"]).map_err(Err)?;
+        let tree = self.g(&["write-tree"]).map_err(Err)?;
         Ok((changed, tree))
     }
 
     /// The commit the run started from.
     pub fn base(&self) -> Result<String, String> {
-        std::fs::read_to_string(self.dir.join(".git/jaynes-base")).map(|s| s.trim().to_string()).map_err(|e| e.to_string())
+        std::fs::read_to_string(self.git.join("jaynes-base")).map(|s| s.trim().to_string()).map_err(|e| e.to_string())
     }
 
     /// Put the copy at the base with `commits` applied in order, each one step's own change. A change that does
     /// not apply over the ones before it is an error naming it.
     pub fn compose(&self, commits: &[(String, String)]) -> Result<String, String> {
-        git(&self.dir, &["reset", "-q", "--hard"])?;
-        git(&self.dir, &["clean", "-fdq", "-e", EXCHANGE])?;
-        git(&self.dir, &["checkout", "-q", "--detach", &self.base()?])?;
+        self.g(&["reset", "-q", "--hard"])?;
+        self.g(&["clean", "-fdq", "-e", EXCHANGE])?;
+        self.g(&["checkout", "-q", "--detach", &self.base()?])?;
         for (step, c) in commits {
-            if let Err(e) = git(&self.dir, &["cherry-pick", "--allow-empty", "--keep-redundant-commits", c]) {
-                let _abort = git(&self.dir, &["cherry-pick", "--abort"]);
+            if let Err(e) = self.g(&["cherry-pick", "--allow-empty", "--keep-redundant-commits", c]) {
+                let _abort = self.g(&["cherry-pick", "--abort"]);
                 return Err(format!("the change of {step} does not apply over the steps before it: {e}"));
             }
         }
@@ -224,12 +288,12 @@ impl Copy {
     /// One commit holding the whole change of a step: the copy's tree now, over `parent`, the copy as the steps
     /// before it left it. None when the step changed nothing.
     pub fn result(&self, parent: &str, message: &str) -> Result<Option<String>, String> {
-        git(&self.dir, &["add", "-A"])?;
-        let tree = git(&self.dir, &["write-tree"])?;
-        if tree == git(&self.dir, &["rev-parse", &format!("{parent}^{{tree}}")])? {
+        self.g(&["add", "-A"])?;
+        let tree = self.g(&["write-tree"])?;
+        if tree == self.g(&["rev-parse", &format!("{parent}^{{tree}}")])? {
             return Ok(None);
         }
-        git(&self.dir, &["commit-tree", &tree, "-p", parent, "-m", message]).map(Some)
+        self.g(&["commit-tree", &tree, "-p", parent, "-m", message]).map(Some)
     }
 
     /// One commit of `tree` over `parent`; None when the tree is the parent's own.
@@ -237,18 +301,18 @@ impl Copy {
         if tree == self.tree_of(parent)? {
             return Ok(None);
         }
-        git(&self.dir, &["commit-tree", tree, "-p", parent, "-m", message]).map(Some)
+        self.g(&["commit-tree", tree, "-p", parent, "-m", message]).map(Some)
     }
 
     /// The tree of a commit.
     pub fn tree_of(&self, commit: &str) -> Result<String, String> {
-        git(&self.dir, &["rev-parse", &format!("{commit}^{{tree}}")])
+        self.g(&["rev-parse", &format!("{commit}^{{tree}}")])
     }
 
     /// Throw away what is not committed.
     pub fn discard(&self) -> Result<(), String> {
-        git(&self.dir, &["reset", "-q", "--hard", "HEAD"])?;
-        git(&self.dir, &["clean", "-fdq", "-e", EXCHANGE])?;
+        self.g(&["reset", "-q", "--hard", "HEAD"])?;
+        self.g(&["clean", "-fdq", "-e", EXCHANGE])?;
         Ok(())
     }
 
@@ -257,20 +321,20 @@ impl Copy {
     pub fn deliver(&self, commits: &[(String, String)]) -> Result<String, String> {
         let head = self.compose(commits)?;
         let refspec = format!("+{head}:refs/heads/{}", self.branch);
-        git(&self.source, &["fetch", "-q", &self.dir.display().to_string(), &refspec])?;
+        git(&self.source, &["fetch", "-q", &self.git.display().to_string(), &refspec])?;
         Ok(format!("{} at {}", self.branch, &head[..head.len().min(12)]))
     }
 
     fn start_branch(&self) -> Result<String, String> {
-        let b = std::fs::read_to_string(self.dir.join(".git/jaynes-start")).unwrap_or_default().trim().to_string();
+        let b = std::fs::read_to_string(self.git.join("jaynes-start")).unwrap_or_default().trim().to_string();
         if b.is_empty() { Err("the project was on no branch when the run started".to_string()) } else { Ok(b) }
     }
 
     /// Land `commit`, made in the copy over the branch's tip `tip`, on the person's branch: by fast-forward where it
     /// is checked out, and only over a clean checkout; moved directly where it is not. Never pushed.
     fn land(&self, branch: &str, tip: &str, commit: &str) -> Result<(), String> {
-        git(&self.dir, &["update-ref", "refs/jaynes/landing", commit])?;
-        git(&self.source, &["fetch", "-q", &self.dir.display().to_string(), "+refs/jaynes/landing:refs/jaynes/landing"])?;
+        self.g(&["update-ref", "refs/jaynes/landing", commit])?;
+        git(&self.source, &["fetch", "-q", &self.git.display().to_string(), "+refs/jaynes/landing:refs/jaynes/landing"])?;
         let checked_out = git(&self.source, &["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default() == branch;
         if checked_out {
             let dirty = git(&self.source, &["status", "--porcelain", "--untracked-files=no"])?;
@@ -288,22 +352,22 @@ impl Copy {
     pub fn merge(&self, head: &str, run: &str) -> Result<Option<String>, String> {
         let branch = self.start_branch()?;
         let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
-        git(&self.dir, &["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
-        if git(&self.dir, &["merge-base", "--is-ancestor", head, &tip]).is_ok() {
+        self.g(&["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
+        if self.g(&["merge-base", "--is-ancestor", head, &tip]).is_ok() {
             return Ok(None);
         }
         let message = format!("Jaynes: run {run}, merged");
-        git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
-        if let Err(e) = git(&self.dir, &["merge", "-q", "--no-ff", "--no-edit", "-m", &message, head]) {
-            let _abort = git(&self.dir, &["merge", "--abort"]);
+        self.g(&["checkout", "-q", "--detach", &tip])?;
+        if let Err(e) = self.g(&["merge", "-q", "--no-ff", "--no-edit", "-m", &message, head]) {
+            let _abort = self.g(&["merge", "--abort"]);
             return Err(format!("it conflicts with what {branch} has now: {e}"));
         }
         let merged = self.head()?;
         if self.tree_of(&merged)? == self.tree_of(&tip)? {
             // The branch has the change already: a process that died after the merge landed and before it was
             // recorded. The run's merge on the branch is the one to record, so Undo reverts it.
-            git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
-            let found = git(&self.dir, &["log", "-1", "--format=%H", "--fixed-strings", &format!("--grep={message}"), &tip])?;
+            self.g(&["checkout", "-q", "--detach", &tip])?;
+            let found = self.g(&["log", "-1", "--format=%H", "--fixed-strings", &format!("--grep={message}"), &tip])?;
             return Ok(Some(found).filter(|f| !f.is_empty()));
         }
         self.land(&branch, &tip, &merged)?;
@@ -314,11 +378,11 @@ impl Copy {
     pub fn undo(&self, merges: &[String], run: &str) -> Result<String, String> {
         let branch = self.start_branch()?;
         let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
-        git(&self.dir, &["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
-        git(&self.dir, &["checkout", "-q", "--detach", &tip])?;
+        self.g(&["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
+        self.g(&["checkout", "-q", "--detach", &tip])?;
         for m in merges.iter().rev() {
-            if let Err(e) = git(&self.dir, &["revert", "--no-edit", "-m", "1", m]) {
-                let _abort = git(&self.dir, &["revert", "--abort"]);
+            if let Err(e) = self.g(&["revert", "--no-edit", "-m", "1", m]) {
+                let _abort = self.g(&["revert", "--abort"]);
                 return Err(format!("the merge {} does not revert over what {branch} has now: {e}", &m[..m.len().min(12)]));
             }
         }
@@ -379,6 +443,74 @@ pub fn toolchains(path: &str, home: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod git_tests {
+    use super::*;
+
+    fn repo(base: &Path) -> PathBuf {
+        let source = base.join("source");
+        std::fs::create_dir_all(&source).expect("dir");
+        std::fs::write(source.join("a.txt"), "a\n").expect("write");
+        for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["commit", "-q", "-m", "start"]] {
+            git(&source, &args).expect("git");
+        }
+        source
+    }
+
+    fn deliver_merge_undo(copy: &Copy) {
+        std::fs::write(copy.dir.join("a.txt"), "b\n").expect("write");
+        let (changed, tree) = copy.stage(&["**".to_string()]).expect("staged");
+        assert_eq!(changed.iter().map(|c| c.what.as_str()).collect::<Vec<_>>(), ["a.txt"]);
+        let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+        let steps = vec![("change".to_string(), c)];
+        copy.deliver(&steps).expect("delivered");
+        let merged = copy.merge(&copy.head().expect("head"), "r").expect("merged").expect("a merge");
+        assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "b\n");
+        Workspace::undo(copy, &[merged], "r").expect("undone");
+        assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "a\n");
+    }
+
+    #[test]
+    fn the_engine_s_repository_for_a_copy_lives_beside_it_and_the_copy_s_own_is_the_agent_s() {
+        let base = std::env::temp_dir().join(format!("jaynes-git-beside-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        let dir = base.join("run/project");
+        let copy = Copy::make(&source, &dir, "jaynes/r").expect("made");
+        assert_eq!(copy.git, base.join("run/project.git"));
+        assert!(dir.join(".git").is_dir(), "the agent has a repository of its own in the copy");
+        assert_eq!(git_dir(&dir), copy.git);
+        // the agent's repository works for the agent, and its history is the project's
+        assert_eq!(git(&dir, &["log", "--format=%s"]).expect("log"), "start");
+        // the run's folder may move whole, as a start moves it into place
+        std::fs::rename(base.join("run"), base.join("moved")).expect("moved");
+        let dir = base.join("moved/project");
+        assert_eq!(git(&dir, &["status", "--porcelain"]).expect("status"), "");
+        let copy = Copy { source: source.clone(), dir: dir.clone(), git: git_dir(&dir), branch: "jaynes/r".into() };
+        deliver_merge_undo(&copy);
+    }
+
+    #[test]
+    fn a_copy_made_before_the_engine_s_repository_moved_out_still_delivers_and_undoes() {
+        let base = std::env::temp_dir().join(format!("jaynes-git-legacy-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        // the copy as engines before made it: a plain clone, with its marks in its own .git
+        let dir = base.join("run/project");
+        let mut c = git_command();
+        c.args(["clone", "-q", "--no-hardlinks"]).arg(&source).arg(&dir);
+        run(c, &[]).expect("cloned");
+        git(&dir, &["checkout", "-q", "-b", "jaynes/r"]).expect("branch");
+        let head = git(&dir, &["rev-parse", "HEAD"]).expect("head");
+        std::fs::write(dir.join(".git/jaynes-base"), head).expect("base");
+        std::fs::write(dir.join(".git/jaynes-start"), "main").expect("start");
+        assert_eq!(git_dir(&dir), dir.join(".git"));
+        assert_eq!(start_branch_of(&dir), "main");
+        let copy = Copy { source: source.clone(), dir: dir.clone(), git: git_dir(&dir), branch: "jaynes/r".into() };
+        deliver_merge_undo(&copy);
+    }
 }
 
 #[cfg(test)]
