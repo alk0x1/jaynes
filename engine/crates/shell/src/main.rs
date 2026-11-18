@@ -251,7 +251,10 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "page" => {
             let port = flag(rest, "--port").map(|p| p.parse().map_err(|_| "--port takes a number")).transpose()?.unwrap_or(8750);
-            let key = std::env::var("JAYNES_PAGE_KEY").unwrap_or_else(|_| install::page_key(&home()));
+            let key = match std::env::var("JAYNES_PAGE_KEY") {
+                Ok(k) => k,
+                Err(_) => install::page_key(&home())?,
+            };
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             page::Page { home: home(), port, key, exe }.serve()
         }

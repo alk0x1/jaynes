@@ -54,21 +54,23 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
     }
     let home = base.join("home");
     let role = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change");
-    // the Makefile changed raises the risk, so the person is shown the change, with the agent's own words
-    let output = r#"printf '{"summary":"<script>document.title=1</script><img src=x onerror=alert(2)>","files":["greeting.txt"]}' > .jaynes/output.json"#;
-    // and into the file it changes, whose diff the stop shows
-    let agent = format!("command:printf 'hi <script>document.title=1</script><img src=x onerror=alert(2)>\\n' > greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {output}");
+    // the Makefile changed raises the risk, so the person is shown the change: the agent writes markup into the file
+    // it changes, whose diff the stop shows, and into the name of a new file, with quotes
+    let output = r#"printf '{"summary":"hi","files":["greeting.txt"]}' > .jaynes/output.json"#;
+    let agent = format!(
+        "command:printf 'hi <script>document.title=1</script><img src=x onerror=alert(2)>\\n' > greeting.txt && printf 'x\\n' > 'q\"><img src=y onerror=alert(3)>.txt' && printf 'test:\\n\\ttrue\\n' > Makefile && {output}"
+    );
     let started = Command::new(BIN)
         .args(["start", "--run", "marked", "--role", role.to_str().expect("path"), "--project", project.to_str().expect("path"), "--request", "<b>say hi</b>", "--agent", &agent])
         .env("JAYNES_ENGINE_HOME", &home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "")
         .output()
         .expect("start");
     assert!(started.status.success(), "{}{}", String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
-    let port = 20750 + (std::process::id() % 1000) as u16 + if name == "origin" { 1 } else { 0 } + if name == "script" { 2 } else { 0 };
+    let port = 20750 + (std::process::id() % 1000) as u16 * 4 % 4000 + ["cookie", "origin", "script", "broken"].iter().position(|n| *n == name).unwrap_or(0) as u16;
     let said = std::fs::File::create(base.join("said.txt")).expect("said");
     let child = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
-        .env("JAYNES_ENGINE_HOME", &home).env("JAYNES_NO_PAGE", "1").env("JAYNES_NO_UPDATE_CHECK", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y")
+        .env("JAYNES_ENGINE_HOME", &home).env("JAYNES_HOME", base.join("jaynes")).env("JAYNES_NO_PAGE", "1").env("JAYNES_NO_UPDATE_CHECK", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y")
         .stderr(said)
         .spawn()
         .expect("page");
@@ -88,7 +90,10 @@ fn the_page_s_key_never_rides_in_a_cookie() {
     // an old link with the key in its query still works once: it goes to the fragment and clears the old cookie
     let old = get(port, "/run/marked?key=k3y", "");
     assert!(old.starts_with("HTTP/1.1 303"), "{old}");
-    assert!(old.contains("Location: /run/marked#key=k3y\r\n"), "{old}");
+    assert!(old.contains("Location: /#key=k3y\r\n"), "{old}");
+    // never to where the address said: a path that starts with // would leave for another host
+    let away = get(port, "//evil.example/x?key=k3y", "");
+    assert!(away.contains("Location: /#key=k3y\r\n") && !away.contains("evil"), "{away}");
     assert!(old.contains("Set-Cookie: jaynes_key=; Path=/; Max-Age=0"), "{old}");
     // a wrong key in the query is no way in, and sets nothing
     let wrong = get(port, "/?key=nope", "");
@@ -113,15 +118,18 @@ fn only_a_request_from_the_page_s_own_origin_with_its_key_counts_as_the_person()
     let ours = format!("Origin: http://127.0.0.1:{port}\r\n");
     let key = "X-Jaynes-Key: k3y\r\n";
     assert_eq!(json(&post(port, "/api/whoami", &format!("{ours}{key}")))["person"], true);
-    // localhost names the same page
-    assert_eq!(json(&post(port, "/api/whoami", &format!("Origin: http://localhost:{port}\r\n{key}")))["person"], true);
+    // localhost is not this page: the page listens on 127.0.0.1, and another server can answer localhost on ::1
+    assert!(post(port, "/api/whoami", &format!("Origin: http://localhost:{port}\r\n{key}")).starts_with("HTTP/1.1 403"));
+    let named = http(port, &format!("GET /run/marked HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
+    assert!(named.starts_with("HTTP/1.1 303") && named.contains(&format!("Location: http://127.0.0.1:{port}/\r\n")), "{named}");
     // the key alone, from a program that sends no origin, is not the person
     assert_eq!(json(&post(port, "/api/whoami", key))["person"], false);
     // a wrong key, or none, is not the person
     assert_eq!(json(&post(port, "/api/whoami", &format!("{ours}X-Jaynes-Key: k3y0\r\n")))["person"], false);
     assert_eq!(json(&post(port, "/api/whoami", &ours))["person"], false);
     // another app on this machine, or any site, is refused outright, key or not
-    for other in ["http://127.0.0.1:3000", "http://localhost:5173", "https://example.com", "null"] {
+    let alike = format!("http://127.0.0.1:{port}.evil.example");
+    for other in ["http://127.0.0.1:3000", "http://localhost:5173", "https://example.com", "null", alike.as_str()] {
         let reply = post(port, "/api/whoami", &format!("Origin: {other}\r\n{key}"));
         assert!(reply.starts_with("HTTP/1.1 403"), "{other}: {reply}");
         let reply = post(port, "/api/answer", &format!("Origin: {other}\r\n{key}"));
@@ -152,13 +160,35 @@ fn nothing_an_agent_writes_runs_as_a_script_on_the_page() {
         // every script tag is the page's own file or data that does not run
         for tag in body.split("<script").skip(1) {
             let head = tag.split('>').next().unwrap_or("");
-            assert!(head == " src=\"/page.js\"" || head.contains("type=\"application/json\""), "{path}: <script{head}>");
+            assert!(head == " src=\"/key.js\"" || head == " src=\"/page.js\"" || head.contains("type=\"application/json\""), "{path}: <script{head}>");
         }
         // what the agent and the request wrote is shown as text
-        assert!(!body.contains("<script>document.title") && !body.contains("<img src=x") && !body.contains("<b>say hi</b>"), "{path}: {body}");
+        assert!(!body.contains("<script>document.title") && !body.contains("<img src=") && !body.contains("<b>say hi</b>") && !body.contains("q\"><img"), "{path}: {body}");
     }
     let stop = get(port, &format!("/q/marked/{q}"), "");
     assert!(stop.contains("hi &lt;script&gt;document.title=1&lt;/script&gt;&lt;img src=x onerror=alert(2)&gt;"), "{stop}");
-    let js = get(port, "/page.js", "");
-    assert!(js.starts_with("HTTP/1.1 200") && js.contains("Content-Type: text/javascript; charset=utf-8") && js.contains("X-Jaynes-Key"), "{js}");
+    // git shows that name quoted, with a backslash before its quote: escaped all the same
+    assert!(stop.contains("q\\&quot;&gt;&lt;img src=y onerror=alert(3)&gt;.txt"), "{stop}");
+    for script in ["/key.js", "/page.js"] {
+        let js = get(port, script, "");
+        assert!(js.starts_with("HTTP/1.1 200") && js.contains("Content-Type: text/javascript; charset=utf-8"), "{js}");
+    }
+    // nothing is taken for what it is not: an agent's page is never a script
+    for path in ["/", "/key.js", "/page.js", "/page/none.html", "/api/version"] {
+        assert!(get(port, path, "").contains("X-Content-Type-Options: nosniff\r\n"), "{path}");
+    }
+    assert!(post(port, "/api/whoami", "Origin: http://127.0.0.1:1\r\n").contains("X-Content-Type-Options: nosniff\r\n"));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_request_that_breaks_its_handler_does_not_stop_the_page() {
+    let (_page, port, _base) = page("broken");
+    // a name as long as a kept page's (69 bytes), whose 64th byte falls inside a letter of two bytes
+    let name = format!("/page/{}éhtml", "a".repeat(63));
+    assert_eq!(name.len() - "/page/".len(), 69);
+    let reply = get(port, &name, "");
+    assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+    // and the page goes on answering
+    assert!(get(port, "/home", "").starts_with("HTTP/1.1 200"));
 }

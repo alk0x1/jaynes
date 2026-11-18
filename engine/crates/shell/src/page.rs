@@ -36,12 +36,14 @@ struct Request {
     body: Vec<u8>,
 }
 
-pub fn key() -> String {
+/// A new key for the page, from the system's randomness. Without it there is no key: one that could be guessed would
+/// be kept for good.
+pub fn key() -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _read = f.read_exact(&mut bytes);
-    }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|e| format!("cannot make the page's key, since the system's randomness does not read: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The commit of Jaynes installed when the page started: what it runs.
@@ -102,7 +104,7 @@ impl Page {
                 std::thread::spawn(move || {
                     let reply = understand_in(&home, &body, by).unwrap_or_else(|e| json!({"ok": false, "refused": e})).to_string();
                     let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
                         reply.len()
                     );
                     let _sent = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(reply.as_bytes()));
@@ -112,7 +114,7 @@ impl Page {
         }
         let (status, kind, body, extra) = self.route(&req);
         let mut head = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nConnection: close\r\n",
+            "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n",
             body.len()
         );
         for (k, v) in extra {
@@ -123,14 +125,12 @@ impl Page {
         stream.write_all(body.as_bytes()).map_err(|e| e.to_string())
     }
 
+    /// Whether a Host (or, with `scheme`, an Origin) is this page's, exactly. Only 127.0.0.1: the page listens there, and
+    /// another server may answer localhost on ::1.
     fn local(&self, value: Option<&String>, scheme: bool) -> bool {
         let p = self.port;
-        let ok: Vec<String> = if scheme {
-            vec![format!("http://127.0.0.1:{p}"), format!("http://localhost:{p}")]
-        } else {
-            vec![format!("127.0.0.1:{p}"), format!("localhost:{p}")]
-        };
-        value.is_some_and(|v| ok.contains(v))
+        let ours = if scheme { format!("http://127.0.0.1:{p}") } else { format!("127.0.0.1:{p}") };
+        value.is_some_and(|v| *v == ours)
     }
 
     /// Whether a request is the person's: it carries the page's key in its header and comes from the page's own
@@ -147,6 +147,10 @@ impl Page {
     }
 
     fn route(&self, req: &Request) -> (&'static str, &'static str, String, Vec<(String, String)>) {
+        // the page by the name localhost goes on to its own address; the fragment of the link goes with it
+        if req.method == "GET" && req.headers.get("host").is_some_and(|h| *h == format!("localhost:{}", self.port)) {
+            return ("303 See Other", "text/plain", String::new(), vec![("Location".into(), format!("http://127.0.0.1:{}/", self.port))]);
+        }
         if !self.local(req.headers.get("host"), false) {
             return ("403 Forbidden", "text/plain", "this page answers only on its own local address".into(), vec![]);
         }
@@ -154,9 +158,13 @@ impl Page {
             // a link of earlier versions, with the key in its query: it goes on to the fragment, and the old cookie goes
             if let Some(k) = req.query.get("key")
                 && *k == self.key {
-                    let to = format!("{}#key={}", req.path, self.key);
+                    // always to the page's root: a path that starts with // would leave for another host
+                    let to = format!("/#key={}", self.key);
                     return ("303 See Other", "text/plain", String::new(), vec![("Set-Cookie".into(), CLEAR.into()), ("Location".into(), to)]);
                 }
+            if req.path == "/key.js" {
+                return ("200 OK", "text/javascript; charset=utf-8", KEY_SCRIPT.to_string(), vec![]);
+            }
             if req.path == "/page.js" {
                 return ("200 OK", "text/javascript; charset=utf-8", SCRIPT.to_string(), vec![]);
             }
@@ -1138,35 +1146,43 @@ fn read(stream: &TcpStream) -> Result<Request, String> {
     Ok(Request { method, path, query, headers, body })
 }
 
-/// The page's own script, served from /page.js: the policy lets no other script run, inline or from elsewhere.
-const SCRIPT: &str = r##"// The page's key: it comes once in the link's fragment, which no browser sends to any server, and is kept for this
-// page's origin alone (scheme, host and port), where no other site or app can read it. It goes only with this page's
-// own requests, in a header, never in a cookie that every server on this machine would receive.
-let pageKey = "";
+/// The script that holds the page's key, served from /key.js before the page's own. The key comes once in the link's
+/// fragment, which no browser sends to any server, and is kept for this page's origin alone (scheme, host and port),
+/// where no other site or app can read it, and only once the page says it is its own: a link from anywhere with
+/// another key never replaces the person's. It goes only with this page's own requests, in a header.
+pub const KEY_SCRIPT: &str = r##"let pageKey = "";
 for (const store of [localStorage, sessionStorage]) { try { pageKey = pageKey || store.getItem("jaynes_key") || ""; } catch (_) {} }
-{
-  const m = /^#key=([0-9A-Za-z]+)$/.exec(location.hash);
-  if (m) {
-    pageKey = m[1];
-    for (const store of [localStorage, sessionStorage]) { try { store.setItem("jaynes_key", pageKey); break; } catch (_) {} }
-    history.replaceState(null, "", location.pathname + location.search);
-  }
-}
 const sendFetch = window.fetch.bind(window);
+// whether this page counts what a key sends as the person's
+const theirs = key => sendFetch("/api/whoami", { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "X-Jaynes-Key": key } : {}) }, body: "{}" })
+  .then(r => r.json()).then(r => r.person === true, () => false);
+const fromLink = (/^#key=([0-9A-Za-z]+)$/.exec(location.hash) || [])[1] || "";
+// the address loses the key at once, before anything else reads it
+if (location.hash.startsWith("#key=")) history.replaceState(null, "", location.pathname + location.search);
 window.fetch = (url, opts = {}) => {
   if ((opts.method || "GET").toUpperCase() === "POST" && pageKey) opts = { ...opts, headers: { ...(opts.headers || {}), "X-Jaynes-Key": pageKey } };
   return sendFetch(url, opts);
 };
-// without the key, or with one this page does not know, answers from here count as an agent's: say so
-fetch("/api/whoami", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(r => r.json()).then(r => {
-  if (r.person) return;
-  const n = document.createElement("div");
-  n.className = "notice";
-  n.textContent = "You opened the page without its key: answers from here count as an agent's. Open the link the page printed.";
-  const box = document.getElementById("nokey");
-  if (box) box.replaceWith(n);
-}).catch(() => {});
-const el = document.getElementById("data");
+window.jaynesKey = (async () => {
+  if (fromLink && fromLink !== pageKey && await theirs(fromLink)) {
+    pageKey = fromLink;
+    for (const store of [localStorage, sessionStorage]) { try { store.setItem("jaynes_key", pageKey); break; } catch (_) {} }
+  }
+  // without the key, or with one this page does not know, answers from here count as an agent's: say so
+  const person = pageKey ? await theirs(pageKey) : false;
+  if (!person) {
+    const n = document.createElement("div");
+    n.className = "notice";
+    n.textContent = "You opened the page without its key: answers from here count as an agent's. Open the link the page printed.";
+    const box = document.getElementById("nokey");
+    if (box) box.replaceWith(n);
+  }
+  return person;
+})();
+"##;
+
+/// The page's own script, served from /page.js: the policy lets no other script run, inline or from elsewhere.
+const SCRIPT: &str = r##"const el = document.getElementById("data");
 const base = el ? JSON.parse(el.textContent) : null;
 if (!el || base.choose) document.getElementById("fxbar").classList.add("hide");
 // a stop that chooses: the answer one click on an option sends, and what it will do, written under each option
@@ -1503,7 +1519,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 <div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a><a href="/setup">Setup</a></nav></div>
 <div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}</main></div>
 <div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
-<script src="/page.js"></script></body></html>"##;
+<script src="/key.js"></script><script src="/page.js"></script></body></html>"##;
 
 #[cfg(test)]
 mod tests {

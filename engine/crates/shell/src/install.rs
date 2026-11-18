@@ -255,14 +255,14 @@ pub fn list(home: &Path) -> Vec<(String, String, String, String)> {
 /// The page's key, kept under the home so the page's address stays the same across its restarts.
 /// Readable by its owner alone: whoever reads it answers as the person. A file an earlier version left readable by
 /// all is tightened when it is read.
-pub fn page_key(home: &Path) -> String {
+pub fn page_key(home: &Path) -> Result<String, String> {
     let file = home.join("page.key");
     if let Ok(k) = std::fs::read_to_string(&file)
         && k.trim().len() >= 16 {
             owner_only(&file);
-            return k.trim().to_string();
+            return Ok(k.trim().to_string());
         }
-    let k = crate::page::key();
+    let k = crate::page::key()?;
     let _made = std::fs::create_dir_all(home);
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create(true).truncate(true);
@@ -270,7 +270,7 @@ pub fn page_key(home: &Path) -> String {
     std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
     let _written = open.open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, k.as_bytes()));
     owner_only(&file);
-    k
+    Ok(k)
 }
 
 /// The file readable and writable by its owner alone.
@@ -309,9 +309,11 @@ pub fn ensure_page(home: &Path) -> String {
     }
     if c.spawn().is_ok() {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        if std::env::var("JAYNES_NO_BROWSER").is_err() {
+        if std::env::var("JAYNES_NO_BROWSER").is_err()
+            && let Ok(key) = page_key(home)
+        {
             // the key in the fragment, which the browser keeps for the page and never sends to any server
-            let _opened = Command::new("open").arg(format!("{address}#key={}", page_key(home))).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+            let _opened = Command::new("open").arg(format!("{address}#key={key}")).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
         }
     }
     address
