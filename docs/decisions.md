@@ -91,8 +91,10 @@ during runs, and a second page opened with another key replaced the person's.
 
 **Since 2026-11-18.** An answer or an action the page refuses leaves a trace
 beside the record, outside its chain (when, on what, by whom, why), shown on
-the run's screen and in its summary. Refusals through the MCP server leave none
-yet.
+the run's screen and in its summary. A trace keeps the page's and the engine's
+words only, never what the request said, since the summary is copied out of the
+machine; another origin is named on the run's screen alone. Refusals through
+the MCP server leave none yet.
 
 ## 2026-11-11: A decision can be dropped for good or taken as the base
 

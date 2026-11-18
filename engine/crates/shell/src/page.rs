@@ -401,11 +401,12 @@ impl Page {
                 // an answer or an action sent in the person's place from elsewhere leaves a trace on its run
                 if matches!(req.path.as_str(), "/api/answer" | "/api/act") {
                     let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-                    let from = req.headers.get("origin").map(|o| format!("a request from {o}")).unwrap_or_else(|| "a request that is not JSON".into());
+                    let from = crate::refused::from_origin(req.headers.get("origin").map(String::as_str));
+                    let what = if req.path == "/api/act" { crate::refused::action(body["action"].as_str().unwrap_or("")) } else { "answer".into() };
                     crate::refused::record(&self.home, &crate::refused::Refusal {
                         at: crate::store::now(),
                         run: body["run"].as_str().unwrap_or("").to_string(),
-                        what: req.path.trim_start_matches("/api/").to_string(),
+                        what,
                         who: from,
                         reason: "it did not come from this page".into(),
                     });
@@ -446,14 +447,15 @@ impl Page {
     fn refusal(&self, path: &str, body: &Value, by: &By, reason: &str) -> crate::refused::Refusal {
         let run = body["run"].as_str().unwrap_or("").to_string();
         let what = if path == "/api/act" {
-            format!("act {}", body["action"].as_str().unwrap_or("?"))
+            crate::refused::action(body["action"].as_str().unwrap_or(""))
         } else {
             let step = self.store().ok().and_then(|s| s.state(&run).ok().flatten()).and_then(|r| {
                 body["question"].as_str().and_then(|q| r.questions.get(q)).map(|q| q.question.step.clone())
             });
             step.map(|s| format!("answer to {s}")).unwrap_or_else(|| "answer".into())
         };
-        crate::refused::Refusal { at: crate::store::now(), run, what, who: crate::refused::who(by), reason: reason.to_string() }
+        // the engine's words, without the request's: its errors may name what they were given
+        crate::refused::Refusal { at: crate::store::now(), run, what, who: crate::refused::who(by), reason: crate::refused::scrub(reason, body) }
     }
 
     fn store(&self) -> Result<Store, String> {

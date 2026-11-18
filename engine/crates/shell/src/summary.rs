@@ -636,7 +636,7 @@ pub fn read(home: &Path, run: &str, wait: bool) -> Result<Summary, String> {
     let looks = crate::presence::looks(home, run)?;
     summarize(&events, &looks, Promises::Unread)?;
     let told = summarize(&events, &looks, promises(home, run, wait))?;
-    Ok(Summary { refused: crate::refused::of_run(home, run).iter().map(crate::refused::Refusal::line).collect(), ..told })
+    Ok(Summary { refused: crate::refused::of_run(home, run).iter().map(crate::refused::Refusal::line_out).collect(), ..told })
 }
 
 #[cfg(test)]

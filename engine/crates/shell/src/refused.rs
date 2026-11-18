@@ -7,6 +7,7 @@
 
 use crate::store::Store;
 use jaynes_core::question::By;
+use serde_json::Value;
 use std::path::Path;
 
 /// Traces kept per run, the latest: whoever is refused writes them, so a program on the machine could otherwise fill
@@ -25,6 +26,69 @@ pub struct Refusal {
     /// Who tried, as the page knew them: "the person", an agent's name, or where the request came from.
     pub who: String,
     pub reason: String,
+}
+
+/// What the page's actions are called: a refused action is kept by one of these names, or as "an unknown action",
+/// never by what the request called it.
+pub const ACTIONS: &[&str] = &["halt", "resume", "continue", "abandon", "raise-risk", "raise-ceiling", "undo", "correct"];
+
+/// What was tried, in the page's words: an action it knows, by its name; any other, as an unknown action.
+pub fn action(said: &str) -> String {
+    if ACTIONS.contains(&said) { format!("act {said}") } else { "an unknown action".into() }
+}
+
+/// Who sent a request from another origin, for the trace beside the record: the origin, when it has an origin's
+/// shape (http or https, a host of letters, digits, dots and hyphens, a port), or else only that it came from another.
+/// The summary, which leaves the machine, names no origin at all ([`Refusal::line_out`]).
+pub fn from_origin(origin: Option<&str>) -> String {
+    let shaped = origin.is_some_and(|o| {
+        let Some(rest) = o.strip_prefix("https://").or_else(|| o.strip_prefix("http://")) else { return false };
+        let (host, port) = rest.split_once(':').unwrap_or((rest, ""));
+        o.len() <= 100
+            && !host.is_empty()
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+            && port.len() <= 5
+            && port.bytes().all(|b| b.is_ascii_digit())
+    });
+    match origin {
+        Some(o) if shaped => format!("{ANOTHER}{o}"),
+        Some(_) => format!("{ANOTHER}another origin"),
+        None => "a request that is not JSON".into(),
+    }
+}
+
+const ANOTHER: &str = "a request from ";
+
+/// The page's own words in a request: the verdicts and actions it sends by name. What else a request sends is its own.
+const PAGE_WORDS: &[&str] = &["keep", "skip", "drop", "change", "redo"];
+
+/// The engine's reason for a refusal, with every word the request sent taken out: the engine's errors may name what
+/// they were given (a question, an item, a step, a verdict), and a trace keeps the engine's words only. Each text the
+/// request brought (a value, or a key inside one of its fields, as an item's id), of three characters or more and not
+/// one of the page's own words, the longest first, is put out of the reason. The fields' own names are the page's.
+pub fn scrub(reason: &str, said: &Value) -> String {
+    fn texts(v: &Value, inside: bool, out: &mut Vec<String>) {
+        match v {
+            Value::String(s) => out.push(s.clone()),
+            Value::Array(a) => a.iter().for_each(|x| texts(x, true, out)),
+            Value::Object(m) => m.iter().for_each(|(k, x)| {
+                if inside {
+                    out.push(k.clone());
+                }
+                texts(x, true, out);
+            }),
+            _ => {}
+        }
+    }
+    let mut all = Vec::new();
+    texts(said, false, &mut all);
+    all.retain(|t| t.chars().count() >= 3 && !PAGE_WORDS.contains(&t.as_str()) && !ACTIONS.contains(&t.as_str()));
+    all.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    let mut out = reason.to_string();
+    for t in all {
+        out = out.replace(&t, "(what the request said)");
+    }
+    out
 }
 
 /// Who an answer or an action came from, in the words a refusal keeps.
@@ -64,15 +128,44 @@ pub fn of_run(home: &Path, run: &str) -> Vec<Refusal> {
 }
 
 impl Refusal {
-    /// The trace in a line: when, what, by whom, and why.
+    /// The trace in a line, for the person's own screen: when, what, by whom, and why.
     pub fn line(&self) -> String {
         format!("{}, {}, by {}: {}", crate::summary::utc(self.at), self.what, self.who, self.reason)
+    }
+
+    /// The trace in a line for what leaves the machine, the run's summary: an origin is a name its sender chose and
+    /// can carry words, so a request from another origin is said to be one, and not named.
+    pub fn line_out(&self) -> String {
+        let who = if self.who.starts_with(ANOTHER) { "a request from another origin" } else { self.who.as_str() };
+        format!("{}, {}, by {who}: {}", crate::summary::utc(self.at), self.what, self.reason)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trace_says_what_was_tried_and_by_whom_in_the_page_s_words_only() {
+        assert_eq!(action("undo"), "act undo");
+        assert_eq!(action("rm -rf the partner's secrets"), "an unknown action");
+        assert_eq!(from_origin(Some("https://example.com")), "a request from https://example.com");
+        assert_eq!(from_origin(Some("http://localhost:8751")), "a request from http://localhost:8751");
+        for odd in ["http://evil.example/a/path", "javascript:alert(1)", "http://a b", "null", "http://x:99999999", &format!("http://{}.example", "a".repeat(100))] {
+            assert_eq!(from_origin(Some(odd)), "a request from another origin", "{odd}");
+        }
+        assert_eq!(from_origin(None), "a request that is not JSON");
+        // the engine's reason, with what it was given taken out; a short text stays, and a longer one goes first
+        let said = serde_json::json!({"question": "q-from-the-repo", "verdicts": {"item-from-the-repo": "keep"}, "x": "ab"});
+        assert_eq!(
+            scrub("there is no question q-from-the-repo; the question has no item item-from-the-repo; ab; keep", &said),
+            "there is no question (what the request said); the question has no item (what the request said); ab; keep"
+        );
+        // the summary names no origin
+        let t = Refusal { at: 0, run: "r".into(), what: "answer".into(), who: from_origin(Some("https://example.com")), reason: "it did not come from this page".into() };
+        assert!(t.line().contains("by a request from https://example.com:"), "{}", t.line());
+        assert!(t.line_out().contains("by a request from another origin:") && !t.line_out().contains("example.com"), "{}", t.line_out());
+    }
     use jaynes_core::{Digest, Input, Manifest};
 
     fn home(name: &str) -> std::path::PathBuf {
