@@ -173,6 +173,57 @@ pub fn of_change(target: Target, changed: &[Changed]) -> (Risk, Vec<String>) {
     (if reasons.is_empty() { Risk::Low } else { Risk::High }, reasons)
 }
 
+/// Where a stop that asks only at high risk says why the risk is high, in what its role writes it asks.
+pub const RISK_TOLD: &str = "{{risk}}";
+
+/// Why `changed` makes a run's risk high, as a stop says it to the person: a sentence for each rule of
+/// [`of_change`] that holds, the files that run later outside any box named, and how much bigger than a small change
+/// it is. None when none holds.
+pub fn told(target: Target, changed: &[Changed]) -> Vec<String> {
+    let on_floor = |c: &Changed| {
+        c.floor
+            || match target {
+                Target::Repository => !floor([c.what.as_str()]).is_empty(),
+            }
+    };
+    let mut told = Vec::new();
+    let floor: Vec<&str> = changed.iter().filter(|c| on_floor(c)).map(|c| c.what.as_str()).collect();
+    if !floor.is_empty() {
+        told.push(format!("This change touches {}, which {} later outside any box.", named(&floor), if floor.len() == 1 { "runs" } else { "run" }));
+    }
+    let lines: u64 = changed.iter().map(|c| c.size).sum();
+    if lines > SMALL_LINES {
+        told.push(format!("This change has {lines} changed lines, more than a small change's {SMALL_LINES}."));
+    }
+    if changed.len() > SMALL_FILES {
+        told.push(format!("This change touches {} files, more than a small change's {SMALL_FILES}.", changed.len()));
+    }
+    told
+}
+
+/// The most files a stop names; the rest are counted.
+pub const NAMED_MOST: usize = 5;
+/// The most characters of a file's name a stop shows.
+const NAME_MOST: usize = 80;
+
+/// Files as a stop names them to the person: each between backquotes, on one line, with nothing a reader would take
+/// for words of Jaynes's own (no control character, no line break, no backquote of its own) and cut when long; the
+/// first few, and how many more. An agent chose the names, so they are shown as names and never read as sentences.
+fn named(files: &[&str]) -> String {
+    let one = |f: &str| {
+        let clean: String = f.chars().map(|c| if c.is_control() { ' ' } else if c == '`' { '\'' } else { c }).collect();
+        let cut: String = clean.chars().take(NAME_MOST).collect();
+        format!("`{cut}{}`", if clean.chars().count() > NAME_MOST { "…" } else { "" })
+    };
+    let shown: Vec<String> = files.iter().take(NAMED_MOST).map(|f| one(f)).collect();
+    let more = files.len().saturating_sub(NAMED_MOST);
+    match (shown.split_last(), more) {
+        (Some((last, [])), 0) => last.clone(),
+        (Some((last, first)), 0) => format!("{} and {last}", first.join(", ")),
+        (_, more) => format!("{} and {more} more", shown.join(", ")),
+    }
+}
+
 /// A run's ceiling of time and tokens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ceiling {

@@ -29,7 +29,7 @@ checks = [
   { use = "field-max-length", field = "summary", max = 400 },
   "suite-passes",
 ]
-stop = { ask = "The change turned out bigger than a small one. Keep it, or have it done again?", verdicts = ["keep", "redo"], from_risk = "high", release = true }
+stop = { ask = "{{risk}} Keep it, or have it done again?", verdicts = ["keep", "redo"], from_risk = "high", release = true }
 
 [step.output]
 summary = { type = "string", about = "what changed, in a sentence or two" }

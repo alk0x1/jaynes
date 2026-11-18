@@ -432,7 +432,7 @@ impl Ctx {
             items,
             offered: stop.verdicts.clone(),
             holds: stop.holds || self.braked(i),
-            about: stop.about.clone(),
+            about: self.risk_told(&stop.about),
             choose: stop.choose,
             pass: self.run.sent_back_at(i) + 1,
             passes: 0,
@@ -440,6 +440,23 @@ impl Ctx {
         };
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
+    }
+
+    /// What a stop asks, with why the run's risk is high where its role wrote {{risk}}: the rules in code that the
+    /// run's change, as its steps made it, meets. A risk the person raised, or a role's own, says so in general.
+    fn risk_told(&self, about: &str) -> String {
+        if !about.contains(risk::RISK_TOLD) {
+            return about.to_string();
+        }
+        let changed: Vec<Changed> = self.run.path().into_iter().filter_map(|j| self.run.steps[j].done.as_ref()).flat_map(|d| d.changed.iter().cloned()).collect();
+        let told = risk::told(self.run.manifest.target, &changed);
+        // no rule of the change holds: the risk the run is at, raised by the person or the role's own, said plainly
+        let why = match (told.is_empty(), self.run.risk) {
+            (false, _) => told.join(" "),
+            (true, crate::risk::Risk::High) => "This run is at high risk.".to_string(),
+            (true, _) => String::new(),
+        };
+        about.replace(risk::RISK_TOLD, &why).trim().to_string()
     }
 
     /// A stop with two errors among its last ten outcomes asks every run and holds it.
@@ -665,7 +682,7 @@ impl Ctx {
             items,
             offered: stop.verdicts,
             holds: true,
-            about: stop.about,
+            about: self.risk_told(&stop.about),
             choose: false,
             pass: 0,
             passes: 0,

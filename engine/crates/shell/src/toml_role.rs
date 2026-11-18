@@ -1379,6 +1379,10 @@ impl TomlRole {
                 if st.choose && s.show.as_ref().is_none_or(|sh| sh.each.is_none() || sh.id.is_none()) {
                     errs.push("chooses among options, so its show lists them with an id that stays: show = { each = \"FIELD\", id = \"{{name}}\", label = \"...\" }".into());
                 }
+                // {{risk}} is why the run's risk is high, said only where the stop asks for that reason alone
+                if st.ask.contains(jaynes_core::risk::RISK_TOLD) && st.from_risk != Risk::High {
+                    errs.push("has a stop whose ask names {{risk}}, why the run's risk is high, and it asks at every risk: write from_risk = \"high\", or leave {{risk}} out".into());
+                }
             }
             let stop = s.stop.as_ref().map(|st| StopDecl {
                 verdicts: st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() }),
@@ -2042,7 +2046,8 @@ Run the project's suite before you answer: {{{{runner.suite}}}}
 """
 checks = ["output-follows-schema", "suite-passes"]
 # Where the person is asked: verdicts from keep, change, redo, drop, skip. from_risk = "high" asks only on a
-# risky run; holds = true makes the steps after it wait; release = true lets an agent let it go on.
+# risky run, and {{risk}} in its ask says why the run is risky (the files that run later, or how big the change is);
+# holds = true makes the steps after it wait; release = true lets an agent let it go on.
 # redo = "STEP" sends what the person sends back to the agent's step that made the work: from an agent's step that
 # reviews it, or from one of Jaynes's own that shows it (such as quotes in their pages), to an agent's step it needs.
 stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
@@ -2676,7 +2681,8 @@ with = {{ pages = "read.sources" }}
     /// its tests, each with the fingerprint of the manifest it read into then. A stop's earned record is kept under
     /// a key made from the manifest, so a role that reads into another manifest loses what its stops earned.
     const BEFORE: &[(&str, &str)] = &[
-        ("small-change", "f9584e45bb1763dce2c9e6f9f8a7c1c799e905bfaf016b2102f0e18ba28d71d6"),
+        // its stop says why the run is risky since 18/11 ({{risk}} in its ask): a manifest of its own
+        ("small-change", "0ef3e36cfe674de226a18953af676fac66bb992d53353b66c2cac2c1208108a0"),
         // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own
         ("fix-bug", "e1708e2c11ff3e65585ed6db58411e0a8b0d757b9a2d7c99104e064cee6f3777"),
         ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
@@ -3473,6 +3479,21 @@ script = "requires/changelog.sh"
         let cases = fix.manifest.steps.iter().find(|s| s.name == "cases").expect("cases");
         assert!(cases.checks.iter().any(|c| c.name == "field-required"), "{:?}", cases.checks);
         assert_eq!(fix.extras["cases"].checks["field-required"], CheckImpl::Menu { uses: "field-required".into(), with: json!({"field": "cases"}).as_object().cloned().unwrap_or_default() });
+    }
+
+    #[test]
+    fn a_stop_says_why_the_run_is_risky_only_where_it_asks_for_that_alone() {
+        const STOP: &str = "stop = { ask = \"Keep it?\", verdicts = [\"keep\", \"redo\"], from_risk = \"high\", release = true }";
+        assert!(GOOD.contains(STOP));
+        let told = GOOD.replace(STOP, "stop = { ask = \"{{risk}} Keep it?\", verdicts = [\"keep\", \"redo\"], from_risk = \"high\", release = true }");
+        let r = TomlRole::load(&role("risk-told", &told)).expect("reads");
+        assert_eq!(r.manifest.steps.iter().find_map(|s| s.stop.as_ref()).map(|s| s.about.as_str()), Some("{{risk}} Keep it?"));
+        // a stop that asks at every risk has no risk to say
+        let e = errors("risk-every", &GOOD.replace(STOP, "stop = { ask = \"{{risk}} Keep it?\", verdicts = [\"keep\", \"redo\"] }"));
+        assert!(e.contains("names {{risk}}, why the run's risk is high, and it asks at every risk: write from_risk = \"high\", or leave {{risk}} out"), "{e}");
+        // and small-change, as this repository keeps it, says why
+        let small = TomlRole::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change")).expect("reads");
+        assert_eq!(small.manifest.steps[1].stop.as_ref().map(|s| s.about.as_str()), Some("{{risk}} Keep it, or have it done again?"));
     }
 
     #[test]
