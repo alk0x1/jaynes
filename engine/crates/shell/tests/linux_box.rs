@@ -191,14 +191,6 @@ fn unix_sockets_outside_the_box_are_not_reached() {
     drop(abstract_server);
 }
 
-#[test]
-fn a_box_asked_for_local_ports_refuses_until_it_has_a_network_of_its_own() {
-    let p = place("ports");
-    opens();
-    let o = boxed(&p, "echo ran", &["--local"]);
-    assert!(!o.status.success() && !said(&o).contains("ran"), "{}", said(&o));
-    assert!(said(&o).contains("refuses"), "{}", said(&o));
-}
 
 #[test]
 fn a_file_handed_open_outside_the_box_is_not_reached() {
@@ -282,4 +274,96 @@ fn temporary_files_and_a_real_build_work_with_tmpdir_in_its_folder() {
         .env("TMPDIR", &tmp).env("CARGO_HOME", p.work.join("cargo")).env("CARGO_TARGET_DIR", p.work.join("target"))
         .output().expect("box");
     assert!(o.status.success() && said(&o).contains("Hello, world!"), "cargo builds in the box: {}", said(&o));
+}
+
+// --- the network --------------------------------------------------------------------------------------------
+
+/// Which network a command that runs local servers gets on this machine: "own", "ports", or "refused". When the
+/// one running the tests says which it expects (JAYNES_TEST_NET), the box must give that one, so a test never
+/// passes in the wrong way.
+fn local_network(p: &Place) -> String {
+    opens();
+    let o = boxed(p, "echo $JAYNES_BOX_NETWORK", &["--local"]);
+    let got = if o.status.success() { String::from_utf8_lossy(&o.stdout).trim().to_string() } else { "refused".to_string() };
+    if let Ok(want) = std::env::var("JAYNES_TEST_NET") {
+        assert_eq!(got, want, "the box gave another network than this machine should: {}", said(&o));
+    }
+    eprintln!("local servers here: {got}");
+    got
+}
+
+/// A Python one-liner that serves on `port` and reaches it: exit 0 when both worked.
+fn serve_and_reach(port: u16) -> String {
+    format!("python3 -c 'import socket,sys\ns=socket.socket(); s.bind((\"127.0.0.1\",{port})); s.listen(1)\nc=socket.create_connection((\"127.0.0.1\",{port}),timeout=3); print(\"served and reached\")'")
+}
+
+fn reach(host: &str, port: u16) -> String {
+    format!("python3 -c 'import socket; socket.create_connection((\"{host}\",{port}),timeout=3); print(\"reached\")'")
+}
+
+#[test]
+fn a_command_that_runs_local_servers_serves_them_and_reaches_nothing_outside() {
+    let p = place("local");
+    let net = local_network(&p);
+    let port = 20000 + (std::process::id() % 20000) as u16;
+    let o = boxed(&p, &serve_and_reach(port), &["--local", "--port", &port.to_string()]);
+    if net == "refused" {
+        assert!(!o.status.success() && said(&o).contains("refuses to open local ports"), "it says why it refuses: {}", said(&o));
+        return;
+    }
+    assert!(o.status.success() && said(&o).contains("served and reached"), "a listed port serves and is reached: {}", said(&o));
+    // the internet stays closed, whichever network the box has
+    let o = boxed(&p, &reach("1.1.1.1", 443), &["--local", "--port", "443"]);
+    assert!(!o.status.success(), "the box reached the internet: {}", said(&o));
+}
+
+#[test]
+fn a_port_outside_the_list_is_closed_unless_the_box_has_a_network_of_its_own() {
+    let p = place("unlisted");
+    let net = local_network(&p);
+    if net == "refused" {
+        return;
+    }
+    let listed = 20000 + (std::process::id() % 20000) as u16;
+    let other = listed + 1;
+    let o = boxed(&p, &serve_and_reach(other), &["--local", "--port", &listed.to_string()]);
+    if net == "own" {
+        assert!(o.status.success(), "in its own network any port serves: {}", said(&o));
+    } else {
+        assert!(!o.status.success(), "a port not listed served: {}", said(&o));
+    }
+}
+
+#[test]
+fn a_service_of_this_machine_is_not_reached_and_the_page_never_is() {
+    let p = place("service");
+    let net = local_network(&p);
+    if net == "refused" {
+        return;
+    }
+    // a service listening on this machine's loopback, outside the box, as the Jaynes page or a database
+    let service = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = service.local_addr().expect("addr").port();
+    let o = boxed(&p, &reach("127.0.0.1", port), &["--local"]);
+    assert!(!o.status.success(), "the box reached a service of this machine: {}", said(&o));
+    // even with every port opened by the person, the page's port stays closed
+    let o = boxed(&p, &reach("127.0.0.1", port), &["--local", "--any-port", "--never-port", &port.to_string()]);
+    assert!(!o.status.success(), "the box reached the page's port: {}", said(&o));
+    drop(service);
+}
+
+#[test]
+fn any_port_is_only_for_a_command_that_runs_local_servers() {
+    let p = place("any");
+    opens();
+    let o = boxed(&p, "echo ran", &["--any-port"]);
+    assert!(!o.status.success() && !said(&o).contains("ran"), "{}", said(&o));
+}
+
+#[test]
+fn a_command_that_asks_for_no_network_gets_none_on_any_machine() {
+    let p = place("none");
+    opens();
+    let o = boxed(&p, "echo $JAYNES_BOX_NETWORK", &[]);
+    assert!(o.status.success() && said(&o).contains("none"), "{}", said(&o));
 }
