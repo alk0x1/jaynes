@@ -482,17 +482,21 @@ fn a_script_that_cannot_be_undone_and_fails_says_whether_it_may_have_acted() {
     let role = one_script(&s, "sure", keys, "echo 'the registry does not answer, so nothing was sent'\nexit 1\n");
     let out = start(&s, "sure", &role, "act");
     assert!(out.contains("blocked (Role)") && out.contains("nothing was sent") && !out.contains("may have acted"), "{out}");
-    // any other failure may have left its mark on the world
+    // any other failure may have left its mark on the world: its outcome is not known, and a continue asks first
     for (name, script) in [("broke", "echo sent; exit 2\n"), ("silent", "exit 0\n")] {
         let role = one_script(&s, name, keys, script);
         let out = start(&s, name, &role, "act");
-        assert!(out.contains("blocked (Role)") && out.contains("cannot be undone") && out.contains("may have acted"), "{name}: {out}");
+        assert!(out.contains("blocked") && out.contains("cannot be undone") && out.contains("may have acted"), "{name}: {out}");
         assert_eq!(started(&events(&s, name)), ["act"], "{name}: what may have acted is not run again by itself");
+        let out = person(&s, &["continue", name]);
+        assert_eq!(started(&events(&s, name)), ["act"], "{name}: a continue ran again what may have acted: {out}");
+        let asked = events(&s, name).iter().rev().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "act").map(|e| e["question"]["kind"].clone());
+        assert_eq!(asked, Some(json!("acted")), "{name}: the person is asked about the act: {out}");
     }
     // its script ran to the end, and only then Jaynes found it wrote what it may not: it may have acted all the same
     let strayed = one_script(&s, "strayed", &format!("reach = {{ project = \"write\", write = [\"notes/**\"] }}\n{keys}"), &format!("echo b > README.md\n{DONE}\n"));
     let out = start(&s, "strayed", &strayed, "act");
-    assert!(out.contains("blocked (Role)") && out.contains("README.md") && out.contains("may have acted"), "{out}");
+    assert!(out.contains("blocked") && out.contains("README.md") && out.contains("may have acted"), "{out}");
 }
 
 #[test]
@@ -504,8 +508,9 @@ fn a_step_that_cannot_be_undone_run_again_in_the_same_round_carries_the_same_key
     let script = SEND.replace("REGISTRY", &world.address()).replace("MARKER", &marker.display().to_string());
     let role = one_script(&s, "key", &format!("reach = {{ local_ports = [{}] }}\neffect = \"irreversible\"\nidempotent = true", world.port), &script);
     let out = start(&s, "key", &role, "act");
-    assert!(out.contains("may have acted"), "{out}");
+    assert!(out.contains("blocked (Jaynes)") && out.contains("exited with 2"), "its outcome is not known, said as the machine's: {out}");
     std::fs::write(&marker, "").expect("write");
+    // a step safe to repeat: the person's continue starts it again by itself, with the key it had
     let out = person(&s, &["continue", "key"]);
     assert!(out.contains("finished: delivered"), "{out}");
     let sent = world.announcements();

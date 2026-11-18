@@ -77,10 +77,13 @@ class HowItEnded(unittest.TestCase):
             self.assertNotIn("may have acted", got.reason)
 
     def test_a_step_that_cannot_be_undone_may_have_acted_in_every_failure_but_its_own_word(self):
+        # its outcome is not known: told to the engine as such, never as the role's refusal, which a continue would
+        # take as nothing done and run the act again
         for end in [ended(2, "sent\n"), ended(0), ended(0, output="done!"), ended(0, output="[]"), ended(124)]:
             got, _ = step(end, {"acts": True})
-            self.assertIsInstance(got, Refused)
-            self.assertTrue(got.reason.endswith(ACTED), got.reason)
+            self.assertIsInstance(got, Blocked, got)
+            got, _ = step(end, {"acts": False})
+            self.assertIsInstance(got, Refused, "a step that does not act is the role's to fix")
 
     def test_a_box_that_refused_what_the_script_tried_is_the_machine_s(self):
         printed = "urlopen error [Errno 1] Operation not permitted\nthe registry is out of reach\n"

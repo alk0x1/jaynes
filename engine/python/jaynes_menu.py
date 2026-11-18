@@ -116,13 +116,18 @@ def script_step(call: Call, params: Params) -> Any:
     Exit 0 with an output is the step done. Exit 1 is the script's word that the step cannot be done and that it
     did nothing: the role's fault, with what it printed. Exit 3, no box, or a box that refused what it tried: the
     machine's. Anything else is a script that broke, the role's fault too. A step that cannot be undone (``acts``)
-    may have acted in every case but exit 1 and exit 3, and the person is told so."""
+    may have acted in every case but exit 1 and exit 3: then its outcome is not known, which is told to the engine as
+    such, so that it asks the person before anything acts again, and never as the role's refusal, after which a
+    continue would run the act again."""
     path = str(params["path"])
     name = str(params.get("name") or Path(path).name)
     access = str(params.get("project") or "none")
     project = Path(call["project"]) if call.get("project") and access != "none" else None
     acted = (f". {call.get('step') or name} cannot be undone, so it may have acted: look before you continue"
              if params.get("acts") else "")
+    # what may have acted is not the role's refusal: its outcome is not known, and the engine holds it so
+    def failed(reason: str) -> Any:
+        return Blocked(reason) if params.get("acts") else Refused(reason)
     given = json.dumps({"request": call.get("request"), "given": call.get("given") or [],
                         "project": "." if project is not None else None, "round": call.get("round"),
                         "attempt": call.get("attempt"), "key": call.get("key")})
@@ -143,16 +148,16 @@ def script_step(call: Call, params: Params) -> Any:
     if ran.code == 3:
         return Blocked(" ".join(said[-5:]) or f"{name} could not run")
     if ran.code != 0:
-        return Refused(f"{name} exited with {ran.code}" + (": " + " ".join(said[-5:]) if said else "") + acted)
+        return failed(f"{name} exited with {ran.code}" + (": " + " ".join(said[-5:]) if said else ""))
     if done.output is None:
-        return Refused(f"{name} " + (f"gave an output Jaynes does not read: {done.unread}" if done.unread else
-                                     "wrote no output: it writes JSON to the file named in JAYNES_OUTPUT") + acted)
+        return failed(f"{name} " + (f"gave an output Jaynes does not read: {done.unread}" if done.unread else
+                                    "wrote no output: it writes JSON to the file named in JAYNES_OUTPUT"))
     try:
         output = json.loads(done.output)
     except ValueError as e:
-        return Refused(f"what {name} wrote to JAYNES_OUTPUT is not JSON: {e}" + acted)
+        return failed(f"what {name} wrote to JAYNES_OUTPUT is not JSON: {e}")
     if not isinstance(output, dict):
-        return Refused(f"what {name} wrote to JAYNES_OUTPUT is not a JSON object" + acted)
+        return failed(f"what {name} wrote to JAYNES_OUTPUT is not a JSON object")
     return output
 
 

@@ -1258,8 +1258,9 @@ impl<'a> Driver<'a> {
                         }
                         Err(Ok(paths)) => {
                             // its script ran to the end before this was found: what cannot be undone may be done
-                            let acted = if decl.effect.irreversible() { format!(". {step} cannot be undone, so it may have acted: look before you continue") } else { String::new() };
-                            return end(AttemptOutcome::Refused { reason: format!("the step changed files it may not change: {}{acted}", paths.join(", ")) });
+                            let reason = format!("the step changed files it may not change: {}", paths.join(", "));
+                            // what may have acted is held by the core as an outcome not known, never as a refusal
+                            return end(if decl.effect.irreversible() { AttemptOutcome::Fault { reason } } else { AttemptOutcome::Refused { reason } });
                         }
                         Err(Err(e)) => return end(AttemptOutcome::Fault { reason: e }),
                     }
