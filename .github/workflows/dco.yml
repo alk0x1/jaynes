@@ -1,0 +1,30 @@
+name: dco
+
+# A pull request from outside carries the Developer Certificate of Origin on every commit (CONTRIBUTING.md): each is
+# signed off by its own author. Run from the base branch's own copy of this file and of .github/dco.sh
+# (pull_request_target), so a pull request cannot turn its own check off; it reads the pull request's commits with git
+# and runs none of its code. The owner's own pull requests are not checked, unless labelled dco.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    if: github.event.pull_request.user.login != github.repository_owner || contains(github.event.pull_request.labels.*.name, 'dco')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every commit signed off by its author
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin "pull/$PR/head"
+          sh .github/dco.sh "$BASE" "$HEAD"
