@@ -102,7 +102,7 @@ impl RoleProgram {
             .spawn()
             .map_err(|e| format!("the role program did not start: {e}"))?;
         if let Some(f) = &self.pidfile {
-            let _noted = std::fs::write(f, child.id().to_string());
+            let _noted = crate::agent::note_process(f, child.id());
         }
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(line.as_bytes()).map_err(|e| format!("the role program did not take the request: {e}"))?;
@@ -120,6 +120,10 @@ impl RoleProgram {
                     // the whole group: a check's suite runs in the role's children
                     let pgid = child.id();
                     let stopped = crate::agent::stop_group_reaping(pgid, Duration::ZERO, || drop(child.try_wait()));
+                    // a role that left its group is ended by its own number, so the wait has an end
+                    if matches!(child.try_wait(), Ok(None)) {
+                        let _killed = child.kill();
+                    }
                     let _waited = child.wait();
                     if let Some(f) = &self.pidfile {
                         let _gone = std::fs::remove_file(f);
