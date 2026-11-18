@@ -1132,9 +1132,10 @@ mod tests {
         let pgid = child.id();
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(group_runs(pgid), Ok(false), "an ended process waiting to be collected does not run");
+        // nothing is waited for: it returns well before its patience, however slow the machine (a CI runner took 1.2 s)
         let asked = Instant::now();
-        assert_eq!(stop_group(pgid, Duration::from_secs(3)), Ok(false));
-        assert!(asked.elapsed() < Duration::from_secs(1), "nothing is waited for: {:?}", asked.elapsed());
+        assert_eq!(stop_group(pgid, Duration::from_secs(20)), Ok(false));
+        assert!(asked.elapsed() < Duration::from_secs(10), "nothing is waited for: {:?}", asked.elapsed());
         let _collected = child.wait();
     }
 
