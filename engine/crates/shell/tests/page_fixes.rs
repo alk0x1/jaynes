@@ -96,9 +96,36 @@ fn get(port: u16, path: &str) -> Result<String, String> {
     ask(port, format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes(), Duration::from_secs(3))
 }
 
-/// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+/// A port free now on both of the page's addresses, for a page a test starts. Not the system's choice: the system
+/// gives a bind on 0 a port of the range it also gives every connection that goes out (49152 and up on macOS), and a
+/// connection of another test running at once could take it before the page binds it. A port drawn below that range,
+/// at random among 20000, is taken by no connection, and by another test's draw only by chance. A bind alone does not
+/// tell it free: the standard library binds with SO_REUSEADDR, which on macOS lets a bind on 127.0.0.1 through where
+/// another program listens on every address at that port; so nothing may answer there either.
 fn port(_n: u16) -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+    use std::hash::{BuildHasher, Hasher};
+    let answers = |address: &str, p: u16| {
+        let at: std::net::SocketAddr = format!("{address}:{p}").parse().expect("address");
+        TcpStream::connect_timeout(&at, Duration::from_millis(200)).is_ok()
+    };
+    for _ in 0..200 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let p = 20000 + (h.finish() % 20000) as u16;
+        let four = std::net::TcpListener::bind(("127.0.0.1", p)).is_ok();
+        let six = !std::net::TcpListener::bind(("::1", p)).is_err_and(|e| e.kind() == std::io::ErrorKind::AddrInUse);
+        if four && six && !answers("127.0.0.1", p) && !answers("[::1]", p) {
+            return p;
+        }
+    }
+    panic!("no free port between 20000 and 40000")
+}
+
+/// A listener on 127.0.0.1 at a port the system gives, held from the start: no other test can take its port.
+fn held() -> (std::net::TcpListener, u16) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = l.local_addr().expect("address").port();
+    (l, port)
 }
 
 #[test]
@@ -268,14 +295,26 @@ fn a_head_spoken_a_byte_at_a_time_is_cut_off_at_its_deadline() {
     assert!(closed < Duration::from_secs(5), "{closed:?}");
 }
 
+const IMPOSTOR: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"seq\":123}";
+const OLDER: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 15\r\n\r\n<h1>Jaynes</h1>";
+
 /// A program on the machine that answers anything on `address`, as another program could.
 fn impostor(address: &str, port: u16) -> Option<std::net::TcpListener> {
-    answering(address, port, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"seq\":123}")
+    answering(address, port, IMPOSTOR)
 }
 
 /// A program that gives every request the same reply.
 fn answering(address: &str, port: u16, reply: &'static str) -> Option<std::net::TcpListener> {
-    let l = std::net::TcpListener::bind((address, port)).ok()?;
+    Some(answer_on(std::net::TcpListener::bind((address, port)).ok()?, reply))
+}
+
+/// A program on 127.0.0.1 at a port it holds from the start, giving every request the same reply, and its port.
+fn answering_held(reply: &'static str) -> (std::net::TcpListener, u16) {
+    let (l, port) = held();
+    (answer_on(l, reply), port)
+}
+
+fn answer_on(l: std::net::TcpListener, reply: &'static str) -> std::net::TcpListener {
     let mine = l.try_clone().expect("clone");
     std::thread::spawn(move || {
         for s in mine.incoming().flatten() {
@@ -285,7 +324,7 @@ fn answering(address: &str, port: u16, reply: &'static str) -> Option<std::net::
             let _said = s.write_all(reply.as_bytes());
         }
     });
-    Some(l)
+    l
 }
 
 fn stop_pages_on(port: u16) {
@@ -299,10 +338,12 @@ fn the_page_is_opened_only_once_it_answers_as_itself_on_both_of_its_addresses() 
     let exe = Path::new(BIN);
     // nothing there: the page starts, proves itself on both addresses, and the link would open
     let port = port(6);
+    let log = || std::fs::read_to_string(base.join("home/page.log")).unwrap_or_default();
     let opened = jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false);
-    assert_eq!(opened, Ok(format!("http://localhost:{port}/")), "{opened:?}");
+    assert_eq!(opened, Ok(format!("http://localhost:{port}/")), "the page said: {}", log());
     // and a second time it is found running, as itself
-    assert_eq!(jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false), Ok(format!("http://localhost:{port}/")));
+    let again = jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false);
+    assert_eq!(again, Ok(format!("http://localhost:{port}/")), "the page said: {}", log());
     stop_pages_on(port);
     // another program on ::1, where the browser goes for localhost: the link, key and all, is never opened
     let port = crate::port(7);
@@ -313,8 +354,7 @@ fn the_page_is_opened_only_once_it_answers_as_itself_on_both_of_its_addresses() 
         stop_pages_on(port);
     }
     // another program on 127.0.0.1: the page is not taken for running, and the link is not opened
-    let port = crate::port(8);
-    let _four = impostor("127.0.0.1", port).expect("bind");
+    let (_four, port) = answering_held(IMPOSTOR);
     let refused = jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false);
     let said = refused.expect_err("opened with another program on 127.0.0.1");
     assert!(said.contains(&format!("127.0.0.1:{port}")) && said.contains("not opened"), "{said}");
@@ -326,8 +366,7 @@ fn an_older_page_still_on_one_address_with_another_program_on_the_other_is_never
     let base = home("older");
     std::fs::write(base.join("home/page.key"), "0123456789abcdef0123456789abcdef").expect("key");
     // a page of an earlier version knows nothing of the proof: it answers any path with its home screen
-    let port = port(11);
-    let _old = answering("127.0.0.1", port, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 15\r\n\r\n<h1>Jaynes</h1>").expect("bind");
+    let (_old, port) = answering_held(OLDER);
     let other = impostor("::1", port);
     let refused = jaynes_shell::install::ensure_page_on(&base.join("home"), port, Path::new(BIN), false);
     let said = refused.expect_err("opened with an older page and another program");
@@ -337,8 +376,7 @@ fn an_older_page_still_on_one_address_with_another_program_on_the_other_is_never
     }
     stop_pages_on(port);
     // and an older page alone is not taken for this one either, and says what it may be
-    let port = crate::port(12);
-    let _old = answering("127.0.0.1", port, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 15\r\n\r\n<h1>Jaynes</h1>").expect("bind");
+    let (_old, port) = answering_held(OLDER);
     let alone = jaynes_shell::install::ensure_page_on(&base.join("home"), port, Path::new(BIN), false).expect_err("opened an older page");
     assert!(alone.contains(&format!("127.0.0.1:{port}")) && alone.contains("an older page"), "{alone}");
     stop_pages_on(port);

@@ -21,9 +21,26 @@ impl Drop for Page {
     }
 }
 
-/// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+/// A port free now on both of the page's addresses, drawn below the range the system gives connections that go out,
+/// where a connection of another test could take it before the page binds it, and where nothing answers: page_fixes.rs
+/// says why.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+    use std::hash::{BuildHasher, Hasher};
+    let answers = |address: &str, p: u16| {
+        let at: std::net::SocketAddr = format!("{address}:{p}").parse().expect("address");
+        std::net::TcpStream::connect_timeout(&at, std::time::Duration::from_millis(200)).is_ok()
+    };
+    for _ in 0..200 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let p = 20000 + (h.finish() % 20000) as u16;
+        let four = std::net::TcpListener::bind(("127.0.0.1", p)).is_ok();
+        let six = !std::net::TcpListener::bind(("::1", p)).is_err_and(|e| e.kind() == std::io::ErrorKind::AddrInUse);
+        if four && six && !answers("127.0.0.1", p) && !answers("[::1]", p) {
+            return p;
+        }
+    }
+    panic!("no free port between 20000 and 40000")
 }
 
 /// Wait until Jaynes's page answers on `port`: its /api/version, with the record's sequence, and nothing else's.
