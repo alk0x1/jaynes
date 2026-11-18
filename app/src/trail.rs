@@ -1,6 +1,9 @@
 //! The app's own log, kept in a file (~/Library/Logs/Jaynes/app.log, or JAYNES_APP_TRAIL): what it says while it runs
 //! and, last, why it ended, so an app that is gone tells how. Opened from the Dock or Finder, nothing sees its stderr.
+//! A build for tests never writes in the person's log: its own goes where the test says, beside the test's state, or
+//! in the temporary folder.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing_subscriber::fmt::writer::MakeWriterExt as _;
@@ -33,10 +36,24 @@ static ENDING: Mutex<Option<Ending>> = Mutex::new(None);
 
 /// Where the log is kept.
 pub fn path() -> PathBuf {
-    std::env::var_os("JAYNES_APP_TRAIL").map(PathBuf::from).unwrap_or_else(|| {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-        home.join("Library/Logs/Jaynes/app.log")
-    })
+    let state = crate::testing::var("JAYNES_APP_STATE");
+    kept_at(crate::testing::BUILT_FOR_TESTS, std::env::var_os("JAYNES_APP_TRAIL"), state, std::env::var_os("HOME"), &std::env::temp_dir(), std::process::id())
+}
+
+/// Where a build keeps its log: where it is told (`trail`), else the person's; a build for tests, where it is told,
+/// else beside the test's state, else the temporary folder (one per process), and never the person's, even told so.
+fn kept_at(for_tests: bool, trail: Option<OsString>, state: Option<OsString>, home: Option<OsString>, temp: &Path, pid: u32) -> PathBuf {
+    let persons = home.map(PathBuf::from).unwrap_or_default().join("Library/Logs/Jaynes/app.log");
+    let own = || match state.as_ref().map(Path::new).and_then(Path::parent) {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join("app.log"),
+        _ => temp.join(format!("jaynes-app-test-{pid}.log")),
+    };
+    match trail.map(PathBuf::from) {
+        Some(t) if for_tests && t == persons => own(),
+        Some(t) => t,
+        None if for_tests => own(),
+        None => persons,
+    }
 }
 
 /// Keeps a log grown past `under` bytes aside as `<log>.1` (the one there before goes); whether it did.
@@ -103,7 +120,37 @@ pub fn fail(why: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ending, rotated};
+    use super::{Ending, kept_at, rotated};
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_build_for_tests_never_keeps_its_log_in_the_persons() {
+        let home = || Some(OsString::from("/Users/someone"));
+        let persons = PathBuf::from("/Users/someone/Library/Logs/Jaynes/app.log");
+        let temp = Path::new("/tmp/t");
+        let told = || Some(OsString::from("/x/a.log"));
+        // a build for people: the person's log, or where it is told
+        assert_eq!(kept_at(false, None, None, home(), temp, 7), persons);
+        assert_eq!(kept_at(false, told(), None, home(), temp, 7), PathBuf::from("/x/a.log"));
+        // a build for tests: where it is told, else beside the test's state, else the temporary folder
+        assert_eq!(kept_at(true, told(), None, home(), temp, 7), PathBuf::from("/x/a.log"));
+        assert_eq!(kept_at(true, None, Some("/t/s/app-state.json".into()), home(), temp, 7), PathBuf::from("/t/s/app.log"));
+        assert_eq!(kept_at(true, None, None, home(), temp, 7), PathBuf::from("/tmp/t/jaynes-app-test-7.log"));
+        assert_eq!(kept_at(true, None, Some("app-state.json".into()), home(), temp, 7), PathBuf::from("/tmp/t/jaynes-app-test-7.log"));
+        // and never the person's, even told so
+        for state in [None, Some(OsString::from("/t/s/app-state.json"))] {
+            assert_ne!(kept_at(true, Some(persons.clone().into()), state.clone(), home(), temp, 7), persons);
+            assert_ne!(kept_at(true, None, state, home(), temp, 7), persons);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-driver")]
+    fn this_build_for_tests_keeps_no_log_in_the_persons() {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        assert_ne!(super::path(), home.join("Library/Logs/Jaynes/app.log"));
+    }
 
     #[test]
     fn a_log_grown_too_big_is_kept_aside_once_and_a_new_one_starts() {
