@@ -7,3 +7,4 @@ dist/
 *.sqlite3
 .jaynes/
 docs/research/
+docs/prototypes/
