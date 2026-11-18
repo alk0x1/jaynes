@@ -33,9 +33,9 @@
 //! | io_uring, bpf, perf, keys, new namespaces, mounts         | seccomp refuses them (io_uring would pass the filter) |
 //! | the same calls by another way in: x32 numbers, a 32-bit   | seccomp refuses the x32 numbers too; a call of another |
 //! | process, socketcall                                       | architecture (socketcall is only 32-bit) ends it      |
-//! | a file it was handed open outside its folders             | the box refuses to open while any file but 0, 1 and 2 |
-//! |                                                           | would stay open into the command (Landlock does not   |
-//! |                                                           | see a file already open)                              |
+//! | a file it was handed open outside its folders             | every file but 0, 1 and 2 is marked to close on exec  |
+//! |                                                           | (Landlock does not see a file already open); if one   |
+//! |                                                           | stays open into the command, the box refuses          |
 //! | no gain of privilege (a setuid program)                   | no_new_privs, which Landlock and seccomp require      |
 //!
 //! "web" and "packages", the network a step's agent may reach, are Claude Code's own sandbox, not this box.
@@ -204,8 +204,8 @@ mod imp {
     }
 
     pub fn run(spec: &Spec, argv: &[String]) -> String {
-        if let Some(open) = handed_open() {
-            return open;
+        if let Some(failed) = close_handed_open() {
+            return failed;
         }
         match confine(spec) {
             // the command is told which network it got, for itself and for tests; it opens nothing
@@ -217,9 +217,50 @@ mod imp {
         }
     }
 
-    /// The files this process was handed open that would stay open into the command: anything but 0, 1 and 2 not
-    /// marked to close on exec. Landlock does not see a file already open, so the box refuses rather than run with
-    /// one: a caller passes only the standard three, as Python's subprocess does.
+    /// Marks every file this process was handed open, but 0, 1 and 2, to close on exec, so that none reaches the
+    /// command: Landlock does not see a file already open. A careless caller (the shell of a CI runner holds two, a
+    /// terminal may hold some) is then no reason to refuse. Then it looks again, and refuses if one is still open
+    /// into the command, as when a mark failed: the box never opens with one.
+    fn close_handed_open() -> Option<String> {
+        // with one thread, nothing closes or reuses a number while it is marked (see close_on_exec)
+        if threads() != Some(1) {
+            return Some("the box closes the files it was handed open only from a process with one thread; it refuses".into());
+        }
+        let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
+            return Some("the box cannot read /proc/self/fd to close the files it was handed open".into());
+        };
+        // the listing's own descriptor is among them, closing on exec already, and gone once the listing ends
+        let fds: Vec<i32> = entries.flatten().filter_map(|e| e.file_name().to_string_lossy().parse::<i32>().ok()).filter(|fd| *fd > 2).collect();
+        mark_close_on_exec(&fds, close_on_exec).or_else(handed_open)
+    }
+
+    /// Marks each of `fds` with `mark`; the first that fails is said. One gone since the listing is not open.
+    pub(super) fn mark_close_on_exec(fds: &[i32], mut mark: impl FnMut(i32) -> rustix::io::Result<()>) -> Option<String> {
+        for &fd in fds {
+            match mark(fd) {
+                Ok(()) | Err(rustix::io::Errno::BADF) => {}
+                Err(e) => return Some(format!("the box could not close the file {fd} it was handed open ({e}); it refuses")),
+            }
+        }
+        None
+    }
+
+    /// The one unsafe call of the engine. No safe call takes a descriptor by its number: std and rustix only borrow
+    /// one through something that owns it, and a file handed open across exec is owned by nothing in this program.
+    /// It is sound here: the descriptor is borrowed only for the two fcntl calls, the program has one thread at this
+    /// point (close_handed_open checks that first), so nothing closes or reuses the number meanwhile, and
+    /// a number that is not open fails with EBADF instead of touching anything.
+    #[allow(unsafe_code)]
+    fn close_on_exec(fd: i32) -> rustix::io::Result<()> {
+        use rustix::io::{fcntl_getfd, fcntl_setfd, FdFlags};
+        // SAFETY: as said above: borrowed for these two calls only, on the single thread, EBADF if not open
+        let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+        let flags = fcntl_getfd(borrowed)?;
+        fcntl_setfd(borrowed, flags | FdFlags::CLOEXEC)
+    }
+
+    /// The files this process holds open that would stay open into the command: anything but 0, 1 and 2 not
+    /// marked to close on exec.
     fn handed_open() -> Option<String> {
         const CLOSE_ON_EXEC: u32 = 0o2_000_000;
         let Ok(entries) = std::fs::read_dir("/proc/self/fdinfo") else {
@@ -330,13 +371,18 @@ mod imp {
         Ok(Net::Ports(ports))
     }
 
+    /// How many threads this process has, read in /proc.
+    fn threads() -> Option<u32> {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Threads:").and_then(|n| n.trim().parse::<u32>().ok())))
+    }
+
     /// A network of the box's own: a new user namespace, which a process may make without privilege where the
     /// machine allows it, holding a new network namespace whose only interface is its loopback, brought up here.
     /// The box's user and group stay what they are, so the command does not see itself as root.
     pub(super) fn own_network() -> Result<(), String> {
-        let threads = std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Threads:").and_then(|n| n.trim().parse::<u32>().ok())));
+        let threads = threads();
         if threads != Some(1) {
             let n = threads.map(|n| n.to_string()).unwrap_or_else(|| "an unknown number of".into());
             return Err(format!("the box makes a network of its own only from a process with one thread, and this one has {n} threads"));
@@ -507,6 +553,15 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_the_box_cannot_mark_to_close_makes_it_refuse() {
+        let failed = imp::mark_close_on_exec(&[7, 9], |fd| if fd == 9 { Err(rustix::io::Errno::PERM) } else { Ok(()) });
+        assert!(failed.as_deref().is_some_and(|f| f.contains("could not close the file 9") && f.contains("refuses")), "{failed:?}");
+        // one gone since the listing is not open, and nothing to refuse
+        assert_eq!(imp::mark_close_on_exec(&[7, 9], |fd| if fd == 9 { Err(rustix::io::Errno::BADF) } else { Ok(()) }), None);
+    }
 
     #[test]
     fn a_network_has_a_way_out_when_it_has_an_interface_but_the_loopback() {
