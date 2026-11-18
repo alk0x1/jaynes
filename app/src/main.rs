@@ -36,6 +36,7 @@ mod testing;
 mod looking_at;
 mod run_actions;
 mod palette;
+mod run_waits;
 mod trail;
 mod presence;
 mod rail;
@@ -155,6 +156,8 @@ pub(crate) struct Root {
     act_said: Option<String>,
     /// Command-K, while it shows.
     palette: Option<(Entity<palette::PaletteView>, Subscription)>,
+    /// The runs' questions put off with Later on the line over an agent ("run/question").
+    later: std::collections::HashSet<String>,
     _branch: Task<()>,
 }
 
@@ -194,6 +197,8 @@ impl Render for Root {
                             .min_w_0()
                             .h_full()
                             .when(self.tabs.read(cx).changes.is_none(), |d| d.children(self.ask_bar(cx)))
+                            // a run that waits, said over the agent open: it tells, it does not cover the agent
+                            .when(self.agent_view.is_some() && self.tabs.read(cx).changes.is_none() && !self.tabs.read(cx).inbox, |d| d.children(self.run_waits_line(cx)))
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
                                 _ if self.tabs.read(cx).changes.is_some() => self.stack.clone().into_any_element(),
                                 _ if self.tabs.read(cx).inbox => self.inbox_view(cx),
@@ -278,7 +283,13 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.tabs.update(cx, |t, cx| t.step_by(-1, cx))))
             .on_action(cx.listener(|this, _: &NextRun, _, cx| this.step_run(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousRun, _, cx| this.step_run(-1, cx)))
-            .on_action(cx.listener(|this, _: &OpenWaiting, window, cx| this.open_next(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenWaiting, window, cx| {
+                // the run the line over the agent tells of, when it shows: what its Open says
+                match this.run_waits(cx) {
+                    Some(w) if this.agent_view.is_some() => this.tabs.update(cx, |t, cx| t.show(Some(w.run), cx)),
+                    _ => this.open_next(window, cx),
+                }
+            }))
             .on_action(cx.listener(|this, _: &ShowInbox, _, cx| this.tabs.update(cx, |t, cx| t.show_inbox(cx))))
             .on_action(cx.listener(|this, _: &SendAnswer, _, cx| {
                 // the open agent's first choice when it asks, else the run's answer
@@ -401,6 +412,80 @@ enum Shown {
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
+    /// The run the line over an open agent tells of, if one waits (run_waits.rs).
+    fn run_waits(&self, cx: &App) -> Option<run_waits::Waiting> {
+        let waits = run_waits::waiting(&self.runs.read(cx).snap);
+        run_waits::line(&waits, &self.later, self.open_ask(cx).is_some())
+    }
+
+    /// "◆ A run waits · <run> · <question>", Open (Command-O) and Later, over the open agent's terminal.
+    fn run_waits_line(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let w = self.run_waits(cx)?;
+        let (run, key) = (w.run.clone(), run_waits::key(&w));
+        let what = if w.ahead { format!("{} · {} · before something that cannot be undone", w.title, w.about) } else { format!("{} · {}", w.title, w.about) };
+        Some(
+            div()
+                .flex_none()
+                .mx(px(10.))
+                .mt(px(8.))
+                .px(px(10.))
+                .py(px(6.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if w.ahead { rgb(look::amber()) } else { rgba((look::amber() << 8) | 0x66) })
+                .bg(rgb(look::panel_2()))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(12.5))
+                .child(div().flex_none().text_color(rgb(look::amber())).font_weight(FontWeight::SEMIBOLD).child("◆ A run waits"))
+                .child(div().flex_1().min_w_0().truncate().text_color(rgb(look::text())).child(what))
+                .child(
+                    div()
+                        .id("run-waits-open")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(9.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .bg(rgb(look::blue()))
+                        .text_color(rgb(look::on_fill()))
+                        .cursor_pointer()
+                        .child("Open")
+                        .child(div().text_size(px(10.5)).child("⌘O"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.tabs.update(cx, |t, cx| t.show(Some(run.clone()), cx)))),
+                )
+                .child(
+                    div()
+                        .id("run-waits-later")
+                        .flex_none()
+                        .px(px(9.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(look::line_2()))
+                        .text_color(rgb(look::dim()))
+                        .cursor_pointer()
+                        .child("Later")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.later.insert(key.clone());
+                            cx.notify();
+                        })),
+                ),
+        )
+    }
+
+    /// Later on the line over the agent, as a click on it: for a test.
+    #[cfg(feature = "test-driver")]
+    pub(crate) fn put_off(&mut self, cx: &mut Context<Self>) {
+        if let Some(w) = self.run_waits(cx) {
+            self.later.insert(run_waits::key(&w));
+            cx.notify();
+        }
+    }
+
     /// The line under the tabs while herdr-core cannot save its terminals: what to do, said once.
     fn core_cannot_save(&self, cx: &App) -> Option<Div> {
         let trouble = self.agents.read(cx).trouble.clone()?;
@@ -1707,7 +1792,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, later: Default::default(), _branch: branch }
         })
     })
     .map(|handle| {
@@ -1743,6 +1828,17 @@ pub(crate) fn palette_does(what: String, cx: &mut App) {
             "go" => p.go(cx),
             _ => {}
         });
+    });
+}
+
+/// Later on the line over the agent, as a click on it: for a test.
+#[cfg(feature = "test-driver")]
+pub(crate) fn later_on_line(cx: &mut App) {
+    let Some(main) = MAIN.with(|m| m.get()) else { return };
+    let _ = main.update(cx, |_, window, cx| {
+        if let Some(Some(root)) = window.root::<Root>() {
+            root.update(cx, |r, cx| r.put_off(cx));
+        }
     });
 }
 

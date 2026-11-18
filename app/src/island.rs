@@ -509,6 +509,8 @@ impl Island {
             "panic" => panic!("a test asked the app to panic"),
             // what the next presence tick would tell, told in the log and sent nowhere
             "presence?" => cx.defer(crate::presence_probe),
+            // Later on the line over an agent that says a run waits
+            "later" => cx.defer(crate::later_on_line),
             // Command-K: `palette type <letters>`, `palette down`, `palette go` (open it with `key cmd-k`)
             "palette" => {
                 let what = rest.to_string();
