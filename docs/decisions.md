@@ -2,6 +2,34 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-18: The guard refuses an agent what a project's checks reach
+
+**Decided.** In an agent's session the guard refuses, never asks, the commands
+that change what a project's checks reach: `jaynes project open-ports`,
+`close-ports`, `open-network` and `close-network`. It is the guard's one deny,
+and it holds whatever its settings: with the guard off, only watching, or off
+in the project's folder. It refuses every form it reads: the whole path of
+jaynes, a variable, `cargo run`, after `cd`, behind `env`, `timeout` or
+`script`, inside `sh -c`, `bash -lc`, `eval`, `python -c` or a line echoed into
+a shell. The refusal says to run the command in the person's own terminal,
+and that `jaynes project ports DIR` says what is open. Reading the choices
+passes, and so do words that only talk about the commands: a search (`grep`,
+`rg`), a commit message, a pull request's text.
+
+**Why.** These are the person's alone, at a terminal (a decision of the same
+day, with the network's way out for servers that open every address). The
+command line refuses a program without a terminal, but an agent can give the
+command one (`script -q /dev/null jaynes project open-ports .`), and then the
+command line sees a terminal. An ask would put an agent's request in front of
+a person who may approve it without reading; there is nothing here an agent
+needs, so there is nothing to ask.
+
+**Costs.** The guard reads words: a command put together when it runs (a verb
+in a variable, a script the agent writes first and then runs) is not seen, and
+only the command line's refusal stays. Words that name the commands in another
+program's arguments (`sed -n '/project open-ports/p'`) are refused too; the
+reason says what to do. The guard runs only where the plugin is on.
+
 ## 2026-11-18: The guard can only watch
 
 **Decided.** Setup can set the guard to watch. Watching, what it would ask

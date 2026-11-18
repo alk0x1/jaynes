@@ -3,7 +3,9 @@
 It runs in every Claude Code session where the plugin is on, before jaynes may be installed, so it uses only
 python3's standard library. It holds git and GitHub actions that cannot be undone, and edits of its own files, by
 answering "ask"; everything else gets no answer at all, so Claude Code's own permission flow applies. It never
-blocks (never exits 2): in claude -p, where nobody can answer, Claude Code turns the ask into a deny by itself.
+blocks (never exits 2): in claude -p, where nobody can answer, Claude Code turns the ask into a deny by itself. One
+thing it refuses outright ("deny"), whatever its settings: changing what a project's checks reach (jaynes project
+open-ports, close-ports, open-network, close-network), which is the person's alone, at a terminal of their own.
 
 Settings: $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json) with "on", "watch" and "owners". On a free owner's
 repositories on GitHub, what can be taken back passes: a plain push, a pull request opened or merged. With no valid
@@ -559,11 +561,68 @@ def writes_own(cmd: Simple) -> str | None:
     return None
 
 
+# --- the person's alone -----------------------------------------------------------
+
+# What a project's checks reach is the person's to change, at a terminal of their own: the command line refuses a
+# program without one, but an agent can give the command a terminal (script -q /dev/null jaynes ...), so the guard
+# refuses these in an agent's session, whatever its settings. It reads words, as everywhere: a command put together
+# when it runs (a verb in a variable, a script written first) is not seen, and the command line's refusal stays.
+PERSON_ONLY = {
+    "open-ports": "which local ports a project's checks reach",
+    "close-ports": "which local ports a project's checks reach",
+    "open-network": "whether the machines on your network reach the servers a project's checks start",
+    "close-network": "whether the machines on your network reach the servers a project's checks start",
+}
+PERSON_ONLY_TEXT = re.compile(r"\bproject\W{1,8}((?:open|close)-(?:ports|network))\b")
+TALKS_ONLY = {"git", "gh", "grep", "egrep", "fgrep", "rg", "ag", "ack"}  # their words are searched or written, not run
+
+
+def person_only(cmd: Simple) -> str | None:
+    """The person's-alone verb one simple command runs (jaynes project open-ports and its family), or None.
+
+    Any program counts, since jaynes is reached many ways (its whole path, a variable, cargo run, script for a
+    terminal); a word that holds a command line counts too (sh -lc, script -c, python -c, echo into a shell). A
+    search, a commit message and a pull request's text only talk about the commands."""
+    if not cmd.words or os.path.basename(cmd.words[0]) in TALKS_ONLY:
+        return None
+    for a, b in zip(cmd.words, cmd.words[1:]):
+        if a == "project" and b in PERSON_ONLY:
+            return b
+    for w in cmd.words:
+        found = PERSON_ONLY_TEXT.search(w)
+        if found:
+            return found.group(1)
+    return None
+
+
+def refused(event: dict[str, object]) -> str | None:
+    """The reason to refuse an agent's Bash command, or None: only the person's-alone verbs are refused."""
+    tool_input = event.get("tool_input")
+    if event.get("tool_name") != "Bash" or not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+    cwd = event.get("cwd")
+    for cmd in simple_commands(command, cwd if isinstance(cwd, str) and cwd else os.getcwd()):
+        verb = person_only(cmd)
+        if verb:
+            return (f"`jaynes project {verb}` changes {PERSON_ONLY[verb]}, which is the person's alone: the guard "
+                    "refuses it in an agent's session, whatever its settings. To do it, run "
+                    f"`jaynes project {verb} DIR` in your own terminal; `jaynes project ports DIR` says what is open "
+                    "now.")
+    return None
+
+
 # --- the answer -----------------------------------------------------------------
 
-def ask(reason: str) -> None:
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+def answer(decision: str, reason: str) -> None:
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
                                              "permissionDecisionReason": reason}}))
+
+
+def ask(reason: str) -> None:
+    answer("ask", reason)
 
 
 OWN_REASON = ("This changes the guard's own files ({path}), which would let it be turned off without you. "
@@ -688,6 +747,10 @@ def main() -> int:
     try:
         event = json.loads(sys.stdin.read() or "null")
         if isinstance(event, dict):
+            refusal = refused(event)
+            if refusal:
+                answer("deny", refusal)
+                return 0
             verdict = decide(event)
             if verdict:
                 reason, held = verdict
