@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import hashlib
 import json
 import os
 import re
@@ -304,15 +305,15 @@ def _shim(path: Path) -> bool:
     return "libxcselect" in out
 
 
-def _libraries(roots: Iterable[Path]) -> set[Path]:
+def _libraries(roots: Iterable[Path]) -> dict[Path, str]:
     """The folders of the libraries outside ``roots`` that the binaries inside them load, followed recursively, but
     the system's (which the system's own rules already let read); and each library by the path its binary names, when
     links lead from it to the real one (Homebrew's /opt/homebrew/opt/sqlite is a link into its Cellar): the loader
-    follows them, so the box opens their metadata too."""
+    follows them, so the box opens their metadata too. Each with what asked for it, to say so when it is refused."""
     roots = [Path(os.path.realpath(r)) for r in roots]
     todo = [f for r in roots for f in r.rglob("*") if f.is_file() and (f.suffix in (".so", ".dylib") or os.access(f, os.X_OK))]
     seen: set[Path] = set()
-    out: set[Path] = set()
+    out: dict[Path, str] = {}
     while todo:
         f = todo.pop()
         if f in seen:
@@ -329,19 +330,24 @@ def _libraries(roots: Iterable[Path]) -> set[Path]:
             real = Path(os.path.realpath(lib))
             if any(r == real or r in real.parents for r in roots) or not real.exists():
                 continue
-            out.add(real.parent)
+            asked = f"the library {lib}, which {f} loads,"
+            out.setdefault(real.parent, asked)
             if Path(lib) != real:
-                out.add(Path(lib))
+                out.setdefault(Path(lib), asked)
             todo.append(real)
-    return out
+    return dict(sorted(out.items()))
 
 
-def program_needs(interpreter: Path, commands: Iterable[Path] = ()) -> Needs:
+def program_needs(interpreter: Path, commands: Iterable[Path] = (), home: Path | None = None) -> Needs:
     """What a program run by ``interpreter`` and calling ``commands`` needs, from the files themselves: each by the
     path declared and the real one; the interpreter's folder and its environment's (a framework Python runs itself
     inside its folder); the libraries they load outside them (Homebrew's openssl, sqlite). Raises ``Refused`` for a
-    shim of /usr/bin, which works only by reading the whole disk: the real program is to be declared."""
-    run, inside, read = [], [], []
+    shim of /usr/bin, which works only by reading the whole disk: the real program is to be declared; and for what it
+    would open that a box never opens (``_never``), as a declaration of it is refused, naming what asked for it."""
+    home = Path(home) if home is not None else Path.home()
+    commands = list(commands)
+    run, inside = [], []
+    read: dict[Path, str] = {}
     for exe in [interpreter, *commands]:
         real = Path(os.path.realpath(exe))
         if not real.is_file() or not os.access(real, os.X_OK):
@@ -354,17 +360,26 @@ def program_needs(interpreter: Path, commands: Iterable[Path] = ()) -> Needs:
                             capture_output=True, text=True, timeout=60)
     if prefix.returncode != 0:
         raise Refused(f"{interpreter} did not say where it lives: {prefix.stderr.strip()[-200:]}")
-    for line in prefix.stdout.split():
+    for line in prefix.stdout.splitlines():
+        if not line:
+            continue
         real = Path(os.path.realpath(line))
-        if real not in read:
-            read.append(real)
+        read.setdefault(real, f"the interpreter {interpreter}, whose folder it is,")
         if ".framework" in str(real) and real not in inside:
             inside.append(real)
     for c in commands:
-        real = Path(os.path.realpath(c)).parent
-        if real not in read:
-            read.append(real)
-    read += sorted(_libraries(read) - set(read))
+        read.setdefault(Path(os.path.realpath(c)).parent, f"the command {c}, whose folder it is,")
+
+    def refuse_never():
+        for p, asked in read.items():
+            if _never(p, home):
+                raise Refused(f"{asked} would open {p}, which is {NEVER}; put it elsewhere, or declare one that lives elsewhere")
+
+    # before the libraries are looked for: that walks every folder found so far
+    refuse_never()
+    for p, asked in _libraries(read).items():
+        read.setdefault(p, asked)
+    refuse_never()
     return Needs(tuple(dict.fromkeys(run)), tuple(inside), tuple(read))
 
 
@@ -398,20 +413,28 @@ def _literals(paths: Iterable[str]) -> str:
     return " ".join('(literal "' + p.replace("\\", "\\\\").replace('"', '\\"') + '")' for p in paths)
 
 
-def _declared(paths: Iterable[Path], home: Path) -> list[Path]:
-    """The declared folders a program's box opens. Raises ``Refused`` for one that is the person's home or holds it,
-    holds a place secrets live, or is the engine's folder, inside it or holding it: those are never opened."""
+def _never(path: Path | str, home: Path) -> bool:
+    """Whether a program's box never opens ``path``: the person's home or what holds it, a place secrets live, inside
+    it or what holds it, the engine's folder, inside it or what holds it. One rule for what is declared and for what is
+    worked out from the program's interpreter and commands."""
+    real = Path(os.path.realpath(path))
     engine = Path(os.path.realpath(engine_home()))
     home = Path(os.path.realpath(home))
-    secrets = [home / s for s in SECRETS]
+    holds = lambda inner: real == inner or real in inner.parents  # noqa: E731
+    within = lambda outer: real == outer or outer in real.parents  # noqa: E731
+    return holds(home) or holds(engine) or within(engine) or any(holds(x) or within(x) for x in (home / s for s in SECRETS))
+
+
+NEVER = "the person's home, a folder that holds it, a place secrets live or the engine's folder: a role's program never reaches it"
+
+
+def _declared(paths: Iterable[Path], home: Path) -> list[Path]:
+    """The declared folders a program's box opens. Raises ``Refused`` for one it never opens (``_never``)."""
     out = []
     for p in paths:
-        real = Path(os.path.realpath(p))
-        holds = lambda inner: real == inner or real in inner.parents  # noqa: E731
-        if holds(home) or holds(engine) or engine in real.parents or any(holds(x) for x in secrets):
-            raise Refused(f"{p} is the person's home, holds a place secrets live, or is the engine's folder: a role's "
-                          "program never reaches it")
-        out.append(real)
+        if _never(p, home):
+            raise Refused(f"{p} is {NEVER}")
+        out.append(Path(os.path.realpath(p)))
     return out
 
 
@@ -419,6 +442,10 @@ def program_profile(box: ProgramBox) -> str:
     """The sandbox-exec profile for a role's program: closed by default, with the system's own rules for what any
     process needs, and only what the program and its call need opened. The last rule that matches wins."""
     reads, writes = _declared(box.reads, box.home), _declared(box.writes, box.home)
+    for p in [*box.needs.read, *box.needs.run_inside]:
+        # the needs were worked out at pinning and kept: checked again, as what is declared is
+        if _never(p, box.home):
+            raise Refused(f"the program's needs name {p}, which is {NEVER}")
     project = [box.project] if box.project is not None else []
     writable = [box.tmp, *writes, *(project if box.project_write else [])]
     readable = [box.role_dir, box.library, *box.needs.read, *reads, *project]
@@ -562,19 +589,21 @@ def program_selftest(interpreter: Path, make=None) -> list[str]:
 
 
 def program_proof(interpreter: Path, again: bool = False) -> dict:
-    """The proof that a program's box holds on this macOS, kept in the engine's home and made again when macOS changed
-    (or ``again``): {"macos", "at", "holds", "wrong"}."""
+    """The proof that a program's box holds on this macOS, kept in the engine's home and made again when macOS, the
+    box (this file, which writes the profile: a jaynes update may change it) or the interpreter changed, or ``again``:
+    {"macos", "box", "interpreter", "at", "holds", "wrong"}."""
     file = engine_home() / PROOF
-    now = macos()
+    now = {"macos": macos(), "box": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+           "interpreter": os.path.realpath(interpreter)}
     if not again:
         try:
             kept = json.loads(file.read_text())
-            if kept.get("macos") == now:
+            if all(kept.get(k) == v for k, v in now.items()):
                 return kept
         except (OSError, ValueError):
             pass
     wrong = program_selftest(interpreter)
-    proof = {"macos": now, "at": int(__import__("time").time()), "holds": not wrong, "wrong": wrong}
+    proof = {**now, "at": int(__import__("time").time()), "holds": not wrong, "wrong": wrong}
     file.parent.mkdir(parents=True, exist_ok=True)
     tmp = file.with_name(f".{PROOF}.{os.getpid()}")
     tmp.write_text(json.dumps(proof, indent=1))
@@ -1077,7 +1106,8 @@ if __name__ == "__main__":
         # worked out once per role and interpreter, at pinning, and kept: it walks the interpreter's whole folder
         given = json.load(sys.stdin)
         try:
-            n = program_needs(Path(given["interpreter"]), [Path(c) for c in given.get("commands", [])])
+            n = program_needs(Path(given["interpreter"]), [Path(c) for c in given.get("commands", [])],
+                              Path(given["home"]) if given.get("home") else None)
             print(json.dumps({k: [str(p) for p in getattr(n, k)] for k in ("run", "run_inside", "read")}))
         except Refused as e:
             print(e)

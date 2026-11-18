@@ -2629,6 +2629,20 @@ fn a_program_s_box_is_proved_on_this_macos_before_use_and_stays_shut_when_the_pr
     let (code, profile) = lib("program-profile", &call);
     assert!(code == 0 && profile.contains("(deny default)"), "{profile}");
     assert_eq!(proof()["macos"].as_str(), Some(this_macos.as_str()), "the proof was not made again on this macOS");
+    // another box (a jaynes update that changed the profile), or another interpreter: proved again before the first use
+    use sha2::Digest as _;
+    let this_box = format!("{:x}", sha2::Sha256::digest(std::fs::read(root().join("python/jaynes_box.py")).expect("box")));
+    let this_interpreter = std::fs::canonicalize(&interpreter).expect("interpreter").display().to_string();
+    assert_eq!((proof()["box"].as_str(), proof()["interpreter"].as_str()), (Some(this_box.as_str()), Some(this_interpreter.as_str())));
+    for (key, other) in [("box", "an older profile"), ("interpreter", "/another/python3")] {
+        let mut p = proof();
+        p[key] = serde_json::json!(other);
+        p["at"] = serde_json::json!(0);
+        std::fs::write(&proof_file, p.to_string()).expect("write");
+        let (code, profile) = lib("program-profile", &call);
+        assert!(code == 0 && profile.contains("(deny default)"), "{profile}");
+        assert!(proof()["at"].as_i64() != Some(0), "a proof kept for {other} was used: {}", proof());
+    }
     // a proof that did not hold here: the box stays shut and says what got through
     let mut p = proof();
     p["holds"] = serde_json::json!(false);
@@ -2637,6 +2651,60 @@ fn a_program_s_box_is_proved_on_this_macos_before_use_and_stays_shut_when_the_pr
     let (code, said) = lib("program-profile", &call);
     assert!(code == 3 && said.contains("did not hold") && said.contains("list the person's home"), "{said}");
     assert!(!said.contains("(version 1)"), "{said}");
+    let _gone = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box of a role's program is macOS's sandbox-exec here")]
+fn what_a_program_s_box_works_out_from_its_commands_never_opens_the_person_s_home() {
+    // a command's folder, the interpreter's and the libraries' are opened as what is declared is: never the person's
+    // home or what holds it, a place secrets live, or the engine's folder (the engineer lead read a command at the root
+    // of the home open the whole home, but for the secrets)
+    let base = std::env::temp_dir().join(format!("jaynes-program-derived-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&base);
+    let (home, engine) = (base.join("home"), base.join("engine"));
+    for d in [home.join("x/bin"), home.join(".ssh/bin"), engine.join("bin"), base.join("role"), base.join("tmp")] {
+        std::fs::create_dir_all(d).expect("dir");
+    }
+    let tool = |at: &Path| {
+        std::fs::write(at, "#!/bin/sh\necho hi\n").expect("tool");
+        std::fs::set_permissions(at, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
+        at.display().to_string()
+    };
+    let real = Command::new(python()).args(["-c", "import sys; print(sys.executable)"]).output().expect("python");
+    let interpreter = String::from_utf8_lossy(&real.stdout).trim().to_string();
+    let lib = |what: &str, input: &Value| -> (i32, String) {
+        let mut c = Command::new(&interpreter)
+            .args([root().join("python/jaynes_box.py").to_str().expect("path"), what]).env("JAYNES_ENGINE_HOME", &engine)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().expect("run");
+        {
+            use std::io::Write;
+            c.stdin.take().expect("stdin").write_all(input.to_string().as_bytes()).expect("write");
+        }
+        let out = c.wait_with_output().expect("out");
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let needs = |commands: &[String]| lib("program-needs", &serde_json::json!({"interpreter": interpreter, "commands": commands, "home": home}));
+    // a command at the root of the home, in a place secrets live, or in the engine's folder: refused, naming it
+    for at in [home.join("tool"), home.join(".ssh/bin/tool"), engine.join("bin/tool")] {
+        let t = tool(&at);
+        let (code, said) = needs(std::slice::from_ref(&t));
+        assert!(code == 3 && said.contains(&format!("the command {t}")) && said.contains("never reaches"), "{t}: {code} {said}");
+    }
+    // a command in ~/x/bin opens ~/x/bin and nothing else of the home
+    let t = tool(&home.join("x/bin/tool"));
+    let (code, said) = needs(&[t]);
+    assert_eq!(code, 0, "{said}");
+    let got: Value = serde_json::from_str(&said).expect("needs");
+    let real_home = std::fs::canonicalize(&home).expect("home");
+    let of_home: Vec<&str> = got["read"].as_array().expect("read").iter().filter_map(Value::as_str).filter(|p| Path::new(p).starts_with(&real_home)).collect();
+    assert_eq!(of_home, vec![real_home.join("x/bin").display().to_string()], "{got}");
+    // needs kept from pinning that name the home are refused when the box is made, as a declaration of it is
+    let mut kept = got.clone();
+    kept["read"].as_array_mut().expect("read").push(Value::from(home.display().to_string()));
+    let call = serde_json::json!({"needs": kept, "role_dir": base.join("role"), "library": base.join("role"), "tmp": base.join("tmp"), "home": home});
+    let (code, said) = lib("program-profile", &call);
+    assert!(code == 3 && said.contains("never reaches") && !said.contains("(version 1)"), "{code} {said}");
     let _gone = std::fs::remove_dir_all(&base);
 }
 
