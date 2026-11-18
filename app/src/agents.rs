@@ -109,7 +109,7 @@ impl Agents {
         self.write_seen(address, turn);
     }
 
-    /// "Mark reviewed" in the Inbox: what the agent finished is seen without opening it.
+    /// "Seen" in the Inbox: what the agent finished is seen without opening it.
     pub fn mark_reviewed(&mut self, address: &str, cx: &mut Context<Self>) {
         if let Some((address, turn)) = seen_now(&self.spaces, Some(address)) {
             self.write_seen(address, turn);

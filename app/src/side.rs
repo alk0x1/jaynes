@@ -43,13 +43,15 @@ impl EventEmitter<Cleared> for Side {}
 
 /// The column in the order the person chose ("Needs you first"): what waits for them, runs and agents in one list;
 /// then the runs at work; then the finished runs, folded to a count; then the spaces with the agents that do not
-/// wait for them.
+/// wait for them. Each label says what is expected of the person, or nothing: an agent done is "done · 5m", grey,
+/// and out of the Inbox's number; a blocked run waits for them ("continue or abandon").
 #[derive(Debug, Default, PartialEq)]
 struct Order {
-    /// The runs whose question is open, then the agents that ask or failed, with their space's name.
+    /// The runs whose question is open, then the blocked ones; then the agents that ask or failed, with their
+    /// space's name.
     needs: Vec<Row>,
     asking: Vec<(String, Agent)>,
-    /// The runs not finished that wait on nothing: working, halted, blocked.
+    /// The runs not finished that wait on nothing: working, halted.
     at_work: Vec<Row>,
     /// The finished runs (delivered, merged, undone, abandoned), by project as the record lists them, but the
     /// cleared ones, which are apart: a run that waits for the person or works is never cleared.
@@ -65,6 +67,11 @@ impl Order {
     }
 }
 
+/// The Inbox's number: what needs the person, runs and agents; never what is done.
+fn inbox_count(o: &Order) -> usize {
+    o.needs.len() + o.asking.len()
+}
+
 /// Whether an agent waits for the person: it asks, or it failed.
 fn asks(a: &Agent) -> bool {
     matches!(a.state, State::Waiting | State::Error)
@@ -78,6 +85,8 @@ fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space], cle
     let mut o = Order { needs: listing.needs.clone(), ..Order::default() };
     for (project, rows) in &listing.projects {
         let (done, open): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|r| finished(r.mark));
+        let (blocked, open): (Vec<&Row>, Vec<&Row>) = open.into_iter().partition(|r| r.mark == Mark::Blocked);
+        o.needs.extend(blocked.into_iter().cloned());
         o.at_work.extend(open.into_iter().cloned());
         let (gone, done): (Vec<&Row>, Vec<&Row>) = done.into_iter().partition(|r| cleared.contains(&r.id));
         o.cleared.extend(gone.into_iter().cloned());
@@ -104,12 +113,42 @@ fn kept_cleared(cleared: &HashSet<String>, listing: Option<&jaynes_shell::listin
     kept
 }
 
-/// What a run at work says at the right of its name: where it is ("step 2 of 4"), or that it halted or is blocked.
-fn at_work_tag(row: &Row) -> String {
+/// What a run at work says at the right of its name: where it is ("step 2 of 4"), or who halted it (`halted`, from
+/// the record: "halted by you" only when the person did).
+fn at_work_tag(row: &Row, halted: Option<&String>) -> String {
     match row.mark {
-        Mark::Halted => "halted".into(),
-        Mark::Blocked => "blocked".into(),
+        Mark::Halted => halted.cloned().unwrap_or_else(|| "halted".into()),
         _ => row.line.split(", ").next().unwrap_or_default().to_owned(),
+    }
+}
+
+/// What a run in "Needs you" says at the right of its name: a blocked one, what the person can do; one that asks,
+/// that it is a run (its question is under it).
+fn needs_tag(row: &Row) -> (String, u32) {
+    match row.mark {
+        Mark::Blocked => ("continue or abandon".into(), look::red()),
+        _ => ("run".into(), look::faint()),
+    }
+}
+
+/// What a finished run says at the right of its name: a delivered or merged one, how many files it changed, as the
+/// record holds them (`files`, counted for finished runs only); the others say nothing there, their line says it.
+fn finished_tag(row: &Row, files: Option<usize>) -> Option<String> {
+    let word = match row.mark {
+        Mark::Delivered => "delivered",
+        Mark::Merged => "merged",
+        _ => return None,
+    };
+    files.map(|n| format!("{word} · {n} {}", if n == 1 { "file" } else { "files" }))
+}
+
+/// What an agent says beside its name, and its colour: what is expected of the person when it waits or failed, how
+/// it stands otherwise; one done says since when, neutral.
+fn agent_word(a: &Agent, now: u64) -> (String, u32) {
+    match a.state {
+        State::Error => ("failed · open it".into(), look::red()),
+        State::ToReview => (format!("done · {}", agents::age(a.since_ms, now)), look::faint()),
+        s => (s.word().into(), colour(s)),
     }
 }
 
@@ -143,7 +182,7 @@ fn colour(state: State) -> u32 {
         State::Waiting => look::amber(),
         State::Error => look::red(),
         State::Working => look::blue(),
-        State::ToReview => look::violet(),
+        State::ToReview => look::grey(),
         State::Idle => look::faint(),
     }
 }
@@ -213,8 +252,7 @@ impl Side {
         cx.notify();
     }
 
-    fn inbox(&self, waiting: usize, review: usize, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let need = waiting + review;
+    fn inbox(&self, need: usize, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.tabs.clone();
         div()
             .id("side-inbox")
@@ -241,7 +279,7 @@ impl Side {
                     div()
                         .px(px(7.))
                         .rounded(px(9.))
-                        .bg(rgb(if waiting > 0 { look::amber() } else { look::violet() }))
+                        .bg(rgb(look::amber()))
                         .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(look::on_fill()))
@@ -299,7 +337,8 @@ impl Side {
         let right = if a.shell || a.state == State::Idle {
             div().text_color(rgb(look::faint())).child(agents::age(a.since_ms, now))
         } else {
-            div().text_color(rgb(colour(a.state))).child(a.state.word())
+            let (word, c) = agent_word(a, now);
+            div().text_color(rgb(c)).child(word)
         };
         let (tabs, address, title) = (self.tabs.clone(), a.address.clone(), a.title.clone());
         div()
@@ -322,7 +361,8 @@ impl Side {
     }
 
     /// An agent that waits for the person, in "Needs you": its space and name, what it asks under them.
-    fn asking(&self, space: &str, a: &Agent, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    fn asking(&self, space: &str, a: &Agent, on: bool, now: u64, cx: &mut Context<Self>) -> impl IntoElement {
+        let (word, c) = agent_word(a, now);
         let (tabs, address, title) = (self.tabs.clone(), a.address.clone(), a.title.clone());
         div()
             .id(SharedString::from(format!("asking-{}", a.address)))
@@ -349,7 +389,7 @@ impl Side {
                             .flex()
                             .gap(px(8.))
                             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(format!("{space} · {}", a.title)))
-                            .child(div().flex_none().text_size(px(11.5)).text_color(rgb(colour(a.state))).child(a.state.word())),
+                            .child(div().flex_none().text_size(px(11.5)).text_color(rgb(c)).child(word)),
                     )
                     .when(!a.msg.trim().is_empty(), |d| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(look::amber())).child(a.msg.clone()))),
             )
@@ -517,12 +557,12 @@ impl Side {
         let (listing, selected) = (runs.snap.listing.clone(), runs.selected.clone());
         let agents = self.agents.read(cx);
         let o = order(&listing, &agents.spaces, &self.cleared);
-        let (waiting, review) = agents.counts();
         let tabs = self.tabs.read(cx);
         let (open, inbox_on) = (tabs.agent.as_ref().map(|(a, _)| a.clone()), tabs.inbox);
         let mut list = div().id("rail-list").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().pt(px(8.)).pb(px(8.)).gap(px(2.));
 
-        let (need, waits) = (waiting + listing.needs.len() + review, waiting + listing.needs.len() > 0);
+        let need = inbox_count(&o);
+        let now = agents::now_ms();
         let tabs = self.tabs.clone();
         list = list.child(
             rail_item("rail-inbox".into(), inbox_on, if need > 0 { format!("Inbox · {need} need you") } else { "Inbox".into() })
@@ -537,7 +577,7 @@ impl Side {
                             .right(px(1.))
                             .px(px(4.))
                             .rounded(px(7.))
-                            .bg(rgb(if waits { look::amber() } else { look::violet() }))
+                            .bg(rgb(look::amber()))
                             .text_size(px(9.5))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(look::on_fill()))
@@ -565,7 +605,7 @@ impl Side {
                 list = list.child(run(row));
             }
             for (space, a) in &o.asking {
-                list = list.child(agent(a, format!("{space} · {} · {}", a.title, a.state.word())));
+                list = list.child(agent(a, format!("{space} · {} · {}", a.title, agent_word(a, now).0)));
             }
         }
         if !o.at_work.is_empty() {
@@ -598,7 +638,7 @@ impl Side {
             );
             if !folded {
                 for a in rest {
-                    list = list.child(agent(a, format!("{} · {}", a.title, a.state.word())));
+                    list = list.child(agent(a, format!("{} · {}", a.title, if a.shell || a.state == State::Idle { a.state.word().to_owned() } else { agent_word(a, now).0 })));
                 }
             }
         }
@@ -618,12 +658,12 @@ impl Render for Side {
         let agents = self.agents.read(cx);
         let core_trouble = agents.trouble.clone();
         let o = order(&listing, &agents.spaces, &self.cleared);
-        let (waiting, review) = agents.counts();
         let now = agents::now_ms();
+        let (files, halted) = (runs.snap.files.clone(), runs.snap.halted.clone());
         let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
         let inbox_on = self.tabs.read(cx).inbox;
         let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
-        list = list.child(self.inbox(waiting + listing.needs.len(), review, inbox_on, cx));
+        list = list.child(self.inbox(inbox_count(&o), inbox_on, cx));
 
         // what waits for the person, runs and agents in one list
         let needs = o.needs.len() + o.asking.len();
@@ -631,10 +671,10 @@ impl Render for Side {
             list = list.child(self.section("§needs", "Needs you", Some(needs), look::amber(), cx));
             if !self.folded.contains("§needs") {
                 for row in &o.needs {
-                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(("run".into(), look::faint())), true, None, cx));
+                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(needs_tag(row)), true, None, cx));
                 }
                 for (space, a) in &o.asking {
-                    list = list.child(self.asking(space, a, open.as_deref() == Some(a.address.as_str()), cx));
+                    list = list.child(self.asking(space, a, open.as_deref() == Some(a.address.as_str()), now, cx));
                 }
             }
         }
@@ -650,7 +690,7 @@ impl Render for Side {
             list = list.child(self.section("§work", "Runs at work", Some(o.at_work.len()), look::faint(), cx));
             if !self.folded.contains("§work") {
                 for row in &o.at_work {
-                    let tag = (at_work_tag(row), if row.mark == Mark::Working { look::blue() } else { look::colour(row.mark) });
+                    let tag = (at_work_tag(row, halted.get(&row.id)), if row.mark == Mark::Working { look::blue() } else { look::faint() });
                     list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(tag), false, None, cx));
                 }
                 if o.finished_count() > 0 {
@@ -660,7 +700,10 @@ impl Render for Side {
                             list = list.child(heading(project, look::faint()));
                             for row in rows {
                                 let x = self.row_control(&row.id, false, cx);
-                                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), None, true, Some(x), cx));
+                                let tag = finished_tag(row, files.get(&row.id).copied()).map(|t| (t, look::faint()));
+                                // a tag says what the line under would: one of the two
+                                let line = tag.is_none();
+                                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), tag, line, Some(x), cx));
                             }
                         }
                     }
@@ -705,7 +748,7 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agents, at_work_tag, kept_cleared, order};
+    use super::{Agent, Mark, Order, Row, State, agent_word, agents, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_tag, order};
     use std::collections::HashSet;
     use jaynes_shell::listing::Listing;
 
@@ -745,13 +788,57 @@ mod tests {
             ],
         };
         let o = order(&listing, &[], &HashSet::new());
-        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "c", "e"]);
+        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "c"]);
         let finished: Vec<(String, Vec<String>)> = o.finished.iter().map(|(p, rows)| (p.clone(), rows.iter().map(|r| r.id.clone()).collect())).collect();
         assert_eq!(finished, [("my-app".to_string(), vec!["b".to_string()]), ("api".into(), vec!["d".into()]), ("notes".into(), vec!["f".into(), "g".into()])]);
         assert_eq!(o.finished_count(), 4);
-        assert_eq!(at_work_tag(&o.at_work[0]), "step 2 of 4");
-        assert_eq!(at_work_tag(&o.at_work[1]), "halted");
-        assert_eq!(at_work_tag(&o.at_work[2]), "blocked");
+        assert_eq!(at_work_tag(&o.at_work[0], None), "step 2 of 4");
+        assert_eq!(at_work_tag(&o.at_work[1], Some(&"halted by you".to_string())), "halted by you");
+        assert_eq!(at_work_tag(&o.at_work[1], None), "halted");
+    }
+
+    #[test]
+    fn a_blocked_run_needs_the_person_after_the_open_questions_and_says_what_they_can_do() {
+        let listing = Listing {
+            needs: vec![row("q", Mark::Needs, "Keep this fix?")],
+            projects: vec![("api".into(), vec![row("e", Mark::Blocked, "step 3 of 3, blocked: no room"), row("a", Mark::Working, "step 1 of 2, running")])],
+        };
+        let o = order(&listing, &[], &HashSet::new());
+        assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q", "e"]);
+        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(needs_tag(&o.needs[0]).0, "run");
+        assert_eq!(needs_tag(&o.needs[1]).0, "continue or abandon");
+        // the Inbox counts what needs the person, the blocked run too, and never what is done
+        let spaces = vec![agents::Space {
+            id: "w1".into(),
+            name: "jaynes".into(),
+            folder: String::new(),
+            agents: vec![agent("w1:t1", State::Waiting), agent("w1:t2", State::ToReview), agent("w1:t3", State::Error)],
+            tabs: Vec::new(),
+        }];
+        assert_eq!(inbox_count(&order(&listing, &spaces, &HashSet::new())), 4);
+    }
+
+    #[test]
+    fn an_agent_says_what_is_expected_of_the_person_or_only_how_it_stands() {
+        let now = 10 * 60_000;
+        let mut done = agent("t", State::ToReview);
+        done.since_ms = 5 * 60_000;
+        assert_eq!(agent_word(&done, now).0, "done · 5m");
+        assert_eq!(agent_word(&agent("t", State::Error), now).0, "failed · open it");
+        assert_eq!(agent_word(&agent("t", State::Waiting), now).0, "waiting");
+        assert_eq!(agent_word(&agent("t", State::Working), now).0, "working");
+    }
+
+    #[test]
+    fn a_delivered_run_says_how_many_files_and_the_other_finished_ones_say_nothing_at_the_right() {
+        assert_eq!(finished_tag(&row("g", Mark::Delivered, "delivered"), Some(3)).as_deref(), Some("delivered · 3 files"));
+        assert_eq!(finished_tag(&row("g", Mark::Delivered, "delivered"), Some(1)).as_deref(), Some("delivered · 1 file"));
+        assert_eq!(finished_tag(&row("b", Mark::Merged, "merged"), Some(2)).as_deref(), Some("merged · 2 files"));
+        // not counted (a run still answering): its line says it
+        assert_eq!(finished_tag(&row("g", Mark::Delivered, "delivered, answers open"), None), None);
+        assert_eq!(finished_tag(&row("d", Mark::Abandoned, "abandoned"), Some(0)), None);
+        assert_eq!(finished_tag(&row("f", Mark::Undone, "reverted by you"), Some(2)), None);
     }
 
     #[test]

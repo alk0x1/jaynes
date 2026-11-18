@@ -1,9 +1,10 @@
-//! The Inbox: what needs the person across every space. Agents that ask something and Jaynes runs that wait come
-//! first ("Needs you"), then agents that finished a turn the person has not looked at ("Finished, to review"). Command-I
-//! shows it in the middle; Command-O goes to the next thing in it.
+//! The Inbox: what needs the person across every space. Agents that ask something or failed, Jaynes runs that wait
+//! and blocked runs come first ("Needs you"), then agents that finished a turn the person has not looked at
+//! ("Finished", neutral: nothing is expected of them there). Command-I shows it in the middle; Command-O goes to the
+//! next thing that needs the person.
 
 use crate::agents::{Space, State};
-use jaynes_shell::listing::Listing;
+use jaynes_shell::listing::{Listing, Mark};
 
 /// A thing in the Inbox: one of the person's agents, or a Jaynes run.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,7 +25,7 @@ pub struct Item {
     pub since_ms: u64,
 }
 
-/// What needs the person, then what finished unseen.
+/// What needs the person, then what finished unseen. A blocked run needs them: to continue it or abandon it.
 pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
     let agents = || spaces.iter().flat_map(|s| s.agents.iter().map(move |a| (s, a)));
     let item = |s: &Space, a: &crate::agents::Agent, what: String| Item {
@@ -43,6 +44,15 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
         })
         .collect();
     needs.extend(runs.needs.iter().map(|r| Item { key: Key::Run(r.id.clone()), title: r.title.clone(), place: "Jaynes run".into(), what: r.line.clone(), state: State::Waiting, since_ms: 0 }));
+    let blocked = runs.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == Mark::Blocked);
+    needs.extend(blocked.map(|r| Item {
+        key: Key::Run(r.id.clone()),
+        title: r.title.clone(),
+        place: format!("Jaynes run · {}", r.line),
+        what: "continue or abandon".into(),
+        state: State::Error,
+        since_ms: 0,
+    }));
     let review = agents().filter(|(_, a)| a.state == State::ToReview).map(|(s, a)| item(s, a, "finished".into())).collect();
     (needs, review)
 }
@@ -85,9 +95,24 @@ mod tests {
             Space { id: "s1".into(), name: "jaynes".into(), folder: String::new(), agents: vec![agent("t1", State::ToReview), agent("t2", State::Waiting), agent("t3", State::Working)], tabs: vec![] },
             Space { id: "s2".into(), name: "helm".into(), folder: String::new(), agents: vec![agent("t4", State::Error), agent("t5", State::Idle)], tabs: vec![] },
         ];
-        let runs = Listing { needs: vec![Row { id: "r1".into(), title: "Run".into(), line: "Pick one".into(), mark: Mark::Needs }], projects: vec![] };
+        let runs = Listing {
+            needs: vec![Row { id: "r1".into(), title: "Run".into(), line: "Pick one".into(), mark: Mark::Needs }],
+            projects: vec![(
+                "api".into(),
+                vec![
+                    Row { id: "r2".into(), title: "Stuck".into(), line: "step 2 of 3, blocked: no room".into(), mark: Mark::Blocked },
+                    Row { id: "r3".into(), title: "Going".into(), line: "step 1 of 3, running".into(), mark: Mark::Working },
+                    Row { id: "r4".into(), title: "Stopped".into(), line: "step 1 of 3, halted".into(), mark: Mark::Halted },
+                ],
+            )],
+        };
         let (needs, review) = gather(&spaces, &runs);
-        assert_eq!(needs.iter().map(|i| i.key.clone()).collect::<Vec<_>>(), [Key::Agent("t2".into()), Key::Agent("t4".into()), Key::Run("r1".into())]);
+        assert_eq!(
+            needs.iter().map(|i| i.key.clone()).collect::<Vec<_>>(),
+            [Key::Agent("t2".into()), Key::Agent("t4".into()), Key::Run("r1".into()), Key::Run("r2".into())]
+        );
+        assert_eq!(needs[3].what, "continue or abandon");
+        assert_eq!(needs[3].place, "Jaynes run · step 2 of 3, blocked: no room");
         assert_eq!(needs[0].what, "wants to approve Bash: ls");
         assert_eq!(needs[0].place, "jaynes");
         assert_eq!(needs[1].what, "stopped with an error");

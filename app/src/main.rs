@@ -1264,10 +1264,11 @@ impl Root {
         inbox::gather(&self.agents.read(cx).spaces, &self.runs.read(cx).snap.listing)
     }
 
-    /// Command-O: the next thing in the Inbox after the one open, round the end.
+    /// Command-O: the next thing that needs the person after the one open, round the end. What is only done, the
+    /// person has nothing to do with, so it is not on the way.
     fn open_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (needs, review) = self.inbox_items(cx);
-        let order: Vec<inbox::Key> = needs.iter().chain(review.iter()).map(|i| i.key.clone()).collect();
+        let (needs, _) = self.inbox_items(cx);
+        let order: Vec<inbox::Key> = needs.iter().map(|i| i.key.clone()).collect();
         let tabs = self.tabs.read(cx);
         let open = match (&tabs.agent, &tabs.open) {
             (Some((a, _)), _) => Some(inbox::Key::Agent(a.clone())),
@@ -1275,7 +1276,7 @@ impl Root {
             _ => None,
         };
         if let Some(key) = inbox::next(&order, open.as_ref()) {
-            let title = needs.iter().chain(review.iter()).find(|i| i.key == key).map(|i| i.title.clone()).unwrap_or_default();
+            let title = needs.iter().find(|i| i.key == key).map(|i| i.title.clone()).unwrap_or_default();
             self.open_item(key, title, window, cx);
         }
     }
@@ -1326,7 +1327,7 @@ impl Root {
                 .cursor_pointer()
                 .child(text)
         };
-        for (name, items) in [("Needs you", &needs), ("Finished, to review", &review)] {
+        for (name, items) in [("Needs you", &needs), ("Finished", &review)] {
             if items.is_empty() {
                 continue;
             }
@@ -1351,7 +1352,7 @@ impl Root {
                 let act = match &item.key {
                     inbox::Key::Agent(address) if item.state == agents::State::ToReview => {
                         let (agents, address) = (self.agents.clone(), address.clone());
-                        button(SharedString::from(format!("{id}-seen")), "Mark reviewed").on_click(move |_, _, cx| {
+                        button(SharedString::from(format!("{id}-seen")), "Seen").on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             agents.update(cx, |a, cx| a.mark_reviewed(&address, cx));
                         })
@@ -1367,7 +1368,7 @@ impl Root {
                 let colour = match item.state {
                     agents::State::Waiting => look::amber(),
                     agents::State::Error => look::red(),
-                    _ => look::violet(),
+                    _ => look::grey(),
                 };
                 page = page.child(
                     div()
@@ -1526,7 +1527,9 @@ impl Root {
             .filter(|r| r.mark == jaynes_shell::listing::Mark::Working)
             .map(|r| r.id.clone())
             .collect();
-        let waiting_runs = runs.snap.listing.needs.len();
+        // a blocked run waits for the person too, as the column and the Inbox say
+        let blocked_runs = runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == jaynes_shell::listing::Mark::Blocked).count();
+        let waiting_runs = runs.snap.listing.needs.len() + blocked_runs;
         let agents = self.agents.read(cx);
         let (waiting, review) = agents.counts();
         let working = agents.spaces.iter().flat_map(|s| &s.agents).filter(|a| a.state == agents::State::Working).count() + working_runs.len();
@@ -1573,7 +1576,7 @@ impl Root {
         }
         bar.child(div().flex_1())
             .when(waiting > 0, |d| d.child(count("count-waiting").child(dot(look::amber())).child(format!("{waiting} waiting"))))
-            .when(review > 0, |d| d.child(count("count-review").child(dot(look::violet())).child(format!("{review} to review"))))
+            .when(review > 0, |d| d.child(count("count-review").child(dot(look::grey())).child(format!("{review} done"))))
             .when(working > 0, |d| d.child(count("count-working").child(look::spinner("status-spin", 10., look::blue())).child(format!("{working} working"))))
             .when(!working_runs.is_empty(), |d| {
                 d.child(

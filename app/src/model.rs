@@ -31,6 +31,40 @@ pub struct Snapshot {
     pub details: HashMap<String, Detail>,
     /// The stop each run that needs the person waits at.
     pub stops: HashMap<String, Stop>,
+    /// How many files each finished run changed, as its done steps recorded them (the column's "delivered · 3 files").
+    pub files: HashMap<String, usize>,
+    /// Who halted each halted run, in the column's words: "halted by you" only when it was the person.
+    pub halted: HashMap<String, String>,
+}
+
+/// Who halted a run, from its entries: the last halt's author, as the column says it.
+pub fn halted_by(events: &[jaynes_core::event::Event]) -> String {
+    use jaynes_core::question::By;
+    let by = events.iter().rev().find_map(|e| match e {
+        jaynes_core::event::Event::Halted { by } => Some(by),
+        _ => None,
+    });
+    match by {
+        Some(By::Person) => "halted by you",
+        Some(By::Agent { .. }) => "halted by an agent",
+        Some(By::Rule { .. }) => "halted by a rule",
+        None => "halted",
+    }
+    .into()
+}
+
+/// How many files a run changed: each thing its done steps on the path changed, once, as the run's summary lists
+/// what was delivered (jaynes_shell::summary).
+pub fn delivered_files(r: &jaynes_core::run::Run) -> usize {
+    let mut seen: Vec<&str> = Vec::new();
+    for i in r.path() {
+        for c in r.steps[i].done.as_ref().map(|d| d.changed.as_slice()).unwrap_or_default() {
+            if !seen.contains(&c.what.as_str()) {
+                seen.push(&c.what);
+            }
+        }
+    }
+    seen.len()
 }
 
 pub struct Runs {
@@ -135,7 +169,19 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
         listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.as_str(), r)).collect();
     let mut details = HashMap::new();
     let mut stops = HashMap::new();
+    let mut files = HashMap::new();
+    let mut halted = HashMap::new();
+    let halts: Vec<&str> = listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == Mark::Halted).map(|r| r.id.as_str()).collect();
+    if !halts.is_empty() {
+        let store = jaynes_shell::store::Store::open(&home.join("record.sqlite3"))?;
+        for id in halts {
+            halted.insert(id.to_owned(), halted_by(&store.events(id)?));
+        }
+    }
     for e in &entries {
+        if e.run.finished() {
+            files.insert(e.run.id.clone(), delivered_files(&e.run));
+        }
         if let Some(s) = stop::waiting(home, &e.run) {
             stops.insert(e.run.id.clone(), s);
         }
@@ -158,7 +204,7 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
             },
         );
     }
-    Ok(Snapshot { listing, details, stops })
+    Ok(Snapshot { listing, details, stops, files, halted })
 }
 
 /// Sends the runs at once, then whenever they change; looks once a second.
@@ -186,5 +232,46 @@ fn watch(tx: async_channel::Sender<Result<Snapshot, String>>) {
             }
         }
         std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{delivered_files, halted_by};
+    use jaynes_core::event::Event;
+    use jaynes_core::question::By;
+    use jaynes_core::manifest::Manifest;
+    use jaynes_core::risk::Changed;
+    use jaynes_core::run::Run;
+    use jaynes_core::{Digest, Input};
+
+    fn done(step: &str, changed: &[&str]) -> Event {
+        Event::StepDone { step: step.into(), round: 0, output: Digest("o".into()), items: vec![], reads: vec![], changed: changed.iter().map(|f| Changed::file((*f).into(), 4)).collect() }
+    }
+
+    #[test]
+    fn a_delivered_run_counts_each_file_its_done_steps_changed_once() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "role": "fix-bug", "version": "1", "protocol": 1,
+            "steps": [{"name": "change", "executor": "agent"}, {"name": "tests", "executor": "agent"}, {"name": "deliver", "executor": "role"}],
+        }))
+        .expect("manifest");
+        let start = Input::Start {
+            run: "r1".into(), request: "Fix it".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(),
+            raise: None, attention: Default::default(), task: None, arm: None, never_merge: false,
+        };
+        let mut events = jaynes_core::decide(None, &start).expect("start").events;
+        events.extend([done("change", &["a.rs", "b.rs"]), done("tests", &["b.rs", "tests/c.rs"]), done("deliver", &[])]);
+        let run = Run::fold(&events).expect("run");
+        assert_eq!(delivered_files(&run), 3);
+    }
+
+    #[test]
+    fn a_halted_run_says_halted_by_you_only_when_the_person_halted_it_last() {
+        let halt = |by: By| Event::Halted { by };
+        assert_eq!(halted_by(&[halt(By::Person)]), "halted by you");
+        assert_eq!(halted_by(&[halt(By::Person), Event::Resumed { by: By::Person }, halt(By::Agent { who: "a program without a terminal".into() })]), "halted by an agent");
+        assert_eq!(halted_by(&[halt(By::Rule { rule: "brake".into() })]), "halted by a rule");
+        assert_eq!(halted_by(&[]), "halted");
     }
 }
