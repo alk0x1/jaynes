@@ -288,12 +288,16 @@ def field_max_length(call: Call, params: Params) -> Any:
 
 
 def _own_role(path: str) -> tuple[Path, ...]:
-    """The folder of the role a check's script is in, for the box to let it read: the folder the menu was started
-    in, which is the role's, and in a run the run's own copy of the role under the engine's home, which the box
-    hides with the rest of the runs. Only that folder, and only when the script is inside it: never the runs, nor
-    another run's copy."""
+    """The folder a check's script may read beyond the project: its run's own copy of the role, which the box hides
+    with the rest of the runs. Only when the menu was started there (the engine starts it in the role's folder),
+    exactly a run's role folder (runs/RUN/role, never a run's own folder, which holds its steps), and the script is
+    inside it. A role anywhere else is not hidden and needs nothing made readable; and making a wide folder
+    readable would open again what the box hides inside it."""
+    import os
     here = Path.cwd().resolve()
-    return (here,) if here in Path(path).resolve().parents else ()
+    runs = Path(os.path.realpath(box.engine_home() / "runs"))
+    is_run_role = here.name == "role" and here.parent.parent == runs
+    return (here,) if is_run_role and here in Path(path).resolve().parents else ()
 
 
 def script(call: Call, params: Params) -> Any:

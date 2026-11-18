@@ -692,6 +692,50 @@ class Source(unittest.TestCase):
         self.assertEqual(odd, [], "write these as escapes")
 
 
+class OwnRole(unittest.TestCase):
+    """The one folder a script check may read beyond the project: its run's own copy of the role, and only that."""
+
+    def where(self, cwd: Path, script: Path, home: Path) -> tuple[Path, ...]:
+        import os
+        here, before = os.getcwd(), os.environ.get("JAYNES_ENGINE_HOME")
+        try:
+            os.environ["JAYNES_ENGINE_HOME"] = str(home)
+            os.chdir(cwd)
+            return menu._own_role(str(script))
+        finally:
+            os.chdir(here)
+            if before is None:
+                os.environ.pop("JAYNES_ENGINE_HOME", None)
+            else:
+                os.environ["JAYNES_ENGINE_HOME"] = before
+
+    def test_a_run_s_own_copy_of_the_role_is_readable(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve() / "home"
+            role = home / "runs" / "r1" / "role"
+            (role / "checks").mkdir(parents=True)
+            (role / "checks" / "x.py").write_text("")
+            self.assertEqual(self.where(role, role / "checks" / "x.py", home), (role,))
+
+    def test_nothing_else_is_made_readable(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve() / "home"
+            run = home / "runs" / "r1"
+            (run / "role" / "checks").mkdir(parents=True)
+            (run / "role" / "checks" / "x.py").write_text("")
+            wide = Path(tmp).resolve() / "wide"
+            (wide / "checks").mkdir(parents=True)
+            (wide / "checks" / "x.py").write_text("")
+            # a role served from any folder outside the runs needs nothing made readable, and a wide one must not be
+            self.assertEqual(self.where(wide, wide / "checks" / "x.py", home), ())
+            # the run's own folder, which holds its steps, is not its copy of the role
+            self.assertEqual(self.where(run, run / "role" / "checks" / "x.py", home), ())
+            # nor is a script outside the folder the role was started in
+            self.assertEqual(self.where(run / "role", wide / "checks" / "x.py", home), ())
+
+
 class SecondReading(unittest.TestCase):
     """Each case of the second reading, as a test that went wrong before."""
 
