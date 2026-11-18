@@ -477,3 +477,49 @@ fn the_page_proves_itself_only_to_a_nonce_in_hex_and_short() {
     }
     assert!(get(port, "/api/knows").expect("reply").starts_with("HTTP/1.1 400"), "no nonce");
 }
+
+#[test]
+fn on_port_0_the_page_takes_the_port_it_is_given_on_both_addresses_and_says_it() {
+    // tests start pages side by side: each asks for any port and reads the one it got from the page's first line
+    let base = home("any-port");
+    let said_file = base.join("said.txt");
+    let said = std::fs::File::create(&said_file).expect("said");
+    let child = Command::new(BIN)
+        .args(["page", "--port", "0"])
+        .env("JAYNES_ENGINE_HOME", base.join("home")).env("JAYNES_HOME", base.join("jaynes")).env("JAYNES_NO_PAGE", "1").env("JAYNES_NO_UPDATE_CHECK", "1").env("JAYNES_PAGE_KEY", "k3y")
+        .stdout(said.try_clone().expect("said"))
+        .stderr(said)
+        .spawn()
+        .map(Page)
+        .expect("page");
+    let until = Instant::now() + Duration::from_secs(5);
+    let port = loop {
+        let said = std::fs::read_to_string(&said_file).unwrap_or_default();
+        if let Some(p) = said.split("the page: http://localhost:").nth(1).and_then(|r| r.split('/').next())
+            && let Ok(p) = p.parse::<u16>()
+        {
+            break p;
+        }
+        assert!(Instant::now() < until, "the page never said its port: {said}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_ne!(port, 0, "the page says the port it holds, not the one it was asked for");
+    assert!(get(port, "/api/version").expect("answers on 127.0.0.1").starts_with("HTTP/1.1 200"));
+    if let Ok(mut six) = TcpStream::connect(("::1", port)) {
+        six.set_read_timeout(Some(Duration::from_secs(3))).expect("timeout");
+        six.write_all(format!("GET /api/knows?nonce=01 HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes()).expect("write");
+        let mut out = String::new();
+        let _read = six.read_to_string(&mut out);
+        assert!(out.contains(&jaynes_shell::page::proof("k3y", "01")), "another program on [::1]:{port}: {out}");
+    }
+    // the person is told by the origin of that port: the page holds it as its own
+    let body = r#"{"run":"no-such-run","action":"halt"}"#;
+    let halt = ask(
+        port,
+        format!("POST /api/act HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: k3y\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes(),
+        Duration::from_secs(3),
+    )
+    .expect("halt");
+    assert!(halt.starts_with("HTTP/1.1 200") && halt.contains("no such run"), "{halt}");
+    drop(child);
+}

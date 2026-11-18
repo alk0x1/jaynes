@@ -163,24 +163,44 @@ const MOST_BODY: u64 = 1 << 20;
 /// Whether an update the page started is still building.
 static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-impl Page {
-    pub fn serve(&self) -> Result<(), String> {
-        let listener = TcpListener::bind(("127.0.0.1", self.port)).map_err(|e| format!("cannot listen on {}: {e}", self.port))?;
-        // localhost is the page's origin, and the browser may reach it on ::1: the page holds that address too, or
-        // another program there would answer for the page. A machine without IPv6 has nothing there to hold.
-        let six = match TcpListener::bind(("::1", self.port)) {
-            Ok(l) => Some(l),
+/// Times a page asked for any port (0) asks again when the port the system gave it on 127.0.0.1 is held on ::1.
+const PORT_TRIES: u32 = 5;
+
+/// The page's two addresses on one port: 127.0.0.1, and ::1 where the machine has it, since localhost may reach
+/// either and another program on ::1 would answer for the page. With `port` 0 the system gives the port, and a port
+/// another program holds on ::1 is let go and another asked for, [`PORT_TRIES`] times; with a port given, that
+/// program is an error at once. `bind` is how an address is taken: the system's, or a test's.
+fn hold(port: u16, mut bind: impl FnMut(&str, u16) -> std::io::Result<TcpListener>) -> Result<(TcpListener, Option<TcpListener>), String> {
+    let tries = if port == 0 { PORT_TRIES } else { 1 };
+    for attempt in 1..=tries {
+        let four = bind("127.0.0.1", port).map_err(|e| format!("cannot listen on {port}: {e}"))?;
+        let given = four.local_addr().map_err(|e| e.to_string())?.port();
+        match bind("::1", given) {
+            Ok(six) => return Ok((four, Some(six))),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempt < tries => drop(four),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                return Err(format!(
-                    "another program answers on [::1]:{}, and it would answer for localhost, the page's origin: the page does not start. Stop that program, or give the page another port",
-                    self.port
-                ));
+                return Err(if port == 0 {
+                    format!("another program answered on ::1 at each of {tries} ports the system gave on 127.0.0.1, last [::1]:{given}, and it would answer for localhost, the page's origin: the page does not start")
+                } else {
+                    format!("another program answers on [::1]:{given}, and it would answer for localhost, the page's origin: the page does not start. Stop that program, or give the page another port")
+                });
             }
             Err(e) => {
                 say(&format!("no IPv6 here ({e}): the page listens on 127.0.0.1 alone, which is all localhost reaches"));
-                None
+                return Ok((four, None));
             }
-        };
+        }
+    }
+    Err("the page found no port".into())
+}
+
+impl Page {
+    /// Serve the page on its port, or with port 0 on the one the system gives, which it takes as its own (the origin
+    /// it answers for, what it restarts on) and says in its first line.
+    pub fn serve(&self) -> Result<(), String> {
+        let (listener, six) = hold(self.port, |address, port| TcpListener::bind((address, port)))?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let page = Page { port, ..self.clone() };
         RUNNING.get_or_init(crate::install::installed_commit);
         if std::env::var("JAYNES_NO_UPDATE_CHECK").is_err() {
             std::thread::spawn(|| loop {
@@ -195,14 +215,14 @@ impl Page {
         // the key never goes to what the page says, which Jaynes keeps in page.log: whoever needs it reads its file
         say(&format!(
             "the page: http://localhost:{port}/ . Open it with its key: http://localhost:{port}/#key= followed by what {} holds",
-            self.home.join("page.key").display(),
-            port = self.port
+            page.home.join("page.key").display(),
+            port = page.port
         ));
         if let Some(six) = six {
-            let page = self.clone();
-            let _started = std::thread::Builder::new().name("page-six".into()).spawn(move || page.accept(&six));
+            let other = page.clone();
+            let _started = std::thread::Builder::new().name("page-six".into()).spawn(move || other.accept(&six));
         }
-        self.accept(&listener);
+        page.accept(&listener);
         Ok(())
     }
 
@@ -1765,6 +1785,51 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ports a test's bind was asked for on ::1, in order.
+    type Asked = std::rc::Rc<std::cell::RefCell<Vec<u16>>>;
+
+    /// A bind that finds ::1 held by another program the first `held` times it is asked for it.
+    fn six_held(held: u32) -> (impl FnMut(&str, u16) -> std::io::Result<TcpListener>, Asked) {
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = asked.clone();
+        let mut left = held;
+        let bind = move |address: &str, port: u16| {
+            if address == "::1" {
+                seen.borrow_mut().push(port);
+                if left > 0 {
+                    left -= 1;
+                    return Err(std::io::Error::from(std::io::ErrorKind::AddrInUse));
+                }
+            }
+            TcpListener::bind((address, port))
+        };
+        (bind, asked)
+    }
+
+    #[test]
+    fn on_any_port_a_port_held_on_ipv6_is_let_go_and_another_asked_for_a_few_times() {
+        // held twice: the third port the system gives is the page's, on both addresses
+        let (bind, asked) = six_held(2);
+        let (four, six) = hold(0, bind).expect("a port");
+        let port = four.local_addr().expect("address").port();
+        assert_eq!(asked.borrow().len(), 3, "{:?}", asked.borrow());
+        assert_eq!(asked.borrow().last(), Some(&port));
+        if let Some(six) = six {
+            assert_eq!(six.local_addr().expect("address").port(), port, "one port on both addresses");
+        }
+        // held every time: the page does not start, and says why
+        let (bind, asked) = six_held(PORT_TRIES);
+        let refused = hold(0, bind).map(|_| ()).expect_err("started with ::1 held");
+        assert_eq!(asked.borrow().len(), PORT_TRIES as usize);
+        assert!(refused.contains("another program answered on ::1 at each of 5 ports"), "{refused}");
+        // a port given: another program on ::1 there is an error at once, as before
+        let given = TcpListener::bind("127.0.0.1:0").expect("bind").local_addr().expect("address").port();
+        let (bind, asked) = six_held(1);
+        let refused = hold(given, bind).map(|_| ()).expect_err("started with ::1 held");
+        assert_eq!(asked.borrow().len(), 1);
+        assert!(refused.contains(&format!("another program answers on [::1]:{given}")), "{refused}");
+    }
 
     /// A connection to a listener of this test, and the page's end of it.
     fn pair(listener: &TcpListener) -> (TcpStream, TcpStream) {
