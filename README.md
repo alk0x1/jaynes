@@ -14,6 +14,10 @@ passed, and the result is still wrong, so you fix it yourself. You either
 review everything and become the bottleneck, or let them run and have no idea
 how often they get it wrong.
 
+An agent writes a fix and a test, the test passes, and it reports done.
+But the test never failed before the fix, so it proves nothing, and the bug
+is still there the next time someone hits it. Nothing in the run told you.
+
 ## How it works
 
 1. **A role is a method.** Its steps, what each may reach, its checks and where
@@ -205,6 +209,11 @@ one before it, so a change to any past entry shows (`jaynes verify`).
 
 Missing, roughly in order: plans of several runs, the Codex adapter, roles for
 design work on this protocol, Linux, targets other than a repository.
+
+What Jaynes costs is measured on your own runs: `jaynes cost` adds up the
+finished ones by risk and outcome, with the minutes and tokens they spent, how
+often a result was sent back, how often a delivery was corrected later, and
+the attempts the agent spent.
 
 ## Maintenance
 
