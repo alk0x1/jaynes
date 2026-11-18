@@ -51,6 +51,32 @@ note_herdr() {
 }
 # --- installed note: end
 
+# --- provenance: begin
+# Where the download was built, checked with GitHub's own gh where it is here and logged in: the release workflow of
+# this repository (JAYNES_REPO, for a fork) must have attested it, from the tag of its version, on GitHub's runners.
+# Where gh cannot check, the checksum the manifest names is all that was checked, and the installer says so: it never
+# goes on silently, and a provenance that does not hold installs nothing.
+provenance() {
+  repo=${JAYNES_REPO:-alk0x1/jaynes}
+  if ! command -v gh >/dev/null 2>&1; then
+    say "Its provenance was not checked, since GitHub's gh is not installed; its checksum was."
+    return 0
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    say "Its provenance was not checked, since gh is not logged in (gh auth login); its checksum was."
+    return 0
+  fi
+  if said=$(gh attestation verify "$1" --repo "$repo" --signer-workflow "$repo/.github/workflows/release.yml" \
+      --source-ref "refs/tags/v$2" --deny-self-hosted-runners 2>&1); then
+    say "Its provenance was checked: built by $repo's release workflow, from tag v$2, on GitHub's runners."
+  else
+    nl='
+'
+    fail "the download's provenance does not hold, so nothing was installed: ${said##*"$nl"}"
+  fi
+}
+# --- provenance: end
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -66,6 +92,7 @@ version=$(printf '%s' "$flat" | sed -n 's/^{"version":"\([^"]*\)".*/\1/p')
 say "Installing Jaynes ${version} for $target..."
 curl -fsSL "$url" -o "$tmp/jaynes.tar.gz" || fail "download failed"
 [ "$(sha256 "$tmp/jaynes.tar.gz")" = "$want" ] || fail "the download is damaged (checksum mismatch); try again"
+provenance "$tmp/jaynes.tar.gz" "$version"
 tar -xzf "$tmp/jaynes.tar.gz" -C "$tmp"
 [ -x "$tmp/jaynes" ] && [ -d "$tmp/Jaynes.app" ] || fail "the release is missing the program or the app"
 

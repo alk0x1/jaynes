@@ -10,6 +10,9 @@ on:
 
 permissions:
   contents: write
+  # GitHub's signing identity for the attestation of where the release was built, and where it is kept
+  id-token: write
+  attestations: write
 
 jobs:
   macos:
@@ -76,6 +79,20 @@ jobs:
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v$version/jaynes-macos-aarch64.tar.gz"
           printf '{\n  "version": "%s",\n  "targets": {\n    "macos-aarch64": {"url": "%s", "sha256": "%s"}\n  }\n}\n' "$version" "$url" "$sum" > "$out/latest.json"
           cat "$out/latest.json"
+      # where the two files were built, signed by GitHub: install.sh checks it with gh where gh is
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/out/jaynes-macos-aarch64.tar.gz
+            ${{ runner.temp }}/out/latest.json
+      - name: The attestation holds as install.sh checks it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in jaynes-macos-aarch64.tar.gz latest.json; do
+            gh attestation verify "$RUNNER_TEMP/out/$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "$GITHUB_REF" --deny-self-hosted-runners
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: jaynes-macos-aarch64
