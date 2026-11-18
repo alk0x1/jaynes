@@ -71,7 +71,7 @@ fn told_two_days_ago(home: &Path) {
         store.decide(run, &start).expect("start");
         store.decide(run, &Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() }).expect("probe");
         let attempt = store.state(run).expect("state").expect("run").steps[0].attempt;
-        let done = AttemptOutcome::Delivered { output: Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None };
+        let done = AttemptOutcome::Delivered { output: Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None, tree: None };
         store.decide(run, &Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: done }).expect("done");
         let waits = store.state(run).expect("state").expect("run");
         assert!(!waits.told.is_empty(), "the run waits on the person: {:?}", waits.phase);
