@@ -88,9 +88,22 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 
 - That Jaynes holds against a program that runs as you, outside any box, and rewrites Jaynes's own files.
 - That the list of such files is complete: it holds what is known to run by itself today, and a file a tool starts to obey later is not on it until it is added.
-- That a step is confined. Jaynes sets the agent program's own guards for each step and
-  records the settings it applied; those guards are partial (in Claude Code the sandbox covers
-  shell commands only), and Jaynes does not claim more than them.
+- That an agent's step is confined to its folder. With Claude Code as the agent, Jaynes sets
+  Claude Code's own guards for each step and records the settings it applied: the tools it may
+  use and the paths they may touch, and Claude Code's sandbox around its shell commands
+  (writing only in the step's folder, no network but what the step declares, the engine's
+  folder, the other runs and your secrets hidden). Claude Code's file tools are held by its
+  permission rules, not by the operating system, and Jaynes claims no more than those guards.
+- That what Jaynes runs itself is held beyond its box. On macOS, a project's test suite, a
+  check's commands and a role's own scripts run in Jaynes's own box: they write only in the
+  step's folders; they reach no network but the local ports the run reserved or the step
+  names, never the Jaynes page's, and where you opened a project's ports yourself, every local
+  port, the page's among them; they send no UDP, cannot read the engine's folder, the other
+  runs or your secrets, cannot use your clipboard or keychain, open no app and write to no
+  terminal. They can still read your other files that are not on the list of secrets, take a
+  port they are allowed in a way other machines on your network can reach while they run, and
+  use as much CPU, memory and disk as the step's time allows. Elsewhere there is no box yet,
+  and these commands do not run.
 - That the agent's work is right. The checks say what they checked; you say the rest.
 - That a correction is the same as a run started over with the corrected answer. Steps run
   again on top of their previous work.
