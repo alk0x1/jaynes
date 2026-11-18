@@ -81,10 +81,16 @@ fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
     start(&s, "small", &format!("printf 'hi\\n' > greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'"));
     let (ok, told) = engine(&s, &["summary", "small"]);
     assert!(ok, "{told}");
-    assert!(told.starts_with("## Jaynes run summary\n\n**Request:** say hi instead of hello\n\n- Run `small`: role small-change 3.0.0 (fingerprint "), "{told}");
+    assert!(told.starts_with("## say hi instead of hello\n\n### Delivered\n\njaynes/small at "), "{told}");
+    assert!(told.contains(", in a repository. The files Jaynes measured:\n\n- `greeting.txt`: 2 lines changed\n\n### Proved by\n\n- **field-required**, on what change made\n- **field-max-length**, on what change made\n- **suite-passes**, on what change made\n"), "{told}");
+    // nothing a person was asked: the change was small, so its stop did not ask
+    assert!(told.contains("### Not proved\n\n- The stop at change asks only at high risk, and this run was low: no person looked at what change made.\n"), "{told}");
+    assert!(told.contains("- Run `small`: role small-change 3.0.0 (fingerprint "), "{told}");
+    // the promises were proved: what is not proved never says they were not read
+    assert!(!told.contains("The role's promises:"), "{told}");
     // the agent here is a line of shell with this machine's paths: the summary keeps it out
-    assert!(told.contains(&format!("), agent a shell command, low risk, engine {}\n- Outcome: delivered as jaynes/small at ", jaynes_core::ENGINE)), "{told}");
-    assert!(told.contains("1. **runner** (Jaynes): done.\n2. **change** (agent): done, 1 attempt. Checks passed: field-required, field-max-length, suite-passes.\n"), "{told}");
+    assert!(told.contains(&format!("), agent a shell command, low risk, engine {}\n", jaynes_core::ENGINE)), "{told}");
+    assert!(told.contains("1. **runner** (Jaynes): done.\n2. **change** (agent): done, 1 attempt.\n"), "{told}");
     // the role's promise, proved again from the run's own copy of the role
     assert!(told.contains("### Promises proved of the role\n\n- Nothing is delivered before the project's suite passed on the change\n"), "{told}");
     assert!(told.contains("1,234 tokens, 1 attempt (0 spent by the agent's own fault), 0 fixes.\n- People: no stop answered by a person.\n"), "{told}");
@@ -147,9 +153,9 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let r = post(port, "/api/look", &look);
     assert!(r["ok"] == true && r["recorded"] == false, "{r}");
     let text = told.split("<pre class=\"said\" id=\"sumtext\">").nth(1).and_then(|t| t.split("</pre>").next()).expect("the summary on the page");
-    assert!(text.starts_with("## Jaynes run summary\n\n**Request:** say hi instead of hello\n"), "{text}");
-    assert!(text.contains(&format!(", high risk, engine {}\n- Outcome: delivered as jaynes/asked at ", jaynes_core::ENGINE)), "{text}");
-    assert!(text.contains("2. **change** (agent): done, 1 attempt. Checks passed: field-required, field-max-length, suite-passes. A person answered 1 question.\n"), "{text}");
+    assert!(text.starts_with("## say hi instead of hello\n\n### Delivered\n\njaynes/asked at "), "{text}");
+    assert!(text.contains(&format!(", high risk, engine {}\n", jaynes_core::ENGINE)), "{text}");
+    assert!(text.contains("2. **change** (agent): done, 1 attempt. A person answered 1 question.\n"), "{text}");
     assert!(text.contains("### Promises proved of the role\n\n- Nothing is delivered before the project&#39;s suite passed on the change\n") || text.contains("### Promises proved of the role\n\n- Nothing is delivered before the project's suite passed on the change\n"), "{text}");
     // the person answered one stop, and their time on its screen was measured: seconds, never the wait
     assert!(text.contains("- People: 1 stop answered by a person, 0 sent back. Their time on Jaynes"), "{text}");

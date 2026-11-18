@@ -44,10 +44,9 @@ pub struct StepLine {
     pub state: &'static str,
     pub attempts: u32,
     pub rounds: u32,
-    /// The checks that passed on the step's last judged attempt, a hidden one marked so.
-    pub passed: Vec<String>,
-    /// Those that did not, each with what it said.
-    pub failed: Vec<String>,
+    /// The checks that passed on what the step made, last time they judged it: each name, and whether it was hidden
+    /// from the agent that made it.
+    pub passed: Vec<(String, bool)>,
     /// Who answered what the step asked, when it asked.
     pub asked: Option<String>,
 }
@@ -83,8 +82,19 @@ pub struct Summary {
     pub engine: String,
     pub prover: String,
     pub risk: &'static str,
-    /// How it ended and what it delivered, in a sentence.
-    pub outcome: String,
+    /// What the run delivered, in the target's own words for it, as recorded; None: nothing.
+    pub delivered: Option<String>,
+    pub abandoned: bool,
+    /// A person reverted what the run merged.
+    pub undone: bool,
+    /// The target, in words ("a repository"), and whether it is one: what a change's size is counted in.
+    pub target: &'static str,
+    pub repository: bool,
+    /// What the run changed, as Jaynes measured it on its copy, never as the agent said: each thing once, in the
+    /// order of the steps, with how much it changed.
+    pub changed: Vec<(String, u64)>,
+    /// What this run did not establish, a sentence each: what no check or no person looked at, what was not measured.
+    pub unproved: Vec<String>,
     pub started: u64,
     pub ended: u64,
     pub steps: Vec<StepLine>,
@@ -198,14 +208,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         .map(|(i, d)| {
             let s = &r.steps[i];
             let on_path = path.contains(&i);
-            let state = if !on_path {
-                "left out at this risk"
-            } else if s.status == Status::Done && s.done.is_some() {
-                "done"
-            } else {
-                "not done"
-            };
-            let named = |c: &jaynes_core::event::CheckRecord| if c.kind == CheckKind::Hidden { format!("{} (hidden)", c.check) } else { c.check.clone() };
+            let done = on_path && s.status == Status::Done && s.done.is_some();
             StepLine {
                 name: d.name.clone(),
                 by: match d.executor {
@@ -213,15 +216,26 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
                     Executor::Role => "Jaynes",
                     Executor::Person => "person",
                 },
-                state,
+                state: if !on_path { "left out at this risk" } else if done { "done" } else { "not done" },
                 attempts: attempts.get(d.name.as_str()).copied().unwrap_or(0),
                 rounds: s.round + 1,
-                passed: s.checks.iter().filter(|c| c.passed && !c.blocked).map(named).collect(),
-                failed: s.checks.iter().filter(|c| !c.passed || c.blocked).map(|c| format!("{} {}", named(c), if c.blocked { "could not judge" } else { "failed" })).collect(),
+                passed: if done { s.checks.iter().filter(|c| c.passed && !c.blocked).map(|c| (c.check.clone(), c.kind == CheckKind::Hidden)).collect() } else { Vec::new() },
                 asked: if on_path { asked(&r, i) } else { None },
             }
         })
         .collect::<Vec<StepLine>>();
+    // what was delivered is what the done steps changed, each thing once, summed over the steps that changed it
+    let mut changed: Vec<(String, u64)> = Vec::new();
+    for &i in &path {
+        for c in r.steps[i].done.as_ref().map(|d| d.changed.as_slice()).unwrap_or_default() {
+            match changed.iter_mut().find(|(what, _)| *what == c.what) {
+                Some((_, size)) => *size += c.size,
+                None => changed.push((c.what.clone(), c.size)),
+            }
+        }
+    }
+    let person = person(events, looks);
+    let unproved = unproved(&r, &steps, &person, &promises);
     Ok(Summary {
         run: r.id.clone(),
         request: r.request.trim().to_string(),
@@ -232,7 +246,13 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         engine: r.engine.clone(),
         prover: jaynes_core::ENGINE.to_string(),
         risk: r.risk.word(),
-        outcome: delivery_line(*outcome, reference, r.undone),
+        delivered: reference.map(str::to_string),
+        abandoned: *outcome == Outcome::Abandoned,
+        undone: r.undone,
+        target: r.manifest.target.noun(),
+        repository: r.manifest.target.is_repository(),
+        changed,
+        unproved,
         started: events.first().map(|(ts, _)| *ts).unwrap_or(0),
         ended: events.last().map(|(ts, _)| *ts).unwrap_or(0),
         // the agents' own: an attempt of a step Jaynes does itself is not theirs
@@ -243,19 +263,57 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         tokens: r.spent.tokens,
         spent: r.counts.spent,
         fixes: r.counts.fixes,
-        person: person(events, looks),
+        person,
     })
 }
 
-/// How the run ended and what it delivered. The delivery is told in the engine's own words for it, as recorded.
-fn delivery_line(outcome: Outcome, reference: Option<&str>, undone: bool) -> String {
-    match (outcome, reference) {
-        (Outcome::Delivered, Some(what)) if undone => format!("delivered as {what}. A person then reverted the merge"),
-        (Outcome::Delivered, Some(what)) => format!("delivered as {what}"),
-        (Outcome::Delivered, None) => "delivered".to_string(),
-        (Outcome::Abandoned, Some(what)) => format!("abandoned, after it delivered as {what}"),
-        (Outcome::Abandoned, None) => "abandoned, nothing delivered".to_string(),
+/// What a finished run did not establish: an agent's output no check ran on, a stop that did not ask a person, the
+/// person's time where it was not measured, a promise of the role not proved.
+fn unproved(r: &Run, steps: &[StepLine], person: &Person, promises: &Promises) -> Vec<String> {
+    let mut out = Vec::new();
+    for &i in &r.path() {
+        let (d, line) = (&r.manifest.steps[i], &steps[i]);
+        if d.executor != Executor::Agent || line.state != "done" {
+            continue;
+        }
+        let name = &d.name;
+        // who let what the step made go on, at its current round's question
+        let by = r.steps[i].question.as_ref().and_then(|q| r.questions.get(q)).and_then(|q| q.answer.as_ref()).map(|a| &a.by);
+        let let_on = match by {
+            Some(By::Person) => " A person kept it.",
+            Some(By::Agent { .. }) => " An agent, not a person, let it go on.",
+            Some(By::Rule { .. }) => " A rule in code let it go on.",
+            None => "",
+        };
+        if line.passed.is_empty() {
+            out.push(format!("What {name} made: no check ran on it.{let_on}"));
+        } else if matches!(by, Some(By::Agent { .. })) {
+            out.push(format!("What {name} made: an agent, not a person, let it go on."));
+        }
+        match &d.stop {
+            Some(stop) if stop.from_risk > r.risk => out.push(format!(
+                "The stop at {name} asks only at {} risk, and this run was {}: no person looked at what {name} made.",
+                stop.from_risk.word(),
+                r.risk.word()
+            )),
+            Some(_) if r.steps[i].skipped == Some(r.steps[i].round) => {
+                out.push(format!("The stop at {name} asks only a sample, and did not ask this time: no person looked at what {name} made."))
+            }
+            _ => {}
+        }
     }
+    let stops = |n: u32| format!("{n} stop{}", if n == 1 { "" } else { "s" });
+    match (person.seconds, person.unmeasured) {
+        (None, _) if person.stops > 0 => out.push(format!("The person's time at {}: not measured.", stops(person.stops))),
+        (Some(_), n) if n > 0 => out.push(format!("The person's time at {n} of {}: not measured.", stops(person.stops))),
+        _ => {}
+    }
+    match promises {
+        Promises::Told(all) => out.extend(all.iter().filter(|p| !p.proved).map(|p| format!("The role's promise \"{}\": not proved.", p.says))),
+        Promises::Proving => out.push("The role's promises: being proved again now.".to_string()),
+        Promises::Unread => out.push("The role's promises: not read again, since the run's copy of the role is gone.".to_string()),
+    }
+    out
 }
 
 /// Who answered what step `i` asked: its stop and what it asked in the middle of its work.
@@ -301,40 +359,49 @@ impl Summary {
             a if a.starts_with("command:") => "a shell command".to_string(),
             a => format!("`{a}`"),
         };
-        let mut out = format!(
-            "## Jaynes run summary\n\n**Request:** {}\n\n- Run `{}`: role {} {} (fingerprint {}), agent {agent}, {} risk, engine {}\n- Outcome: {}\n- Started {}, finished {} later\n\n### Steps\n\n",
-            one_line(&self.request),
-            self.run,
-            self.role,
-            self.version,
-            self.fingerprint,
-            self.risk,
-            self.engine,
-            self.outcome,
-            utc(self.started),
-            span(self.ended.saturating_sub(self.started)),
-        );
-        for (n, s) in self.steps.iter().enumerate() {
-            let mut line = format!("{}. **{}** ({}): {}", n + 1, s.name, s.by, s.state);
-            // a step of Jaynes's own or of the person takes one attempt, which says nothing
-            if s.attempts > 1 || (s.attempts == 1 && s.by == "agent") {
-                line.push_str(&format!(", {}", plural(s.attempts, "attempt")));
+        let mut out = format!("## {}\n\n### Delivered\n\n", title(&self.request));
+        match (&self.delivered, self.abandoned) {
+            (Some(what), false) => {
+                out.push_str(&format!("{what}, in {}.", self.target));
+                if self.undone {
+                    out.push_str(" A person then reverted the merge.");
+                }
+                if self.changed.is_empty() {
+                    out.push_str(" Jaynes measured no change.\n");
+                } else {
+                    out.push_str(if self.repository { " The files Jaynes measured:\n\n" } else { " What Jaynes measured:\n\n" });
+                    for (what, size) in self.changed.iter().take(MOST_SHOWN) {
+                        out.push_str(&if self.repository {
+                            format!("- `{what}`: {size} line{} changed\n", if *size == 1 { "" } else { "s" })
+                        } else {
+                            format!("- {what}: {size}\n")
+                        });
+                    }
+                    if self.changed.len() > MOST_SHOWN {
+                        let more = self.changed.len() - MOST_SHOWN;
+                        out.push_str(&format!("- and {more} more{}\n", if self.repository { if more == 1 { " file" } else { " files" } } else { "" }));
+                    }
+                }
             }
-            if s.rounds > 1 {
-                line.push_str(&format!(" over {} rounds", s.rounds));
-            }
-            line.push('.');
-            if !s.passed.is_empty() {
-                line.push_str(&format!(" Checks passed: {}.", s.passed.join(", ")));
-            }
-            if !s.failed.is_empty() {
-                line.push_str(&format!(" Checks not passed: {}.", s.failed.join(", ")));
-            }
-            if let Some(asked) = &s.asked {
-                line.push_str(&format!(" {asked}"));
-            }
-            out.push_str(&line);
-            out.push('\n');
+            (None, false) => out.push_str("Delivered, with no record of where.\n"),
+            (Some(what), true) => out.push_str(&format!("Nothing kept: the run was abandoned after it delivered {what}.\n")),
+            (None, true) => out.push_str("Nothing: the run was abandoned.\n"),
+        }
+        let proved: Vec<String> = self
+            .steps
+            .iter()
+            .flat_map(|s| {
+                s.passed.iter().map(move |(check, hidden)| {
+                    let how = if *hidden { ": a hidden check, which the agent that made it never saw" } else { "" };
+                    format!("- **{check}**, on what {} made{how}\n", s.name)
+                })
+            })
+            .collect();
+        if !self.abandoned && !proved.is_empty() {
+            out.push_str(&format!("\n### Proved by\n\n{}", proved.concat()));
+        }
+        if !self.unproved.is_empty() {
+            out.push_str(&format!("\n### Not proved\n\n{}", self.unproved.iter().map(|u| format!("- {u}\n")).collect::<String>()));
         }
         match &self.promises {
             Promises::Told(all) if !all.is_empty() && all.iter().all(|p| p.proved) => {
@@ -352,6 +419,23 @@ impl Summary {
         // a proof stands for the rules of the engine that made it: say so when the run ran on others
         if matches!(&self.promises, Promises::Told(all) if !all.is_empty()) && self.prover != self.engine {
             out.push_str(&format!("- Proved again by engine {}, not by the engine this run ran on ({}): its rules may differ.\n", self.prover, self.engine));
+        }
+        out.push_str("\n### Steps\n\n");
+        for (n, s) in self.steps.iter().enumerate() {
+            let mut line = format!("{}. **{}** ({}): {}", n + 1, s.name, s.by, s.state);
+            // a step of Jaynes's own or of the person takes one attempt, which says nothing
+            if s.attempts > 1 || (s.attempts == 1 && s.by == "agent") {
+                line.push_str(&format!(", {}", plural(s.attempts, "attempt")));
+            }
+            if s.rounds > 1 {
+                line.push_str(&format!(" over {} rounds", s.rounds));
+            }
+            line.push('.');
+            if let Some(asked) = &s.asked {
+                line.push_str(&format!(" {asked}"));
+            }
+            out.push_str(&line);
+            out.push('\n');
         }
         let p = &self.person;
         let mut people = if p.stops == 0 {
@@ -378,8 +462,30 @@ impl Summary {
         if p.waited > 0 {
             out.push_str(&format!("- The run stood {} at its stops, waiting for an answer. That is waiting, not anyone's attention.\n", span(p.waited)));
         }
+        out.push_str(&format!(
+            "\n### Run\n\n- Request: {}\n- Run `{}`: role {} {} (fingerprint {}), agent {agent}, {} risk, engine {}\n- Started {}, finished {} later\n",
+            one_line(&self.request),
+            self.run,
+            self.role,
+            self.version,
+            self.fingerprint,
+            self.risk,
+            self.engine,
+            utc(self.started),
+            span(self.ended.saturating_sub(self.started)),
+        ));
         out
     }
+}
+
+/// Things changed listed one by one; past it, how many more.
+const MOST_SHOWN: usize = 30;
+
+/// The request as a title: one line of at most 72 characters.
+fn title(request: &str) -> String {
+    let line = request.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = line.trim_start_matches('#').trim();
+    if line.chars().count() <= 72 { line.to_string() } else { format!("{}…", line.chars().take(71).collect::<String>()) }
 }
 
 /// A text on one line, long ones cut.
@@ -490,10 +596,11 @@ pub fn read(home: &Path, run: &str, wait: bool) -> Result<Summary, String> {
     if events.is_empty() {
         return Err(format!("there is no run {run}"));
     }
-    // told first, so a run not finished is refused before its role's promises are proved
+    // a run not finished is refused before its role's promises are proved; then it is told with them, since what
+    // was not proved depends on them
     let looks = crate::presence::looks(home, run)?;
-    let told = summarize(&events, &looks, Promises::Unread)?;
-    Ok(Summary { promises: promises(home, run, wait), ..told })
+    summarize(&events, &looks, Promises::Unread)?;
+    summarize(&events, &looks, promises(home, run, wait))
 }
 
 #[cfg(test)]
@@ -501,6 +608,7 @@ mod tests {
     use super::*;
     use jaynes_core::event::{CheckRecord, Cost, Effects, Usage};
     use jaynes_core::manifest::Manifest;
+    use jaynes_core::risk::Changed;
     use jaynes_core::question::{Answer, Item, Question, QuestionKind, Verdict, VerdictKind};
     use jaynes_core::{Digest, Input};
 
@@ -575,7 +683,10 @@ mod tests {
             (t0 + 39_920, attempt("change", 2)),
             (t0 + 40_400, delivered("change", 2, 480, 132_250)),
             (t0 + 40_410, judged(true)),
-            (t0 + 40_410, done("change")),
+            (t0 + 40_410, Event::StepDone {
+                step: "change".into(), round: 0, output: Digest("o".into()), items: vec![], reads: vec![],
+                changed: vec![Changed::file("auth/redirect.go".into(), 12), Changed::file("auth/redirect_test.go".into(), 30)],
+            }),
             (t0 + 40_420, attempt("deliver", 1)),
             (t0 + 40_430, done("deliver")),
             (t0 + 40_430, Event::Delivered { digest: Digest("x".into()), reference: "jaynes/r1 at 87b9b5dc3549".into() }),
@@ -585,33 +696,50 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_run_reads_as_its_role_its_steps_with_their_checks_its_delivery_and_its_cost() {
+    fn a_summary_opens_with_what_was_delivered_what_proved_it_and_what_was_not_proved() {
         let promises = vec![Promised { says: "Nothing is delivered before the hidden cases pass".into(), proved: true }];
         let told = summarize(&whole(), &[], Promises::Told(promises)).expect("summary").markdown();
         let expected = "\
-## Jaynes run summary
+## Make the login redirect keep the page the person came from
 
-**Request:** Make the login redirect keep the page the person came from
+### Delivered
 
-- Run `r1`: role fix-bug 3 (fingerprint 6ab163606a8e), agent `claude:some-model`, low risk, engine ENGINE
-- Outcome: delivered as jaynes/r1 at 87b9b5dc3549
-- Started 2026-11-15 16:26 UTC, finished 11 h 14 min later
+jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 
-### Steps
+- `auth/redirect.go`: 12 lines changed
+- `auth/redirect_test.go`: 30 lines changed
 
-1. **plan** (agent): done, 1 attempt. A person answered 1 question.
-2. **change** (agent): done, 2 attempts. Checks passed: suite-passes, cases-pass (hidden).
-3. **deliver** (Jaynes): done.
+### Proved by
+
+- **suite-passes**, on what change made
+- **cases-pass**, on what change made: a hidden check, which the agent that made it never saw
+
+### Not proved
+
+- What plan made: no check ran on it. A person kept it.
+- The person's time at 1 stop: not measured.
 
 ### Promises proved of the role
 
 - Nothing is delivered before the hidden cases pass
+
+### Steps
+
+1. **plan** (agent): done, 1 attempt. A person answered 1 question.
+2. **change** (agent): done, 2 attempts.
+3. **deliver** (Jaynes): done.
 
 ### Cost
 
 - Agents: 12 min of work, 252,250 tokens, 3 attempts (1 spent by the agent's own fault), 0 fixes.
 - People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.
 - The run stood 11 h 0 min at its stops, waiting for an answer. That is waiting, not anyone's attention.
+
+### Run
+
+- Request: Make the login redirect keep the page the person came from
+- Run `r1`: role fix-bug 3 (fingerprint 6ab163606a8e), agent `claude:some-model`, low risk, engine ENGINE
+- Started 2026-11-15 16:26 UTC, finished 11 h 14 min later
 ";
         assert_eq!(told, expected.replace("ENGINE", jaynes_core::ENGINE));
         // proved by another engine than the run's: said under the promises; and an agent never recorded is said so
@@ -621,6 +749,37 @@ mod tests {
         let told = s.markdown();
         assert!(told.contains(&format!("- x\n- Proved again by engine {}, not by the engine this run ran on (0.1.0+older): its rules may differ.\n", jaynes_core::ENGINE)), "{told}");
         assert!(told.contains("agent not recorded, low risk, engine 0.1.0+older\n"), "{told}");
+    }
+
+    #[test]
+    fn what_a_stop_did_not_ask_a_person_is_not_proved_and_a_long_request_is_cut_in_the_title() {
+        let mut e = started(0);
+        if let Event::RunStarted { request, .. } = &mut e[0].1 {
+            *request = format!("{} and then much more", "Make the login redirect keep the page the person came from".repeat(2));
+        }
+        let many: Vec<Changed> = (0..32).map(|n| Changed::file(format!("f{n:02}.go"), 1)).collect();
+        e.extend([
+            (10, attempt("plan", 1)),
+            (20, delivered("plan", 1, 10, 500)),
+            (20, done("plan")),
+            (20, Event::QuestionOpened { question: question("q1-plan", "plan", true) }),
+            (30, answer("q1-plan", By::Agent { who: "an agent".into() }, Verdict::Keep)),
+            (40, attempt("change", 1)),
+            (50, Event::StepDone { step: "change".into(), round: 0, output: Digest("o".into()), items: vec![], reads: vec![], changed: many }),
+            (60, done("deliver")),
+            (60, Event::Delivered { digest: Digest("x".into()), reference: "jaynes/r1 at abc; merged as def".into() }),
+            (70, finished(Outcome::Delivered)),
+            (80, Event::MergeUndone { note: "wrong".into(), by: By::Person }),
+        ]);
+        let told = summarize(&e, &[], Promises::Told(vec![])).expect("summary").markdown();
+        let title = told.lines().next().expect("title");
+        assert_eq!(title.chars().count(), 3 + 72, "{title}");
+        assert!(title.starts_with("## Make the login redirect") && title.ends_with('…'), "{title}");
+        assert!(told.contains("\njaynes/r1 at abc; merged as def, in a repository. A person then reverted the merge. The files Jaynes measured:\n"), "{told}");
+        assert!(told.contains("- `f29.go`: 1 line changed\n- and 2 more files\n"), "{told}");
+        assert!(told.contains("### Not proved\n\n- What plan made: no check ran on it. An agent, not a person, let it go on.\n- What change made: no check ran on it.\n"), "{told}");
+        // the change's checks were never judged: nothing to put under Proved by
+        assert!(!told.contains("### Proved by"), "{told}");
     }
 
     #[test]
@@ -701,7 +860,8 @@ mod tests {
             (80, finished(Outcome::Abandoned)),
         ]);
         let told = summarize(&e, &[], Promises::Unread).expect("summary").markdown();
-        assert!(told.contains("- Outcome: abandoned, nothing delivered\n"), "{told}");
+        assert!(told.contains("### Delivered\n\nNothing: the run was abandoned.\n\n### Not proved\n"), "{told}");
+        assert!(!told.contains("### Proved by"), "{told}");
         assert!(told.contains("1. **plan** (agent): done, 1 attempt. 1 question left unanswered.\n2. **change** (agent): not done.\n"), "{told}");
         assert!(told.contains("### Promises of the role\n\n- Not read again: the run's copy of the role is gone.\n"), "{told}");
         assert!(told.contains("- People: no stop answered by a person.\n"), "{told}");
