@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod conformance;
+pub mod declaration;
 pub mod drive;
 pub mod export;
 pub mod index;

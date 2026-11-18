@@ -240,3 +240,44 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let (ok, cli) = engine(&s, &["summary", "asked"]);
     assert!(ok && cli.contains(&format!("- People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: {time}.\n")), "{cli}");
 }
+
+/// The engine's answer, what it printed apart from what it said on stderr.
+fn engine_apart(s: &Scratch, args: &[&str]) -> (bool, String, String) {
+    let out = Command::new(BIN).args(args).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").output().expect("engine");
+    (out.status.success(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_summary_as_fields_is_checked_again_from_the_record_with_or_without_the_person_s_words() {
+    let s = scratch("fields");
+    let words = "PLANTEDword say hi instead of hello";
+    let role = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change");
+    let agent = format!("command:printf 'hi\\n' > greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'");
+    let (ok, out) = engine(&s, &["start", "--run", "fields", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", words, "--agent", &agent]);
+    assert!(ok, "start failed:\n{out}");
+    // with the person's words, said at once on the terminal
+    let (ok, json, said) = engine_apart(&s, &["summary", "fields", "--json"]);
+    assert!(ok && said.contains("this file holds the person's words"), "{said}");
+    let v: serde_json::Value = serde_json::from_str(&json).expect("a summary as fields");
+    assert_eq!((v["format"].as_str(), v["holds_words"].as_bool(), v["request"]["text"].as_str()), (Some("jaynes-run-summary/1"), Some(true), Some(words)));
+    assert_eq!((v["run"]["result"].as_str(), v["delivery"]["delivered"].as_bool(), v["cost"]["tokens"].as_u64()), (Some("accepted"), Some(true), Some(1234)));
+    assert!(v["steps"][1]["checks"].as_array().expect("checks").iter().any(|c| c["name"] == "suite-passes" && c["passed"] == true), "{}", v["steps"]);
+    // the agent, a line of shell with this machine's paths, is named by a fingerprint
+    assert!(v["agent"]["program"] == "command" && !json.contains(s.project.to_str().expect("path")), "{}", v["agent"]);
+    let file = s.base.join("summary.json");
+    std::fs::write(&file, &json).expect("write");
+    let (ok, checked, _) = engine_apart(&s, &["verify-summary", file.to_str().expect("path")]);
+    assert!(ok && checked.starts_with("the summary is what the record says: run fields, entries "), "{checked}");
+    // a field changed in the file is named, and the check fails
+    std::fs::write(&file, json.replace("\"tokens\": 1234", "\"tokens\": 12")).expect("write");
+    let (ok, checked, said) = engine_apart(&s, &["verify-summary", file.to_str().expect("path")]);
+    assert!(!ok && checked.contains("cost.tokens: the file says 12, the record says 1234") && said.contains("1 field of the file is not what the record says"), "{checked}{said}");
+    // without the person's words: none of them, said in the file, and it checks
+    let (ok, bare, said) = engine_apart(&s, &["summary", "fields", "--json", "--without-words"]);
+    assert!(ok && !said.contains("holds the person's words"), "{said}");
+    assert!(!bare.contains("PLANTED") && bare.contains("\"words_left_out\": \"the person's words are left out"), "{bare}");
+    std::fs::write(&file, &bare).expect("write");
+    let (ok, checked, _) = engine_apart(&s, &["verify-summary", file.to_str().expect("path")]);
+    assert!(ok, "{checked}");
+}

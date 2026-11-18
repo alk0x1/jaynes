@@ -1,6 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-use jaynes_shell::{home, agent, conformance, drive, export, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
+use jaynes_shell::{home, agent, conformance, declaration, drive, export, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -29,6 +29,9 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   summary RUN             what a finished run did, in Markdown, to paste in a merge request or a note
+  summary RUN --json [--without-words]   the same as fields, for an auditor's tools: what the record holds, what it does not;
+                          with the person's words (the request, their notes) unless --without-words
+  verify-summary FILE     make a --json summary again from the record and name every field the file says otherwise
   export --numbers [--since YYYY-MM-DD]   each finished run's numbers as JSON lines, and no word of the record: task, arm,
                           minutes of presence, stops, result, the agents' minutes and tokens (the day in UTC)
   page [--port N]         the page where you answer, at http://localhost:8750 (or the port given; 0: one the system gives, said in its first line)
@@ -301,10 +304,36 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "summary" => {
-            let id = rest.first().ok_or("which run?")?;
+            let id = rest.iter().find(|a| !a.starts_with("--")).ok_or("which run?")?;
+            if rest.iter().any(|a| a == "--json") {
+                let words = !rest.iter().any(|a| a == "--without-words");
+                let d = declaration::declare(&home(), id, words)?;
+                println!("{}", serde_json::to_string_pretty(&d).map_err(|e| e.to_string())?);
+                if words {
+                    say(declaration::HOLDS_WORDS);
+                }
+                return Ok(());
+            }
             // the role's promises are proved again before it answers: once per role, and minutes for a large one
             print!("{}", summary::read(&home(), id, true)?.markdown());
             Ok(())
+        }
+        "verify-summary" => {
+            let path = rest.first().ok_or("which file? one jaynes summary RUN --json wrote")?;
+            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            let file: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{path} is not JSON: {e}"))?;
+            let differ = declaration::differences(&home(), &file)?;
+            if differ.is_empty() {
+                println!(
+                    "the summary is what the record says: run {}, entries {} to {} of the record, its chain whole",
+                    file["run"]["id"].as_str().unwrap_or(""), file["record"]["first"], file["record"]["last"]
+                );
+                return Ok(());
+            }
+            for d in &differ {
+                println!("{d}");
+            }
+            Err(format!("{} field{} of the file {} not what the record says", differ.len(), if differ.len() == 1 { "" } else { "s" }, if differ.len() == 1 { "is" } else { "are" }))
         }
         "export" => {
             if !rest.iter().any(|a| a == "--numbers") {

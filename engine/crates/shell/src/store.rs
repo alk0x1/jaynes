@@ -142,6 +142,27 @@ impl Store {
         Ok(out)
     }
 
+    /// A run's entries in the chain: each one's place in the record, when it was written, the chain's hash after it,
+    /// and the entry.
+    pub fn chained(&self, run: &str) -> Result<Vec<(u64, u64, String, Event)>, String> {
+        let mut q = self.db.prepare("select seq, ts, hash, body from events where run = ?1 order by seq").map_err(|e| e.to_string())?;
+        let rows = q.query_map([run], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, ts, hash, body) = row.map_err(|e| e.to_string())?;
+            out.push((seq as u64, ts as u64, hash, serde_json::from_str(&body).map_err(|e| format!("an entry of {run} does not read: {e}"))?));
+        }
+        Ok(out)
+    }
+
+    /// The keys whose signatures came with the person's answers of a run, by question: the answers a device of theirs
+    /// proved.
+    pub fn proof_keys(&self, run: &str) -> Result<Vec<(String, String)>, String> {
+        let mut q = self.db.prepare("select question, key from proofs where run = ?1 order by id").map_err(|e| e.to_string())?;
+        let rows = q.query_map([run], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+        rows.map(|r| r.map_err(|e| e.to_string())).collect()
+    }
+
     /// When each run's first and last entries were recorded.
     pub fn times(&self) -> Result<std::collections::BTreeMap<String, (u64, u64)>, String> {
         let mut q = self.db.prepare("select run, min(ts), max(ts) from events group by run").map_err(|e| e.to_string())?;
