@@ -156,6 +156,9 @@ impl Tabs {
         self.changes = None;
         if run != self.open {
             self.story.clear();
+            // the run before's summary must not show under this one's story, nor be what its button copies
+            self.summary = None;
+            self.copied_at = None;
             self.seek = None;
             self.lit = None;
             self.scroll.set_offset(point(px(0.), px(0.)));
