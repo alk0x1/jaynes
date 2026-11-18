@@ -91,6 +91,7 @@ pub fn run(role: &RoleProgram) -> Vec<Finding> {
                     given: Vec::new(),
                     project: None,
                     source: None,
+                    any_port: false,
                 });
                 let ok = matches!(reply, Ok(Body::Verdict { .. }));
                 out.push(found(&format!("{}: check {} gives a verdict, even on an empty output", s.name, c.name), ok, short(&reply)));

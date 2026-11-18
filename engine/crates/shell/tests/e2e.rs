@@ -1718,7 +1718,7 @@ fn serve_check(s: &Scratch, role: &Path, call: Value, env: &[(&str, &str)]) -> V
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which is macOS's sandbox-exec")]
-fn a_project_s_command_reads_nothing_the_engine_keeps_nor_another_run_and_sends_no_udp_nor_opens_a_terminal() {
+fn a_project_s_command_reads_nothing_the_engine_keeps_and_reaches_only_its_reserved_and_declared_local_ports() {
     let s = scratch("wall");
     std::fs::create_dir_all(&s.home).expect("home");
     // what the engine keeps that no project command may read: the page's key and log, the record, other runs, and
@@ -1766,15 +1766,38 @@ try:
     open(os.path.join(own, "project/greeting.txt")).read()
 except OSError as e:
     holes.append(f"could not read the run's own copy of the project: {e}")
-# a suite's own servers on port 0 still answer it
-for host, family in [("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)]:
+# a suite's own server on a port the run reserved answers it, on 127.0.0.1 and ::1
+reserved = [int(p) for p in os.environ.get("JAYNES_PORTS", "").split(",") if p]
+if len(reserved) < 2:
+    holes.append(f"too few reserved ports: {os.environ.get('JAYNES_PORTS')!r}")
+for (host, family), port in zip([("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)], reserved):
     mine = socket.socket(family)
-    mine.bind((host, 0))
-    mine.listen()
     try:
-        socket.create_connection((host, mine.getsockname()[1]), timeout=3).close()
+        mine.bind((host, port))
+        mine.listen()
+        socket.create_connection((host, port), timeout=3).close()
     except OSError as e:
-        holes.append(f"its own server on {host} port 0 was not reached: {e}")
+        holes.append(f"its own server on {host} port {port}, reserved, was not reached: {e}")
+    finally:
+        mine.close()
+# a port of its own choosing is refused: the bind of port 0
+try:
+    socket.socket().bind(("127.0.0.1", 0))
+    holes.append("bound port 0")
+except PermissionError:
+    pass
+def reach(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=3).close()
+        return "reached"
+    except PermissionError:
+        return "refused"
+    except OSError as e:
+        return type(e).__name__
+# what already listened when the box opened, and the page's port: refused; what the step declared: reached
+for port in said["listening"] + [8750]:
+    if reach(port) != "refused":
+        holes.append(f"port {port}: {reach(port)}")
 # no UDP, not even to its own machine
 u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 try:
@@ -1807,12 +1830,18 @@ sys.exit(1 if holes else 0)
         .stdout(std::process::Stdio::piped()).spawn().expect("pty");
     let mut tty = String::new();
     std::io::BufRead::read_line(&mut std::io::BufReader::new(holder.stdout.take().expect("out")), &mut tty).expect("tty");
+    // services that already listen when the box opens, on every address localhost answers on
+    let listeners: Vec<std::net::TcpListener> = ["127.0.0.1:0", "[::1]:0", "0.0.0.0:0", "[::]:0"]
+        .iter().map(|a| std::net::TcpListener::bind(a).expect("listen")).collect();
+    let ports: Vec<u16> = listeners.iter().map(|l| l.local_addr().expect("addr").port()).collect();
     let call = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "look", "check": "wall", "request": "r",
-        "output": {"home": s.home, "own": own, "tty": tty.trim()}, "given": [], "project": copy, "source": s.project});
+        "output": {"home": s.home, "own": own, "tty": tty.trim(), "listening": ports}, "given": [], "project": copy,
+        "source": s.project});
     let held = serve_check(&s, &role, call, &[]);
     let _gone = holder.kill();
     let _reaped = holder.wait();
     assert_eq!(held["verdict"], "pass", "{held}");
+    drop(listeners);
     // the planted files are not a record: CI compares the Lean model with every jaynes-e2e-*/home/record.sqlite3
     // the tests leave, so this test leaves none
     let _gone = std::fs::remove_dir_all(s.home.parent().expect("base"));
@@ -1838,6 +1867,7 @@ except b.Unavailable as e:
     assert!(!said.contains("ran under the other sandbox"), "{said}");
     assert!(said.contains("refused: Jaynes was started inside another program's sandbox and cannot put its own box around your project's commands"), "{said}");
     assert!(said.contains("mcp__plugin_jaynes_jaynes__start") && said.contains("in an ordinary terminal"), "both ways out, each named: {said}");
+
 }
 
 /// A role that is a program runs with the person's rights, outside any box: jaynes add says so, and says nothing of
@@ -1852,6 +1882,73 @@ fn adding_a_role_that_is_a_program_says_it_runs_with_your_rights() {
     let (ok, out) = add("small-change");
     assert!(ok, "{out}");
     assert!(!out.contains("runs with your rights"), "a role in role.toml is not told so: {out}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
+fn a_port_the_step_declares_is_reached_and_a_refused_server_on_port_0_is_named() {
+    // a service of the person's that the step declares, and the page's port, declared too, which stays closed
+    let service = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = service.local_addr().expect("addr").port();
+    let base = std::env::temp_dir().join(format!("jaynes-declared-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("project")).expect("dir");
+    let script = format!(r#"
+import json, sys
+sys.path.insert(0, {lib:?})
+import jaynes_box as box, jaynes_menu as menu
+reach = "import socket, sys\nfor p in sys.argv[1:]:\n    try:\n        socket.create_connection(('127.0.0.1', int(p)), timeout=3).close(); print(p, 'reached')\n    except OSError as e:\n        print(p, type(e).__name__)"
+open({dir:?} + "/project/reach.py", "w").write(reach)
+open({dir:?} + "/project/serve.py", "w").write("import http.server\nhttp.server.HTTPServer(('127.0.0.1', 0), http.server.BaseHTTPRequestHandler)")
+ran = box.run(__import__("pathlib").Path({dir:?} + "/project"), "python3 reach.py {port} 8750", local_ports=[{port}, 8750])
+served = menu._box({{"project": {dir:?} + "/project", "reach": {{"local_ports": [{port}]}}}}, "python3 serve.py")
+print(json.dumps({{"reach": ran.printed, "local_ports": ran.local_ports, "served": getattr(served, "reason", "ran")}}))
+"#, lib = root().join("python"), dir = base.display().to_string(), port = port);
+    let out = Command::new(python()).args(["-c", &script]).output().expect("python");
+    let said: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+    let reach = said["reach"].as_str().unwrap_or("");
+    assert!(reach.contains(&format!("{port} reached")), "{said}");
+    assert!(reach.contains("8750 PermissionError"), "the page's port opens for no declaration: {said}");
+    assert_eq!(said["local_ports"], serde_json::json!([port]), "{said}");
+    // a test server on port 0 is refused the bind: blocked, the machine's fault, saying what to do instead
+    let served = said["served"].as_str().unwrap_or("");
+    assert!(served.contains("JAYNES_PORTS") && served.contains("local_ports") && served.contains("local port 0"), "{said}");
+    drop(service);
+    let _gone = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
+fn in_25_profiles_the_box_writes_a_command_reaches_exactly_the_local_ports_it_lists() {
+    // ten listeners outside the box; each profile, as profile() writes it, lists some of them as reserved and some as
+    // declared, in a random order: the command inside reaches those and no other
+    let script = format!(r#"
+import json, random, socket, subprocess, sys, tempfile, threading
+from pathlib import Path
+sys.path.insert(0, {lib:?})
+import jaynes_box as box
+listeners = []
+for _ in range(10):
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(64); listeners.append(s)
+    threading.Thread(target=lambda s=s: [s.accept()[0].close() for _ in iter(int, 1)], daemon=True).start()
+ports = [s.getsockname()[1] for s in listeners]
+client = "import socket, sys\nout = []\nfor p in sys.argv[1:]:\n    s = socket.socket(); s.settimeout(2)\n    try:\n        s.connect(('127.0.0.1', int(p))); out.append(int(p))\n    except OSError: pass\n    s.close()\nprint(out)"
+rng = random.Random(18)
+wrong = []
+for trial in range(25):
+    listed = rng.sample(ports, rng.randint(0, 6))
+    cut = rng.randint(0, len(listed))
+    reserved, declared = tuple(listed[:cut]), tuple(listed[cut:])
+    prof = box.profile(box.Box((Path(tempfile.mkdtemp()),), local=True, reserved=reserved, local_ports=declared))
+    r = subprocess.run(["/usr/bin/sandbox-exec", "-p", prof, sys.executable, "-c", client, *map(str, ports)], capture_output=True, text=True)
+    reached = set(eval(r.stdout.strip() or "None") or [])
+    if reached != set(listed):
+        wrong.append({{"listed": sorted(listed), "reached": sorted(reached), "err": r.stderr[-200:]}})
+print(json.dumps(wrong))
+"#, lib = root().join("python"));
+    let out = Command::new(python()).args(["-c", &script]).output().expect("python");
+    let wrong: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+    assert_eq!(wrong, serde_json::json!([]), "profiles where what was reached is not what was listed: {wrong}");
 }
 
 /// An agent that writes in the copy's .git what git runs: every hook git knows, and the configuration keys that run a
@@ -2164,4 +2261,147 @@ fn an_agent_jaynes_does_not_know_is_refused_before_anything_starts_and_never_bec
         assert!(said.contains(agent) && said.contains("claude:MODEL") && said.contains("command:CMD"), "{agent}: it does not say which agents there are: {said}");
         assert!(!s.home.join("runs").join(run).exists(), "{agent}: a run was recorded");
     }
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
+fn only_the_person_opens_a_project_s_local_ports_and_only_the_engine_s_call_opens_the_box() {
+    let s = scratch("open-ports");
+    let project = s.project.to_str().expect("path");
+    // a program without a terminal is an agent: it may not open them, nor close them
+    let (ok, out) = engine(&s, &["project", "open-ports", project]);
+    assert!(!ok && out.contains("only the person opens or closes"), "{out}");
+    let (_, said) = engine(&s, &["project", "ports", project]);
+    assert!(said.contains("reach only the ports a run reserves"), "{said}");
+    // the person, at a terminal, opens them
+    let opened = tty()
+        .args([BIN, "project", "open-ports", project])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python())
+        .output().expect("script");
+    let opened = String::from_utf8_lossy(&opened.stdout).to_string();
+    assert!(opened.contains("opened by you on") && opened.contains("the Jaynes page's port among them"), "{opened}");
+    let (_, said) = engine(&s, &["project", "ports", project]);
+    assert!(said.contains("this project's checks reach any local port of this machine: opened by you on"), "{said}");
+    // a run says it before it starts, records it in its setup, and shows it
+    let out = start(&s, "open", OUTPUT);
+    assert!(out.contains("this project's checks reach any local port of this machine"), "{out}");
+    let (_, shown) = engine(&s, &["show", "open"]);
+    assert!(shown.contains("this project's checks reach any local port"), "{shown}");
+
+    // the box opens on the engine's word in the call, and on nothing else: not a variable, not a file
+    let role = s.home.parent().expect("base").join("open");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "open"
+version = "1.0.0"
+
+[[step]]
+name = "look"
+reach = { project = "read" }
+instructions = "Look at {{request}}."
+checks = [{ script = "checks/open.py", about = "a server on port 0 is reached" }]
+"#).expect("write");
+    std::fs::write(role.join("checks/open.py"), r#"#!/usr/bin/env python3
+import json, os, socket, sys
+said = json.load(sys.stdin)["output"]
+# what the person chose for each project: no command reads or writes it
+for mode in ("r", "w"):
+    try:
+        open(os.path.join(said["home"], "projects", "x.toml"), mode).close()
+        print(f"opened the projects' folder to {mode}")
+        sys.exit(1)
+    except OSError:
+        pass
+mine = socket.socket()
+mine.bind(("127.0.0.1", 0))
+mine.listen()
+socket.create_connection(("127.0.0.1", mine.getsockname()[1]), timeout=3).close()
+"#).expect("write");
+    let script = role.join("checks/open.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    // a file in the project that says the ports are open is just a file
+    std::fs::write(s.project.join("jaynes-ports.toml"), "[ports]\nany = true\n").expect("write");
+    let call = |any: Option<bool>| {
+        let mut c = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "look", "check": "open", "request": "r",
+            "output": {"home": s.home}, "given": [], "project": s.project, "source": s.project});
+        if let Some(a) = any {
+            c["any_port"] = serde_json::json!(a);
+        }
+        c
+    };
+    let open = serve_check(&s, &role, call(Some(true)), &[]);
+    assert_eq!(open["verdict"], "pass", "{open}");
+    for (said, env) in [(call(None), vec![]), (call(Some(false)), vec![]), (call(None), vec![("JAYNES_ANY_LOCAL_PORT", "1")])] {
+        let shut = serve_check(&s, &role, said, &env);
+        assert_eq!(shut["verdict"], "blocked", "{shut}");
+        let why = shut["reason"].as_str().unwrap_or("");
+        assert!(why.contains("Two ways out") && why.contains("JAYNES_PORTS") && why.contains("jaynes project open-ports"), "{why}");
+    }
+    // and the person closes them again
+    let closed = tty()
+        .args([BIN, "project", "close-ports", project])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python())
+        .output().expect("script");
+    assert!(String::from_utf8_lossy(&closed.stdout).contains("closed"), "{closed:?}");
+    let (_, said) = engine(&s, &["project", "ports", project]);
+    assert!(said.contains("reach only the ports a run reserves"), "{said}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
+fn in_a_real_run_a_role_s_script_check_runs_from_the_run_s_copy_of_the_role_and_serves_on_a_reserved_port() {
+    // the path a real run takes: the role pinned under runs/<run>/role, its script run in the box on the run's
+    // copy of the project, a test server of its own on a port Jaynes reserved
+    let s = scratch("real-run-script");
+    let role = s.home.parent().expect("base").join("served");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "served"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Make the change: {{request}}"
+checks = [{ use = "field-required", field = "summary" }, { script = "checks/served.py", about = "the project serves its greeting" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+files = { type = "array", items = "string" }
+"#).expect("write");
+    std::fs::write(role.join("checks/served.py"), r#"#!/usr/bin/env python3
+import http.server, os, sys, threading, urllib.request
+port = int(os.environ["JAYNES_PORTS"].split(",")[0])
+text = open("greeting.txt").read().encode()
+class Say(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(text)
+    def log_message(self, *a):
+        pass
+server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Say)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+got = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).read()
+server.shutdown()
+if b"hi" not in got:
+    print(f"the project serves {got!r}")
+    sys.exit(1)
+"#).expect("write");
+    let script = role.join("checks/served.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let (ok, out) = engine(&s, &[
+        "start", "--run", "served", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        "--request", "say hi instead of hello", "--agent", &format!("command:{agent}"),
+    ]);
+    assert!(ok, "{out}");
+    let e = events(&s, "served");
+    let judged = e.iter().find(|x| x["type"] == "ChecksJudged").unwrap_or_else(|| panic!("no check was judged: {:?}", types(&e)));
+    let served = judged["checks"].as_array().into_iter().flatten().find(|c| c["check"] == "served")
+        .unwrap_or_else(|| panic!("the script check was not judged: {judged}"));
+    assert_eq!((served["passed"].as_bool(), served["blocked"].as_bool()), (Some(true), Some(false)), "the script check did not pass in the box: {judged}");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{judged}", types(&e));
 }

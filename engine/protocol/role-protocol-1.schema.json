@@ -757,6 +757,10 @@
               },
               "type": "array"
             },
+            "any_port": {
+              "description": "The person opened this project's checks to every local port (`jaynes project open-ports`), as the run's\nsetup recorded it when it started: the role's box then lets its commands reach any local TCP port. Left\nout when not.",
+              "type": "boolean"
+            },
             "attempt": {
               "format": "uint32",
               "minimum": 0,
@@ -819,6 +823,10 @@
         },
         {
           "properties": {
+            "any_port": {
+              "description": "The person opened this project's checks to every local port (`jaynes project open-ports`), as the run's\nsetup recorded it when it started: the role's box then lets its commands reach any local TCP port. Left\nout when not.",
+              "type": "boolean"
+            },
             "call": {
               "const": "check",
               "type": "string"

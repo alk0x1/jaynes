@@ -13,6 +13,7 @@ pub mod permit;
 pub mod person;
 pub mod presence;
 pub mod project;
+pub mod project_prefs;
 pub mod protocol;
 pub mod role;
 pub mod stop;

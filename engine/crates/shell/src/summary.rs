@@ -542,7 +542,7 @@ fn thousands(n: u64) -> String {
 }
 
 /// A time of the record, in seconds since 1970, as a date and an hour in UTC.
-fn utc(ts: u64) -> String {
+pub fn utc(ts: u64) -> String {
     let (days, rest) = (ts / 86_400, ts % 86_400);
     // the civil date of a count of days (Howard Hinnant's days_from_civil, turned around)
     let z = days as i64 + 719_468;

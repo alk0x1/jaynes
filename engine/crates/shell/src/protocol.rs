@@ -69,6 +69,11 @@ pub enum Call {
         project: Option<String>,
         /// The person's own folder the run started from, never to be written.
         source: Option<String>,
+        /// The person opened this project's checks to every local port (`jaynes project open-ports`), as the run's
+        /// setup recorded it when it started: the role's box then lets its commands reach any local TCP port. Left
+        /// out when not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        any_port: bool,
     },
     Check {
         step: String,
@@ -78,6 +83,11 @@ pub enum Call {
         given: Vec<Given>,
         project: Option<String>,
         source: Option<String>,
+        /// The person opened this project's checks to every local port (`jaynes project open-ports`), as the run's
+        /// setup recorded it when it started: the role's box then lets its commands reach any local TCP port. Left
+        /// out when not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        any_port: bool,
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },

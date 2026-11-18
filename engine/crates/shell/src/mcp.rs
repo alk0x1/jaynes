@@ -226,3 +226,17 @@ fn run_text(r: &Run) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_tool_opens_a_project_s_local_ports() {
+        // opening a project's checks to every local port is the person's, at a terminal: the agents' server has no
+        // tool for it, under any name
+        let names: Vec<String> = tools().as_array().expect("tools").iter().filter_map(|t| t["name"].as_str().map(String::from)).collect();
+        assert!(!names.is_empty());
+        assert!(names.iter().all(|n| !n.contains("port") && !n.contains("project")), "{names:?}");
+    }
+}

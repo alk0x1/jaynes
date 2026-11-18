@@ -9,18 +9,22 @@ system, so toolchains work, and denies the ways out: writing anywhere but the bo
 local ports, reading where secrets usually live or what the engine keeps (the page's key and log, the record, other
 runs), signalling outside the box, writing preferences, opening apps.
 
-A known limit, said plainly: on macOS a project's commands reach ANY local TCP port, so a suite's own servers work
-on fixed ports and on port 0, and so does everything else that listens on the machine: a browser's debugger, a
-database without a password, the Jaynes page. The page's key and the record stay out of reach, so what comes through
-the page from inside the box is not the person. sandbox-exec cannot cut one port out of "any local port": a deny of
-one port under ``localhost:*`` holds for some port numbers and not for others (measured on macOS 26.5.2, the same
-every time for the same profile), so no list of refused ports is written here. What holds is allowing listed ports
-only, which breaks suites that serve on port 0; that is still to be measured. A network of the box's own, which
-closes this, exists only on Linux.
+Local ports, on macOS, are a list of what is allowed, closed by default: a project's commands bind and reach only
+the ports the run reserved for them, handed over in ``JAYNES_PORTS`` (free ports, comma separated), and the ports
+the step declares in its reach as ``local_ports``; never the Jaynes page's, through which an answer counts as the
+person's. Unix sockets work only in the box's own folders. A suite that serves on port 0 (Go's httptest, supertest,
+a test server on port 0) is refused the bind: it has to take its port from ``JAYNES_PORTS``, and until it does its
+check is blocked, the machine's fault, naming what was refused. Only a list of allowed ports holds: a deny of one
+port under ``localhost:*`` holds for some port numbers and not for others (measured on macOS 26.5.2).
 
-Other known limits on macOS: a command may still bind a server on 0.0.0.0, which other machines on the network can
-reach while it runs (the bind filter for localhost matches the wildcard too). The box sends no UDP, and reads and
-writes none of the terminals (/dev/ttys*), so a command that needs a pty of its own fails there.
+The person may open one project's checks to any local port (``jaynes project open-ports DIR``, at a terminal): the
+choice is kept in the engine's home, which no box reads or writes, fixed for a run when it starts and recorded in
+its setup, and the engine says it in each call (``any_port``), never through the environment. Then a project's commands
+bind and reach every local TCP port, the page's among them: sandbox-exec cannot keep one port shut under that.
+
+Known limits on macOS: a command may bind an allowed port on 0.0.0.0, which other machines on the network can reach
+while it runs (the bind filter for localhost matches the wildcard too). The box sends no UDP, and reads and writes
+none of the terminals (/dev/ttys*), so a command that needs a pty of its own fails there.
 Services of macOS reached by name (mach-lookup) are open but for the pasteboard's and the keychain's, which are
 denied (``MACH_DENIED``): no project command reads or writes what the person copied, nor asks their keychain. Every
 other service still answers; closing them all takes a profile that denies by default, with each service listed.
@@ -40,6 +44,7 @@ import shlex
 import shutil
 import signal
 import stat
+import socket
 import subprocess
 import sys
 import tempfile
@@ -63,6 +68,10 @@ SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".n
 # folders are hidden as well, but for the run's own copy of the project, whose installed dependencies the box links.
 ENGINE_SECRETS = ("page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm")
 # What the Python engine that came before kept in ~/.jaynes.
+# The Jaynes page: an answer through it counts as the person's, so no box ever reaches it.
+PAGE_PORT = 8750
+# How many local ports a run reserves for a project's commands, handed over in JAYNES_PORTS.
+RESERVED = 8
 OLD_ENGINE = ("jaynes.sqlite3", "jaynes.sqlite3-wal", "jaynes.sqlite3-shm", "guard.json", "backups", "objects")
 # Devices a command may write. Not the terminals (/dev/ttys*): a pty's other end has the same names as the person's
 # own terminals, so the box reads and writes none of them, and a command that opens a pty of its own fails.
@@ -88,7 +97,12 @@ class Box:
     hidden: tuple[Path, ...] = ()  # folders it may not read, apart from its writable folders inside them
     readonly: tuple[Path, ...] = ()  # folders inside its writable folders that it may read and not write
     ports: tuple[int, ...] = ()  # local ports it may connect to
-    local: bool = False  # any local port: a test suite's own servers, and whatever else listens; never the internet
+    # a test suite's own servers: it binds and reaches ``reserved`` and ``local_ports``, never the page's; never
+    # the internet
+    local: bool = False
+    reserved: tuple[int, ...] = ()  # the free ports the run reserved, handed over in JAYNES_PORTS
+    local_ports: tuple[int, ...] = ()  # the ports the step declares in its reach
+    any_port: bool = False  # with ``local``: every local TCP port, opened by the person for this project
     readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
     home: Path = field(default_factory=Path.home)
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
@@ -102,7 +116,8 @@ def hidden_paths(box: Box) -> list[Path]:
     # the runs are hidden from a box that says what it reads in them; a photograph's box does not, and its page is
     # a step's output under the runs
     runs = [engine / "runs"] if box.local or box.readable else []
-    return ([box.home / s for s in SECRETS] + [engine / f for f in ENGINE_SECRETS] + [old / f for f in OLD_ENGINE]
+    return ([box.home / s for s in SECRETS] + [engine / f for f in ENGINE_SECRETS] + [engine / "projects"]
+            + [old / f for f in OLD_ENGINE]
             + runs + list(box.hidden))
 
 
@@ -166,6 +181,17 @@ def _mach_denied() -> str:
     return "(deny mach-lookup " + " ".join(f'(global-name "{n}")' for n in MACH_DENIED) + ")"
 
 
+def _chrome_socket() -> list[str]:
+    """In that same folder Chrome binds the socket file that keeps one browser to a profile, and stops when it
+    cannot: the box lets it bind and reach socket files there and nowhere else outside its own folders."""
+    temp = user_temp()
+    if not temp:
+        return []
+    pattern = re.escape(temp).replace('"', '\\"') + r"/\.?(com\.google\.[Cc]hrome|org\.chromium\.[Cc]hromium)[^/]*/"
+    return [f'(allow network-bind (local unix-socket (regex #"^{pattern}")))',
+            f'(allow network-outbound (remote unix-socket (regex #"^{pattern}")))']
+
+
 def profile(box: Box) -> str:
     """The sandbox-exec profile for ``box``. Where two rules match, an allow with a filter wins over a deny."""
     lines = ["(version 1)", "(allow default)",
@@ -184,10 +210,19 @@ def profile(box: Box) -> str:
     if box.writable:
         lines.append(f"(allow file-read* {_subpaths(box.writable)})")
     lines.append("(deny network-outbound)")
-    # TCP only: the box sends no UDP, not even to its own machine
-    lines += [f'(allow network-outbound (remote tcp "localhost:{int(p)}"))' for p in box.ports]
-    if box.local:
+    # TCP only: the box sends no UDP, not even to its own machine. Only listed ports: a deny under a wildcard does not
+    # hold in sandbox-exec
+    lines += [f'(allow network-outbound (remote tcp "localhost:{int(p)}"))' for p in box.ports if p != PAGE_PORT]
+    if box.local and box.any_port:
         lines.append('(allow network-outbound (remote tcp "localhost:*"))')
+        lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
+    elif box.local:
+        lines.append("(deny network-bind)")
+        for p in sorted({*box.reserved, *box.local_ports} - {PAGE_PORT}):
+            lines.append(f'(allow network-bind (local tcp "localhost:{int(p)}"))')
+            lines.append(f'(allow network-outbound (remote tcp "localhost:{int(p)}"))')
+        lines += [f"(allow network-bind (local unix-socket {_subpaths([p])}))" for p in box.writable]
+        lines += _chrome_socket()
         # a suite's own servers on socket files, such as the role tools: only in its own folders, a rule each, since
         # a socket rule with several paths holds only the first
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
@@ -398,6 +433,9 @@ class Ran:
     code: int  # 124 when the command ran out of time
     output: str  # the end of what it printed, stdout and stderr together
     printed: str = ""  # all of it
+    reserved: tuple[int, ...] = ()  # the ports it was given in JAYNES_PORTS
+    local_ports: tuple[int, ...] = ()  # the ports its step declared
+    any_port: bool = False  # it ran with every local port open, by the person's choice for the project
 
 
 def _kill(proc: "subprocess.Popen[bytes]") -> None:
@@ -421,13 +459,30 @@ def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
     return env
 
 
+def reserve(n: int = RESERVED) -> tuple[int, ...]:
+    """``n`` local ports free now, none of them the page's."""
+    socks = []
+    try:
+        while len(socks) < n:
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            if s.getsockname()[1] == PAGE_PORT:
+                s.close()
+                continue
+            socks.append(s)
+        return tuple(sorted(s.getsockname()[1] for s in socks))
+    finally:
+        for s in socks:
+            s.close()
+
+
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
-        readable: tuple[Path, ...] = ()) -> Ran:
+        readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
     ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
-    inside the hidden ones, such as the run's own copy of the role a check's script is in. Raises ``Unavailable``
-    where there is no box."""
+    inside the hidden ones, such as the run's own copy of the role a check's script is in. Its servers bind the ports
+    in ``JAYNES_PORTS`` and the step's ``local_ports``. Raises ``Unavailable`` where there is no box."""
     with tempfile.TemporaryDirectory(prefix="jaynes-suite-") as tmp:
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
@@ -436,8 +491,14 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         link_dependencies(project, work)
         if source is not None:
             link_dependencies(source, work)
-        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True, readable=(project, *readable)))
-        proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {})},
+        ports, declared = reserve(), tuple(sorted({int(p) for p in local_ports} - {PAGE_PORT}))
+        # the run's say, from its setup, in the engine's call: the person opened this project's local ports
+        anyone = any_port is True
+        box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *readable), reserved=ports, local_ports=declared,
+                  any_port=anyone)
+        argv = command_in_box(command, box)
+        given = {"JAYNES_PORTS": ",".join(map(str, ports))}
+        proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {}), **given},
                                 stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True)
         try:
@@ -449,7 +510,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
             out += f"\n(stopped after {timeout:.0f} s)".encode()
             code = 124
         text = out.decode(errors="replace")
-        return Ran(code, text[-TAIL:], text)
+        return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone)
 
 
 # --- a role's own step ------------------------------------------------------------------------------------------
@@ -566,10 +627,32 @@ def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str
     return f"the project's tests cannot run on this machine ({runner.suite}: {said}); {hint}, then continue the run"
 
 
+def ports_refused(ran: Ran) -> list[str]:
+    """The local ports a refused command names, outside what it was given: ``0`` for a server on a port of its own
+    choosing, or one whose refused bind names no port. Read from each refusal and the few lines before it, where a
+    traceback shows the call: macOS logs no denial of a sandbox-exec profile, so the output is all there is."""
+    allowed = {*ran.reserved, *ran.local_ports}
+    lines = ran.printed.splitlines()
+    named: list[str] = []
+    for i, line in enumerate(lines):
+        if "not permitted" not in line.lower() and "eperm" not in line.lower():
+            continue
+        near = "\n".join(lines[max(0, i - 6):i + 1])
+        ports = re.findall(r"(?:localhost|[\d.]+|\[[0-9a-f:]*\]|\*):(\d{1,5})\b", line)
+        ports = ports or re.findall(r"\(\s*['\"](?:localhost|[\d.]+|::1?|)['\"]\s*,\s*(\d{1,5})\s*\)", near)
+        if not ports and re.search(r"\b(listen|bind)\b", near, re.IGNORECASE):
+            ports = ["0"]
+        for port in ports:
+            if int(port) not in allowed and port not in named:
+                named.append(port)
+    return named
+
+
 def refused(ran: Ran) -> list[str]:
     """What the box refused, when the command failed for it: then its failure says nothing about the project."""
     lines = [line.strip() for line in ran.printed.splitlines()
-             if "operation not permitted" in line.lower() and not any(h in line for h in HARMLESS)]
+             if ("operation not permitted" in line.lower() or "eperm" in line.lower())
+             and not any(h in line for h in HARMLESS)]
     return lines if ran.code != 0 else []
 
 

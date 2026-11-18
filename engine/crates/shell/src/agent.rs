@@ -463,6 +463,8 @@ impl Claude {
         let mut hide: Vec<String> = vec!["~/".into()];
         let home = crate::home();
         hide.extend(ENGINE_SECRETS.iter().map(|f| home.join(f).display().to_string()));
+        // what the person chose for each project, which an agent neither reads nor writes
+        hide.push(home.join(crate::project_prefs::FOLDER).display().to_string());
         // what the step may read is never hidden: a folder that holds one is hidden around it, one entry at a time
         for p in beside(&home.join("runs"), cwd) {
             hide.extend(around(&p, reads).iter().map(|p| p.display().to_string()));
@@ -1060,7 +1062,7 @@ mod tests {
         assert_eq!(s["sandbox"]["filesystem"]["allowRead"][0], "/w");
         // and what the engine keeps, even when its home is not under the person's
         let home = crate::home();
-        for f in ENGINE_SECRETS.iter().map(|f| home.join(f)) {
+        for f in ENGINE_SECRETS.iter().map(|f| home.join(f)).chain([home.join(crate::project_prefs::FOLDER)]) {
             assert!(hidden.contains(&f.display().to_string().as_str()), "{f:?} is not hidden: {hidden:?}");
         }
     }

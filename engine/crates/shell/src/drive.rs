@@ -24,6 +24,8 @@ pub struct Setup {
     /// The run's copy of its target, when it has one.
     pub copy: Option<Box<dyn Workspace>>,
     pub agent: Box<dyn Agent>,
+    /// The person opened the project's checks to every local port, as the run's setup says (`ports_open`).
+    pub any_port: bool,
 }
 
 impl Setup {
@@ -42,8 +44,15 @@ impl Setup {
             _ => None,
         };
         let agent = agent_in(s["agent"].as_str().unwrap_or("claude"), Some(&role.library));
-        Ok(Setup { run: run.to_string(), dir, role, copy, agent })
+        Ok(Setup { run: run.to_string(), dir, role, copy, agent, any_port: ports_open(&s).is_some() })
     }
+}
+
+/// When the person let this run's project reach any local port, as the run's setup recorded it at its start: the
+/// time they opened it, in seconds since 1970.
+pub fn ports_open(setup: &serde_json::Value) -> Option<u64> {
+    let p = setup.get("ports")?;
+    if p.get("any").and_then(serde_json::Value::as_bool) == Some(true) { p.get("opened").and_then(serde_json::Value::as_u64).or(Some(0)) } else { None }
 }
 
 /// Whether `spec` names an agent program Jaynes knows: `claude`, `claude:MODEL`, `codex:MODEL` or `command:CMD`. Anything else is
@@ -1243,6 +1252,7 @@ impl<'a> Driver<'a> {
             key,
             project,
             source,
+            any_port: self.setup.any_port,
         });
         let outcome = match reply {
             Err(e) => AttemptOutcome::Fault { reason: e },
@@ -1325,6 +1335,7 @@ impl<'a> Driver<'a> {
                     given: given.clone(),
                     project: project.clone(),
                     source: source.clone(),
+                    any_port: self.setup.any_port,
                 }) {
                     Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict },
                     Ok(other) => blocked(name, format!("the role answered a check with {other:?}")),

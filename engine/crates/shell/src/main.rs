@@ -1,6 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-use jaynes_shell::{home, agent, conformance, drive, index, install, mcp, page, permit, project, protocol, role, store, summary, toml_role};
+use jaynes_shell::{home, agent, conformance, drive, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -38,6 +38,8 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   conformance DIR         check a role against the protocol
   new NAME [DIR]          write a starting role.toml, with the menu in its comments
   check DIR               read a role in TOML strictly, every error with its line, and prove its promises
+  project ports DIR       whether a project's checks reach any local port of this machine, and since when
+  project open-ports DIR | project close-ports DIR   let them, or not: the person's alone, at a terminal
   schema                  print the protocol's schema
 
 The record lives in $JAYNES_ENGINE_HOME (default ~/.jaynes/engine).";
@@ -229,8 +231,12 @@ fn run(args: &[String]) -> Result<(), String> {
             let s = store()?;
             let state = s.state(id)?.ok_or("no such run")?;
             print_state(&state);
+            if let Some(opened) = s.setup(id).ok().as_ref().and_then(drive::ports_open) {
+                println!("{}", ports_sentence(opened));
+            }
             Ok(())
         }
+        "project" => project_cmd(rest),
         "answer" => answer(rest),
         "raise" | "halt" | "resume" | "abandon" => {
             let id = rest.first().ok_or("which run?")?;
@@ -480,10 +486,19 @@ fn start(args: &[String]) -> Result<(), String> {
         let c = jaynes_core::attention::count(&history, &key, &lineage, &agent, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
         attention.insert(step.name.clone(), c);
     }
+    // the project's open ports as the person left them now, fixed for the whole run
+    let ports = match &project {
+        Some(p) => project_prefs::load(&home(), p)?.ports.filter(|p| p.any),
+        None => None,
+    };
     s.put_setup(&id, &json!({
         "role_given": role_dir, "fingerprint": fingerprint, "agent": agent, "target": manifest.target,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
+        "ports": ports.as_ref().map(|p| json!({"any": true, "opened": p.opened})),
     }))?;
+    if let Some(p) = &ports {
+        say(&ports_sentence(p.opened));
+    }
     drive::sweep_engines(&home(), &s)?;
     drive::sweep_copies(&home(), &s)?;
     let setup = Setup::load(&s, &home(), &id)?;
@@ -492,6 +507,45 @@ fn start(args: &[String]) -> Result<(), String> {
     let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention })?;
     print_state(&end);
     Ok(())
+}
+
+/// What a run whose project the person opened says about it, before it starts and when it is shown.
+fn ports_sentence(opened: u64) -> String {
+    format!("this project's checks reach any local port of this machine: opened by you on {}", summary::utc(opened))
+}
+
+/// `jaynes project ports|open-ports|close-ports DIR`. Opening and closing are the person's, at a terminal: an
+/// agent's shell has none, and the agent's box cannot write the engine's home anyway.
+fn project_cmd(args: &[String]) -> Result<(), String> {
+    let (Some(what), Some(dir)) = (args.first(), args.get(1)) else {
+        return Err("jaynes project ports|open-ports|close-ports DIR".into());
+    };
+    let dir = std::fs::canonicalize(dir).map_err(|e| format!("{dir}: {e}"))?;
+    let mut prefs = project_prefs::load(&home(), &dir)?;
+    match what.as_str() {
+        "ports" => {
+            match prefs.ports.as_ref().filter(|p| p.any) {
+                Some(p) => println!("{}", ports_sentence(p.opened)),
+                None => println!("this project's checks reach only the ports a run reserves for them (JAYNES_PORTS) and the ones a step declares"),
+            }
+            Ok(())
+        }
+        "open-ports" | "close-ports" => {
+            if let By::Agent { who } = who() {
+                return Err(format!("only the person opens or closes a project's local ports, at a terminal; {who} may not"));
+            }
+            let open = what == "open-ports";
+            prefs.ports = Some(project_prefs::Ports { any: open, opened: if open { store::now() } else { 0 } });
+            project_prefs::save(&home(), &dir, &prefs)?;
+            println!("{}", if open {
+                format!("{}; a run started from now on lets its checks reach every service listening here, the Jaynes page's port among them. `jaynes project close-ports {}` closes them again", ports_sentence(store::now()), dir.display())
+            } else {
+                "closed: this project's checks reach only the ports a run reserves for them and the ones a step declares".to_string()
+            });
+            Ok(())
+        }
+        other => Err(format!("jaynes project ports|open-ports|close-ports DIR, not {other}")),
+    }
 }
 
 /// Remove the folders of starts that died while they made them, once nothing can still be writing in them.
