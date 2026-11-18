@@ -184,14 +184,14 @@ impl SettingsView {
                     .p(px(5.))
                     .rounded(px(6.))
                     .border_1()
-                    .border_color(rgb(if on { look::BLUE } else { look::LINE_2 }))
+                    .border_color(rgb(if on { look::blue() } else { look::line_2() }))
                     .cursor_pointer()
                     .flex()
                     .flex_col()
                     .items_center()
                     .gap(px(4.))
                     .text_size(px(10.5))
-                    .text_color(rgb(if on { look::TEXT } else { look::DIM }))
+                    .text_color(rgb(if on { look::text() } else { look::dim() }))
                     .child(div().w_full().h(px(18.)).rounded(px(3.)).overflow_hidden().flex().child(div().flex_1().bg(rgb(bg))).child(div().flex_1().bg(rgb(a))).child(div().flex_1().bg(rgb(b))))
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| this.pick("terminal_colors", name, cx))),
@@ -210,12 +210,12 @@ impl SettingsView {
             .px(px(10.))
             .py(px(5.))
             .rounded(px(7.))
-            .bg(rgb(look::PANEL_2))
+            .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgb(look::LINE_2))
+            .border_color(rgb(look::line_2()))
             .cursor_pointer()
             .child(current.clone())
-            .child(div().text_color(rgb(look::FAINT)).text_size(px(10.)).child("▾"))
+            .child(div().text_color(rgb(look::faint())).text_size(px(10.)).child("▾"))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_fonts(cx)));
         if !self.font_open {
             return button.into_any_element();
@@ -226,9 +226,9 @@ impl SettingsView {
             .min_w(px(180.))
             .py(px(4.))
             .rounded(px(8.))
-            .bg(rgb(look::PANEL_2))
+            .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgb(look::LINE_2))
+            .border_color(rgb(look::line_2()))
             .shadow_lg()
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -245,8 +245,8 @@ impl SettingsView {
                     .px(px(12.))
                     .py(px(5.))
                     .cursor_pointer()
-                    .text_color(rgb(if on { look::TEXT } else { look::DIM }))
-                    .hover(|d| d.bg(rgb(look::SELECTED)).text_color(rgb(look::TEXT)))
+                    .text_color(rgb(if on { look::text() } else { look::dim() }))
+                    .hover(|d| d.bg(rgb(look::selected())).text_color(rgb(look::text())))
                     .child(f)
                     .on_click(cx.listener(move |this, _, _, cx| this.pick("terminal_font", &value, cx))),
             );
@@ -256,7 +256,7 @@ impl SettingsView {
 
     fn option_key(&self, p: &Prefs, cx: &mut Context<Self>) -> Div {
         let choices = [("Auto", "auto", OptionAsAlt::Auto), ("Alt", "alt", OptionAsAlt::On), ("Left Alt", "left", OptionAsAlt::Left), ("Characters", "characters", OptionAsAlt::Off)];
-        let mut seg = div().flex().rounded(px(7.)).border_1().border_color(rgb(look::LINE_2)).overflow_hidden();
+        let mut seg = div().flex().rounded(px(7.)).border_1().border_color(rgb(look::line_2())).overflow_hidden();
         for (i, (label, value, which)) in choices.into_iter().enumerate() {
             let on = p.option_key == which;
             seg = seg.child(
@@ -265,9 +265,9 @@ impl SettingsView {
                     .px(px(10.))
                     .py(px(4.))
                     .cursor_pointer()
-                    .when(i > 0, |d| d.border_l_1().border_color(rgb(look::LINE_2)))
-                    .when(on, |d| d.bg(rgb(look::SELECTED)))
-                    .text_color(rgb(if on { look::TEXT } else { look::DIM }))
+                    .when(i > 0, |d| d.border_l_1().border_color(rgb(look::line_2())))
+                    .when(on, |d| d.bg(rgb(look::selected())))
+                    .text_color(rgb(if on { look::text() } else { look::dim() }))
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| this.pick("option_key", value, cx))),
             );
@@ -303,13 +303,13 @@ fn row(name: &str, hint: Option<String>, control: impl IntoElement) -> Div {
         .gap(px(14.))
         .py(px(10.))
         .border_b_1()
-        .border_color(rgb(look::LINE))
+        .border_color(rgb(look::line()))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(div().text_color(rgb(look::TEXT)).child(name.to_owned()))
-                .when_some(hint, |d, h| d.child(div().mt(px(2.)).text_size(px(11.5)).text_color(rgb(look::FAINT)).child(h))),
+                .child(div().text_color(rgb(look::text())).child(name.to_owned()))
+                .when_some(hint, |d, h| d.child(div().mt(px(2.)).text_size(px(11.5)).text_color(rgb(look::faint())).child(h))),
         )
         .child(control)
 }
@@ -321,13 +321,13 @@ fn toggle(id: &'static str, on: bool, name: &'static str, cx: &mut Context<Setti
         .h(px(18.))
         .flex_none()
         .rounded(px(9.))
-        .bg(rgb(if on { look::BLUE } else { look::LINE_2 }))
+        .bg(rgb(if on { look::blue() } else { look::line_2() }))
         .cursor_pointer()
         .flex()
         .items_center()
         .px(px(2.))
         .when(on, |d| d.justify_end())
-        .child(div().size(px(14.)).rounded_full().bg(rgb(if on { 0x0b0e13 } else { look::DIM })))
+        .child(div().size(px(14.)).rounded_full().bg(rgb(if on { 0x0b0e13 } else { look::dim() })))
         .on_click(cx.listener(move |this, _, _, cx| this.pick(name, if on { "off" } else { "on" }, cx)))
 }
 
@@ -338,8 +338,8 @@ fn stepper(id: &'static str, shown: String, name: &'static str, value: f32, step
             .px(px(9.))
             .py(px(3.))
             .cursor_pointer()
-            .text_color(rgb(look::FAINT))
-            .hover(|d| d.text_color(rgb(look::TEXT)))
+            .text_color(rgb(look::faint()))
+            .hover(|d| d.text_color(rgb(look::text())))
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| this.pick(name, &to.to_string(), cx)))
     };
@@ -348,20 +348,20 @@ fn stepper(id: &'static str, shown: String, name: &'static str, value: f32, step
         .items_center()
         .rounded(px(7.))
         .border_1()
-        .border_color(rgb(look::LINE_2))
+        .border_color(rgb(look::line_2()))
         .child(button("less", "−", value - step, cx))
-        .child(div().px(px(10.)).py(px(3.)).min_w(px(44.)).flex().justify_center().border_l_1().border_r_1().border_color(rgb(look::LINE_2)).font_family(look::MONO_FONT).text_size(px(12.)).child(shown))
+        .child(div().px(px(10.)).py(px(3.)).min_w(px(44.)).flex().justify_center().border_l_1().border_r_1().border_color(rgb(look::line_2())).font_family(look::MONO_FONT).text_size(px(12.)).child(shown))
         .child(button("more", "+", value + step, cx))
 }
 
 fn field(input: &Entity<InputState>) -> Div {
-    div().w(px(220.)).h(px(30.)).px(px(10.)).flex().items_center().rounded(px(7.)).bg(rgb(look::PANEL_2)).border_1().border_color(rgb(look::LINE_2)).font_family(look::MONO_FONT).text_size(px(12.)).child(Input::new(input))
+    div().w(px(220.)).h(px(30.)).px(px(10.)).flex().items_center().rounded(px(7.)).bg(rgb(look::panel_2())).border_1().border_color(rgb(look::line_2())).font_family(look::MONO_FONT).text_size(px(12.)).child(Input::new(input))
 }
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = prefs::get();
-        let mut bar = div().flex().items_end().justify_center().gap(px(4.)).px(px(14.)).pb(px(10.)).border_b_1().border_color(rgb(look::LINE));
+        let mut bar = div().flex().items_end().justify_center().gap(px(4.)).px(px(14.)).pb(px(10.)).border_b_1().border_color(rgb(look::line()));
         for s in Section::ALL {
             let on = s == self.section;
             bar = bar.child(
@@ -376,10 +376,10 @@ impl Render for SettingsView {
                     .rounded(px(7.))
                     .cursor_pointer()
                     .text_size(px(11.5))
-                    .text_color(rgb(if on { look::TEXT } else { look::DIM }))
-                    .when(on, |d| d.bg(rgb(look::SELECTED)))
-                    .hover(|d| d.text_color(rgb(look::TEXT)))
-                    .child(svg().data(s.icon().as_bytes()).size(px(18.)).text_color(rgb(if on { look::TEXT } else { look::DIM })))
+                    .text_color(rgb(if on { look::text() } else { look::dim() }))
+                    .when(on, |d| d.bg(rgb(look::selected())))
+                    .hover(|d| d.text_color(rgb(look::text())))
+                    .child(svg().data(s.icon().as_bytes()).size(px(18.)).text_color(rgb(if on { look::text() } else { look::dim() })))
                     .child(s.name())
                     .on_click(cx.listener(move |this, _, _, cx| this.show(s, cx))),
             );
@@ -390,10 +390,10 @@ impl Render for SettingsView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(look::PANEL))
+            .bg(rgb(look::panel()))
             .font_family(look::UI_FONT)
             .text_size(px(12.5))
-            .text_color(rgb(look::TEXT))
+            .text_color(rgb(look::text()))
             .track_focus(&self.focus)
             .key_context("Settings")
             .on_action(|_: &CloseSettings, window, _| window.remove_window())
@@ -416,7 +416,7 @@ impl Render for SettingsView {
             )
             .child(bar)
             .child(div().flex_1().px(px(24.)).py(px(8.)).flex().flex_col().children(rows.into_iter().enumerate().map(|(i, r)| if i + 1 == n { r.border_b_0() } else { r })))
-            .when_some(self.note.clone(), |d, n| d.child(div().px(px(24.)).pb(px(12.)).text_size(px(11.5)).text_color(rgb(look::RED)).child(n)))
+            .when_some(self.note.clone(), |d, n| d.child(div().px(px(24.)).pb(px(12.)).text_size(px(11.5)).text_color(rgb(look::red())).child(n)))
     }
 }
 

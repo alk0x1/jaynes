@@ -196,7 +196,7 @@ impl Render for Root {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(look::PANEL))
+            .bg(rgb(look::panel()))
             .font_family(look::UI_FONT)
             .track_focus(&self.focus)
             .key_context("Jaynes")
@@ -298,7 +298,7 @@ impl Render for Root {
                                 .flex()
                                 .flex_col()
                                 .border_r_1()
-                                .border_color(rgb(look::LINE))
+                                .border_color(rgb(look::line()))
                                 .child(self.side_head(cx))
                                 .child(div().flex_1().min_h_0().child(self.side.clone())),
                         )
@@ -322,7 +322,7 @@ fn title_bar(id: &'static str) -> Stateful<Div> {
         .flex()
         .items_center()
         .border_b_1()
-        .border_color(rgb(look::LINE))
+        .border_color(rgb(look::line()))
         .on_mouse_down(MouseButton::Left, |e, window, _| {
             if e.click_count == 2 {
                 window.titlebar_double_click();
@@ -414,7 +414,7 @@ impl Root {
             Shown::Inbox => self.inbox_view(cx),
             Shown::Changes => self.stack.clone().into_any_element(),
         };
-        div().relative().size_full().child(body).child(div().absolute().inset_0().bg(rgb(look::PANEL)).child(was)).into_any_element()
+        div().relative().size_full().child(body).child(div().absolute().inset_0().bg(rgb(look::panel())).child(was)).into_any_element()
     }
 
     /// The terminal in the middle: the agent open from the column, else the person's own Claude Code.
@@ -481,7 +481,7 @@ impl Root {
                     .min_h_0()
                     .rounded(px(6.))
                     .border_1()
-                    .border_color(rgb(if on { look::BLUE } else { look::LINE_2 }))
+                    .border_color(rgb(if on { look::blue() } else { look::line_2() }))
                     .overflow_hidden()
                     .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
                         if this.agent_view.as_ref().map(|(o, _)| o) != Some(&address) {
@@ -592,12 +592,12 @@ impl Root {
                 .py(px(6.))
                 .rounded(px(7.))
                 .border_1()
-                .border_color(rgb(if main { look::AMBER } else { look::LINE_2 }))
-                .bg(rgb(if main { look::AMBER } else { look::PANEL_2 }))
+                .border_color(rgb(if main { look::amber() } else { look::line_2() }))
+                .bg(rgb(if main { look::amber() } else { look::panel_2() }))
                 .text_size(px(12.5))
-                .text_color(rgb(if main { look::ON_FILL } else { look::TEXT }))
+                .text_color(rgb(if main { look::on_fill() } else { look::text() }))
                 .when(main, |d| d.font_weight(FontWeight::SEMIBOLD))
-                .when(!main, |d| d.hover(|d| d.bg(rgb(look::SELECTED))))
+                .when(!main, |d| d.hover(|d| d.bg(rgb(look::selected()))))
                 .cursor_pointer()
                 .child(div().min_w_0().truncate().child(text))
                 .child(div().flex_none().text_size(px(11.)).opacity(0.6).child(key))
@@ -607,7 +607,7 @@ impl Root {
             button("ask-deny".into(), "Deny".into(), "⌘⌫".into(), false)
                 .border_color(rgba(0))
                 .bg(rgba(0))
-                .text_color(rgb(look::DIM))
+                .text_color(rgb(look::dim()))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.answer(Answer::Deny, cx);
                 })),
@@ -629,10 +629,10 @@ impl Root {
                 .py(px(12.))
                 .relative()
                 .border_b_1()
-                .border_color(rgb(look::LINE))
-                .bg(rgba((look::AMBER << 8) | 0x0c))
+                .border_color(rgb(look::line()))
+                .bg(rgba((look::amber() << 8) | 0x0c))
                 // the amber edge at the left, as the familiar look marks what waits
-                .child(div().absolute().left_0().top_0().bottom_0().w(px(3.)).bg(rgb(look::AMBER)))
+                .child(div().absolute().left_0().top_0().bottom_0().w(px(3.)).bg(rgb(look::amber())))
                 .child(
                     div()
                         .min_w_0()
@@ -640,8 +640,8 @@ impl Root {
                         .gap(px(6.))
                         .text_size(px(13.))
                         .line_height(px(19.5))
-                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child(ask.title.clone()))
-                        .child(div().min_w_0().truncate().text_color(rgb(look::DIM)).child(ask.what.clone())),
+                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(ask.title.clone()))
+                        .child(div().min_w_0().truncate().text_color(rgb(look::dim())).child(ask.what.clone())),
                 )
                 .child(acts)
                 .into_any_element(),
@@ -797,11 +797,11 @@ impl Root {
                 .rounded(px(6.))
                 .text_size(px(12.5))
                 .cursor_pointer()
-                .text_color(rgb(if self.changes_on { look::TEXT } else { look::FAINT }))
-                .when(self.changes_on, |d| d.bg(rgb(look::SELECTED)))
-                .hover(|d| d.text_color(rgb(look::DIM)))
+                .text_color(rgb(if self.changes_on { look::text() } else { look::faint() }))
+                .when(self.changes_on, |d| d.bg(rgb(look::selected())))
+                .hover(|d| d.text_color(rgb(look::dim())))
                 .child("Changes")
-                .when(n > 0, |d| d.child(div().text_color(rgb(look::FAINT)).child(n.to_string()))),
+                .when(n > 0, |d| d.child(div().text_color(rgb(look::faint())).child(n.to_string()))),
         )
         .on_click(cx.listener(|this, _, _, cx| {
             this.changes_on = !this.changes_on;
@@ -874,12 +874,12 @@ impl Root {
             .font_family(look::UI_FONT)
             .flex()
             .flex_col()
-            .child(div().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Inbox"))
+            .child(div().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child("Inbox"))
             .child(
                 div()
                     .mt(px(4.))
                     .text_size(px(12.5))
-                    .text_color(rgb(look::FAINT))
+                    .text_color(rgb(look::faint()))
                     .child(format!("What needs you, across all {spaces} spaces. Agents land here when they ask something or finish.")),
             );
         let button = |id: SharedString, text: &'static str| {
@@ -890,11 +890,11 @@ impl Root {
                 .py(px(6.))
                 .rounded(px(7.))
                 .border_1()
-                .border_color(rgb(look::LINE_2))
-                .bg(rgb(look::PANEL_2))
+                .border_color(rgb(look::line_2()))
+                .bg(rgb(look::panel_2()))
                 .text_size(px(12.5))
-                .text_color(rgb(look::TEXT))
-                .hover(|d| d.bg(rgb(look::SELECTED)))
+                .text_color(rgb(look::text()))
+                .hover(|d| d.bg(rgb(look::selected())))
                 .cursor_pointer()
                 .child(text)
         };
@@ -910,9 +910,9 @@ impl Root {
                     .gap(px(8.))
                     .text_size(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(look::DIM))
+                    .text_color(rgb(look::dim()))
                     .child(name)
-                    .child(div().font_weight(FontWeight::NORMAL).text_color(rgb(look::FAINT)).child(items.len().to_string())),
+                    .child(div().font_weight(FontWeight::NORMAL).text_color(rgb(look::faint())).child(items.len().to_string())),
             );
             for item in items.iter() {
                 let id = match &item.key {
@@ -937,9 +937,9 @@ impl Root {
                     }
                 };
                 let colour = match item.state {
-                    agents::State::Waiting => look::AMBER,
-                    agents::State::Error => look::RED,
-                    _ => look::VIOLET,
+                    agents::State::Waiting => look::amber(),
+                    agents::State::Error => look::red(),
+                    _ => look::violet(),
                 };
                 page = page.child(
                     div()
@@ -950,7 +950,7 @@ impl Root {
                         .px(px(14.))
                         .py(px(11.))
                         .rounded(px(9.))
-                        .hover(|d| d.bg(rgb(look::PANEL_2)))
+                        .hover(|d| d.bg(rgb(look::panel_2())))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, window, cx| this.open_item(key.clone(), title.clone(), window, cx)))
                         .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(colour)))
@@ -966,10 +966,10 @@ impl Root {
                                         .flex()
                                         .gap(px(6.))
                                         .text_size(px(13.))
-                                        .child(div().flex_none().max_w(px(320.)).truncate().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child(item.title.clone()))
-                                        .child(div().min_w_0().truncate().text_color(rgb(look::DIM)).child(item.what.clone())),
+                                        .child(div().flex_none().max_w(px(320.)).truncate().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(item.title.clone()))
+                                        .child(div().min_w_0().truncate().text_color(rgb(look::dim())).child(item.what.clone())),
                                 )
-                                .child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).child(item.place.clone())),
+                                .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(item.place.clone())),
                         )
                         .child(act)
                         .child(
@@ -978,20 +978,20 @@ impl Root {
                                 .flex_none()
                                 .text_right()
                                 .text_size(px(12.))
-                                .text_color(rgb(look::FAINT))
+                                .text_color(rgb(look::faint()))
                                 .child(if item.since_ms > 0 { agents::age(item.since_ms, now) } else { String::new() }),
                         ),
                 );
             }
         }
         if needs.is_empty() && review.is_empty() {
-            page = page.child(div().mt(px(40.)).text_size(px(15.)).font_weight(FontWeight::MEDIUM).text_color(rgb(look::GREEN)).child("✓ All clear. Nothing needs you."));
+            page = page.child(div().mt(px(40.)).text_size(px(15.)).font_weight(FontWeight::MEDIUM).text_color(rgb(look::green())).child("✓ All clear. Nothing needs you."));
         }
         let all = || self.agents.read(cx).spaces.iter().flat_map(|s| s.agents.iter()).cloned().collect::<Vec<_>>();
         let (working, idle) = (all().iter().filter(|a| a.state == agents::State::Working).count(), all().iter().filter(|a| a.state == agents::State::Idle && !a.shell).count());
         if working + idle > 0 {
             let words = [(working, "working"), (idle, "idle")].iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect::<Vec<_>>().join(" · ");
-            page = page.child(div().mt(px(26.)).text_size(px(12.5)).text_color(rgb(look::FAINT)).child(format!("{words}. They show up here when they need you.")));
+            page = page.child(div().mt(px(26.)).text_size(px(12.5)).text_color(rgb(look::faint())).child(format!("{words}. They show up here when they need you.")));
         }
         page.into_any_element()
     }
@@ -1038,22 +1038,22 @@ impl Root {
             .w(px(440.))
             .p(px(20.))
             .rounded(px(12.))
-            .bg(rgb(look::PANEL_2))
+            .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgb(look::LINE_2))
+            .border_color(rgb(look::line_2()))
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Shortcuts"));
+            .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child("Shortcuts"));
         for (group, keys) in SHORTCUTS {
-            let mut list = div().flex().flex_col().gap(px(6.)).child(look::label(group, look::FAINT));
+            let mut list = div().flex().flex_col().gap(px(6.)).child(look::label(group, look::faint()));
             for (key, what) in keys.iter() {
                 list = list.child(
                     div()
                         .flex()
                         .gap(px(12.))
-                        .child(div().w(px(110.)).flex_none().font_family(look::MONO_FONT).text_size(px(12.5)).text_color(rgb(look::TEXT)).child(*key))
-                        .child(div().text_size(px(13.)).text_color(rgb(look::DIM)).child(*what)),
+                        .child(div().w(px(110.)).flex_none().font_family(look::MONO_FONT).text_size(px(12.5)).text_color(rgb(look::text())).child(*key))
+                        .child(div().text_size(px(13.)).text_color(rgb(look::dim())).child(*what)),
                 );
             }
             panel = panel.child(list);
@@ -1109,7 +1109,7 @@ impl Root {
         let place = home_short(&place, &std::env::var("HOME").unwrap_or_default());
         let item = || div().flex().items_center().gap(px(6.));
         let count = |id: &'static str| {
-            item().id(id).cursor_pointer().hover(|d| d.text_color(rgb(look::TEXT))).on_click(cx.listener(|this, _, _, cx| this.tabs.update(cx, |t, cx| t.show_inbox(cx))))
+            item().id(id).cursor_pointer().hover(|d| d.text_color(rgb(look::text()))).on_click(cx.listener(|this, _, _, cx| this.tabs.update(cx, |t, cx| t.show_inbox(cx))))
         };
         let dot = |c: u32| div().size(px(7.)).rounded_full().bg(rgb(c));
         let mut bar = div()
@@ -1120,22 +1120,22 @@ impl Root {
             .gap(px(16.))
             .px(px(12.))
             .border_t_1()
-            .border_color(rgb(look::LINE))
+            .border_color(rgb(look::line()))
             .text_size(px(11.5))
-            .text_color(rgb(look::DIM));
+            .text_color(rgb(look::dim()));
         if inbox {
-            bar = bar.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::TEXT)).child("Inbox"));
+            bar = bar.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::text())).child("Inbox"));
         } else {
             bar = bar
-                .when_some(space, |d, s| d.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::TEXT)).child(s)))
-                .when(!self.branch.is_empty(), |d| d.child(div().font_family(look::MONO_FONT).text_size(px(11.)).text_color(rgb(look::BLUE)).child(format!("⎇ {}", self.branch))))
+                .when_some(space, |d, s| d.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::text())).child(s)))
+                .when(!self.branch.is_empty(), |d| d.child(div().font_family(look::MONO_FONT).text_size(px(11.)).text_color(rgb(look::blue())).child(format!("⎇ {}", self.branch))))
                 .child(div().min_w_0().truncate().child(place))
                 .when(open_works, |d| {
                     d.child(
                         item()
                             .id("stop-agent")
                             .cursor_pointer()
-                            .hover(|d| d.text_color(rgb(look::TEXT)))
+                            .hover(|d| d.text_color(rgb(look::text())))
                             .on_click(cx.listener(|this, _, _, cx| this.stop_agent(cx)))
                             .child("Stop")
                             .child(div().opacity(0.6).child("⌘.")),
@@ -1143,9 +1143,9 @@ impl Root {
                 });
         }
         bar.child(div().flex_1())
-            .when(waiting > 0, |d| d.child(count("count-waiting").child(dot(look::AMBER)).child(format!("{waiting} waiting"))))
-            .when(review > 0, |d| d.child(count("count-review").child(dot(look::VIOLET)).child(format!("{review} to review"))))
-            .when(working > 0, |d| d.child(count("count-working").child(look::spinner("status-spin", 10., look::BLUE)).child(format!("{working} working"))))
+            .when(waiting > 0, |d| d.child(count("count-waiting").child(dot(look::amber())).child(format!("{waiting} waiting"))))
+            .when(review > 0, |d| d.child(count("count-review").child(dot(look::violet())).child(format!("{review} to review"))))
+            .when(working > 0, |d| d.child(count("count-working").child(look::spinner("status-spin", 10., look::blue())).child(format!("{working} working"))))
             .when(!working_runs.is_empty(), |d| {
                 d.child(
                     item()
@@ -1153,11 +1153,11 @@ impl Root {
                         .px(px(6.))
                         .py(px(2.))
                         .rounded(px(5.))
-                        .text_color(rgb(look::RED))
+                        .text_color(rgb(look::red()))
                         .cursor_pointer()
-                        .hover(|d| d.bg(rgba((look::RED << 8) | 0x1f)))
+                        .hover(|d| d.bg(rgba((look::red() << 8) | 0x1f)))
                         .on_click(move |_, _, _| halt(&working_runs))
-                        .child(look::icon(look::Icon::Stop, 13., look::RED))
+                        .child(look::icon(look::Icon::Stop, 13., look::red()))
                         .child("Halt all runs"),
                 )
             })
@@ -1165,7 +1165,7 @@ impl Root {
                 item()
                     .id("shortcuts-hint")
                     .cursor_pointer()
-                    .hover(|d| d.text_color(rgb(look::TEXT)))
+                    .hover(|d| d.text_color(rgb(look::text())))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.help = true;
                         cx.notify();

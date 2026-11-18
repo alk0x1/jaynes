@@ -46,20 +46,20 @@ fn diff_lines(text: &str) -> Div {
     let mut lines = div().flex().flex_col().font_family(look::MONO_FONT).text_size(px(12.));
     for l in text.lines() {
         let color = if l.starts_with("diff --git") || l.starts_with("+++") || l.starts_with("---") {
-            look::TEXT
+            look::text()
         } else if l.starts_with('+') {
-            look::GREEN
+            look::green()
         } else if l.starts_with('-') {
-            look::RED
+            look::red()
         } else if l.starts_with("@@") {
-            look::BLUE
+            look::blue()
         } else {
-            look::DIM
+            look::dim()
         };
         lines = lines.child(div().whitespace_nowrap().text_color(rgb(color)).child(if l.is_empty() { " ".to_string() } else { l.to_string() }));
     }
     if more > 0 {
-        lines = lines.child(div().pt(px(8.)).text_color(rgb(look::AMBER)).child(format!("{more} more bytes not shown here: read the branch before it lands.")));
+        lines = lines.child(div().pt(px(8.)).text_color(rgb(look::amber())).child(format!("{more} more bytes not shown here: read the branch before it lands.")));
     }
     lines
 }
@@ -93,9 +93,9 @@ impl Render for Lightbox {
                     .flex_col()
                     .size_full()
                     .rounded(px(12.))
-                    .bg(rgb(look::PANEL))
+                    .bg(rgb(look::panel()))
                     .border_1()
-                    .border_color(rgb(look::LINE_2))
+                    .border_color(rgb(look::line_2()))
                     .overflow_hidden()
                     .child(
                         div()
@@ -104,11 +104,11 @@ impl Render for Lightbox {
                             .px(px(14.))
                             .py(px(10.))
                             .border_b_1()
-                            .border_color(rgb(look::LINE))
+                            .border_color(rgb(look::line()))
                             .text_size(px(13.))
-                            .text_color(rgb(look::TEXT))
+                            .text_color(rgb(look::text()))
                             .child(title)
-                            .child(div().text_color(rgb(look::FAINT)).child("Esc · close")),
+                            .child(div().text_color(rgb(look::faint())).child("Esc · close")),
                     )
                     .child(div().flex_1().min_h_0().p(px(10.)).child(body)),
             )

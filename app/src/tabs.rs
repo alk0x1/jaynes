@@ -289,7 +289,7 @@ impl Tabs {
             .flex()
             .flex_col();
         if self.story.is_empty() {
-            lines = lines.child(div().text_color(rgb(look::FAINT)).child(if working { "The agent is starting…" } else { "No agent has spoken in this run yet." }));
+            lines = lines.child(div().text_color(rgb(look::faint())).child(if working { "The agent is starting…" } else { "No agent has spoken in this run yet." }));
         }
         for (step, said) in &self.story {
             let at = order.iter().position(|s| s == step).map(|i| format!("Step {} of {} · {step}", i + 1, order.len())).unwrap_or_else(|| step.clone());
@@ -305,16 +305,16 @@ impl Tabs {
                 .pb(px(6.))
                 .rounded(px(6.))
                 .border_l_2()
-                .border_color(if lit { rgb(look::BLUE) } else { rgba(0) })
-                .when(lit, |d| d.bg(rgb(look::PANEL_2)))
-                .child(div().pt(px(10.)).text_color(rgb(look::BLUE)).child(format!("── {at}")));
+                .border_color(if lit { rgb(look::blue()) } else { rgba(0) })
+                .when(lit, |d| d.bg(rgb(look::panel_2())))
+                .child(div().pt(px(10.)).text_color(rgb(look::blue())).child(format!("── {at}")));
             for s in said {
-                told = told.child(div().flex().gap(px(8.)).child(div().flex_none().text_color(rgb(look::FAINT)).child("●")).child(div().min_w_0().child(s.clone())));
+                told = told.child(div().flex().gap(px(8.)).child(div().flex_none().text_color(rgb(look::faint())).child("●")).child(div().min_w_0().child(s.clone())));
             }
             lines = lines.child(told);
         }
         if working {
-            lines = lines.child(div().pt(px(6.)).flex().gap(px(8.)).items_center().child(look::spinner("story-spin", 11., look::BLUE)).child(div().text_color(rgb(look::FAINT)).child("working")));
+            lines = lines.child(div().pt(px(6.)).flex().gap(px(8.)).items_center().child(look::spinner("story-spin", 11., look::blue())).child(div().text_color(rgb(look::faint())).child("working")));
         }
         if let Some(summary) = &self.summary {
             lines = lines.child(self.summary_section(summary));
@@ -333,10 +333,10 @@ impl Tabs {
                         .py(px(8.))
                         .rounded(px(9.))
                         .border_1()
-                        .border_color(rgb(look::LINE))
+                        .border_color(rgb(look::line()))
                         .font_family(look::UI_FONT)
                         .text_size(px(12.5))
-                        .text_color(rgb(look::FAINT))
+                        .text_color(rgb(look::faint()))
                         .child("This run's agent works on its own and answers to Jaynes; you answer it at its stops."),
                 )
                 .into_any_element(),
@@ -359,16 +359,16 @@ impl Tabs {
             .py(px(4.))
             .rounded(px(7.))
             .border_1()
-            .border_color(rgb(look::LINE_2))
-            .bg(rgb(look::PANEL_2))
+            .border_color(rgb(look::line_2()))
+            .bg(rgb(look::panel_2()))
             .font_family(look::UI_FONT)
             .text_size(px(12.))
-            .text_color(rgb(if copied { look::GREEN } else { look::TEXT }))
+            .text_color(rgb(if copied { look::green() } else { look::text() }))
             .cursor_pointer()
-            .hover(|d| d.border_color(rgb(look::DIM)))
+            .hover(|d| d.border_color(rgb(look::dim())))
             .child(if copied { "Copied" } else { "Copy as Markdown" })
             .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::CopySummary), cx));
-        let mut text = div().mt(px(8.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(rgb(look::LINE)).bg(rgb(look::PANEL_2)).flex().flex_col();
+        let mut text = div().mt(px(8.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(rgb(look::line())).bg(rgb(look::panel_2())).flex().flex_col();
         for line in summary.lines() {
             // an empty line keeps its height
             text = text.child(div().min_h(px(21.)).child(line.to_owned()));
@@ -378,7 +378,7 @@ impl Tabs {
             .mt(px(22.))
             .pt(px(14.))
             .border_t_1()
-            .border_color(rgb(look::LINE))
+            .border_color(rgb(look::line()))
             .flex()
             .flex_col()
             .child(
@@ -391,8 +391,8 @@ impl Tabs {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Summary"))
-                            .child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).child("What this run did, for someone who was not here: paste it in a merge request or a note.")),
+                            .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child("Summary"))
+                            .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child("What this run did, for someone who was not here: paste it in a merge request or a note.")),
                     )
                     .child(button),
             )
@@ -427,8 +427,8 @@ fn tab(id: SharedString, on: bool, line: u32) -> Stateful<Div> {
         .border_b_2()
         .border_color(if on { rgb(line) } else { rgba(0) })
         .text_size(px(12.5))
-        .text_color(rgb(if on { look::TEXT } else { look::DIM }))
-        .hover(|d| d.text_color(rgb(look::TEXT)))
+        .text_color(rgb(if on { look::text() } else { look::dim() }))
+        .hover(|d| d.text_color(rgb(look::text())))
         .cursor_pointer()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
@@ -446,12 +446,12 @@ impl Render for Dragged {
             .px(px(12.))
             .py(px(6.))
             .rounded(px(7.))
-            .bg(rgb(look::PANEL_2))
+            .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgb(look::LINE_2))
+            .border_color(rgb(look::line_2()))
             .font_family(look::UI_FONT)
             .text_size(px(12.5))
-            .text_color(rgb(look::TEXT))
+            .text_color(rgb(look::text()))
             .child(self.title.clone())
     }
 }
@@ -472,13 +472,13 @@ impl Tabs {
                 .rounded(px(7.))
                 .flex()
                 .items_center()
-                .hover(|d| d.bg(rgb(look::SELECTED)))
+                .hover(|d| d.bg(rgb(look::selected())))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.show(None, cx)))
                 .child(look::claude_icon()),
         );
-        row = row.child(div().w(px(1.)).h(px(16.)).mx(px(4.)).flex_none().bg(rgb(look::LINE_2)));
+        row = row.child(div().w(px(1.)).h(px(16.)).mx(px(4.)).flex_none().bg(rgb(look::line_2())));
         for (n, a) in space.iter().enumerate() {
             let on = open.as_deref() == Some(a.address.as_str()) && self.changes.is_none();
             let (address, title) = (a.address.clone(), a.title.clone());
@@ -494,15 +494,15 @@ impl Tabs {
                     .items_center()
                     .gap(px(8.))
                     .text_size(px(12.5))
-                    .text_color(rgb(if on { look::TEXT } else { look::FAINT }))
-                    .when(on, |d| d.bg(rgb(look::SELECTED)))
-                    .hover(|d| d.text_color(rgb(look::DIM)))
+                    .text_color(rgb(if on { look::text() } else { look::faint() }))
+                    .when(on, |d| d.bg(rgb(look::selected())))
+                    .hover(|d| d.text_color(rgb(look::dim())))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| this.show_agent(address.clone(), title.clone(), cx)))
                     .child(div().w(px(12.)).flex_none().flex().items_center().justify_center().child(crate::side::agent_icon(a, "tab")))
                     .child(div().min_w_0().truncate().child(a.title.clone()))
-                    .when(n < 9, |d| d.child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.5)).text_color(rgb(look::FAINT)).child(format!("⌘{}", n + 1)))),
+                    .when(n < 9, |d| d.child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.5)).text_color(rgb(look::faint())).child(format!("⌘{}", n + 1)))),
             );
         }
         if let Some(n) = self.changes {
@@ -519,8 +519,8 @@ impl Tabs {
                 .flex()
                 .items_center()
                 .text_size(px(16.))
-                .text_color(rgb(look::FAINT))
-                .hover(|d| d.text_color(rgb(look::DIM)).bg(rgb(look::SELECTED)))
+                .text_color(rgb(look::faint()))
+                .hover(|d| d.text_color(rgb(look::dim())).bg(rgb(look::selected())))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::NewAgent), cx))
@@ -547,17 +547,17 @@ impl Render for Tabs {
                 None => "tab-main".to_string(),
                 Some(id) => format!("tab-{id}"),
             });
-            let line = if mark == Mark::Needs && key.is_some() { look::AMBER } else { look::TEXT };
+            let line = if mark == Mark::Needs && key.is_some() { look::amber() } else { look::text() };
             let t = tab(id, on, line)
                 .on_click(cx.listener(move |this, _, _, cx| this.show(pick.clone(), cx)))
                 .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
-                .drag_over::<Dragged>(|style, _, _, _| style.bg(rgb(look::SELECTED)))
+                .drag_over::<Dragged>(|style, _, _, _| style.bg(rgb(look::selected())))
                 .on_drop(cx.listener(move |this, d: &Dragged, _, cx| this.move_tab(&d.key, at, cx)));
             row = row.child(match &key {
                 None => t.child(look::claude_icon()).child("Claude Code"),
                 Some(id) => t
                     .child(if mark == Mark::Working {
-                        look::spinner(SharedString::from(format!("tab-spin-{id}")), 10., look::BLUE).into_any_element()
+                        look::spinner(SharedString::from(format!("tab-spin-{id}")), 10., look::blue()).into_any_element()
                     } else {
                         div().size(px(7.)).flex_none().rounded_full().bg(rgb(look::colour(mark))).into_any_element()
                     })
@@ -568,13 +568,13 @@ impl Render for Tabs {
             row = row.child(div().flex().items_center().px(px(4.)).child(changes_tab(n, cx)));
         }
         if self.inbox {
-            row = row.child(tab("tab-inbox".into(), true, look::TEXT).child(look::icon(look::Icon::Inbox, 13., look::DIM)).child("Inbox"));
+            row = row.child(tab("tab-inbox".into(), true, look::text()).child(look::icon(look::Icon::Inbox, 13., look::dim())).child("Inbox"));
         }
         // the agent opened from the column, after the rest
         if let Some((address, title)) = &self.agent {
             row = row.child(
-                tab(SharedString::from(format!("tab-agent-{address}")), true, look::TEXT)
-                    .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_"))
+                tab(SharedString::from(format!("tab-agent-{address}")), true, look::text())
+                    .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::faint())).child("›_"))
                     .child(div().truncate().child(title.clone())),
             );
         }
@@ -594,16 +594,16 @@ fn changes_tab(n: usize, cx: &mut Context<Tabs>) -> Stateful<Div> {
         .items_center()
         .gap(px(8.))
         .text_size(px(12.5))
-        .text_color(rgb(look::TEXT))
-        .bg(rgb(look::SELECTED))
+        .text_color(rgb(look::text()))
+        .bg(rgb(look::selected()))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child("Changes")
-        .child(div().text_size(px(11.)).text_color(rgb(look::FAINT)).child(format!("{n} file{}", if n == 1 { "" } else { "s" })))
+        .child(div().text_size(px(11.)).text_color(rgb(look::faint())).child(format!("{n} file{}", if n == 1 { "" } else { "s" })))
         .child(
             div()
                 .id("tab-changes-close")
-                .text_color(rgb(look::FAINT))
-                .hover(|d| d.text_color(rgb(look::TEXT)))
+                .text_color(rgb(look::faint()))
+                .hover(|d| d.text_color(rgb(look::text())))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.changes = None;

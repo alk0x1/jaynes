@@ -62,7 +62,7 @@ fn word(v: VerdictKind) -> &'static str {
 
 /// A text field in a box of its own height: the field fills whatever holds it.
 pub fn field(input: &Entity<InputState>) -> Div {
-    div().h(px(34.)).px(px(10.)).flex().items_center().rounded(px(8.)).bg(rgb(look::PANEL)).border_1().border_color(rgb(look::LINE)).text_size(px(13.)).text_color(rgb(look::TEXT)).child(Input::new(input))
+    div().h(px(34.)).px(px(10.)).flex().items_center().rounded(px(8.)).bg(rgb(look::panel())).border_1().border_color(rgb(look::line())).text_size(px(13.)).text_color(rgb(look::text())).child(Input::new(input))
 }
 
 pub fn button(id: String, text: &str, on: bool, color: u32) -> Stateful<Div> {
@@ -75,8 +75,8 @@ pub fn button(id: String, text: &str, on: bool, color: u32) -> Stateful<Div> {
         .text_size(px(12.5))
         .cursor_pointer()
         .flex_none()
-        .when(on, |d| d.bg(rgb(color)).border_color(rgb(color)).text_color(rgb(look::ON_FILL)))
-        .when(!on, |d| d.border_color(rgb(look::LINE_2)).text_color(rgb(look::DIM)).hover(|d| d.border_color(rgb(color)).text_color(rgb(look::TEXT))))
+        .when(on, |d| d.bg(rgb(color)).border_color(rgb(color)).text_color(rgb(look::on_fill())))
+        .when(!on, |d| d.border_color(rgb(look::line_2())).text_color(rgb(look::dim())).hover(|d| d.border_color(rgb(color)).text_color(rgb(look::text()))))
         .child(text.to_string())
 }
 
@@ -88,24 +88,24 @@ pub fn primary(id: &str, text: String, can: bool) -> Stateful<Div> {
         .rounded(px(8.))
         .text_size(px(13.))
         .flex_none()
-        .when(can, |d| d.bg(rgb(look::BLUE)).text_color(rgb(look::ON_FILL)).cursor_pointer())
-        .when(!can, |d| d.bg(rgb(look::LINE)).text_color(rgb(look::FAINT)))
+        .when(can, |d| d.bg(rgb(look::blue())).text_color(rgb(look::on_fill())).cursor_pointer())
+        .when(!can, |d| d.bg(rgb(look::line())).text_color(rgb(look::faint())))
         .child(text)
 }
 
 fn colour_of(v: VerdictKind) -> u32 {
     match v {
-        VerdictKind::Keep => look::GREEN,
-        VerdictKind::Drop => look::RED,
-        VerdictKind::Change | VerdictKind::Redo => look::AMBER,
-        VerdictKind::Skip => look::GREY,
+        VerdictKind::Keep => look::green(),
+        VerdictKind::Drop => look::red(),
+        VerdictKind::Change | VerdictKind::Redo => look::amber(),
+        VerdictKind::Skip => look::grey(),
     }
 }
 
 pub fn sentences(list: &[String]) -> Div {
     let mut d = div().flex().flex_col().gap(px(3.));
     for s in list {
-        d = d.child(div().text_size(px(12.5)).text_color(rgb(look::DIM)).child(s.clone()));
+        d = d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(s.clone()));
     }
     d
 }
@@ -310,12 +310,12 @@ impl Island {
     }
 
     fn item_view(&self, it: &stop::Item, stop: &Stop, back: bool, cx: &mut Context<Self>) -> Div {
-        let mut body = div().flex().flex_col().gap(px(4.)).min_w_0().flex_1().child(div().text_size(px(14.)).text_color(rgb(look::TEXT)).child(it.label.clone()));
+        let mut body = div().flex().flex_col().gap(px(4.)).min_w_0().flex_1().child(div().text_size(px(14.)).text_color(rgb(look::text())).child(it.label.clone()));
         if !it.detail.is_empty() {
-            body = body.child(div().text_size(px(12.5)).text_color(rgb(look::DIM)).child(it.detail.clone()));
+            body = body.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(it.detail.clone()));
         }
         for (label, text) in &it.aspects {
-            body = body.child(div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().text_color(rgb(look::FAINT)).child(label.clone())).child(div().text_color(rgb(look::DIM)).child(text.clone())));
+            body = body.child(div().flex().gap(px(6.)).text_size(px(12.)).child(div().flex_none().text_color(rgb(look::faint())).child(label.clone())).child(div().text_color(rgb(look::dim())).child(text.clone())));
         }
         if !it.pictures.is_empty() {
             let mut pics = div().flex().gap(px(8.));
@@ -328,7 +328,7 @@ impl Island {
                         .rounded(px(6.))
                         .overflow_hidden()
                         .border_1()
-                        .border_color(rgb(look::LINE))
+                        .border_color(rgb(look::line()))
                         .on_click(cx.listener(move |this, _, window, cx| this.picture(title.clone(), path.clone(), window, cx)))
                         .child(img(p.clone()).h(px(110.))),
                 );
@@ -338,7 +338,7 @@ impl Island {
         let mut controls = div().flex().gap(px(6.)).flex_none();
         if back {
             let id = it.id.clone();
-            controls = controls.child(button(format!("bring-{}", it.id), "Bring back", self.bring.contains(&it.id), look::AMBER).on_click(cx.listener(move |this, _, window, cx| this.toggle_bring(id.clone(), window, cx))));
+            controls = controls.child(button(format!("bring-{}", it.id), "Bring back", self.bring.contains(&it.id), look::amber()).on_click(cx.listener(move |this, _, window, cx| this.toggle_bring(id.clone(), window, cx))));
         } else {
             for v in &stop.offered {
                 let (item, v) = (it.id.clone(), *v);
@@ -357,9 +357,9 @@ impl Island {
             .gap(px(6.))
             .p(px(10.))
             .rounded(px(10.))
-            .bg(rgb(look::PANEL))
+            .bg(rgb(look::panel()))
             .border_1()
-            .border_color(rgb(look::LINE))
+            .border_color(rgb(look::line()))
             .child(div().flex().gap(px(12.)).items_start().child(body).child(controls))
             .when_some(words, |d, w| d.child(field(&w)))
     }
@@ -378,13 +378,13 @@ impl Island {
             .px(px(16.))
             .py(px(12.))
             .rounded(px(12.))
-            .bg(rgb(look::PANEL_2))
+            .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgba((look::AMBER << 8) | 0x73))
-            .child(div().text_size(px(14.)).text_color(rgb(look::AMBER)).flex_none().child(format!("◆ {} options", stop.items.len())))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::TEXT)).child(stop.title.clone()))
+            .border_color(rgba((look::amber() << 8) | 0x73))
+            .child(div().text_size(px(14.)).text_color(rgb(look::amber())).flex_none().child(format!("◆ {} options", stop.items.len())))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(stop.title.clone()))
             .child(primary("compare", "Compare".into(), true).on_click(open))
-            .child(button("later".into(), "Esc · later", false, look::GREY).on_click(cx.listener(move |this, _, _, cx| {
+            .child(button("later".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
                 this.shrunk.insert(q.clone());
                 cx.notify();
             })))
@@ -579,11 +579,11 @@ impl Render for Island {
                         .px(px(14.))
                         .py(px(8.))
                         .rounded(px(999.))
-                        .bg(rgb(look::PANEL_2))
+                        .bg(rgb(look::panel_2()))
                         .border_1()
-                        .border_color(rgb(look::AMBER))
+                        .border_color(rgb(look::amber()))
                         .text_size(px(13.))
-                        .text_color(rgb(look::TEXT))
+                        .text_color(rgb(look::text()))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.shrunk.remove(&q);
@@ -614,7 +614,7 @@ impl Render for Island {
                     .id("back")
                     .cursor_pointer()
                     .text_size(px(12.5))
-                    .text_color(rgb(look::DIM))
+                    .text_color(rgb(look::dim()))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.show_back = !this.show_back;
                         cx.notify();
@@ -628,8 +628,8 @@ impl Render for Island {
             }
         }
         let understood = match (&self.understood, self.reading) {
-            (_, true) => Some(div().text_size(px(12.5)).text_color(rgb(look::FAINT)).child("Reading your words…")),
-            (Some(Err(e)), _) => Some(div().text_size(px(12.5)).text_color(rgb(look::RED)).child(e.clone())),
+            (_, true) => Some(div().text_size(px(12.5)).text_color(rgb(look::faint())).child("Reading your words…")),
+            (Some(Err(e)), _) => Some(div().text_size(px(12.5)).text_color(rgb(look::red())).child(e.clone())),
             (Some(Ok(u)), _) => {
                 let ok = u.refused.is_none() && !self.sending;
                 Some(
@@ -639,20 +639,20 @@ impl Render for Island {
                         .gap(px(6.))
                         .p(px(10.))
                         .rounded(px(10.))
-                        .bg(rgb(look::PANEL))
+                        .bg(rgb(look::panel()))
                         .border_1()
-                        .border_color(rgb(look::BLUE))
-                        .child(look::label("What Jaynes read · this is what it does when you send", look::BLUE))
+                        .border_color(rgb(look::blue()))
+                        .child(look::label("What Jaynes read · this is what it does when you send", look::blue()))
                         .child(sentences(&u.sentences))
-                        .when(!u.unsure.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(look::AMBER)).child(format!("Not sure: {}", u.unsure))))
-                        .when(!u.repeats.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(look::AMBER)).child(format!("You asked this in an earlier round: {}", u.repeats.join("; ")))))
-                        .when_some(u.refused.clone(), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::RED)).child(r)))
+                        .when(!u.unsure.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Not sure: {}", u.unsure))))
+                        .when(!u.repeats.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("You asked this in an earlier round: {}", u.repeats.join("; ")))))
+                        .when_some(u.refused.clone(), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(r)))
                         .child(
                             div()
                                 .flex()
                                 .gap(px(8.))
                                 .child(primary("send-read", "Send this".into(), ok).when(ok, |d| d.on_click(cx.listener(|this, _, _, cx| this.send_understood(cx)))))
-                                .child(button("by-hand".into(), "Answer with the buttons", false, look::GREY).on_click(cx.listener(|this, _, _, cx| {
+                                .child(button("by-hand".into(), "Answer with the buttons", false, look::grey()).on_click(cx.listener(|this, _, _, cx| {
                                     this.understood = None;
                                     cx.notify();
                                 }))),
@@ -675,9 +675,9 @@ impl Render for Island {
             .overflow_y_scroll()
             .p(px(16.))
             .rounded(px(12.))
-            .bg(rgb(look::PANEL_2))
+            .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgba((look::AMBER << 8) | 0x73))
+            .border_color(rgba((look::amber() << 8) | 0x73))
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -686,16 +686,16 @@ impl Render for Island {
                     .flex()
                     .gap(px(10.))
                     .items_center()
-                    .child(div().size(px(8.)).rounded_full().bg(rgb(look::AMBER)))
-                    .child(div().text_size(px(13.)).text_color(rgb(look::TEXT)).child(project))
-                    .child(div().flex_1().truncate().text_size(px(12.)).text_color(rgb(look::FAINT)).child(if stop.round > 0 { format!("at {} · round {}", stop.step, stop.round) } else { format!("at {}", stop.step) }))
-                    .child(button("diff".into(), "See the diff", false, look::BLUE).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx))))
-                    .child(button("shrink".into(), "Esc · later", false, look::GREY).on_click(cx.listener(move |this, _, _, cx| {
+                    .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
+                    .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(project))
+                    .child(div().flex_1().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(if stop.round > 0 { format!("at {} · round {}", stop.step, stop.round) } else { format!("at {}", stop.step) }))
+                    .child(button("diff".into(), "See the diff", false, look::blue()).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx))))
+                    .child(button("shrink".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
                         this.shrunk.insert(q.clone());
                         cx.notify();
                     }))),
             )
-            .child(div().text_size(px(16.)).text_color(rgb(look::TEXT)).child(stop.title.clone()))
+            .child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone()))
             .child(items)
             .child(back)
             .child(
@@ -704,18 +704,18 @@ impl Render for Island {
                     .gap(px(8.))
                     .items_center()
                     .child(div().flex_1().child(field(&words)))
-                    .child(button("read".into(), "Read my words", false, look::BLUE).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))),
+                    .child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))),
             )
             .children(understood)
-            .when(!self.reckoned.sentences.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::FAINT)).child(sentences(&self.reckoned.sentences))))
-            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::AMBER)).child(format!("Ahead: {ahead}. Sending asks for your touch."))))
-            .when_some(self.reckoned.refused.clone().filter(|_| judged > 0), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::RED)).child(format!("Jaynes would refuse this: {r}"))))
+            .when(!self.reckoned.sentences.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint())).child(sentences(&self.reckoned.sentences))))
+            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))))
+            .when_some(self.reckoned.refused.clone().filter(|_| judged > 0), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(format!("Jaynes would refuse this: {r}"))))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .child(div().flex_1().text_size(px(12.)).text_color(rgb(look::FAINT)).child(match &self.said {
+                    .child(div().flex_1().text_size(px(12.)).text_color(rgb(look::faint())).child(match &self.said {
                         Some(s) => s.clone(),
                         None => format!("{judged} of {} judged", stop.items.len()),
                     }))

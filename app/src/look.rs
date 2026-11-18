@@ -6,35 +6,89 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::Mark;
 
-pub const PANEL: u32 = 0x0b0c0f;
-pub const PANEL_2: u32 = 0x131519;
-pub const SELECTED: u32 = 0x181a20;
-pub const LINE: u32 = 0x1b1d23;
-pub const LINE_2: u32 = 0x262931;
-pub const TEXT: u32 = 0xe9ecf1;
-pub const DIM: u32 = 0x9298a5;
-pub const FAINT: u32 = 0x5d6370;
-pub const AMBER: u32 = 0xffb35c;
-pub const BLUE: u32 = 0x6fb4ff;
-pub const GREEN: u32 = 0x69dba0;
-pub const RED: u32 = 0xff7a7a;
-pub const GREY: u32 = 0x7d8899;
-/// An agent that finished a turn the person has not looked at.
-pub const VIOLET: u32 = 0xc49bff;
-/// Text on an amber or green fill.
-pub const ON_FILL: u32 = 0x0b0e13;
+/// The window's colours: one set for all of it, the frame round the terminal included. The dark one is the default;
+/// a theme puts another in force (`set`), and the next frame draws with it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    pub panel: u32,
+    pub panel_2: u32,
+    pub selected: u32,
+    pub line: u32,
+    pub line_2: u32,
+    pub text: u32,
+    pub dim: u32,
+    pub faint: u32,
+    pub amber: u32,
+    pub blue: u32,
+    pub green: u32,
+    pub red: u32,
+    pub grey: u32,
+    /// An agent that finished a turn the person has not looked at.
+    pub violet: u32,
+    /// Text on an amber or green fill.
+    pub on_fill: u32,
+}
+
+/// The dark the window has always had.
+pub const DARK: Frame = Frame {
+    panel: 0x0b0c0f,
+    panel_2: 0x131519,
+    selected: 0x181a20,
+    line: 0x1b1d23,
+    line_2: 0x262931,
+    text: 0xe9ecf1,
+    dim: 0x9298a5,
+    faint: 0x5d6370,
+    amber: 0xffb35c,
+    blue: 0x6fb4ff,
+    green: 0x69dba0,
+    red: 0xff7a7a,
+    grey: 0x7d8899,
+    violet: 0xc49bff,
+    on_fill: 0x0b0e13,
+};
+
+thread_local! {
+    static FRAME: std::cell::Cell<Frame> = const { std::cell::Cell::new(DARK) };
+}
+
+/// The colours in force.
+pub fn frame() -> Frame {
+    FRAME.with(|f| f.get())
+}
+
+/// Puts other colours in force; the windows show them when next drawn.
+pub fn set(f: Frame) {
+    FRAME.with(|c| c.set(f));
+}
+
+pub fn panel() -> u32 { frame().panel }
+pub fn panel_2() -> u32 { frame().panel_2 }
+pub fn selected() -> u32 { frame().selected }
+pub fn line() -> u32 { frame().line }
+pub fn line_2() -> u32 { frame().line_2 }
+pub fn text() -> u32 { frame().text }
+pub fn dim() -> u32 { frame().dim }
+pub fn faint() -> u32 { frame().faint }
+pub fn amber() -> u32 { frame().amber }
+pub fn blue() -> u32 { frame().blue }
+pub fn green() -> u32 { frame().green }
+pub fn red() -> u32 { frame().red }
+pub fn grey() -> u32 { frame().grey }
+pub fn violet() -> u32 { frame().violet }
+pub fn on_fill() -> u32 { frame().on_fill }
 
 pub const UI_FONT: &str = "Instrument Sans";
 pub const MONO_FONT: &str = "IBM Plex Mono";
 
 pub fn colour(mark: Mark) -> u32 {
     match mark {
-        Mark::Needs => AMBER,
-        Mark::Working => BLUE,
-        Mark::Halted => GREY,
-        Mark::Blocked | Mark::Undone => RED,
-        Mark::Delivered | Mark::Merged => GREEN,
-        Mark::Abandoned => FAINT,
+        Mark::Needs => amber(),
+        Mark::Working => blue(),
+        Mark::Halted => grey(),
+        Mark::Blocked | Mark::Undone => red(),
+        Mark::Delivered | Mark::Merged => green(),
+        Mark::Abandoned => faint(),
     }
 }
 
@@ -126,7 +180,7 @@ pub fn mark_icon(height: f32) -> Img {
 }
 
 /// A quiet button with its key, as the top bar shows them.
-pub fn key_button(id: &'static str, text: &str, key: &str) -> Stateful<Div> {
+pub fn key_button(id: &'static str, label: &str, key: &str) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -136,18 +190,18 @@ pub fn key_button(id: &'static str, text: &str, key: &str) -> Stateful<Div> {
         .py(px(4.))
         .rounded(px(7.))
         .border_1()
-        .border_color(rgb(LINE_2))
+        .border_color(rgb(line_2()))
         .text_size(px(12.5))
-        .text_color(rgb(DIM))
+        .text_color(rgb(dim()))
         .cursor_pointer()
-        .hover(|d| d.bg(rgb(SELECTED)).text_color(rgb(TEXT)))
-        .child(text.to_string())
+        .hover(|d| d.bg(rgb(selected())).text_color(rgb(text())))
+        .child(label.to_string())
         .when(!key.is_empty(), |d| d.child(kbd(key)))
 }
 
 /// A key, drawn small in its box.
 pub fn kbd(key: &str) -> Div {
-    div().px(px(5.)).rounded(px(5.)).border_1().border_color(rgb(LINE_2)).font_family(MONO_FONT).text_size(px(10.5)).text_color(rgb(FAINT)).child(key.to_string())
+    div().px(px(5.)).rounded(px(5.)).border_1().border_color(rgb(line_2())).font_family(MONO_FONT).text_size(px(10.5)).text_color(rgb(faint())).child(key.to_string())
 }
 
 /// The window's small line icons, drawn in the colour of the text around them.
@@ -202,8 +256,8 @@ pub fn icon_button(id: &'static str, which: Icon, on: bool) -> Stateful<Div> {
         .justify_center()
         .rounded(px(6.))
         .cursor_pointer()
-        .hover(|d| d.bg(rgb(SELECTED)))
-        .child(icon(which, 16., if on { TEXT } else { DIM }))
+        .hover(|d| d.bg(rgb(selected())))
+        .child(icon(which, 16., if on { text() } else { dim() }))
 }
 
 /// Claude Code's critter, small, for the tab of the person's own Claude Code.

@@ -24,11 +24,11 @@ pub struct Side {
 /// An agent's state as the column colours it.
 fn colour(state: State) -> u32 {
     match state {
-        State::Waiting => look::AMBER,
-        State::Error => look::RED,
-        State::Working => look::BLUE,
-        State::ToReview => look::VIOLET,
-        State::Idle => look::FAINT,
+        State::Waiting => look::amber(),
+        State::Error => look::red(),
+        State::Working => look::blue(),
+        State::ToReview => look::violet(),
+        State::Idle => look::faint(),
     }
 }
 
@@ -59,12 +59,12 @@ impl Side {
             .gap(px(10.))
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(if on { look::TEXT } else { look::DIM }))
-            .when(on, |d| d.bg(rgb(look::SELECTED)))
-            .hover(|d| d.bg(rgb(look::SELECTED)).text_color(rgb(look::TEXT)))
+            .text_color(rgb(if on { look::text() } else { look::dim() }))
+            .when(on, |d| d.bg(rgb(look::selected())))
+            .hover(|d| d.bg(rgb(look::selected())).text_color(rgb(look::text())))
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |t, cx| t.show_inbox(cx))))
-            .child(look::icon(look::Icon::Inbox, 14., look::DIM))
+            .child(look::icon(look::Icon::Inbox, 14., look::dim()))
             .child("Inbox")
             .child(div().flex_1())
             .when(need > 0, |d| {
@@ -72,10 +72,10 @@ impl Side {
                     div()
                         .px(px(7.))
                         .rounded(px(9.))
-                        .bg(rgb(if waiting > 0 { look::AMBER } else { look::VIOLET }))
+                        .bg(rgb(if waiting > 0 { look::amber() } else { look::violet() }))
                         .text_size(px(11.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(look::ON_FILL))
+                        .text_color(rgb(look::on_fill()))
                         .child(need.to_string()),
                 )
             })
@@ -96,24 +96,24 @@ impl Side {
             .cursor_pointer()
             .text_size(px(12.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(look::DIM))
-            .hover(|d| d.text_color(rgb(look::TEXT)))
+            .text_color(rgb(look::dim()))
+            .hover(|d| d.text_color(rgb(look::text())))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.folded.remove(&key) {
                     this.folded.insert(key.clone());
                 }
                 cx.notify();
             }))
-            .child(div().w(px(10.)).text_color(rgb(look::FAINT)).child(if folded { "▸" } else { "▾" }))
+            .child(div().w(px(10.)).text_color(rgb(look::faint())).child(if folded { "▸" } else { "▾" }))
             .child(div().flex_1().min_w_0().truncate().child(name.to_owned()))
             // a folded space still says that something in it waits
-            .when(folded && waits, |d| d.child(dot(look::AMBER)))
+            .when(folded && waits, |d| d.child(dot(look::amber())))
     }
 
     fn agent(&self, a: &Agent, on: bool, now: u64, cx: &mut Context<Self>) -> impl IntoElement {
         let icon = agent_icon(a, "agent");
         let right = if a.shell || a.state == State::Idle {
-            div().text_color(rgb(look::FAINT)).child(agents::age(a.since_ms, now))
+            div().text_color(rgb(look::faint())).child(agents::age(a.since_ms, now))
         } else {
             div().text_color(rgb(colour(a.state))).child(a.state.word())
         };
@@ -128,12 +128,12 @@ impl Side {
             .flex()
             .items_center()
             .gap(px(9.))
-            .when(on, |d| d.bg(rgb(look::SELECTED)))
-            .hover(|d| d.bg(rgb(look::SELECTED)))
+            .when(on, |d| d.bg(rgb(look::selected())))
+            .hover(|d| d.bg(rgb(look::selected())))
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |t, cx| t.show_agent(address.clone(), title.clone(), cx))))
             .child(div().w(px(14.)).flex_none().flex().items_center().justify_center().child(icon))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::TEXT)).child(a.title.clone()))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(a.title.clone()))
             .child(right.flex_none().text_size(px(11.5)))
     }
 
@@ -149,12 +149,12 @@ impl Side {
             .flex()
             .gap(px(10.))
             .items_start()
-            .when(on, |d| d.bg(rgb(look::SELECTED)))
-            .hover(|d| d.bg(rgb(look::SELECTED)))
+            .when(on, |d| d.bg(rgb(look::selected())))
+            .hover(|d| d.bg(rgb(look::selected())))
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |tabs, cx| tabs.show(Some(id.clone()), cx))))
             .child(div().mt(px(3.)).size(px(12.)).flex_none().flex().items_center().justify_center().child(if row.mark == Mark::Working {
-                look::spinner(SharedString::from(format!("spin-{}", row.id)), 11., look::BLUE).into_any_element()
+                look::spinner(SharedString::from(format!("spin-{}", row.id)), 11., look::blue()).into_any_element()
             } else {
                 dot(look::colour(row.mark)).into_any_element()
             }))
@@ -164,8 +164,8 @@ impl Side {
                     .flex_col()
                     .min_w_0()
                     .flex_1()
-                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::TEXT)).child(row.title.clone()))
-                    .child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::AMBER } else { look::DIM })).child(row.line.clone())),
+                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(row.title.clone()))
+                    .child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::amber() } else { look::dim() })).child(row.line.clone())),
             )
     }
 }
@@ -174,9 +174,9 @@ impl Side {
 /// else a dot in its state's colour. `at` keeps the spinners of the column and the tabs apart.
 pub fn agent_icon(a: &Agent, at: &str) -> AnyElement {
     if a.shell {
-        div().flex_none().whitespace_nowrap().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::FAINT)).child("›_").into_any_element()
+        div().flex_none().whitespace_nowrap().font_family(look::MONO_FONT).text_size(px(10.)).text_color(rgb(look::faint())).child("›_").into_any_element()
         } else if a.state == State::Working {
-            look::spinner(SharedString::from(format!("{at}-spin-{}", a.address)), 11., look::BLUE).into_any_element()
+            look::spinner(SharedString::from(format!("{at}-spin-{}", a.address)), 11., look::blue()).into_any_element()
         } else if a.state == State::Idle {
             div().size(px(8.)).rounded_full().flex_none().border(px(1.5)).border_color(rgb(0x4a505c)).into_any_element()
         } else {
@@ -192,7 +192,7 @@ fn section(name: &str, count: Option<usize>, color: u32) -> impl IntoElement {
         .pt(px(16.))
         .pb(px(4.))
         .child(look::label(name, color))
-        .children(count.map(|n| div().text_size(px(11.)).text_color(rgb(look::FAINT)).child(n.to_string())))
+        .children(count.map(|n| div().text_size(px(11.)).text_color(rgb(look::faint())).child(n.to_string())))
 }
 
 impl Render for Side {
@@ -208,11 +208,11 @@ impl Render for Side {
         let inbox_on = self.tabs.read(cx).inbox;
         list = list.child(self.inbox(waiting + listing.needs.len(), review, inbox_on, cx));
 
-        list = list.child(section("Spaces", None, look::FAINT));
+        list = list.child(section("Spaces", None, look::faint()));
         if let Some(trouble) = core_trouble {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::RED)).child(format!("herdr-core cannot be read: {trouble}")));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("herdr-core cannot be read: {trouble}")));
         } else if spaces.is_empty() {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("No spaces yet."));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No spaces yet."));
         }
         for space in &spaces {
             let folded = self.folded.contains(&space.id);
@@ -225,20 +225,20 @@ impl Render for Side {
             }
         }
 
-        list = list.child(section("Runs", None, look::FAINT));
+        list = list.child(section("Runs", None, look::faint()));
         if let Some(trouble) = trouble {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::RED)).child(format!("The record cannot be read: {trouble}")));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("The record cannot be read: {trouble}")));
         } else if listing.needs.is_empty() && listing.projects.is_empty() {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::FAINT)).child("No runs yet."));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No runs yet."));
         }
         if !listing.needs.is_empty() {
-            list = list.child(section("Waits for you", Some(listing.needs.len()), look::AMBER));
+            list = list.child(section("Waits for you", Some(listing.needs.len()), look::amber()));
             for row in &listing.needs {
                 list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), cx));
             }
         }
         for (project, rows) in &listing.projects {
-            list = list.child(section(project, None, look::FAINT));
+            list = list.child(section(project, None, look::faint()));
             for row in rows {
                 list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), cx));
             }
