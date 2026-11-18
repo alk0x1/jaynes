@@ -40,6 +40,10 @@ whether ~/.ssh exists; one socket file, the broker that runs the project's comma
 a box), and the local TCP ports it declares. The person's home, the engine's folder and the page's port stay shut,
 and a declaration of them is refused before the program starts. A shim of /usr/bin is refused too: it finds its
 program through xcrun, which reads the whole disk.
+The box is proved on the person's machine before any program runs in it (``program-proof``, at install and when
+macOS changes): a sample program does its work and tries nine escapes in it, and the macOS it held on is kept in the
+engine's home. On another macOS the proof is made again first; when it does not hold, no role's program runs, and
+the refusal says what got through.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
@@ -431,6 +435,128 @@ def program_profile(box: ProgramBox) -> str:
     lines.append(f"(deny file-read* {_subpaths([box.home / s for s in SECRETS] + [engine_home() / f for f in ENGINE_SECRETS])})")
     lines += ["(deny lsopen)", "(deny appleevent-send)"]
     return "\n".join(lines) + "\n"
+
+
+# --- the proof of a program's box on this machine --------------------------------------------------------------
+
+# Where the engine keeps the proof that the program's box holds on this Mac, and on which macOS it was made.
+PROOF = "program-box.json"
+
+# A sample program: what a role's program does, then what it must not. Each line prints "work:" or "escape:" with
+# what came of it; the proof holds when every work is ok and every escape is refused.
+SAMPLE = r'''
+import json, os, socket, sqlite3, ssl, subprocess, sys, tempfile, threading
+a = json.loads(sys.argv[1])
+got = {}
+def try_(name, f):
+    try: got[name] = f() or "ok"
+    except Exception as e: got[name] = type(e).__name__
+try_("work: sqlite, ssl, a thread", lambda: (sqlite3.connect(":memory:").execute("select 1").fetchone(), ssl.create_default_context(),
+     threading.Thread(target=lambda: None).start()) and "ok")
+try_("work: a temporary file", lambda: tempfile.NamedTemporaryFile(dir=os.environ["TMPDIR"]).close())
+try_("work: its own folder", lambda: open(os.path.join(a["role_dir"], "role.toml")).read() and "ok")
+try_("work: a child of itself", lambda: "ok" if subprocess.run([sys.executable, "-c", "print(1)"], capture_output=True).returncode == 0 else "failed")
+s = socket.socket(socket.AF_UNIX)
+try_("work: the broker", lambda: s.connect(a["broker"]))
+home = a["real_home"]
+try_("escape: list the person's home", lambda: os.listdir(home) and "listed")
+try_("escape: know whether ~/.ssh exists", lambda: "knows" if os.path.exists(os.path.join(home, ".ssh")) else "PermissionError")
+try_("escape: read the engine's folder", lambda: os.listdir(a["engine"]) and "listed")
+try_("escape: write outside its call", lambda: open(os.path.join(a["role_dir"], "x"), "w").write("x") and "wrote")
+try_("escape: run a program it did not declare", lambda: subprocess.run(["/bin/ls", "/"], capture_output=True) and "ran")
+t = socket.socket(); t.settimeout(3)
+try_("escape: a local port", lambda: t.connect(("127.0.0.1", a["port"])) or "reached")
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try_("escape: UDP", lambda: u.sendto(b"", ("127.0.0.1", 9)) and "sent")
+b = socket.socket()
+try_("escape: bind", lambda: b.bind(("127.0.0.1", 0)) or "bound")
+try_("escape: a name on the network", lambda: socket.getaddrinfo("example.com", 80) and "resolved")
+print(json.dumps(got))
+'''
+
+
+def macos() -> str:
+    """This macOS, by version and build: Apple's own rules (system.sb) change with it."""
+    out = []
+    for flag in ("-productVersion", "-buildVersion"):
+        try:
+            out.append(subprocess.run(["sw_vers", flag], capture_output=True, text=True, timeout=10).stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            out.append("")
+    return " ".join(out)
+
+
+def program_selftest(interpreter: Path) -> list[str]:
+    """Run the sample program in a program's box as program_profile writes it, on this machine: what failed, each in
+    a sentence; nothing when the box holds. The program is the engine's own, in a folder of its own; nothing of the
+    person's is read or written, no app is opened, the pasteboard and the keychain are not touched."""
+    import socket as _socket
+    with tempfile.TemporaryDirectory(prefix="jaynes-program-proof-") as d:
+        base = Path(os.path.realpath(d))
+        role_dir, tmp, fake_engine = base / "role", base / "tmp", base / "engine"
+        for p in (role_dir, tmp, fake_engine):
+            p.mkdir()
+        (role_dir / "role.toml").write_text("role")
+        (role_dir / "sample.py").write_text(SAMPLE)
+        (fake_engine / "page.key").write_text("secret")
+        broker = tmp / "broker.sock"
+        listener = _socket.socket(_socket.AF_UNIX)
+        listener.bind(str(broker))
+        listener.listen()
+        undeclared = _socket.socket()
+        undeclared.bind(("127.0.0.1", 0))
+        undeclared.listen()
+        try:
+            needs = program_needs(interpreter)
+            prof = program_profile(ProgramBox(role_dir, role_dir, tmp, needs, broker=broker))
+            args = json.dumps({"role_dir": str(role_dir), "broker": str(broker), "real_home": str(Path.home()),
+                               "engine": str(fake_engine), "port": undeclared.getsockname()[1]})
+            env = {"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp), "HOME": str(tmp), "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
+            ran = subprocess.run([str(SANDBOX_EXEC), "-p", prof, str(interpreter), str(role_dir / "sample.py"), args],
+                                 capture_output=True, text=True, timeout=120, env=env, cwd=role_dir)
+        except Refused as e:
+            return [f"the box could not be made: {e}"]
+        except (OSError, subprocess.SubprocessError) as e:
+            return [f"the sample program did not run: {e}"]
+        finally:
+            listener.close()
+            undeclared.close()
+        try:
+            got = json.loads(ran.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return [f"the sample program said nothing it could be judged by: {ran.stderr.strip()[-300:]}"]
+        wrong = [f"{k}: {v}" for k, v in got.items()
+                 if (k.startswith("work:") and v != "ok") or (k.startswith("escape:") and v not in ("PermissionError", "gaierror"))]
+        return wrong or ([] if len(got) == 14 else [f"the sample program judged {len(got)} things, not 14"])
+
+
+def program_proof(interpreter: Path, again: bool = False) -> dict:
+    """The proof that a program's box holds on this macOS, kept in the engine's home and made again when macOS changed
+    (or ``again``): {"macos", "at", "holds", "wrong"}."""
+    file = engine_home() / PROOF
+    now = macos()
+    if not again:
+        try:
+            kept = json.loads(file.read_text())
+            if kept.get("macos") == now:
+                return kept
+        except (OSError, ValueError):
+            pass
+    wrong = program_selftest(interpreter)
+    proof = {"macos": now, "at": int(__import__("time").time()), "holds": not wrong, "wrong": wrong}
+    file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = file.with_name(f".{PROOF}.{os.getpid()}")
+    tmp.write_text(json.dumps(proof, indent=1))
+    tmp.replace(file)
+    return proof
+
+
+def program_box_holds(interpreter: Path) -> None:
+    """Raises ``Refused`` unless the program's box was proved on this macOS: the box stays shut, and says why."""
+    proof = program_proof(interpreter)
+    if not proof.get("holds"):
+        raise Refused(f"the box of a role's program did not hold on this macOS ({proof.get('macos')}), so no role's "
+                      "program runs: " + "; ".join(proof.get("wrong") or ["no proof"]))
 
 
 def command_in_box(script: str, box: Box) -> list[str]:
@@ -910,6 +1036,12 @@ if __name__ == "__main__":
     # jaynes_box.py program-profile < BOX.json: the profile of a role's program's box, for the engine that starts it,
     # with what its interpreter and commands need worked out here; a refusal is its sentence and exit 3
     args = sys.argv[1:]
+    if args in (["program-proof"], ["program-proof", "--again"]):
+        # at install (jaynes update, install.sh) and in CI: prove the program's box on this macOS, and keep the proof
+        proof = program_proof(Path(sys.executable), again=args[-1] == "--again")
+        print(("holds on macOS " if proof["holds"] else "does not hold on macOS ") + proof["macos"]
+              + "".join(f"\n  {w}" for w in proof["wrong"]))
+        sys.exit(0 if proof["holds"] else 3)
     if args == ["program-needs"]:
         # worked out once per role and interpreter, at pinning, and kept: it walks the interpreter's whole folder
         given = json.load(sys.stdin)
@@ -924,6 +1056,8 @@ if __name__ == "__main__":
         # one call's box, from the needs worked out at pinning; it never walks the interpreter again
         given = json.load(sys.stdin)
         try:
+            # Apple's own rules change with macOS: no program runs in a box not proved on this one
+            program_box_holds(Path(sys.executable))
             n = given.get("needs")
             if not isinstance(n, dict) or not n.get("run"):
                 raise Refused("the program's needs were not worked out: run program-needs once, at pinning, and pass them")

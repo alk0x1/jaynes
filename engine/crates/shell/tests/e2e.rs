@@ -2560,3 +2560,56 @@ print(json.dumps(got))
     drop((service, undeclared));
     let _gone = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box of a role's program is macOS's sandbox-exec here")]
+fn a_program_s_box_is_proved_on_this_macos_before_use_and_stays_shut_when_the_proof_fails() {
+    let base = std::env::temp_dir().join(format!("jaynes-program-proof-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&base);
+    let engine = base.join("engine");
+    let (role_dir, tmp) = (base.join("role"), base.join("tmp"));
+    for d in [&engine, &role_dir, &tmp] {
+        std::fs::create_dir_all(d).expect("dir");
+    }
+    let real = Command::new(python()).args(["-c", "import sys; print(sys.executable)"]).output().expect("python");
+    let interpreter = String::from_utf8_lossy(&real.stdout).trim().to_string();
+    let lib = |what: &str, input: &str| -> (i32, String) {
+        let mut c = Command::new(&interpreter)
+            .args([root().join("python/jaynes_box.py").to_str().expect("path"), what]).env("JAYNES_ENGINE_HOME", &engine)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().expect("run");
+        {
+            use std::io::Write;
+            c.stdin.take().expect("stdin").write_all(input.as_bytes()).expect("write");
+        }
+        let out = c.wait_with_output().expect("out");
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let sw = |flag: &str| String::from_utf8_lossy(&Command::new("sw_vers").arg(flag).output().expect("sw_vers").stdout).trim().to_string();
+    let this_macos = format!("{} {}", sw("-productVersion"), sw("-buildVersion"));
+    let proof_file = engine.join("program-box.json");
+    let proof = || -> Value { serde_json::from_str(&std::fs::read_to_string(&proof_file).expect("proof")).expect("json") };
+    // at install: the proof is made and kept, with the macOS it held on
+    let (code, said) = lib("program-proof", "");
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains(&this_macos), "{said}");
+    assert_eq!((proof()["holds"].as_bool(), proof()["macos"].as_str()), (Some(true), Some(this_macos.as_str())));
+    let (code, needs) = lib("program-needs", &serde_json::json!({"interpreter": interpreter}).to_string());
+    assert_eq!(code, 0, "{needs}");
+    let call = serde_json::json!({"needs": serde_json::from_str::<Value>(&needs).expect("needs"), "role_dir": role_dir, "library": role_dir, "tmp": tmp}).to_string();
+    // another macOS: proved again before the first use
+    let mut p = proof();
+    p["macos"] = serde_json::json!("1.0 another");
+    std::fs::write(&proof_file, p.to_string()).expect("write");
+    let (code, profile) = lib("program-profile", &call);
+    assert!(code == 0 && profile.contains("(deny default)"), "{profile}");
+    assert_eq!(proof()["macos"].as_str(), Some(this_macos.as_str()), "the proof was not made again on this macOS");
+    // a proof that did not hold here: the box stays shut and says what got through
+    let mut p = proof();
+    p["holds"] = serde_json::json!(false);
+    p["wrong"] = serde_json::json!(["escape: list the person's home: listed"]);
+    std::fs::write(&proof_file, p.to_string()).expect("write");
+    let (code, said) = lib("program-profile", &call);
+    assert!(code == 3 && said.contains("did not hold") && said.contains("list the person's home"), "{said}");
+    assert!(!said.contains("(version 1)"), "{said}");
+    let _gone = std::fs::remove_dir_all(&base);
+}
