@@ -25,5 +25,11 @@ ed25519-dalek = "2"
 # signals to a process group straight from the program, so no kill program on the machine is needed
 rustix = { version = "1", features = ["process"] }
 
+# the box on Linux: the kernel's Landlock and a seccomp filter, set by the program on itself
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+seccompiler = "0.5"
+libc = "0.2"
+
 [lints]
 workspace = true
