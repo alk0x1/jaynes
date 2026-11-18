@@ -45,5 +45,140 @@
    "greeting.txt": "hello\n"
   },
   "expect": "accept"
+ },
+ {
+  "id": "ignored-before-the-run",
+  "expect": "accept",
+  "keeps": "a failure the project's Makefile told make to ignore before the run began is the person's, not the step's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "line-added-beside-the-person-s-ignore",
+  "expect": "accept",
+  "keeps": "a line the step adds to the test target, with nothing make expands, beside a failure the person's Makefile ignored before the run, leaves that failure the person's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n\techo done\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "tested-line-changed-beside-the-person-s-ignore",
+  "expect": "accept",
+  "keeps": "a line the step changes in the test target, with nothing make expands, leaves the failure the person ignored the person's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q h greeting.txt\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "target-added-beside",
+  "expect": "accept",
+  "keeps": "a target the step adds beside the test target leaves the failure the person ignored the person's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\nfmt:\n\t@echo formatted\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "shell-variable-in-a-new-line",
+  "expect": "accept",
+  "keeps": "a shell variable ($$) in a line the step adds is the shell's, not make's, and makes no failure ignored",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tfor f in greeting.txt; do grep -q hi $$f; done\n",
+   "greeting.txt": "hi\n"
+  }
  }
 ]

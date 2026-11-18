@@ -128,6 +128,14 @@ fn beside(copy: &Path) -> PathBuf {
     copy.with_file_name(format!("{name}.git"))
 }
 
+/// Where the engine keeps the start of a run's copy, beside it and out of every agent's reach: its repository and
+/// the commit the run started from, or None for a folder that is not a run's copy.
+pub fn start_of(copy: &Path) -> Option<(PathBuf, String)> {
+    let git = git_dir(copy);
+    let base = std::fs::read_to_string(git.join("jaynes-base")).ok()?.trim().to_string();
+    (!base.is_empty()).then_some((git, base))
+}
+
 /// The branch the person had checked out when the run started, where a run that delivers by merge merges.
 pub fn start_branch_of(copy: &Path) -> String {
     std::fs::read_to_string(git_dir(copy).join("jaynes-start")).unwrap_or_default().trim().to_string()

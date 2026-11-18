@@ -6,7 +6,9 @@ accept, every reject is refused and every accept accepted. Run from engine/:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -125,6 +127,70 @@ class ACase(unittest.TestCase):
     def test_is_asked_for_by_the_engine_as_a_verdict(self):
         said = menu.answer({"kind": "case", "use": "field-required", "with": {"field": "summary"}, "case": {"output": {"summary": " "}}})
         self.assertEqual((said["reply"], said["verdict"]["verdict"]), ("verdict", "fail"))
+
+
+@unittest.skipUnless(box.available(), "needs the box")
+class AFailureMakeWasToldToIgnore(unittest.TestCase):
+    """Is the agent's only when the line that tells make to ignore it is new since the run began: what the person's
+    Makefile already ignored is not the agent's doing."""
+
+    MAKEFILE = "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+
+    def start(self, folder: str, makefile: str) -> dict[str, str]:
+        """The start of the run as the engine keeps it, beside the copy: a repository and its base commit."""
+        repo = Path(folder) / "start"
+        repo.mkdir()
+        (repo / "Makefile").write_text(makefile)
+        (repo / "greeting.txt").write_text("hello\n")
+        for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "start"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        return {"git": str(repo / ".git"), "commit": commit}
+
+    def judge(self, start: Any, makefile: str) -> Any:
+        with tempfile.TemporaryDirectory() as project:
+            (Path(project) / "Makefile").write_text(makefile)
+            (Path(project) / "greeting.txt").write_text("hi\n")
+            runner = {"kind": "make", "suite": "make test", "each": "", "found": "Makefile test target"}
+            call = {"project": project, "given": [{"step": "runner", "output": runner}], "output": {}, "start": start}
+            return menu.suite_passes(call, {"suite_step": "runner"})
+
+    def test_is_the_person_s_when_the_start_of_the_run_already_had_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertIsInstance(self.judge(self.start(folder, self.MAKEFILE), self.MAKEFILE), Pass)
+
+    def test_is_the_agent_s_when_the_run_added_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            got = self.judge(self.start(folder, "test:\n\tgrep -q hi greeting.txt\n"), self.MAKEFILE)
+        self.assertIsInstance(got, Fail)
+        self.assertIn("make: [test] Error 1 (ignored)", got.reasons[0])
+        self.assertIn("Makefile: -rm gone.txt", got.reasons[0])
+
+    def test_is_the_agent_s_when_the_run_changed_a_line_the_person_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            got = self.judge(self.start(folder, self.MAKEFILE), "test:\n\t-grep -q hello greeting.txt\n")
+        self.assertIsInstance(got, Fail)
+        self.assertIn("-grep -q hello greeting.txt", got.reasons[0])
+
+    def test_is_the_agent_s_when_the_run_has_make_ignore_every_failure_of_a_target_the_person_ignored_one_of(self):
+        person = "test:\n\t$(MAKE) check\ncheck:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertIsInstance(self.judge(self.start(folder, person), person), Pass)
+        with tempfile.TemporaryDirectory() as folder:
+            got = self.judge(self.start(folder, person), person.replace("$(MAKE) check", "-$(MAKE) -i check"))
+        self.assertIsInstance(got, Fail)
+        self.assertIn("-$(MAKE) -i check", got.reasons[0])
+
+    def test_is_the_agent_s_when_the_run_gives_a_variable_the_recipe_expands_a_dash(self):
+        person = "RUN = grep -q hi greeting.txt\ntest:\n\t-rm gone.txt\n\t$(RUN)\n"
+        with tempfile.TemporaryDirectory() as folder:
+            got = self.judge(self.start(folder, person), person.replace("RUN = grep", "RUN = -grep").replace("hi greeting", "bye greeting"))
+        self.assertIsInstance(got, Fail)
+        self.assertIn("does not account for", got.reasons[0])
+
+    def test_is_the_agent_s_when_the_start_is_not_known(self):
+        self.assertIsInstance(self.judge(None, self.MAKEFILE), Fail)
+        self.assertIsInstance(self.judge({"git": "/no/such/repository", "commit": "0" * 40}, self.MAKEFILE), Fail)
 
 
 if __name__ == "__main__":

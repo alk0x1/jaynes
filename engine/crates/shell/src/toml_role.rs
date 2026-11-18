@@ -2296,8 +2296,12 @@ impl TomlRole {
             Call::Check { step, check, request, output, given, project, source, any_port } => match step_of(&step) {
                 Err(b) => b,
                 Ok((_, x)) => {
+                    // the start of the run's copy, where the engine keeps it: a check of the menu compares with it
+                    let start = project.as_deref().and_then(|p| crate::project::start_of(Path::new(p)))
+                        .map(|(git, commit)| json!({"git": git.display().to_string(), "commit": commit}));
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
-                                      "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port});
+                                      "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port,
+                                      "start": start});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
@@ -3241,7 +3245,7 @@ files = { type = "array", items = "string" }
         let (lines, held) = r.cases_told(&|_, _| panic!("the menu's cases are run by the engine's own tests"));
         assert!(held);
         assert_eq!(lines, [
-            "✔ check suite-passes of change: comes with Jaynes, which holds it to 5 it rejects and 2 it accepts",
+            "✔ check suite-passes of change: comes with Jaynes, which holds it to 16 it rejects and 7 it accepts",
             "✔ check field-max-length of change: comes with Jaynes, which holds it to 8 it rejects and 2 it accepts",
         ]);
     }

@@ -118,5 +118,307 @@
    "Makefile": "test:\n\tsh -c 'kill -9 $$$$'\n"
   },
   "expect": "reject"
+ },
+ {
+  "id": "ignore-added-since-the-start",
+  "hole": "a - the run put before the failing line is the run's, with the start known",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-grep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "ignore-moved-to-the-failing-line",
+  "hole": "a - the person had on another line, moved by the run onto the failing one, is the run's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\trm -f gone.txt\n\t-grep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "ignore-copied-into-the-test-target",
+  "hole": "a line the person ignored in another target, copied word for word into the test target, is the run's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "lint:\n\t-grep -q hi greeting.txt\n\ntest:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "lint:\n\t-grep -q hi greeting.txt\n\ntest:\n\t-grep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "sub-make-told-to-ignore",
+  "hole": "a sub-make the run called with -i ignores the failure as a - would",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t$(MAKE) -i check\n\ncheck:\n\tgrep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "ignore-in-an-included-file",
+  "hole": "an .IGNORE the run wrote in a file the Makefile includes, whatever the file is named, is the run's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "include rules.inc\ntest:\n\tgrep -q hi greeting.txt\n",
+   "rules.inc": ".IGNORE: test\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "dash-from-a-variable",
+  "hole": "a - the run puts in a variable the recipe expands ignores the failing line, as a - written in the recipe would, in a target that ignored another line at the start",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "RUN = -grep -q hi greeting.txt\ntest:\n\t-rm gone.txt\n\t$(RUN)\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "dash-from-a-define",
+  "hole": "a - at the start of a define the recipe expands ignores the failing line",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "define RUN\n-grep -q hi greeting.txt\nendef\ntest:\n\t-rm gone.txt\n\t$(RUN)\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "ignore-in-a-dash-include",
+  "hole": "-include reads a file as include does, so an .IGNORE the run writes there is the run's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "-include rules.inc\ntest:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n",
+   "rules.inc": ".IGNORE: test\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "ignore-in-a-sinclude",
+  "hole": "sinclude reads a file as include does, so an .IGNORE the run writes there is the run's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "sinclude rules.inc\ntest:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n",
+   "rules.inc": ".IGNORE: test\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "makeflags-under-override",
+  "hole": "override MAKEFLAGS += -i tells make to ignore every failure, as MAKEFLAGS += -i does",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "override MAKEFLAGS += -i\ntest:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "failing-line-moved-into-what-was-ignored",
+  "hole": "a failing line the run moves into the script whose failure the person ignored, dropping it from the recipe, is still the suite's",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\t-sh lint.sh\n\tgrep -q hi greeting.txt\n",
+   "lint.sh": "true\n"
+  },
+  "project": {
+   "Makefile": "test:\n\t-sh lint.sh\n",
+   "lint.sh": "grep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
  }
 ]

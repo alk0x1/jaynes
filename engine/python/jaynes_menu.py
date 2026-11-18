@@ -30,6 +30,7 @@ import os
 import posixpath
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -192,8 +193,14 @@ def _suite(call: Call, params: Params) -> dict[str, Any]:
     return _given(call).get(str(params.get("suite_step") or "")) or {}
 
 
-# make's line for a failure it went on after, as a - before a recipe's line, -i or .IGNORE tell it to
-IGNORED = re.compile(r"^g?make(\[\d+\])?: \[.*\] Error \d+ \(ignored\)$", re.M)
+# make's line for a failure it went on after, as a - before a recipe's line, -i or .IGNORE tell it to; it names the
+# target whose recipe failed, after the file and line when make says them ([Makefile:2: test])
+IGNORED = re.compile(r"^g?make(?:\[\d+\])?: \[(?:.*: )?(?P<target>[^\]]+)\] Error \d+ \(ignored\)$", re.M)
+# What tells make to ignore failures beyond a target's own recipe, or may: .IGNORE, MAKEFLAGS, an include, and make
+# run again with -i
+TOLD = re.compile(r"^\s*(\.IGNORE\s*:|(export\s+|override\s+)?MAKEFLAGS\b|-?s?include\s)")
+MAKE_I = re.compile(r"(\$\(MAKE\)|\$\{MAKE\}|\bg?make\b).*?\s(-[a-zA-Z]*i[a-zA-Z]*|--ignore-errors)(\s|$)")
+INCLUDED = re.compile(r"^\s*-?s?include\s+(.*)$")
 
 
 def _emptied(call: Call, runner: dict[str, Any]) -> Any:
@@ -206,16 +213,216 @@ def _emptied(call: Call, runner: dict[str, Any]) -> Any:
                 "the tests it ran when the run began") if why else None
 
 
-def _ran_clean(command: str, ran: Any, what: str) -> Any:
-    """A failure when ``ran`` failed, or passed only by going on after a failure that make was told to ignore."""
+def _makefile(path: str) -> bool:
+    parts = Path(path).parts
+    return bool(parts) and (parts[-1] in box.MAKEFILES or parts[-1].endswith(".mk")) and \
+        not any(p in box.DEPENDENCIES or p == ".git" for p in parts)
+
+
+def _with_included(files: dict[str, str], read: Callable[[str], str | None]) -> dict[str, str]:
+    """``files`` and the files they include by a path written out, read by ``read``, from the folder of the file that
+    includes them; a path made of variables is left unread, and what includes it is then never the person's alone."""
+    out, todo = dict(files), list(files)
+    while todo:
+        path = todo.pop()
+        for line in re.sub(r"\\\n", " ", out[path]).split("\n"):
+            m = INCLUDED.match(line)
+            for name in (m.group(1).split("#", 1)[0].split() if m else []):
+                if "$" in name:
+                    continue
+                named = posixpath.normpath(posixpath.join(posixpath.dirname(path), name))
+                if named not in out and not named.startswith("../"):
+                    text = read(named)
+                    if text is not None:
+                        out[named] = text
+                        todo.append(named)
+    return out
+
+
+def _makefiles_now(project: Path) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for top, dirs, files in os.walk(project):
+        dirs[:] = [d for d in dirs if d not in box.DEPENDENCIES and d != ".git"]
+        for f in files:
+            path = (Path(top) / f).relative_to(project).as_posix()
+            if _makefile(path):
+                found[path] = (Path(top) / f).read_text(errors="replace")
+    def read(path: str) -> str | None:
+        return (project / path).read_text(errors="replace") if (project / path).is_file() else None
+    return _with_included(found, read)
+
+
+def _start_reader(call: Call) -> tuple[list[str], Callable[[str], str | None]] | None:
+    """The project as the run began, as its paths and a reader of any of them, or None when that is not known. A
+    run's check is told where the engine keeps the start, beside the copy and out of every agent's reach (``start``:
+    its repository and the commit the run began from); a case gives its files (``start``: a map of paths to text)."""
+    start = call.get("start")
+    if not isinstance(start, dict):
+        return None
+    if isinstance(start.get("files"), dict):
+        given = {p: t for p, t in start["files"].items() if isinstance(t, str)}
+        return list(given), given.get
+    git, commit = start.get("git"), start.get("commit")
+    if not isinstance(git, str) or not isinstance(commit, str) or not git or not commit:
+        return None
+    def show(*args: str) -> bytes | None:
+        try:
+            done = subprocess.run(["git", f"--git-dir={git}", *args], capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+    def read(path: str) -> str | None:
+        text = show("show", f"{commit}:{path}")
+        return None if text is None else text.decode(errors="replace")
+    listed = show("ls-tree", "-r", "-z", "--name-only", commit)
+    return None if listed is None else ([p for p in listed.decode(errors="replace").split("\0") if p], read)
+
+
+def _makefiles_at_start(start: tuple[list[str], Callable[[str], str | None]]) -> dict[str, str] | None:
+    """The project's Makefiles, and what they include, as the run began; None when one cannot be read."""
+    paths, read = start
+    files: dict[str, str] = {}
+    for path in paths:
+        if _makefile(path):
+            text = read(path)
+            if text is None:
+                return None
+            files[path] = text
+    return _with_included(files, read)
+
+
+def _lines(text: str) -> list[str]:
+    return re.sub(r"\\\n", " ", text).split("\n")
+
+
+def _ignoring(files: dict[str, str]) -> set[str]:
+    """The lines of these files that tell make to go on after a failure, or may: a recipe's line that starts with -
+    or runs make with -i, and .IGNORE, MAKEFLAGS and include. Each as ``path: line``."""
+    found: set[str] = set()
+    for path, text in files.items():
+        for line in _lines(text):
+            recipe = line.startswith("\t")
+            if (recipe and (line[1:].lstrip("@+ ").startswith("-") or MAKE_I.search(line))) or (not recipe and TOLD.match(line)):
+                found.add(f"{path}: {line.strip()}")
+    return found
+
+
+def _told_beyond_recipes(files: dict[str, str]) -> set[str]:
+    """What tells make to ignore failures beyond the line it is on: .IGNORE, MAKEFLAGS, an include, make run again
+    with -i. Each as ``path: line``."""
+    found: set[str] = set()
+    for path, text in files.items():
+        for line in _lines(text):
+            if (line.startswith("\t") and MAKE_I.search(line)) or (not line.startswith("\t") and TOLD.match(line)):
+                found.add(f"{path}: {line.strip()}")
+    return found
+
+
+def _rules(files: dict[str, str], target: str) -> dict[str, Any]:
+    return {p: r for p, r in ((p, box.make_target(t, target)) for p, t in files.items()) if r is not None}
+
+
+def _told_to_ignore(line: str) -> bool:
+    return line.lstrip("@+ ").startswith("-")
+
+
+def _expands(line: str) -> bool:
+    """Whether make expands something in ``line``: a $ that is not the shell's own ($$)."""
+    return "$" in line.replace("$$", "")
+
+
+def _definitions(files: dict[str, str]) -> set[str]:
+    """The lines of these Makefiles that give a variable its value, which a recipe that expands it runs: assignments
+    and what a define holds. Each as ``path: line``."""
+    found: set[str] = set()
+    for path, text in files.items():
+        inside = False
+        for line in _lines(text):
+            if re.match(r"\s*(export\s+|override\s+)?define\b", line):
+                inside = True
+            if inside or (not line.startswith("\t") and "=" in line and not line.lstrip().startswith("#")):
+                found.add(f"{path}: {line.strip()}")
+            if re.match(r"\s*endef\b", line):
+                inside = False
+    return found
+
+
+def _ignored_then(files: dict[str, str], target: str) -> bool:
+    """Whether the project as the run began told make to go on after a failure of ``target``: a line of its recipe
+    that starts with -, a .IGNORE rule naming it or naming none, -i in MAKEFLAGS, or make run again with -i."""
+    for needs, recipe in _rules(files, target).values():
+        if any(_told_to_ignore(line) for line in recipe):
+            return True
+    for text in files.values():
+        for line in _lines(text):
+            m = re.match(r"\.IGNORE\s*:(.*)$", line)
+            if m and (not m.group(1).split("#", 1)[0].split() or target in m.group(1).split()):
+                return True
+            if re.match(r"\s*(export\s+|override\s+)?MAKEFLAGS\b", line) and re.search(r"(^|[\s=])(-?i|--ignore-errors)(\s|$)", line):
+                return True
+            if line.startswith("\t") and MAKE_I.search(line):
+                return True
+    return False
+
+
+def _the_person_s(start: dict[str, str], now: dict[str, str], targets: list[str],
+                  read_start: Callable[[str], str | None], read_now: Callable[[str], str | None]) -> bool:
+    """Whether every failure make went on after is explained by the project as the run began. Nothing that tells
+    make to ignore beyond a recipe's own line is new; and each target make names was told to be ignored then, in the
+    same files, its lines that tell make to ignore are all ones it had, what they name (a script, a file) is as it
+    was, and the lines the run added or changed in it expand nothing of make's, nor does it expand anything a new
+    definition gives."""
+    if not _told_beyond_recipes(now) <= _told_beyond_recipes(start):
+        return False
+    new_definitions = bool(_definitions(now) - _definitions(start))
+    for target in targets:
+        then, rules = _rules(start, target), _rules(now, target)
+        if not _ignored_then(start, target) or not set(rules) <= set(then):
+            return False
+        for path, (_, recipe) in rules.items():
+            before = {line.strip() for line in then[path][1]}
+            ignoring = [line.strip() for line in recipe if _told_to_ignore(line)]
+            if not set(ignoring) <= before:
+                return False
+            if any(_expands(line) for line in recipe if line.strip() not in before):
+                return False
+            if new_definitions and any(_expands(line) for line in recipe):
+                return False
+            for line in ignoring:
+                for word in line.lstrip("@+-").split():
+                    if "$" in word or word.startswith("-"):
+                        continue
+                    named = posixpath.normpath(posixpath.join(posixpath.dirname(path), word))
+                    if not named.startswith("../") and read_now(named) != read_start(named):
+                        return False
+    return True
+
+
+def _ran_clean(call: Call, command: str, ran: Any, what: str) -> Any:
+    """A failure when ``ran`` failed, or passed only by going on after a failure that make was told to ignore, unless
+    the project as the run began explains each one: what the person's own Makefile already ignored is the person's,
+    not the step's. When the start is not known, none is explained."""
     if ran.code != 0:
         return Fail(f"{what}: {command} exited with {ran.code}. The end of what it printed:\n{ran.output}")
-    ignored = IGNORED.search(ran.printed)
-    if ignored:
-        return Fail(f"{what}: {command} passed only because make went on after a failure it was told to ignore "
-                    f"({ignored.group(0)}); a suite passes when nothing in it fails. The end of what it printed:\n"
-                    f"{ran.output}")
-    return None
+    ignored = list(IGNORED.finditer(ran.printed))
+    if not ignored:
+        return None
+    targets = sorted({m.group("target").strip() for m in ignored})
+    began = _start_reader(call)
+    start = _makefiles_at_start(began) if began is not None else None
+    project = Path(call["project"]) if call.get("project") else None
+    now = _makefiles_now(project) if project is not None else {}
+    def read_now(path: str) -> str | None:
+        return (project / path).read_text(errors="replace") if project is not None and (project / path).is_file() else None
+    if start is not None and began is not None and _the_person_s(start, now, targets, began[1], read_now):
+        return None
+    new = sorted(_ignoring(now) - _ignoring(start)) if start is not None else sorted(_ignoring(now))
+    told = (f", which {'this line' if len(new) == 1 else 'these lines'} that the run added told it to: "
+            + "; ".join(new)) if new else (f", in {', '.join(targets)}, which the project as the run began does not "
+                                            "account for: what tells make to ignore there, what it runs, or what make "
+                                            "expands there changed since")
+    return Fail(f"{what}: {command} passed only because make went on after a failure ({ignored[0].group(0)}){told}. "
+                f"A suite passes when nothing in it fails. The end of what it printed:\n{ran.output}")
 
 
 def suite_passes(call: Call, params: Params) -> Any:
@@ -229,7 +436,7 @@ def suite_passes(call: Call, params: Params) -> Any:
     ran = _box(call, command)
     if isinstance(ran, Blocked):
         return ran
-    return _ran_clean(command, ran, "the suite fails") or Pass()
+    return _ran_clean(call, command, ran, "the suite fails") or Pass()
 
 
 def _allowed(path: str, globs: list[str]) -> bool:
@@ -385,7 +592,7 @@ def tests_pass(call: Call, params: Params) -> Any:
         ran = _box(call, command)
         if isinstance(ran, Blocked):
             return ran
-        failed = _ran_clean(command, ran, what)
+        failed = _ran_clean(call, command, ran, what)
         if failed:
             return failed
         if command == picked and picked != runner["suite"] and _alone(call, tests, picked):
@@ -1720,8 +1927,10 @@ def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
             target = Path(folder) / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
+        start = case.get("start")
         call = {"output": case.get("output"), "given": case.get("given") or [], "request": case.get("request") or "",
-                "project": folder if files else None, "source": None}
+                "project": folder if files else None, "source": None,
+                "start": {"files": start} if isinstance(start, dict) else None}
         if use == "script":
             return script(call, params)
         if use in STEP_CASES:

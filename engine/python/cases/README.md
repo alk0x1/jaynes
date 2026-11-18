@@ -16,6 +16,9 @@ says), `hole` or `keeps`, and the check's input:
 - `output`: the output it judges.
 - `given`: the outputs of the steps its step uses, a list of `{"step": NAME, "output": ...}`. Left out: none.
 - `project`: the folder it sees, a map of paths to text. Left out: it sees no project.
+- `start`: the project as the run began, a map of paths to text, for a check that compares with it (suite-passes
+  and tests-pass, on a failure the project's Makefile told make to ignore). Left out: the start is not known, and
+  such a check counts all it finds as the step's.
 - `with`: for a check of the menu, its parameters, those the role writes and those the engine fills in
   (`suite_step`, `cases_step`, `schema`, `write`).
 

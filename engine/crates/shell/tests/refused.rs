@@ -76,7 +76,7 @@ fn asked(name: &str) -> Asked {
     let mut a = Asked { _base: Base(base.clone()), home, id: String::new(), shown: String::new(), page: None, port: 0 };
     let role = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change");
     // the Makefile changed raises the risk: the person is asked about the change
-    let agent = r#"command:printf 'hi\n' > greeting.txt && printf 'test:\n\ttrue\n' > Makefile && printf '{"summary":"hi","files":["greeting.txt"]}' > .jaynes/output.json"#;
+    let agent = r#"command:printf 'hi\n' > greeting.txt && printf 'test:\n\tgrep -q hi greeting.txt\n\n.PHONY: test\n' > Makefile && printf '{"summary":"hi","files":["greeting.txt"]}' > .jaynes/output.json"#;
     let (ok, out) = a.engine(&["start", "--run", "tried", "--role", role.to_str().expect("path"), "--project", project.to_str().expect("path"), "--request", "say hi", "--agent", agent]);
     assert!(ok, "{out}");
     let (_, log) = a.engine(&["log", "tried"]);

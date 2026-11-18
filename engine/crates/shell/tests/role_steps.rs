@@ -689,7 +689,7 @@ fn jaynes_check_runs_a_check_of_the_role_s_own_on_its_cases_in_the_box() {
     let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
     assert!(ok, "{out}");
     assert!(out.contains("✔ check files-exist of make: rejected 2 of 2, accepted 2 of 2"), "{out}");
-    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 5 it rejects and 2 it accepts"), "{out}");
+    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 16 it rejects and 7 it accepts"), "{out}");
     // the same from the role's own folder, as an author runs it: jaynes check .
     let here = Command::new(BIN).args(["check", "."]).current_dir(&dir).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").output().expect("check");
     let said = format!("{}{}", String::from_utf8_lossy(&here.stdout), String::from_utf8_lossy(&here.stderr));
@@ -757,6 +757,38 @@ fn a_role_that_needs_tests_says_so_when_the_project_has_none() {
     assert!(!ok && out.contains("- The project has tests Jaynes can run: no test runner was found in the project"), "{out}");
     std::fs::write(s.project.join("Makefile"), "test:\n\tgrep -q project README.md\n").expect("write");
     assert!(start(&s, "suite", &role, "go").contains("finished: delivered"));
+}
+
+/// A role whose script step changes the project, `act` being the script, checked by the project's suite.
+fn suite_checked(s: &Scratch, name: &str, act: &str) -> PathBuf {
+    let dir = s.base.join(name);
+    std::fs::create_dir_all(dir.join("steps")).expect("dir");
+    std::fs::write(dir.join("steps/act.sh"), format!("{act}\n{DONE}\n")).expect("write");
+    std::fs::write(dir.join("role.toml"), format!("role = \"{name}\"\nversion = \"1.0.0\"\n\n[[step]]\nname = \"runner\"\nby = \"jaynes\"\nuse = \"find-suite\"\n\n[[step]]\nname = \"act\"\nby = \"role\"\nneeds = [\"runner\"]\nscript = \"steps/act.sh\"\nreach = {{ project = \"write\", write = [\"**\"] }}\nchecks = [\"suite-passes\"]\n")).expect("write");
+    dir
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_failure_the_project_s_makefile_ignored_before_the_run_is_not_the_step_s() {
+    // the suite-passes of the menu reads the start of the run where the engine keeps it, beside the copy
+    let s = scratch("ignored", "http://127.0.0.1:1");
+    std::fs::write(s.project.join("greeting.txt"), "hello\n").expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n").expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a suite"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    let theirs = suite_checked(&s, "theirs", "printf 'hi\\n' > greeting.txt");
+    let out = start(&s, "theirs", &theirs, "say hi");
+    assert!(out.contains("finished: delivered"), "{out}");
+    // the same kind of line, added by the step: its failure is the step's
+    let added = suite_checked(&s, "added", "printf 'hi\\n' > greeting.txt && printf 'test:\\n\\t-rm gone.txt\\n\\t-grep -q bye greeting.txt\\n' > Makefile");
+    let out = start(&s, "added", &added, "say hi");
+    assert!(!out.contains("finished: delivered"), "{out}");
+    let e = events(&s, "added");
+    let failed = of(&e, "AttemptFailed", "act");
+    let said = failed.iter().map(|f| f["reasons"].to_string()).collect::<Vec<_>>().join(" ");
+    assert!(said.contains("make went on after a failure") && said.contains("Makefile: -grep -q bye greeting.txt") && !said.contains("Makefile: -rm gone.txt"), "{said}");
 }
 
 #[test]
