@@ -70,6 +70,7 @@ fn post(port: u16, path: &str, body: &str) -> serde_json::Value {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
     let s = scratch("cli");
     start(&s, "small", &format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'"));
@@ -94,6 +95,7 @@ fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let s = scratch("page");
     // a change to the Makefile runs later outside any box: the risk goes up and the person is asked
