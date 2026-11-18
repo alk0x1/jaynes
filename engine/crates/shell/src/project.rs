@@ -459,6 +459,31 @@ impl Copy {
         let branch = self.start_branch()?;
         let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
         self.g(&["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
+        // compare, then swap: undo starts only from the state the run left in what it touches; already undone, it does
+        // nothing, so doing it again does no harm
+        let blob = |rev: &str, path: &str| self.g(&["rev-parse", "--verify", "-q", &format!("{rev}:{path}")]).ok();
+        let (mut undone, mut changed) = (true, Vec::new());
+        for m in merges {
+            let paths = self.g(&["diff", "--name-only", "--no-renames", &format!("{m}^1"), m])?;
+            for path in paths.lines().filter(|p| !p.is_empty()) {
+                let now = blob(&tip, path);
+                if now != blob(&format!("{m}^1"), path) {
+                    undone = false;
+                }
+                if now != blob(m, path) && !changed.contains(&path.to_string()) {
+                    changed.push(path.to_string());
+                }
+            }
+        }
+        if undone {
+            return Ok(format!("already undone: {branch} has none of what the run merged"));
+        }
+        if !changed.is_empty() {
+            return Err(format!(
+                "{} changed since the run merged it: Jaynes does not undo over what is not as the run left it. Revert by hand what you want back",
+                changed.join(", ")
+            ));
+        }
         self.g(&["checkout", "-q", "--detach", &tip])?;
         for m in merges.iter().rev() {
             if let Err(e) = self.g(&["revert", "--no-edit", "-m", "1", m]) {
@@ -556,7 +581,54 @@ mod git_tests {
         assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "a\n");
     }
 
+/// A copy whose change of a.txt the run merged into the person's branch; the merge.
+    fn merged(name: &str) -> (PathBuf, Copy, String) {
+        let base = std::env::temp_dir().join(format!("jaynes-undo-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        std::fs::write(source.join("other.txt"), "o\n").expect("write");
+        git(&source, &["add", "-A"]).expect("add");
+        git(&source, &["commit", "-q", "-m", "other"]).expect("commit");
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        std::fs::write(copy.dir.join("a.txt"), "b\n").expect("write");
+        let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
+        let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+        copy.deliver(&[("change".to_string(), c)]).expect("delivered");
+        let m = copy.merge(&copy.head().expect("head"), "r").expect("merged").expect("a merge");
+        (base, copy, m)
+    }
+
     #[test]
+    fn undo_refuses_when_what_it_would_touch_changed_since_the_run_merged() {
+        let (base, copy, m) = merged("changed");
+        // the person changed the merged file since
+        std::fs::write(copy.source.join("a.txt"), "theirs\n").expect("write");
+        git(&copy.source, &["commit", "-qam", "theirs"]).expect("commit");
+        let tip = git(&copy.source, &["rev-parse", "HEAD"]).expect("tip");
+        let refused = Workspace::undo(&copy, std::slice::from_ref(&m), "r");
+        assert!(refused.as_ref().is_err_and(|e| e.contains("a.txt") && e.contains("changed since")), "{refused:?}");
+        assert_eq!(git(&copy.source, &["rev-parse", "HEAD"]).expect("tip"), tip, "undo touched the branch");
+        assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "theirs\n");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn undo_goes_on_over_other_changes_and_doing_it_again_does_nothing() {
+        let (base, copy, m) = merged("again");
+        // the person changed another file since: not what the undo touches
+        std::fs::write(copy.source.join("other.txt"), "changed\n").expect("write");
+        git(&copy.source, &["commit", "-qam", "other changed"]).expect("commit");
+        Workspace::undo(&copy, std::slice::from_ref(&m), "r").expect("undone");
+        assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "a\n");
+        assert_eq!(std::fs::read_to_string(copy.source.join("other.txt")).expect("read"), "changed\n");
+        let tip = git(&copy.source, &["rev-parse", "HEAD"]).expect("tip");
+        let again = Workspace::undo(&copy, std::slice::from_ref(&m), "r").expect("again");
+        assert!(again.contains("already undone"), "{again}");
+        assert_eq!(git(&copy.source, &["rev-parse", "HEAD"]).expect("tip"), tip, "a second undo made a commit");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+        #[test]
     fn the_engine_s_repository_for_a_copy_lives_beside_it_and_the_copy_s_own_is_the_agent_s() {
         let base = std::env::temp_dir().join(format!("jaynes-git-beside-{}", std::process::id()));
         let _gone = std::fs::remove_dir_all(&base);
