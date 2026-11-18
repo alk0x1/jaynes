@@ -1911,10 +1911,15 @@ pub(crate) fn seen_now(window: &mut Window, cx: &App) -> looking_at::Seen {
 /// Command-K as a test uses it: `type <letters>`, `down`, `up`, `go`.
 #[cfg(feature = "test-driver")]
 pub(crate) fn palette_does(what: String, cx: &mut App) {
-    let Some(main) = MAIN.with(|m| m.get()) else { return };
-    let _ = main.update(cx, |_, window, cx| {
-        let Some(Some(root)) = window.root::<Root>() else { return };
-        let Some(p) = root.read(cx).palette() else { return };
+    let Some(main) = MAIN.with(|m| m.get()) else { return tracing::warn!("palette {what}: no main window") };
+    let updated = main.update(cx, |_, window, cx| {
+        let Some(Some(root)) = window.root::<Root>() else { return tracing::warn!("palette {what}: no root") };
+        // opened as the Command-K action opens it, without the keyboard: a test's window has none, and an action
+        // dispatched there reaches the window only when something in it has the keys
+        if what == "open" {
+            return root.update(cx, |r, cx| r.open_palette(window, cx));
+        }
+        let Some(p) = root.read(cx).palette() else { return tracing::warn!("palette {what}: Command-K is not open") };
         let (verb, rest) = what.split_once(' ').unwrap_or((what.as_str(), ""));
         let rest = rest.to_string();
         p.update(cx, |p, cx| match verb {
@@ -1922,9 +1927,12 @@ pub(crate) fn palette_does(what: String, cx: &mut App) {
             "down" => p.step(1, cx),
             "up" => p.step(-1, cx),
             "go" => p.go(cx),
-            _ => {}
+            _ => tracing::warn!("palette: no verb {verb}"),
         });
     });
+    if let Err(e) = updated {
+        tracing::warn!("palette {what}: the window could not be updated: {e}");
+    }
 }
 
 /// Later on the line over the agent, as a click on it: for a test.

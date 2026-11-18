@@ -511,7 +511,7 @@ impl Island {
             "presence?" => cx.defer(crate::presence_probe),
             // Later on the line over an agent that says a run waits
             "later" => cx.defer(crate::later_on_line),
-            // Command-K: `palette type <letters>`, `palette down`, `palette go` (open it with `key cmd-k`)
+            // Command-K: `palette open`, `palette type <letters>`, `palette down`, `palette go`; `palette open` needs no keys
             "palette" => {
                 let what = rest.to_string();
                 cx.defer(move |cx| crate::palette_does(what, cx));
