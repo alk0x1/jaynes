@@ -832,7 +832,8 @@ impl Page {
 }
 
 /// The run's steps as a strip, one mark per step of its path, coloured by where each is, as the earlier page drew
-/// it: done, waiting for you, blocked, running, not yet, or asked only a sample and skipped.
+/// it: done, waiting for you, blocked, running, halted (under way in a run the person halted), not yet, or asked only
+/// a sample and skipped.
 fn strip(r: &Run) -> String {
     use jaynes_core::run::Status;
     let blocked = match &r.phase {
@@ -849,6 +850,7 @@ fn strip(r: &Run) -> String {
                 "blocked"
             } else {
                 match &s.status {
+                    Status::Running { .. } | Status::Checking { .. } | Status::Probing if !r.finished() && r.halted => "halted",
                     Status::Running { .. } | Status::Checking { .. } | Status::Probing if !r.finished() => "running",
                     Status::AwaitingInput { .. } => "waiting",
                     Status::Done if r.fresh(i) && r.open_question(i).is_some() => "waiting",
@@ -1942,7 +1944,7 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .pics img.big { max-width:100%; max-height:none; cursor:zoom-out; }
 .strip { display:flex; gap:3px; margin:4px 0 10px; } .strip i { width:14px; height:4px; border-radius:2px; background:var(--green); display:block; }
 aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min-width:3px; }
-.strip i.waiting { background:var(--amber); } .strip i.blocked { background:var(--red); } .strip i.running { background:var(--blue); }
+.strip i.waiting { background:var(--amber); } .strip i.blocked { background:var(--red); } .strip i.running { background:var(--blue); } .strip i.halted { background:var(--faint); }
 .strip i.todo { background:var(--line-2); } .strip i.sampled { background:none; box-shadow:inset 0 0 0 1px var(--green); }
 .stages { list-style:none; margin:8px 0 18px; padding:0; }
 .stages li { display:grid; grid-template-columns:14px 1fr; gap:10px; padding:5px 0; position:relative; }
@@ -1952,6 +1954,7 @@ aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min
 .stages .waiting .dot { background:var(--amber); box-shadow:0 0 0 4px var(--amber-soft); }
 .stages .blocked .dot { background:var(--red); box-shadow:0 0 0 4px var(--red-soft); }
 .stages .running .dot { background:var(--blue); box-shadow:0 0 0 4px var(--blue-soft); }
+.stages .halted .dot { background:var(--faint); } .stages .halted small { color:var(--dim); }
 .stages .todo .dot { background:var(--bg); box-shadow:inset 0 0 0 1px var(--line-2); }
 .stages .sampled .dot { background:var(--bg); box-shadow:inset 0 0 0 1.5px var(--green); }
 .stages .accepted .dot { box-shadow:0 0 0 3px var(--green-soft); }
@@ -2205,6 +2208,22 @@ mod tests {
         // and again a day later
         assert!(reminders_in(&page.render(View::Overview, later + 2 + drive::REMIND_EVERY).expect("overview")).contains("href=\"/q/w2/q1\""));
         let _gone = std::fs::remove_dir_all(&page.home);
+    }
+
+    #[test]
+    fn a_halted_run_s_step_under_way_is_drawn_halted_not_running() {
+        use jaynes_core::run::Status;
+        let manifest: jaynes_core::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "plan", "executor": "agent"}]})).expect("manifest");
+        let start = Input::Start { run: "h".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let mut r = Run::fold(&decide(None, &start).expect("start").events).expect("run");
+        for status in [Status::Running { attempt: 1, fix: 0 }, Status::Checking { attempt: 1, fix: 0 }, Status::Probing] {
+            r.steps[0].status = status;
+            r.halted = false;
+            assert!(strip(&r).contains("class=\"running\""), "{}", strip(&r));
+            r.halted = true;
+            let drawn = strip(&r);
+            assert!(drawn.contains("class=\"halted\"") && !drawn.contains("class=\"running\""), "{drawn}");
+        }
     }
 
     #[test]

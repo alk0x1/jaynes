@@ -142,7 +142,8 @@ pub struct Stage {
     pub index: usize,
     pub name: String,
     pub about: String,
-    /// done ones are "checked", "accepted", "sampled" or "jaynes"; then "running", "waiting", "blocked", "todo".
+    /// done ones are "checked", "accepted", "sampled" or "jaynes"; then "running", "halted" (a step under way in a run
+    /// the person halted: nothing works on it until they resume), "waiting", "blocked", "todo".
     pub class: &'static str,
     pub detail: String,
 }
@@ -176,6 +177,8 @@ pub fn stages(r: &Run) -> Vec<Stage> {
                 ("blocked", format!("blocked, {tries}"))
             } else {
                 match &s.status {
+                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() && r.halted => ("halted", format!("halted, attempt {attempt}{round}")),
+                    Status::Probing if !r.finished() && r.halted => ("halted", "halted while testing what it reaches".to_string()),
                     Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running, attempt {attempt}{round}")),
                     Status::Probing if !r.finished() => ("running", "testing what it reaches".to_string()),
                     _ if asks(i) && r.finished() => ("todo", "left unanswered".to_string()),
@@ -380,6 +383,17 @@ mod tests {
         let stages = stages(&r);
         let seen: Vec<(&str, &str, &str)> = stages.iter().map(|s| (s.name.as_str(), s.class, s.detail.as_str())).collect();
         assert_eq!(seen, [("plan", "running", "running, attempt 2"), ("change", "todo", "")]);
+        // halted, the step under way says so, and is drawn as nothing working on it
+        r.halted = true;
+        for (status, detail) in [
+            (jaynes_core::run::Status::Running { attempt: 2, fix: 0 }, "halted, attempt 2"),
+            (jaynes_core::run::Status::Checking { attempt: 3, fix: 1 }, "halted, attempt 3"),
+            (jaynes_core::run::Status::Probing, "halted while testing what it reaches"),
+        ] {
+            r.steps[0].status = status;
+            let first = &super::stages(&r)[0];
+            assert_eq!((first.class, first.detail.as_str()), ("halted", detail));
+        }
     }
 
     #[test]
