@@ -658,3 +658,197 @@ fn a_role_of_scripts_conforms_to_the_protocol() {
     let (ok, out) = engine(&s, &["conformance", roles().join("announce-version").to_str().expect("path")]);
     assert!(ok, "{out}");
 }
+
+// --- the engine killed at each moment of an act, for real ------------------------------------------------------
+
+/// Tell the registry where the script is and its process, then wait there, so the engine is killed exactly there.
+const MARK: &str = r#"python3 -c 'import os, urllib.request; urllib.request.urlopen("REGISTRY/mark/WHERE/%d" % os.getppid(), timeout=10)'; sleep 60"#;
+
+/// A script that writes NOTE in the run's copy, announces with the run's key, and waits at the mark the test names.
+fn act_and_wait(registry: &str, stop: &str) -> String {
+    let mark = |at: &str| if at == stop { MARK.replace("REGISTRY", registry).replace("WHERE", at) } else { "true".to_string() };
+    format!(
+        "echo note > NOTE\ncall=$(cat)\n{}\nprintf '%s' \"$call\" | python3 -c '\nimport json, sys, urllib.request\nkey = json.load(sys.stdin)[\"key\"]\nask = urllib.request.Request(\"{registry}/announcements\", data=b\"{{\\\"version\\\": \\\"1.4.0\\\"}}\", method=\"POST\", headers={{\"Idempotency-Key\": key}})\nurllib.request.urlopen(ask, timeout=10)\n' || exit 2\n{}\nprintf '{{\"done\": true}}' > \"$JAYNES_OUTPUT\"\n",
+        mark("before"),
+        mark("after")
+    )
+}
+
+impl World {
+    /// The process that marked `at`, once it has.
+    fn marked(&self, at: &str) -> Option<String> {
+        self.heard.lock().expect("lock").iter().find_map(|h| h.path.strip_prefix(&format!("/mark/{at}/")).map(str::to_string))
+    }
+
+    fn unmark(&self) {
+        self.heard.lock().expect("lock").retain(|h| !h.path.starts_with("/mark/"));
+    }
+}
+
+/// Start the run in a process of its own and kill it, and the script it waits on, once the script marks `stop`;
+/// with `stop` "done", the engine dies by itself as soon as the record holds the step done, before its commit.
+fn killed_at(s: &Scratch, world: &World, run: &str, role: &Path, stop: &str) {
+    let mut c = Command::new(BIN);
+    c.args(["start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", "act", "--agent", NO_AGENT])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "")
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if stop == "done" {
+        let status = c.env("JAYNES_DIE_AFTER_DONE", "act").status().expect("start");
+        assert_eq!(status.code(), Some(9), "the engine did not die where it was told");
+        return;
+    }
+    let mut p = c.spawn().expect("start");
+    let mut pid = None;
+    for _ in 0..400 {
+        pid = world.marked(stop);
+        if pid.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let pid = pid.unwrap_or_else(|| panic!("{run}: the script never reached {stop}"));
+    let _killed = p.kill();
+    let _waited = p.wait();
+    // the machine went down with it: the script it waited on dies too
+    let _gone = Command::new("kill").args(["-9", &pid]).status();
+    world.unmark();
+}
+
+fn act_role(s: &Scratch, world: &World, name: &str, stop: &str, more: &str) -> PathBuf {
+    let keys = format!("reach = {{ project = \"write\", write = [\"NOTE\"], local_ports = [{}] }}\neffect = \"irreversible\"\n{more}", world.port);
+    one_script(s, name, &keys, &act_and_wait(&world.address(), stop))
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn killed_before_or_after_it_acts_a_step_that_cannot_be_undone_is_never_started_again_on_its_own() {
+    for stop in ["before", "after"] {
+        let world = World::open();
+        let name = format!("killed-{stop}");
+        let s = scratch(&name, &world.address());
+        let role = act_role(&s, &world, &name, stop, "");
+        killed_at(&s, &world, &name, &role, stop);
+        let acted = world.announcements().len();
+        assert_eq!(acted, usize::from(stop == "after"), "{stop}");
+        // Jaynes comes back: it does not start the act again by itself, and says it may have acted
+        let (_, out) = engine(&s, &["continue", &name]);
+        assert!(out.contains("blocked") && out.contains("may have acted"), "{stop}: {out}");
+        assert_eq!(world.announcements().len(), acted, "{stop}: the act was started again on its own: {out}");
+        // the person continues: nothing acts, the person is asked about the act, which may have happened
+        let role_copy = s.home.join("runs").join(&name).join("role/steps/act.sh");
+        std::fs::write(&role_copy, act_and_wait(&world.address(), "none")).expect("the run's copy of the script, which no longer waits");
+        let out = person(&s, &["continue", &name]);
+        assert_eq!(world.announcements().len(), acted, "{stop}: a bare continue acted again: {out}");
+        let asked = events(&s, &name).iter().rev().find(|e| e["type"] == "QuestionOpened" && e["question"]["kind"] == "acted").map(|e| e["question"]["id"].as_str().unwrap_or("").to_string());
+        let asked = asked.unwrap_or_else(|| panic!("{stop}: the person is not asked about the act: {out}"));
+        // acting again, as the person orders it: once more, with the key it had, so a service that keeps the key counts once
+        let out = person(&s, &["answer", &name, &asked, "act=redo:act again", "--send"]);
+        assert!(out.contains("finished: delivered"), "{stop}: {out}");
+        let sent = world.announcements();
+        assert_eq!(sent.len(), acted + 1, "{stop}: {sent:?}");
+        assert!(sent.windows(2).all(|w| w[0].key == w[1].key), "{stop}: the act came back with another key: {sent:?}");
+        assert_eq!(git(&s.project, &["show", &format!("jaynes/{name}:NOTE")]), "note\n", "{stop}");
+    }
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn killed_after_it_acts_a_step_safe_to_repeat_starts_again_by_itself_with_the_same_key() {
+    let world = World::open();
+    let s = scratch("killed-safe", &world.address());
+    let role = act_role(&s, &world, "killed-safe", "after", "idempotent = true");
+    killed_at(&s, &world, "killed-safe", &role, "after");
+    std::fs::write(s.home.join("runs/killed-safe/role/steps/act.sh"), act_and_wait(&world.address(), "none")).expect("write");
+    let out = engine(&s, &["continue", "killed-safe"]).1;
+    assert!(out.contains("finished: delivered"), "{out}");
+    let sent = world.announcements();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert_eq!(sent[0].key, sent[1].key, "{sent:?}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn killed_while_its_check_runs_or_once_it_is_done_an_act_is_not_done_again() {
+    // while its check runs: the act is recorded, and only the check runs again
+    let world = World::open();
+    let s = scratch("killed-check", &world.address());
+    let role = act_role(&s, &world, "killed-check", "none", "");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("checks/c.sh"), format!("{}\nexit 0\n", MARK.replace("REGISTRY", &world.address()).replace("WHERE", "check"))).expect("write");
+    let text = std::fs::read_to_string(role.join("role.toml")).expect("read");
+    std::fs::write(role.join("role.toml"), format!("{text}checks = [{{ script = \"checks/c.sh\", about = \"it shows\" }}]\n")).expect("write");
+    killed_at(&s, &world, "killed-check", &role, "check");
+    assert_eq!(world.announcements().len(), 1);
+    std::fs::write(s.home.join("runs/killed-check/role/checks/c.sh"), "exit 0\n").expect("the run's copy of the check, which no longer waits");
+    let mut out = person(&s, &["continue", "killed-check"]);
+    if !out.contains("finished: delivered") {
+        out = person(&s, &["continue", "killed-check"]);
+    }
+    assert!(out.contains("finished: delivered"), "{out}");
+    assert_eq!(world.announcements().len(), 1, "the act was done again after a kill while its check ran: {out}");
+    // once the record holds it done and before its change is kept: nothing acts again, and its change is delivered
+    let world = World::open();
+    let s = scratch("killed-done", &world.address());
+    let role = act_role(&s, &world, "killed-done", "none", "");
+    killed_at(&s, &world, "killed-done", &role, "done");
+    assert_eq!(world.announcements().len(), 1);
+    let out = person(&s, &["continue", "killed-done"]);
+    assert!(out.contains("finished: delivered"), "{out}");
+    assert_eq!(world.announcements().len(), 1, "the act was done again after a kill once it was done: {out}");
+    assert_eq!(git(&s.project, &["show", "jaynes/killed-done:NOTE"]), "note\n", "its change was lost");
+}
+
+
+// --- Undo, as the person runs it ---------------------------------------------------------------------------------
+
+/// A role of one script that writes NOTE and delivers by merge into the person's branch; the run, delivered.
+fn merged_run(s: &Scratch, name: &str) -> PathBuf {
+    let dir = s.base.join(name);
+    std::fs::create_dir_all(dir.join("steps")).expect("dir");
+    std::fs::write(dir.join("steps/act.sh"), format!("echo note > NOTE\n{DONE}\n")).expect("write");
+    std::fs::write(dir.join("role.toml"), format!("role = \"{name}\"\nversion = \"1.0.0\"\ndelivery = \"merge\"\n\n[[step]]\nname = \"act\"\nby = \"role\"\nscript = \"steps/act.sh\"\nreach = {{ project = \"write\", write = [\"NOTE\"] }}\n")).expect("write");
+    let out = start(s, name, &dir, "note it");
+    assert!(out.contains("finished: delivered") && out.contains("merged as"), "{out}");
+    assert_eq!(std::fs::read_to_string(s.project.join("NOTE")).expect("merged"), "note\n");
+    dir
+}
+
+fn commit_in_project(s: &Scratch, file: &str, text: &str) {
+    std::fs::write(s.project.join(file), text).expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the person's own change"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn undo_goes_back_only_from_what_the_run_left_and_only_once() {
+    // the person changed the file the run merged: Undo refuses, and their change stays as they made it
+    let s = scratch("undo-touched", "http://127.0.0.1:1");
+    merged_run(&s, "touched");
+    commit_in_project(&s, "NOTE", "theirs\n");
+    let head = git(&s.project, &["rev-parse", "HEAD"]);
+    let out = person(&s, &["undo", "touched", "--note", "not now"]);
+    assert!(out.contains("NOTE") && out.contains("changed since"), "{out}");
+    assert_eq!(std::fs::read_to_string(s.project.join("NOTE")).expect("read"), "theirs\n");
+    assert_eq!(git(&s.project, &["rev-parse", "HEAD"]), head, "a refused undo moved the person's branch");
+    assert!(!types_of(&events(&s, "touched")).contains(&"MergeUndone".to_string()), "a refused undo was recorded as done");
+    // the person changed another file: Undo takes back the run's merge and leaves theirs
+    let s = scratch("undo-other", "http://127.0.0.1:1");
+    merged_run(&s, "other");
+    commit_in_project(&s, "README.md", "# Their project\n");
+    let out = person(&s, &["undo", "other", "--note", "not now"]);
+    assert!(out.contains("undone"), "{out}");
+    assert!(!s.project.join("NOTE").exists(), "the run's merge is still there");
+    assert_eq!(std::fs::read_to_string(s.project.join("README.md")).expect("read"), "# Their project\n");
+    // and a second Undo does nothing to the branch
+    let head = git(&s.project, &["rev-parse", "HEAD"]);
+    let out = person(&s, &["undo", "other", "--note", "again"]);
+    assert!(out.contains("already undone"), "{out}");
+    assert_eq!(git(&s.project, &["rev-parse", "HEAD"]), head, "a second undo moved the person's branch");
+    assert_eq!(types_of(&events(&s, "other")).iter().filter(|t| *t == "MergeUndone").count(), 1);
+}
+
+fn types_of(events: &[Value]) -> Vec<String> {
+    events.iter().map(|e| e["type"].as_str().unwrap_or("").to_string()).collect()
+}
