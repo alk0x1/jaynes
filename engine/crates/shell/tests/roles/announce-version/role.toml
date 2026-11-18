@@ -1,0 +1,55 @@
+# announce-version: writes the entry of the project's version in its changelog and announces that version to the
+# project's registry. No agent works: each step is a script of this folder, which Jaynes runs in its box.
+#
+# What cannot be undone here is the announcement. It starts only once every answer it rests on is the person's, and
+# the registry is given the run's key, so an announcement sent twice counts once.
+
+role = "announce-version"
+version = "1.0.0"
+
+[[step]]
+name = "survey"
+by = "role"
+script = "steps/survey.py"
+reach = { project = "read" }
+about = "Reads the version the project is at and where its registry is."
+checks = ["output-follows-schema"]
+
+[step.output]
+version = { type = "string", max_length = 40, about = "the version in the project's VERSION file" }
+registry = { type = "string", about = "the address in the project's registry file" }
+
+[[step]]
+name = "stamp"
+by = "role"
+script = "steps/stamp.py"
+needs = ["survey"]
+reach = { project = "write", write = ["CHANGELOG.md"] }
+about = "Writes the version's entry in the changelog."
+checks = ["output-follows-schema", "files-within"]
+
+[step.output]
+entry = { type = "string", about = "the entry written" }
+files = { type = "array", items = "string" }
+
+[[step]]
+name = "announce"
+by = "role"
+script = "steps/announce.py"
+needs = ["survey", "stamp"]
+reach = { local_ports = [18473] }
+effect = "irreversible"
+idempotent = true
+about = "Announces the version to the registry. This cannot be undone."
+checks = [
+  "output-follows-schema",
+  { script = "checks/announced.py", kind = "open", about = "the registry lists the version" },
+]
+
+[step.output]
+id = { type = "string", about = "the registry's id for the announcement" }
+
+[[promise]]
+says = "Nothing is announced before the changelog has the version's entry"
+event = "step announce starts"
+only_after = "step stamp done"

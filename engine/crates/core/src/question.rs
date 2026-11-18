@@ -44,7 +44,15 @@ impl Verdict {
 
     /// Whether the verdict sends the step back to work.
     pub fn sends_back(&self) -> bool {
-        matches!(self, Verdict::Change { .. } | Verdict::Redo { .. } | Verdict::Drop)
+        self.kind().sends_back()
+    }
+}
+
+impl VerdictKind {
+    /// Whether a verdict of this kind sends the step back to work. The one place that says so: an answer is read by
+    /// it, and a role is held by it to offer none where nothing may go back.
+    pub fn sends_back(self) -> bool {
+        matches!(self, VerdictKind::Change | VerdictKind::Redo | VerdictKind::Drop)
     }
 }
 

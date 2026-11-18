@@ -151,6 +151,10 @@ pub struct Reach {
     /// Whether the step may run shell commands.
     #[serde(default)]
     pub commands: bool,
+    /// The local ports the step's commands may connect to, such as a service on this machine the step acts on. A
+    /// port is reached only when it is named here: none is open by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_ports: Vec<u16>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
@@ -450,6 +454,12 @@ impl Manifest {
             if s.reach.project == ProjectAccess::Write && s.reach.write.is_empty() {
                 errors.push(format!("{at} writes the project and names no path it may change"));
             }
+            if !s.reach.local_ports.is_empty() && !s.reach.commands {
+                errors.push(format!("{at} names local ports and runs no command that could reach them"));
+            }
+            if s.reach.local_ports.contains(&0) {
+                errors.push(format!("{at} names the local port 0, which is no port"));
+            }
         }
         if errors.is_empty() { Ok(()) } else { Err(errors) }
     }
@@ -475,6 +485,24 @@ mod target_tests {
     fn a_target_this_engine_does_not_know_is_refused() {
         let other = OLD.replace(r#""delivery""#, r#""target":"a-browser-session","delivery""#);
         assert!(serde_json::from_str::<Manifest>(&other).is_err());
+    }
+
+    #[test]
+    fn a_step_that_names_no_local_port_is_written_as_before_and_one_that_does_runs_commands() {
+        // the key of a stop's earned record is made from its step as written, so a step from before must not change
+        let m: Manifest = serde_json::from_str(OLD).expect("an older role's manifest reads");
+        assert!(m.steps[0].reach.local_ports.is_empty());
+        let again = serde_json::to_value(&m).expect("json");
+        assert!(again["steps"][0]["reach"].get("local_ports").is_none(), "a step that names no port is written as before: {again}");
+        let mut named = m.clone();
+        named.steps[0].reach.local_ports = vec![5432];
+        let e = named.validate().expect_err("ports without commands").join("; ");
+        assert!(e.contains("step change names local ports and runs no command that could reach them"), "{e}");
+        named.steps[0].reach.commands = true;
+        assert_eq!(named.validate(), Ok(()));
+        assert_eq!(serde_json::to_value(&named).expect("json")["steps"][0]["reach"]["local_ports"], serde_json::json!([5432]));
+        named.steps[0].reach.local_ports = vec![0];
+        assert!(named.validate().is_err_and(|e| e.join("; ").contains("names the local port 0, which is no port")));
     }
 
     #[test]

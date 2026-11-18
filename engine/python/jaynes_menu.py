@@ -11,6 +11,11 @@ What a name means and which parameters it takes is checked before a run, by the 
 A check the menu lacks is a script of the role (``use: "script"``): it runs in the box on a copy of the project,
 reads ``{"output", "given", "project"}`` on standard input, and exits 0 to pass, 1 to fail with its reasons on
 standard output, 3 when it cannot judge.
+
+A step the menu lacks is a script of the role too (``use: "script"``, kind ``step``): it runs in the box with the
+reach its step declares, reads ``{"request", "given", "project", "round", "attempt", "key"}`` on standard input,
+writes its output as JSON to the file named in ``JAYNES_OUTPUT``, and exits 0 when done, 1 when the step cannot be
+done (with why, on standard output), 3 when it could not run.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tempfile
 import traceback
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -38,13 +44,19 @@ def _source(call: Call) -> Path | None:
     return Path(call["source"]) if call.get("source") else None
 
 
-def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None, readable: tuple[Path, ...] = ()) -> Any:
+def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None, readable: tuple[Path, ...] = (),
+         alone: bool = False) -> Any:
     """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``. ``readable`` names
-    more folders the command may read."""
-    if not call.get("project"):
+    more folders the command may read. ``alone``: a command that needs no project runs in an empty folder when its
+    step reaches none."""
+    if not call.get("project") and not alone:
         return Blocked("the check has no copy of the project to run commands on")
     try:
-        ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable)
+        if call.get("project"):
+            ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable)
+        else:
+            with tempfile.TemporaryDirectory(prefix="jaynes-empty-") as empty:
+                ran = box.run(Path(empty), command, timeout=timeout, stdin=stdin, readable=readable)
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
@@ -95,6 +107,51 @@ def refuse_when_false(call: Call, params: Params) -> Any:
     if (given.get(step) or {}).get(field) is False:
         return Refused(_plain(str(params["says"]), given))
     return {}
+
+
+def script_step(call: Call, params: Params) -> Any:
+    """A step of the role's own: a script of its folder, run in the box with the reach its step declares.
+
+    Exit 0 with an output is the step done. Exit 1 is the script's word that the step cannot be done and that it
+    did nothing: the role's fault, with what it printed. Exit 3, no box, or a box that refused what it tried: the
+    machine's. Anything else is a script that broke, the role's fault too. A step that cannot be undone (``acts``)
+    may have acted in every case but exit 1 and exit 3, and the person is told so."""
+    path = str(params["path"])
+    name = str(params.get("name") or Path(path).name)
+    access = str(params.get("project") or "none")
+    project = Path(call["project"]) if call.get("project") and access != "none" else None
+    acted = (f". {call.get('step') or name} cannot be undone, so it may have acted: look before you continue"
+             if params.get("acts") else "")
+    given = json.dumps({"request": call.get("request"), "given": call.get("given") or [],
+                        "project": "." if project is not None else None, "round": call.get("round"),
+                        "attempt": call.get("attempt"), "key": call.get("key")})
+    try:
+        done = box.run_step(_quote(path) if _executable(path) else f"sh {_quote(path)}", project=project,
+                            write=access == "write", source=_source(call),
+                            ports=tuple(int(p) for p in params.get("local_ports") or []), stdin=given)
+    except box.Unavailable as e:
+        return Blocked(f"there is no box to run the role's script in: {e}")
+    ran = done.ran
+    said = [line.strip() for line in ran.printed.splitlines() if line.strip()]
+    if box.refused(ran):
+        return Blocked(f"the box refused what {name} tried, which its step's reach does not allow: "
+                       + "; ".join(box.refused(ran)[:3]) + acted)
+    if ran.code == 1:
+        return Refused(" ".join(said[-5:]) or f"{name} said the step cannot be done, and not why")
+    if ran.code == 3:
+        return Blocked(" ".join(said[-5:]) or f"{name} could not run")
+    if ran.code != 0:
+        return Refused(f"{name} exited with {ran.code}" + (": " + " ".join(said[-5:]) if said else "") + acted)
+    if done.output is None:
+        return Refused(f"{name} " + (f"gave an output Jaynes does not read: {done.unread}" if done.unread else
+                                     "wrote no output: it writes JSON to the file named in JAYNES_OUTPUT") + acted)
+    try:
+        output = json.loads(done.output)
+    except ValueError as e:
+        return Refused(f"what {name} wrote to JAYNES_OUTPUT is not JSON: {e}" + acted)
+    if not isinstance(output, dict):
+        return Refused(f"what {name} wrote to JAYNES_OUTPUT is not a JSON object" + acted)
+    return output
 
 
 # --- checks ----------------------------------------------------------------------------------------------------
@@ -305,7 +362,7 @@ def script(call: Call, params: Params) -> Any:
     folder (its other files, the modules it imports) and to write none of it."""
     path = str(params["path"])
     given = json.dumps({"output": call.get("output"), "given": call.get("given") or [], "project": "."})
-    ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given, readable=_own_role(path))
+    ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given, readable=_own_role(path), alone=True)
     if isinstance(ran, Blocked):
         return ran
     said = [line for line in ran.printed.splitlines() if line.strip()]
@@ -1396,7 +1453,8 @@ CASE_READERS: dict[str, Callable[[dict[str, Any]], Any]] = {"quotes-found": quot
 
 
 STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,
-                                                       "fetch-pages": fetch_pages, "quote-windows": quote_windows}
+                                                       "fetch-pages": fetch_pages, "quote-windows": quote_windows,
+                                                       "script": script_step}
 CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "suite-passes": suite_passes,
     "tests-fail-for-the-bug": tests_fail_for_the_bug,

@@ -403,6 +403,16 @@
           "description": "Whether the step may run shell commands.",
           "type": "boolean"
         },
+        "local_ports": {
+          "description": "The local ports the step's commands may connect to, such as a service on this machine the step acts on. A\nport is reached only when it is named here: none is open by default.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "network": {
           "$ref": "#/$defs/Network",
           "default": "none"

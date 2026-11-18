@@ -1244,7 +1244,23 @@ impl<'a> Driver<'a> {
         let outcome = match reply {
             Err(e) => AttemptOutcome::Fault { reason: e },
             Ok(Body::Result { output }) => {
-                let object = json!({"output": output, "tree": Value::Null});
+                // What the role's own step changed in the run's copy is measured by Jaynes, as an agent's change is:
+                // the risk is judged from it, and a change outside what the step may write is refused and thrown away.
+                let decl = &run.manifest.steps[i];
+                let mut changed = Vec::new();
+                let mut tree = Value::Null;
+                if let (Some(copy), ProjectAccess::Write | ProjectAccess::Read) = (&self.setup.copy, decl.reach.project) {
+                    let write = if decl.reach.project == ProjectAccess::Write { decl.reach.write.clone() } else { Vec::new() };
+                    match copy.measure(&write) {
+                        Ok((c, t)) => {
+                            changed = c;
+                            tree = Value::String(t);
+                        }
+                        Err(Ok(paths)) => return end(AttemptOutcome::Refused { reason: format!("the step changed files it may not change: {}", paths.join(", ")) }),
+                        Err(Err(e)) => return end(AttemptOutcome::Fault { reason: e }),
+                    }
+                }
+                let object = json!({"output": output, "tree": tree});
                 match self.store.put(&object) {
                     Err(e) => AttemptOutcome::Fault { reason: e },
                     Ok(digest) => match self.setup.role.call(Call::Items { step: step.clone(), output: object["output"].clone() }) {
@@ -1254,7 +1270,7 @@ impl<'a> Driver<'a> {
                                 Ok(i) => i,
                                 Err(e) => return end(AttemptOutcome::Fault { reason: e }),
                             },
-                            changed: Vec::new(),
+                            changed,
                             usage: Default::default(),
                             session: None,
                         },

@@ -71,6 +71,7 @@ fn role(rng: &mut Rng) -> Manifest {
                     write: if project == ProjectAccess::Write { vec!["**".to_string()] } else { Vec::new() },
                     network: Default::default(),
                     commands: rng.chance(50),
+                    local_ports: Vec::new(),
                 }
             };
             let mut checks = Vec::new();

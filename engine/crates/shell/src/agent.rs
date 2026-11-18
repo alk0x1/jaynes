@@ -1047,7 +1047,7 @@ mod tests {
 
     #[test]
     fn a_read_only_step_writes_only_its_exchange_folder() {
-        let reach = Reach { project: ProjectAccess::Read, write: vec![], network: Network::None, commands: false };
+        let reach = Reach { project: ProjectAccess::Read, write: vec![], network: Network::None, commands: false, local_ports: vec![] };
         let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         assert!(allow.contains(&"Edit(./.jaynes/**)"));
@@ -1069,7 +1069,7 @@ mod tests {
     fn a_write_the_guards_refused_inside_the_reach_is_jaynes_s_fault() {
         let out = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/w/.jaynes/output.json"}},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/elsewhere/x"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Permission to use Write has been denied"},{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Permission to use Edit has been denied"}]}}"#;
-        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true };
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
         assert_eq!(refused_writes(out, Path::new("/w"), &reach), Some(vec!["/w/.jaynes/output.json".to_string()]));
         let none = r#"{"type":"user","message":{"content":[]}}"#;
         assert_eq!(refused_writes(none, Path::new("/w"), &reach), None);
@@ -1078,7 +1078,7 @@ mod tests {
     #[test]
     fn a_step_that_installs_packages_reaches_only_their_registries() {
         let c = Claude { model: "m".into(), effort: "high".into(), max_messages: 10 };
-        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::Packages, commands: true };
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::Packages, commands: true, local_ports: vec![] };
         let s = c.settings(Path::new("/w"), &reach, &[], false);
         assert_eq!(s["sandbox"]["network"]["allowedDomains"], json!(PACKAGE_HOSTS));
         assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "WebFetch"), "no web tools");

@@ -115,11 +115,9 @@ fn run(args: &[String]) -> Result<(), String> {
             match toml_role::TomlRole::load(Path::new(dir)) {
                 Ok(role) => {
                     println!("✔ {} {} reads: {}", role.manifest.role, role.manifest.version, role.manifest.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
-                    // a field that once limited and now does nothing is said, so no author counts on it
-                    for st in &role.manifest.steps {
-                        if let Some(n) = st.stop.as_ref().and_then(|s| s.rounds) {
-                            println!("! {} sets rounds = {n}, which limits nothing: rounds the person opens have no ceiling, and agents redoing alone stop at the step's attempts", st.name);
-                        }
+                    // what the author should know and is no error: a key that limits nothing, a step that makes every run risky
+                    for note in role.notes() {
+                        println!("! {note}");
                     }
                     let (lines, all) = role.prove();
                     for l in &lines {

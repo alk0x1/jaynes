@@ -39,6 +39,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,7 @@ class Unavailable(Exception):
 class Box:
     writable: tuple[Path, ...]
     hidden: tuple[Path, ...] = ()  # folders it may not read, apart from its writable folders inside them
+    readonly: tuple[Path, ...] = ()  # folders inside its writable folders that it may read and not write
     ports: tuple[int, ...] = ()  # local ports it may connect to
     local: bool = False  # any local port: a test suite's own servers, and whatever else listens; never the internet
     readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
@@ -171,6 +173,8 @@ def profile(box: Box) -> str:
     lines += _chrome_lock()
     if box.writable:
         lines.append(f"(allow file-write* {_subpaths(box.writable)})")
+    if box.readonly:  # after the allow it narrows: of two rules that match, the later one holds
+        lines.append(f"(deny file-write* {_subpaths(box.readonly)})")
     lines.append(f"(deny file-read* {_subpaths(hidden_paths(box))})")
     # the last rule that matches wins: what it may read inside the hidden is read again, but for its hidden folders
     if box.readable:
@@ -438,6 +442,82 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
             code = 124
         text = out.decode(errors="replace")
         return Ran(code, text[-TAIL:], text)
+
+
+# --- a role's own step ------------------------------------------------------------------------------------------
+
+OUTPUT_MOST = 1_000_000  # bytes of the output a step's script may write
+
+
+@dataclass(frozen=True)
+class Stepped:
+    ran: Ran
+    output: str | None  # what the script wrote to the file named in JAYNES_OUTPUT; None when it wrote nothing
+    unread: str = ""  # why what it wrote there was not read
+
+
+def _output(path: Path) -> tuple[str | None, str]:
+    """What a script left at ``path``, read as data: a plain file and never a link, of at most ``OUTPUT_MOST``
+    bytes. The text, or None and why it was not read (empty when there is nothing there)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None, ""
+    except OSError:
+        return None, "what is at JAYNES_OUTPUT is a link or cannot be opened, and the output is a plain file"
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return None, "what is at JAYNES_OUTPUT is not a plain file"
+        data = f.read(OUTPUT_MOST + 1)
+    if len(data) > OUTPUT_MOST:
+        return None, f"the output is larger than {OUTPUT_MOST} bytes"
+    return data.decode(errors="replace"), ""
+
+
+def run_step(command: str, *, project: Path | None, write: bool = False, source: Path | None = None,
+             ports: tuple[int, ...] = (), timeout: float = 600.0, stdin: str | None = None) -> Stepped:
+    """Run a role's own step, the shell ``command``, in the box with the reach its step declares, and read the
+    output it wrote to the file named in ``JAYNES_OUTPUT``. Raises ``Unavailable`` where there is no box.
+
+    ``project`` None: in an empty folder, seeing nothing of the project. A project it only reads: in a throwaway
+    copy, as a check's command runs, so what it writes there is gone. A project it writes: in the run's copy
+    itself, where Jaynes then measures what it changed; the copy's ``.git`` stays out of what it may write, since
+    Jaynes runs git there later, outside any box, and a hook or a setting left in it would run then. (Where the
+    box can only add what may be written and not take a folder out, new entries at the top of the copy are
+    refused instead.) No network, and of this machine's ports only ``ports``: no local port is open unless named.
+    """
+    with tempfile.TemporaryDirectory(prefix="jaynes-step-") as tmp:
+        scratch, out = Path(tmp) / "tmp", Path(tmp) / "out"
+        scratch.mkdir()
+        out.mkdir()
+        readonly: tuple[Path, ...] = ()
+        if project is None:
+            work = Path(tmp) / "empty"
+            work.mkdir()
+        elif write:
+            work = project
+            readonly = (project / ".git",)
+        else:
+            work = Path(tmp) / "project"
+            shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
+            link_dependencies(project, work)
+            if source is not None:
+                link_dependencies(source, work)
+        argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly))
+        env = {**os.environ, **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
+        proc = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            said, _ = proc.communicate(None if stdin is None else stdin.encode(), timeout=timeout)
+            code = proc.returncode
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            said, _ = proc.communicate()
+            said += f"\n(stopped after {timeout:.0f} s)".encode()
+            code = 124
+        text = said.decode(errors="replace")
+        output, unread = _output(out / "output.json")
+        return Stepped(Ran(code, text[-TAIL:], text), output, unread)
 
 
 # What the box refuses that no command needs: macOS's developer tools try to keep a cache outside the box and go on

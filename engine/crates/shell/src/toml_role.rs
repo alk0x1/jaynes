@@ -5,7 +5,8 @@
 //! What is enforced is in `role.toml`; what the agent reads is prose, inline or in a `.md` file. Anything wrong is
 //! refused before a run, with its line: an unknown key, a value outside its closed list, a step that needs one
 //! that does not exist or comes later, a check that is neither on the menu nor a script, a placeholder the step
-//! may not see.
+//! may not see, a script that is not a file of the folder, a step after one that cannot be undone that could fail
+//! or send work back.
 //!
 //! The one place where a key of `role.toml` meets a field of the manifest (`jaynes_core::manifest`):
 //!
@@ -15,17 +16,52 @@
 //! | `target`                   | `target` (only `repository`, the default) |
 //! | `delivery`                 | `delivery`                       |
 //! | `[[step]] name`, `needs`   | `StepDecl::name`, `needs`        |
-//! | `by` = agent/jaynes/person | `executor` = agent/role/person   |
+//! | `by` = agent/jaynes/role/person | `executor` = agent/role/role/person |
 //! | `session`                  | `session`                        |
-//! | `reach`                    | `reach` (project, write, network, commands) |
+//! | `reach`                    | `reach` (project, write, network, commands, local_ports) |
+//! | `effect`, `idempotent`     | `effect` (`irreversible`, with its `idempotent`) |
 //! | `checks`                   | `checks` (name, kind, about, reads) |
 //! | `stop.ask`                 | `StopDecl::about`                |
 //! | `stop` verdicts, holds, from_risk, release, budget, audit_rate | the same names |
 //! | `from_risk`, `attempts`, `fixes`, `hidden`, `about` | the same names |
 //!
 //! The rest is the role's side of the protocol: `instructions` and `output` (the prompt and its schema), `use`
-//! and `with` (a step of Jaynes's own, from the menu), `show` (what the person is shown of an output). A step's
-//! effect is always none: a role in TOML acts on the world only through its delivery.
+//! and `with` (a step of Jaynes's own, from the menu), `script` (a step of the role's own: a file of its folder),
+//! `show` (what the person is shown of an output).
+//!
+//! # Who does a step
+//!
+//! `by` names one of four: an `agent` (the default), `jaynes` (a step from the menu, with `use`), the `role` (a
+//! script of the role's own folder, with `script`), or the `person` (a question over the steps it needs).
+//!
+//! A script is run by Jaynes in its box, with no agent and no model, with the reach its step declares: nothing of
+//! the project, a throwaway copy of it (`project = "read"`), or the run's own copy (`project = "write"`), where
+//! Jaynes measures what it changed as it measures an agent's change. It reaches no network, and of this machine's
+//! ports only those named in `local_ports`. It reads `{"request", "given", "project", "round", "attempt", "key"}` as
+//! JSON on standard input, writes its output as JSON to the file named in `JAYNES_OUTPUT`, in the format `output`
+//! declares, and exits 0 when done, 1 when the step cannot be done (with why, printed), 3 when it could not run. A
+//! script that fails is the role's fault, never an agent's: no attempt is spent and nothing is tried again by
+//! itself; the run stops and calls the person, who continues it. Exit 3 and a box that refuses are the machine's.
+//!
+//! # What a step does to the world
+//!
+//! `effect` answers one question: how what the step did is taken back. A step declares one effect, that it is not:
+//! `effect = "irreversible"`. Left out, the step's work stays in its output and in the run's copy, which Jaynes
+//! throws away or delivers. What a step writes in the copy is never declared: it follows from its reach. An effect
+//! that an operation undoes is not accepted yet, since nothing runs an undo; `undo` is kept for the name of that
+//! operation.
+//!
+//! Whether a repeat is harmless is another question, with its own key: `idempotent = true` says the same act sent
+//! twice with the run's `key` counts once. It is never assumed.
+//!
+//! An effect says nothing of what leaves. A step with network sends requests that no one takes back, whatever its
+//! effect: that is the matter of its reach, not of its effect.
+//!
+//! Only a script of the role declares that it cannot be undone. Such a step starts once every answer it rests on
+//! is the person's (the engine's own rule), and the file is held to an order: its own stop sends nothing back, and
+//! after it come no agent's step, no stop that could send it or an earlier step back, and no other step that
+//! cannot be undone unless its repeat is harmless. A step that cannot be undone and fails says it may have acted,
+//! unless its script exited 1, which is its word that nothing was done.
 
 use crate::protocol::{Body, Call, Given, Reply, Request, ShownItem, MAJOR};
 use jaynes_core::manifest::{
@@ -78,6 +114,8 @@ enum By {
     #[default]
     Agent,
     Jaynes,
+    /// A script of the role's own folder.
+    Role,
     Person,
 }
 
@@ -107,6 +145,14 @@ struct StepFile {
     #[serde(rename = "use")]
     uses: Option<String>,
     with: Option<toml::Table>,
+    /// A step of the role's own: the path of a file of its folder, which Jaynes runs in its box.
+    script: Option<String>,
+    /// How what the step does to the world is taken back: `"irreversible"`, or left out.
+    effect: Option<toml::Value>,
+    /// Whether the same act sent twice with the run's key counts once. Never assumed.
+    idempotent: Option<bool>,
+    /// Kept for the name of the operation that undoes a step's effect; not accepted until something runs it.
+    undo: Option<toml::Value>,
     output: Option<toml::Table>,
     show: Option<ShowFile>,
 }
@@ -120,8 +166,10 @@ struct ReachFile {
     write: Vec<String>,
     #[serde(default)]
     network: Network,
+    commands: Option<bool>,
+    /// The ports of this machine the step may connect to: none unless named.
     #[serde(default)]
-    commands: bool,
+    local_ports: Vec<u16>,
 }
 
 #[derive(Deserialize)]
@@ -386,6 +434,8 @@ pub struct StepExtra {
     pub instructions: String,
     pub schema: Value,
     pub uses: Option<(String, Map<String, Value>)>,
+    /// The script that does the step, by its path in the role's folder, when the step is the role's own.
+    pub script: Option<String>,
     pub checks: BTreeMap<String, CheckImpl>,
     pub show: Option<ShowFile>,
 }
@@ -405,6 +455,42 @@ fn at(line: Option<usize>, file: &str, what: impl std::fmt::Display) -> String {
         Some(n) => format!("{file}:{n}: {what}"),
         None => format!("{file}: {what}"),
     }
+}
+
+/// Whether `path` names a file inside the role's folder `dir`, and not one reached from it through `..`, an
+/// absolute path or a link that leaves it.
+fn in_folder(dir: &Path, path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') || path.split('/').any(|p| p == "..") {
+        return false;
+    }
+    match (std::fs::canonicalize(dir), std::fs::canonicalize(dir.join(path))) {
+        (Ok(folder), Ok(file)) => file.is_file() && file.starts_with(folder),
+        _ => false,
+    }
+}
+
+/// Whether the file at `path` says which program runs it (`#!`) and may not be run: Jaynes runs an executable
+/// script by itself and any other with `sh`, so such a file would be read by the wrong program.
+fn names_a_program_it_may_not_run(path: &Path) -> bool {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    let mut start = [0u8; 2];
+    let says = std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut start)).is_ok() && &start == b"#!";
+    says && std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 == 0)
+}
+
+/// A verdict as the file writes it.
+fn word(v: &VerdictKind) -> String {
+    format!("{v:?}").to_lowercase()
+}
+
+/// The verdicts a stop offers that send work back, by the core's own word for it.
+fn sends_back(stop: Option<&StopDecl>) -> Vec<String> {
+    stop.into_iter()
+        .flat_map(|s| s.verdicts.iter())
+        .filter(|v| v.sends_back())
+        .map(word)
+        .collect()
 }
 
 fn line_of(text: &str, offset: usize) -> usize {
@@ -604,12 +690,16 @@ impl TomlRole {
             let mut errs: Vec<String> = Vec::new();
             let executor = match s.by {
                 By::Agent => Executor::Agent,
-                By::Jaynes => Executor::Role,
+                By::Jaynes | By::Role => Executor::Role,
                 By::Person => Executor::Person,
             };
             // what each kind of step may and must declare
             let mut uses = None;
-            let mut reach = s.reach.as_ref().map(|r| Reach { project: r.project, write: r.write.clone(), network: r.network, commands: r.commands }).unwrap_or_default();
+            let mut reach = s
+                .reach
+                .as_ref()
+                .map(|r| Reach { project: r.project, write: r.write.clone(), network: r.network, commands: r.commands.unwrap_or(false), local_ports: r.local_ports.clone() })
+                .unwrap_or_default();
             match s.by {
                 By::Agent => {
                     if s.instructions.as_deref().is_none_or(|i| i.trim().is_empty()) {
@@ -617,6 +707,12 @@ impl TomlRole {
                     }
                     if s.uses.is_some() || s.with.is_some() {
                         errs.push("is an agent's, so it uses nothing from the menu (use and with are for by = \"jaynes\")".into());
+                    }
+                    if s.script.is_some() {
+                        errs.push("is an agent's, so it runs no script (script is for by = \"role\")".into());
+                    }
+                    if !reach.local_ports.is_empty() {
+                        errs.push("names local ports, which only a script of the role reaches yet (by = \"role\")".into());
                     }
                 }
                 By::Jaynes => {
@@ -626,6 +722,12 @@ impl TomlRole {
                     let goes = s.uses.as_deref().and_then(menu_step).and_then(|m| m.network);
                     if s.reach.is_some() && goes.is_none() {
                         errs.push("is Jaynes's own: its reach is the menu's, not the role's".into());
+                    }
+                    if s.script.is_some() {
+                        errs.push("is Jaynes's own, so it runs no script (script is for by = \"role\")".into());
+                    }
+                    if s.effect.is_some() || s.idempotent.is_some() || s.undo.is_some() {
+                        errs.push("is Jaynes's own: its effect is the menu's, not the role's".into());
                     }
                     match s.uses.as_deref() {
                         None => errs.push(format!("is Jaynes's own and uses nothing: use one of {}", MENU_STEPS.iter().map(|m| m.name).collect::<Vec<_>>().join(", "))),
@@ -651,12 +753,61 @@ impl TomlRole {
                         },
                     }
                 }
+                By::Role => {
+                    if s.instructions.is_some() || s.uses.is_some() || s.with.is_some() {
+                        errs.push("is the role's own script, so it has no instructions, use or with".into());
+                    }
+                    match s.script.as_deref() {
+                        None => errs.push("is the role's own and names no script: script = \"steps/NAME\", a file of the role's folder".into()),
+                        Some(path) if !in_folder(dir, path) => errs.push(format!("names the script {path}, which is not a file in the role's folder")),
+                        Some(path) if names_a_program_it_may_not_run(&dir.join(path)) => {
+                            errs.push(format!("names the script {path}, which starts with #! and is not executable, so it would be run as a shell script: chmod +x {path}"))
+                        }
+                        Some(_) => {}
+                    }
+                    if let Some(r) = &s.reach {
+                        if r.network != Network::None {
+                            errs.push("is a script, and a script reaches no network yet: leave network out".into());
+                        }
+                        if r.commands.is_some() {
+                            errs.push("is a script, which is commands already: leave commands out".into());
+                        }
+                    }
+                    reach.commands = true;
+                }
                 By::Person => {
-                    if s.instructions.is_some() || s.uses.is_some() || s.with.is_some() || s.output.is_some() {
-                        errs.push("is the person's, so it has no instructions, use or output".into());
+                    if s.instructions.is_some() || s.uses.is_some() || s.with.is_some() || s.output.is_some() || s.script.is_some() {
+                        errs.push("is the person's, so it has no instructions, use, script or output".into());
                     }
                 }
             }
+            // what the step does to the world: the one effect a step declares is that it cannot be undone
+            let not_yet = "is not accepted yet: nothing runs an undo, so a role may not promise one";
+            let mut irreversible = false;
+            if s.by != By::Jaynes {
+                match &s.effect {
+                    None => {}
+                    Some(toml::Value::String(e)) => match e.as_str() {
+                        "irreversible" => irreversible = true,
+                        "none" => errs.push("writes effect = \"none\": a step with no effect leaves the key out".into()),
+                        "confined" => errs.push(
+                            "writes effect = \"confined\": what a step changes in the run's copy follows from its reach and is not declared, so leave the key out".into(),
+                        ),
+                        "compensable" | "reversible" | "undoable" => errs.push(format!("declares an effect that an operation undoes ({e}), which {not_yet}")),
+                        other => errs.push(format!("has the effect {other:?}: the one effect a step declares is \"irreversible\"")),
+                    },
+                    Some(toml::Value::Table(t)) if t.contains_key("undo") => errs.push(format!("declares an effect that an operation undoes, which {not_yet}")),
+                    Some(toml::Value::Table(_)) => errs.push("writes its effect as a table: it is one word, effect = \"irreversible\"".into()),
+                    Some(_) => errs.push("writes an effect that is not a word: effect = \"irreversible\", or leave the key out".into()),
+                }
+                if s.undo.is_some() {
+                    errs.push(format!("names an undo, which {not_yet}"));
+                }
+                if s.idempotent.is_some() && s.effect.is_none() {
+                    errs.push("says a repeat of it is harmless (idempotent) and declares no effect: idempotent goes with effect".into());
+                }
+            }
+            let effect = if irreversible { Effect::Irreversible { idempotent: s.idempotent.unwrap_or(false) } } else { Effect::None };
             // instructions and their placeholders
             let mut instructions = String::new();
             if let Some(v) = &s.instructions {
@@ -780,7 +931,7 @@ impl TomlRole {
                         if about.trim().is_empty() {
                             errs.push(format!("the check {script} says nothing of what it holds the output to: give it an about"));
                         }
-                        if script.starts_with('/') || script.split('/').any(|p| p == "..") || !dir.join(script).is_file() {
+                        if !in_folder(dir, script) {
                             errs.push(format!("the check's script {script} is not a file in the role's folder"));
                         }
                         let name = named.unwrap_or_else(|| Path::new(script).file_stem().and_then(|s| s.to_str()).unwrap_or(script).to_string());
@@ -818,14 +969,15 @@ impl TomlRole {
                 audit_rate: Rate(st.audit_rate.unwrap_or(0.1)),
                 about: st.ask.clone(),
             });
-            let default_attempts = if s.by == By::Jaynes { 1 } else { 3 };
+            // a step of Jaynes's or of the role's own is never tried again by itself
+            let default_attempts = if matches!(s.by, By::Jaynes | By::Role) { 1 } else { 3 };
             steps.push(StepDecl {
                 name: s.name.clone(),
                 needs: s.needs.clone(),
                 executor,
                 session: s.session,
                 reach,
-                effect: Effect::None,
+                effect,
                 checks,
                 stop,
                 from_risk: s.from_risk,
@@ -834,7 +986,8 @@ impl TomlRole {
                 hidden: s.hidden, idempotent: false,
                 about: if s.about.is_empty() { s.uses.as_deref().and_then(menu_step).map(|m| m.about.to_string()).unwrap_or_default() } else { s.about.clone() },
             });
-            extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, checks: impls, show: s.show.clone() });
+            let script = s.script.clone().filter(|_| s.by == By::Role);
+            extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, script, checks: impls, show: s.show.clone() });
             errors.extend(errs.into_iter().map(|e| at(Some(line), FILE, format!("step {} {e}", s.name))));
         }
         let manifest = Manifest { role: file.role, version: file.version, protocol: MAJOR, steps, target: file.target, delivery: file.delivery };
@@ -843,6 +996,47 @@ impl TomlRole {
                 // the manifest names the step a rule is broken at: "step NAME ..."
                 let line = e.strip_prefix("step ").and_then(|r| r.split([' ', ':']).next()).and_then(|n| lines.get(n)).copied();
                 errors.push(at(line, FILE, e));
+            }
+        }
+        // What may come after a step that cannot be undone, in the role's order, which every path of a run follows:
+        // only what can surely be repeated. So no agent's step, whose work can fail or be sent back; no other step
+        // that cannot be undone unless its repeat is harmless; and no stop that sends work back to it or before it.
+        let pivot = manifest.steps.iter().position(|s| s.effect.irreversible());
+        for (i, s) in manifest.steps.iter().enumerate() {
+            let line = lines.get(&s.name).copied();
+            let back = sends_back(s.stop.as_ref());
+            if s.effect.irreversible() && !back.is_empty() {
+                errors.push(at(line, FILE, format!("step {} cannot be undone, so its stop sends nothing back: it offers keep and skip, not {}", s.name, back.join(", "))));
+            }
+            let Some(p) = pivot.filter(|&p| i > p) else { continue };
+            let first = &manifest.steps[p].name;
+            if s.executor == Executor::Agent {
+                errors.push(at(line, FILE, format!(
+                    "step {} is an agent's and comes after {first}, which cannot be undone: after it only steps of the role and of the person run, since an agent's work can fail or be sent back",
+                    s.name
+                )));
+            }
+            if matches!(s.effect, Effect::Irreversible { idempotent: false }) {
+                errors.push(at(line, FILE, format!(
+                    "step {} cannot be undone and comes after {first}, which cannot be undone either: a repeat of it must be harmless (idempotent = true)",
+                    s.name
+                )));
+            }
+            // where its stop could send work: a person's step, to any step it shows; another, to the step it names
+            // as the maker of what it reviews, or to itself
+            let could_send: Vec<&String> = match (s.executor, s.stop.as_ref().and_then(|st| st.redo.as_ref())) {
+                (Executor::Person, _) => s.needs.iter().collect(),
+                (_, Some(maker)) => vec![maker],
+                (_, None) => vec![&s.name],
+            };
+            if !back.is_empty()
+                && let Some(sent) = could_send.into_iter().find(|n| manifest.index(n).is_some_and(|j| j <= p))
+            {
+                errors.push(at(line, FILE, format!(
+                    "step {} comes after {first}, which cannot be undone, and its stop could send {sent} back: it offers keep and skip, not {}",
+                    s.name,
+                    back.join(", ")
+                )));
             }
         }
         let mut promises = Vec::new();
@@ -869,6 +1063,27 @@ impl TomlRole {
 }
 
 impl TomlRole {
+    /// What the role's author should know before any run and is no error, a line each.
+    pub fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        for s in &self.manifest.steps {
+            // a field that once limited and now does nothing is said, so no author counts on it
+            if let Some(n) = s.stop.as_ref().and_then(|stop| stop.rounds) {
+                notes.push(format!(
+                    "{} sets rounds = {n}, which limits nothing: rounds the person opens have no ceiling, and agents redoing alone stop at the step's attempts",
+                    s.name
+                ));
+            }
+            if s.effect.irreversible() && s.from_risk == Risk::Low {
+                notes.push(format!(
+                    "{} cannot be undone and is on the short path, so every run of this role starts at high risk and takes every step: from_risk = \"high\" leaves it out of small runs",
+                    s.name
+                ));
+            }
+        }
+        notes
+    }
+
     /// Prove every promise: a line each, ✔ proved or ✘ broken with the path that breaks it, and whether all hold.
     pub fn prove(&self) -> (Vec<String>, bool) {
         let promises: Vec<Promise> = self.promises.iter().map(|(_, p)| p.clone()).collect();
@@ -953,7 +1168,7 @@ use = "find-suite"
 
 [[step]]
 name = "make"
-by = "agent"                 # "agent", "jaynes" (from the menu) or "person" (a question over the steps it needs)
+by = "agent"                 # "agent", "jaynes" (from the menu), "role" (a script of this folder) or "person" (a question over the steps it needs)
 needs = ["runner"]           # the steps whose outputs it sees, earlier ones
 reach = {{ project = "write", write = ["**"], commands = true }}   # project: none, read, write; network: none, web, packages (only package registries)
 about = "Makes the change."
@@ -981,6 +1196,19 @@ stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
 [step.output]                # what the agent writes, field by field: string, number, integer, boolean, array, object
 summary = {{ type = "string", max_length = 400, about = "what changed, in a sentence or two" }}
 files = {{ type = "array", items = "string" }}
+
+# A step can be a script of this folder instead of an agent's work: by = "role", script = "steps/NAME". Jaynes runs
+# it in its box with the step's reach: project and write as above, no network, and of this machine's ports only the
+# ones it names, reach = {{ local_ports = [5432] }}. It reads {{"request", "given", "project", "round", "key"}} as
+# JSON on standard input, writes its output as JSON to the file named in JAYNES_OUTPUT, and exits 0 when done, 1
+# when the step cannot be done (with why, printed), 3 when it could not run. A script that fails stops the run for
+# the person; it is not tried again by itself.
+#
+# A step whose act cannot be taken back says so: effect = "irreversible", and idempotent = true when the same act
+# sent twice with the run's key counts once. Only a script of the role declares it. It starts only once every
+# answer it rests on is the person's; after it come no agent's steps and no stop that sends work back to it or
+# before it. An effect says how an act is taken back, not what leaves: a step with network sends requests that no
+# one takes back, whatever its effect. That is its reach's matter.
 
 # What the role promises about its method, proved over every way a run can go. Three forms:
 #   never = "EVENT", unless = "CONDITION"
@@ -1124,25 +1352,33 @@ impl TomlRole {
             },
             Call::Execute { step, request, round, attempt, given, previous, answers, key, project, source } => match step_of(&step) {
                 Err(b) => b,
-                Ok((_, x)) => match &x.uses {
-                    None => Body::Error { message: format!("{step} is not a step of Jaynes's own") },
-                    Some((uses, with)) => menu(library, &self.dir, json!({
-                        "kind": "step", "use": uses, "with": with,
-                        "call": {"step": step, "request": request, "round": round, "attempt": attempt, "given": given,
-                                 "previous": previous, "answers": answers, "key": key, "project": project, "source": source},
-                    })),
-                },
+                Ok((d, x)) => {
+                    let call = json!({"step": step, "request": request, "round": round, "attempt": attempt, "given": given,
+                                      "previous": previous, "answers": answers, "key": key, "project": project, "source": source});
+                    match (&x.uses, &x.script) {
+                        (Some((uses, with)), _) => menu(library, &self.dir, json!({"kind": "step", "use": uses, "with": with, "reach": reached(d), "call": call})),
+                        // the role's own script, run in the box with what its step may reach
+                        (None, Some(path)) => menu(library, &self.dir, json!({
+                            "kind": "step", "use": "script",
+                            "with": {"path": self.dir.join(path).display().to_string(), "name": path, "project": d.reach.project,
+                                     "local_ports": d.reach.local_ports, "acts": d.effect.irreversible()},
+                            "reach": reached(d),
+                            "call": call,
+                        })),
+                        (None, None) => Body::Error { message: format!("{step} is not a step of Jaynes's own or of the role's") },
+                    }
+                }
             },
             Call::Check { step, check, request, output, given, project, source } => match step_of(&step) {
                 Err(b) => b,
-                Ok((_, x)) => {
+                Ok((d, x)) => {
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
                                       "project": project, "source": source});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
-                        Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
+                        Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "reach": reached(d), "call": call})),
                         Some(CheckImpl::Script { path }) => menu(library, &self.dir, json!({
-                            "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string()}, "call": call,
+                            "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string()}, "reach": reached(d), "call": call,
                         })),
                     }
                 }
@@ -1160,6 +1396,12 @@ impl TomlRole {
             },
         }
     }
+}
+
+/// What the menu is told of a step's reach beside its parameters: the local ports the step names, for what it runs
+/// in the box.
+fn reached(step: &StepDecl) -> Value {
+    json!({"local_ports": step.reach.local_ports})
 }
 
 /// What the person is shown of an output.
@@ -1492,5 +1734,297 @@ with = {{ pages = "read.sources" }}
         assert_eq!(r.extras["change"].show.as_ref().and_then(|s| s.picture.clone()).as_deref(), Some("{{page}}"));
         let e = errors("show-bad", &text.replace("picture =", "photo ="));
         assert!(e.contains("photo"), "{e}");
+    }
+
+    // --- a step that is a script of the role, and what a step does to the world --------------------------------
+
+    /// The roles written before a step could be a script or declare an effect, as this repository keeps them for
+    /// its tests, each with the fingerprint of the manifest it read into then. A stop's earned record is kept under
+    /// a key made from the manifest, so a role that reads into another manifest loses what its stops earned.
+    const BEFORE: &[(&str, &str)] = &[
+        ("small-change", "f9584e45bb1763dce2c9e6f9f8a7c1c799e905bfaf016b2102f0e18ba28d71d6"),
+        ("fix-bug", "22cd365ec135f0126115afe25d59e53394d6e263ee7bcaf98f5170a3615c6912"),
+        ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
+    ];
+
+    /// A role with no agent: each step is a script of the role's own folder. The first only reads the project, the
+    /// second writes the run's copy, the third does what cannot be undone.
+    const SCRIPTED: &str = r#"
+role = "scripted"
+version = "1.0.0"
+
+[[step]]
+name = "survey"
+by = "role"
+script = "steps/survey.sh"
+reach = { project = "read" }
+about = "Reads the project."
+
+[step.output]
+files = "integer"
+
+[[step]]
+name = "stamp"
+by = "role"
+script = "steps/stamp.sh"
+needs = ["survey"]
+reach = { project = "write", write = ["STAMP"] }
+
+[step.output]
+stamped = "string"
+
+[[step]]
+name = "announce"
+by = "role"
+script = "steps/announce.sh"
+needs = ["stamp"]
+reach = { local_ports = [8125] }
+effect = "irreversible"
+idempotent = true
+
+[step.output]
+id = "string"
+"#;
+
+    /// The folder of a role whose steps are scripts: `role.toml` and each script it may name, empty.
+    fn scripted(name: &str, text: &str) -> PathBuf {
+        let dir = role(name, text);
+        std::fs::create_dir_all(dir.join("steps")).expect("dir");
+        for script in ["survey.sh", "stamp.sh", "announce.sh", "notify.sh"] {
+            std::fs::write(dir.join("steps").join(script), "").expect("write");
+        }
+        dir
+    }
+
+    fn reads(name: &str, text: &str) -> TomlRole {
+        TomlRole::load(&scripted(name, text)).unwrap_or_else(|e| panic!("{name} does not read:\n{}", e.join("\n")))
+    }
+
+    fn scripted_errors(name: &str, text: &str) -> String {
+        match TomlRole::load(&scripted(name, text)) {
+            Ok(_) => panic!("{name} read, and should not have"),
+            Err(e) => e.join("\n"),
+        }
+    }
+
+    #[test]
+    fn a_step_by_the_role_is_a_script_of_its_folder_and_no_agent_s() {
+        let r = reads("scripted", SCRIPTED);
+        let m = &r.manifest;
+        assert_eq!(m.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["survey", "stamp", "announce"]);
+        for s in &m.steps {
+            assert_eq!(s.executor, Executor::Role, "{} is the role's own", s.name);
+            assert_eq!(s.attempts, 1, "{}: a script is not tried again by itself", s.name);
+            assert!(s.reach.commands, "{}: a script is commands", s.name);
+            assert_eq!(s.reach.network, Network::None, "{}: a script reaches no network", s.name);
+        }
+        assert_eq!((m.steps[0].reach.project, m.steps[0].about.as_str()), (ProjectAccess::Read, "Reads the project."));
+        assert_eq!((m.steps[1].reach.project, m.steps[1].reach.write.clone()), (ProjectAccess::Write, vec!["STAMP".to_string()]), "the role says what its script may reach");
+        assert_eq!((m.steps[2].reach.project, m.steps[2].reach.local_ports.clone()), (ProjectAccess::None, vec![8125]), "a local port is reached only when the step names it");
+        assert!(m.steps[0].reach.local_ports.is_empty() && m.steps[1].reach.local_ports.is_empty());
+        // the output is declared as an agent's is, so a check can hold it to its schema and a later step can name its fields
+        assert_eq!(r.extras["survey"].schema["properties"]["files"]["type"], "integer");
+        assert_eq!(r.extras["survey"].schema["required"], json!(["files"]));
+    }
+
+    #[test]
+    fn a_step_says_when_it_cannot_be_undone_and_whether_a_repeat_is_harmless() {
+        let r = reads("effects", SCRIPTED);
+        let effect = |name: &str| r.manifest.steps.iter().find(|s| s.name == name).map(|s| s.effect.clone());
+        assert_eq!(effect("survey"), Some(Effect::None), "a step that declares no effect has none");
+        assert_eq!(effect("stamp"), Some(Effect::None), "what a step writes in the run's copy is its reach's matter, and no effect it declares");
+        assert_eq!(effect("announce"), Some(Effect::Irreversible { idempotent: true }));
+        // whether a repeat is harmless is said, and is never assumed
+        let r = reads("effects-unsaid", &SCRIPTED.replace("idempotent = true\n", ""));
+        assert_eq!(r.manifest.steps[2].effect, Effect::Irreversible { idempotent: false });
+        let r = reads("effects-said", &SCRIPTED.replace("idempotent = true\n", "idempotent = false\n"));
+        assert_eq!(r.manifest.steps[2].effect, Effect::Irreversible { idempotent: false });
+    }
+
+    #[test]
+    fn a_script_step_that_is_not_well_formed_is_refused_at_its_line() {
+        for (name, from, to, says) in [
+            ("script-none", "script = \"steps/survey.sh\"\n", "", "role.toml:5: step survey is the role's own and names no script: script = \"steps/NAME\", a file of the role's folder"),
+            ("script-outside", "steps/survey.sh", "../survey.sh", "role.toml:5: step survey names the script ../survey.sh, which is not a file in the role's folder"),
+            ("script-absolute", "steps/survey.sh", "/bin/sh", "role.toml:5: step survey names the script /bin/sh, which is not a file in the role's folder"),
+            ("script-missing", "steps/survey.sh", "steps/nope.sh", "role.toml:5: step survey names the script steps/nope.sh, which is not a file in the role's folder"),
+            ("script-instructions", "about = \"Reads the project.\"", "instructions = \"Read it.\"", "role.toml:5: step survey is the role's own script, so it has no instructions, use or with"),
+            ("script-use", "about = \"Reads the project.\"", "use = \"find-suite\"", "role.toml:5: step survey is the role's own script, so it has no instructions, use or with"),
+            ("script-network", "reach = { project = \"read\" }", "reach = { project = \"read\", network = \"packages\" }", "role.toml:5: step survey is a script, and a script reaches no network yet: leave network out"),
+            ("script-commands", "reach = { project = \"read\" }", "reach = { project = \"read\", commands = true }", "role.toml:5: step survey is a script, which is commands already: leave commands out"),
+            ("script-session", "about = \"Reads the project.\"", "session = \"continue\"", "role.toml:5: step survey goes on in a session and is not an agent's"),
+            ("script-hidden", "about = \"Reads the project.\"", "hidden = true", "role.toml:5: step survey is hidden and is not an agent's"),
+            ("script-port", "local_ports = [8125]", "local_ports = [0]", "role.toml:25: step announce names the local port 0, which is no port"),
+        ] {
+            let e = scripted_errors(name, &SCRIPTED.replacen(from, to, 1));
+            assert!(e.contains(says), "{name}:\n{e}");
+        }
+        // a script that says which program runs it is run by that program, so it must be executable
+        let dir = scripted("script-program", SCRIPTED);
+        std::fs::write(dir.join("steps/survey.sh"), "#!/usr/bin/env python3\nprint('hi')\n").expect("write");
+        let e = TomlRole::load(&dir).expect_err("not executable").join("\n");
+        assert!(e.contains("role.toml:5: step survey names the script steps/survey.sh, which starts with #! and is not executable, so it would be run as a shell script: chmod +x steps/survey.sh"), "{e}");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.join("steps/survey.sh"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        TomlRole::load(&dir).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        // a script is the role's own step's, and no other's
+        let agent = GOOD.replacen("needs = [\"runner\"]", "needs = [\"runner\"]\nscript = \"steps/survey.sh\"", 1);
+        let e = scripted_errors("script-agent", &agent);
+        assert!(e.contains("role.toml:10: step change is an agent's, so it runs no script (script is for by = \"role\")"), "{e}");
+        let menu = GOOD.replacen("use = \"find-suite\"", "use = \"find-suite\"\nscript = \"steps/survey.sh\"", 1);
+        let e = scripted_errors("script-menu", &menu);
+        assert!(e.contains("role.toml:5: step runner is Jaynes's own, so it runs no script (script is for by = \"role\")"), "{e}");
+        // a local port is named by a script of the role, and by no other step yet
+        let port = GOOD.replacen("commands = true }", "commands = true, local_ports = [5432] }", 1);
+        let e = errors("port-agent", &port);
+        assert!(e.contains("role.toml:10: step change names local ports, which only a script of the role reaches yet (by = \"role\")"), "{e}");
+    }
+
+    #[test]
+    fn the_one_effect_a_step_declares_is_that_it_cannot_be_undone() {
+        let said = "effect = \"irreversible\"";
+        for (name, to, says) in [
+            ("effect-none", "effect = \"none\"", "role.toml:25: step announce writes effect = \"none\": a step with no effect leaves the key out"),
+            ("effect-confined", "effect = \"confined\"", "role.toml:25: step announce writes effect = \"confined\": what a step changes in the run's copy follows from its reach and is not declared, so leave the key out"),
+            ("effect-other", "effect = \"permanent\"", "role.toml:25: step announce has the effect \"permanent\": the one effect a step declares is \"irreversible\""),
+            ("effect-table", "effect = { kind = \"irreversible\" }", "role.toml:25: step announce writes its effect as a table: it is one word, effect = \"irreversible\""),
+        ] {
+            let e = scripted_errors(name, &SCRIPTED.replacen(said, to, 1));
+            assert!(e.contains(says), "{name}:\n{e}");
+        }
+        // idempotent is true or false, and goes with an effect that could repeat
+        let e = scripted_errors("idempotent-text", &SCRIPTED.replacen("idempotent = true", "idempotent = \"yes\"", 1));
+        assert!(e.contains("role.toml:32:") && e.contains("boolean"), "{e}");
+        let e = scripted_errors("idempotent-alone", &SCRIPTED.replacen("reach = { project = \"write\", write = [\"STAMP\"] }", "reach = { project = \"write\", write = [\"STAMP\"] }\nidempotent = true", 1));
+        assert!(e.contains("role.toml:15: step stamp says a repeat of it is harmless (idempotent) and declares no effect: idempotent goes with effect"), "{e}");
+    }
+
+    #[test]
+    fn what_cannot_be_undone_is_only_a_script_of_the_role_s() {
+        // the core's rule for every role, said at the line of a role in a file
+        let agent = GOOD.replacen("needs = [\"runner\"]", "needs = [\"runner\"]\neffect = \"irreversible\"", 1);
+        let e = errors("irreversible-agent", &agent);
+        assert!(e.contains("role.toml:10: step change gives an agent an effect that cannot be undone; only the role does that"), "{e}");
+        // a step of the menu has the menu's effect, as it has the menu's reach
+        let menu = GOOD.replacen("use = \"find-suite\"", "use = \"find-suite\"\neffect = \"irreversible\"", 1);
+        let e = errors("irreversible-menu", &menu);
+        assert!(e.contains("role.toml:5: step runner is Jaynes's own: its effect is the menu's, not the role's"), "{e}");
+        // the person's step declares none
+        let person = format!("{SCRIPTED}\n[[step]]\nname = \"approve\"\nby = \"person\"\nneeds = [\"announce\"]\nstop = {{ ask = \"Good?\", verdicts = [\"keep\"] }}\neffect = \"irreversible\"\n");
+        let e = scripted_errors("effect-person", &person);
+        assert!(e.contains("step approve is the person's and declares checks, an effect or a reach"), "{e}");
+    }
+
+    #[test]
+    fn an_effect_that_an_operation_undoes_is_not_accepted_until_something_runs_the_undo() {
+        // The key is designed and not wired: a role may not promise an undo that nothing would run.
+        let said = "effect = \"irreversible\"\nidempotent = true";
+        for (name, to) in [
+            ("undo-compensable", "effect = \"compensable\"\nundo = \"withdraw\""),
+            ("undo-reversible", "effect = \"reversible\""),
+            ("undo-alone", "undo = \"withdraw\""),
+            ("undo-table", "effect = { undo = \"withdraw\" }"),
+        ] {
+            let e = scripted_errors(name, &SCRIPTED.replacen(said, to, 1));
+            assert!(e.contains("role.toml:25: step announce") && e.contains("is not accepted yet: nothing runs an undo"), "{name}:\n{e}");
+        }
+    }
+
+    /// Steps that follow `announce` in the scripted role, for what may come after a step that cannot be undone.
+    fn after_announce(name: &str, more: &str) -> Result<TomlRole, String> {
+        TomlRole::load(&scripted(name, &format!("{SCRIPTED}\n{more}"))).map_err(|e| e.join("\n"))
+    }
+
+    const NOTIFY: &str = "[[step]]\nname = \"notify\"\nby = \"role\"\nscript = \"steps/notify.sh\"\nneeds = [\"announce\"]\neffect = \"irreversible\"\n";
+    const POLISH: &str = "[[step]]\nname = \"polish\"\nneeds = [\"announce\"]\ninstructions = \"Polish {{announce}}.\"\n";
+
+    #[test]
+    fn after_what_cannot_be_undone_only_what_can_surely_be_repeated_runs() {
+        // SCRIPTED ends at line 35 and a blank line follows, so a step added after it starts on line 37
+        // no agent's step: its work can fail, or be sent back
+        let e = after_announce("after-agent", POLISH).expect_err("an agent's step after it is refused");
+        assert!(e.contains("role.toml:37: step polish is an agent's and comes after announce, which cannot be undone: after it only steps of the role and of the person run"), "{e}");
+        // nor one left out of the short path: the full path takes it after announce all the same
+        let e = after_announce("after-agent-high", &format!("{POLISH}from_risk = \"high\"\n")).expect_err("on the full path too");
+        assert!(e.contains("role.toml:37: step polish is an agent's and comes after announce"), "{e}");
+        // another step that cannot be undone runs after it only when its repeat is harmless
+        let e = after_announce("after-act", NOTIFY).expect_err("a second act that may not repeat is refused");
+        assert!(e.contains("role.toml:37: step notify cannot be undone and comes after announce, which cannot be undone either: a repeat of it must be harmless (idempotent = true)"), "{e}");
+        let r = after_announce("after-act-idempotent", &format!("{NOTIFY}idempotent = true\n")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.manifest.steps[3].effect, Effect::Irreversible { idempotent: true });
+        // so of the steps that cannot be undone, at most the first may be one whose repeat does harm
+        let first_safe = SCRIPTED.to_string();
+        let e = TomlRole::load(&scripted("after-act-second", &format!("{first_safe}\n{NOTIFY}"))).expect_err("the second must be harmless to repeat").join("\n");
+        assert!(e.contains("step notify cannot be undone and comes after announce"), "{e}");
+        // a script that changes nothing real may follow
+        let plain = "[[step]]\nname = \"note\"\nby = \"role\"\nscript = \"steps/notify.sh\"\nneeds = [\"announce\"]\n";
+        after_announce("after-plain", plain).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    #[test]
+    fn no_stop_sends_work_back_to_what_cannot_be_undone_or_to_before_it() {
+        // Its own stop offers nothing that sends it back: every verdict the core counts as sending back is refused,
+        // and every other is offered. The list is whole by construction: a verdict added to the core does not
+        // compile here until it is listed, and then it is held to the rule by the core's own word.
+        let every = [VerdictKind::Keep, VerdictKind::Change, VerdictKind::Redo, VerdictKind::Drop, VerdictKind::Skip];
+        for v in every {
+            match v {
+                VerdictKind::Keep | VerdictKind::Change | VerdictKind::Redo | VerdictKind::Drop | VerdictKind::Skip => {}
+            }
+            let stop = format!("effect = \"irreversible\"\nstop = {{ ask = \"Was it announced?\", verdicts = [\"{}\"] }}", word(&v));
+            let read = TomlRole::load(&scripted(&format!("stop-own-{}", word(&v)), &SCRIPTED.replacen("effect = \"irreversible\"", &stop, 1)));
+            if v.sends_back() {
+                let e = read.expect_err("a verdict that sends back is refused at the stop of what cannot be undone").join("\n");
+                assert!(e.contains(&format!("role.toml:25: step announce cannot be undone, so its stop sends nothing back: it offers keep and skip, not {}", word(&v))), "{v:?}:\n{e}");
+            } else {
+                read.unwrap_or_else(|e| panic!("{v:?} sends nothing back, and is offered:\n{}", e.join("\n")));
+            }
+        }
+        assert_eq!(every.iter().filter(|v| v.sends_back()).map(word).collect::<Vec<_>>(), ["change", "redo", "drop"], "what sends back today");
+        // a step of the person's after it may accept what was done, and may not send it or what came before it back
+        let approve = |verdicts: &str, needs: &str| format!("[[step]]\nname = \"approve\"\nby = \"person\"\nneeds = [{needs}]\nstop = {{ ask = \"Good?\", verdicts = [{verdicts}] }}\n");
+        after_announce("person-keeps", &approve("\"keep\"", "\"announce\"")).unwrap_or_else(|e| panic!("{e}"));
+        let e = after_announce("person-redoes", &approve("\"keep\", \"redo\"", "\"announce\"")).expect_err("it may not send announce back");
+        assert!(e.contains("role.toml:37: step approve comes after announce, which cannot be undone, and its stop could send announce back: it offers keep and skip, not redo"), "{e}");
+        let e = after_announce("person-redoes-before", &approve("\"keep\", \"change\"", "\"stamp\"")).expect_err("nor what came before it");
+        assert!(e.contains("role.toml:37: step approve comes after announce, which cannot be undone, and its stop could send stamp back"), "{e}");
+        // before it, a stop sends back as any other does: nothing has acted yet
+        let before = SCRIPTED.replacen("reach = { project = \"write\", write = [\"STAMP\"] }", "reach = { project = \"write\", write = [\"STAMP\"] }\nstop = { ask = \"Stamp it so?\", verdicts = [\"keep\", \"redo\"] }", 1);
+        reads("stop-before", &before);
+    }
+
+    #[test]
+    fn a_role_says_what_its_author_should_know_before_any_run() {
+        // every run of a role whose short path cannot be undone starts at high risk, and takes the full path
+        let notes = reads("notes", SCRIPTED).notes();
+        assert!(notes.iter().any(|n| n.contains("announce cannot be undone") && n.contains("high risk")), "{notes:?}");
+        let late = reads("notes-late", &SCRIPTED.replacen("effect = \"irreversible\"", "effect = \"irreversible\"\nfrom_risk = \"high\"", 1)).notes();
+        assert!(late.is_empty(), "left out of the short path, it raises no run by itself: {late:?}");
+        assert!(TomlRole::load(&role("notes-good", GOOD)).expect("reads").notes().is_empty());
+    }
+
+    #[test]
+    fn a_new_role_s_comments_say_how_a_step_is_a_script_and_what_it_declares() {
+        let text = template("tidy");
+        for said in ["by = \"role\"", "script = \"steps/", "JAYNES_OUTPUT", "effect = \"irreversible\"", "idempotent", "local_ports"] {
+            assert!(text.contains(said), "the template does not show {said}");
+        }
+    }
+
+    #[test]
+    fn a_role_written_before_reads_into_the_same_manifest() {
+        let mut other = Vec::new();
+        for (name, was) in BEFORE {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles").join(name);
+            let r = TomlRole::load(&dir).unwrap_or_else(|e| panic!("{name} no longer reads:\n{}", e.join("\n")));
+            let now = jaynes_core::Digest::of_json(&r.manifest).0;
+            if now != *was {
+                other.push(format!("{name}: {now}"));
+            }
+            assert!(r.manifest.steps.iter().all(|s| s.effect == Effect::None), "{name}: a step that declares no effect has none");
+        }
+        assert!(other.is_empty(), "these read into another manifest than before: {other:?}");
     }
 }
