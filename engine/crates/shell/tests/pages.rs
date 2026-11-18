@@ -33,6 +33,7 @@ by = "jaynes"
 use = "fetch-pages"
 needs = ["read"]
 with = { pages = "read.sources" }
+reach = { network = "web" }
 
 [[step]]
 name = "note"

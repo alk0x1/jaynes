@@ -215,6 +215,9 @@ struct MenuStep {
     params: &'static [(&'static str, Param, bool)],
     /// The fields of its output, for placeholders.
     fields: &'static [&'static str],
+    /// Where on the network the step goes, which the role must declare in its reach, since what it reaches there
+    /// is chosen by an agent: None for a step that goes nowhere, and takes no reach from the role.
+    network: Option<Network>,
 }
 
 struct MenuCheck {
@@ -236,6 +239,7 @@ const MENU_STEPS: &[MenuStep] = &[
         reach: read_project,
         params: &[("required", Param::YesNo, false)],
         fields: &["kind", "suite", "each", "found"],
+        network: None,
     },
     MenuStep {
         name: "refuse-when-false",
@@ -243,6 +247,7 @@ const MENU_STEPS: &[MenuStep] = &[
         reach: Reach::default,
         params: &[("field", Param::StepField, true), ("says", Param::Text, true)],
         fields: &[],
+        network: None,
     },
     MenuStep {
         name: "fetch-pages",
@@ -250,6 +255,7 @@ const MENU_STEPS: &[MenuStep] = &[
         reach: Reach::default,
         params: &[("pages", Param::StepField, true)],
         fields: &["pages", "any_read", "unread"],
+        network: Some(Network::Web),
     },
 ];
 
@@ -340,6 +346,14 @@ const MENU_CHECKS: &[MenuCheck] = &[
         about: |t| format!("every quote in {} is, word for word, in the text Jaynes downloaded from its page in {}", text(t, "field"), text(t, "pages")),
     },
 ];
+
+fn network_name(n: Network) -> &'static str {
+    match n {
+        Network::None => "none",
+        Network::Web => "web",
+        Network::Packages => "packages",
+    }
+}
 
 fn menu_step(name: &str) -> Option<&'static MenuStep> {
     MENU_STEPS.iter().find(|m| m.name == name)
@@ -601,7 +615,8 @@ impl TomlRole {
                     if s.instructions.is_some() || s.output.is_some() {
                         errs.push("is Jaynes's own, so it has no instructions or output of its own".into());
                     }
-                    if s.reach.is_some() {
+                    let goes = s.uses.as_deref().and_then(menu_step).and_then(|m| m.network);
+                    if s.reach.is_some() && goes.is_none() {
                         errs.push("is Jaynes's own: its reach is the menu's, not the role's".into());
                     }
                     match s.uses.as_deref() {
@@ -609,7 +624,19 @@ impl TomlRole {
                         Some(u) => match menu_step(u) {
                             None => errs.push(format!("uses {u}, which is not a step on the menu ({})", MENU_STEPS.iter().map(|m| m.name).collect::<Vec<_>>().join(", "))),
                             Some(m) => {
+                                let declared = s.reach.as_ref();
                                 reach = (m.reach)();
+                                if let Some(net) = m.network {
+                                    match declared {
+                                        None => errs.push(format!("uses {u}, which downloads addresses an agent chose: declare where it may go, reach = {{ network = \"{}\" }}", network_name(net))),
+                                        Some(r) if r.project != ProjectAccess::default() || !r.write.is_empty() || r.commands => {
+                                            errs.push(format!("{u} may only be given network in its reach: it reads and writes nothing of the project, and runs no command"))
+                                        }
+                                        Some(r) if r.network == Network::None => errs.push(format!("uses {u}, which downloads addresses an agent chose: declare where it may go, reach = {{ network = \"{}\" }}", network_name(net))),
+                                        Some(r) if r.network != net => errs.push(format!("{u} goes to the {}, so its network is {}", network_name(net), network_name(net))),
+                                        Some(r) => reach.network = r.network,
+                                    }
+                                }
                                 let with = params(s.with.as_ref().unwrap_or(&toml::Table::new()), m.params, &s.needs, u, &mut errs);
                                 uses = Some((u.to_string(), with));
                             }
@@ -1237,6 +1264,49 @@ stop = { ask = "Keep it?", verdicts = ["keep", "redo"], from_risk = "high", rele
 summary = { type = "string", about = "what changed" }
 files = { type = "array", items = "string" }
 "#;
+
+    /// A role whose fetch step, a step of Jaynes's own that downloads addresses an agent chose, reaches as given.
+    fn fetching(reach: &str) -> String {
+        format!(r#"
+role = "cites"
+version = "1.0.0"
+
+[[step]]
+name = "read"
+reach = {{ project = "none", network = "web" }}
+instructions = "Find sources for {{{{request}}}}."
+
+[step.output]
+sources = {{ type = "array", items = "string" }}
+
+[[step]]
+name = "fetch"
+by = "jaynes"
+use = "fetch-pages"
+needs = ["read"]
+with = {{ pages = "read.sources" }}
+{reach}
+"#)
+    }
+
+    #[test]
+    fn a_menu_step_that_goes_to_the_network_declares_where_and_says_so_in_the_manifest() {
+        let r = TomlRole::load(&role("fetch-web", &fetching(r#"reach = { network = "web" }"#))).expect("reads");
+        let fetch = &r.manifest.steps[1];
+        assert_eq!((fetch.executor, fetch.reach.network, fetch.reach.project), (Executor::Role, Network::Web, ProjectAccess::None));
+        for (name, reach, says) in [
+            ("fetch-silent", "", "fetch uses fetch-pages, which downloads addresses an agent chose: declare where it may go, reach = { network = \"web\" }"),
+            ("fetch-none", r#"reach = { network = "none" }"#, "declare where it may go"),
+            ("fetch-packages", r#"reach = { network = "packages" }"#, "fetch-pages goes to the web, so its network is web"),
+            ("fetch-more", r#"reach = { network = "web", project = "read" }"#, "fetch-pages may only be given network in its reach"),
+        ] {
+            let e = errors(name, &fetching(reach));
+            assert!(e.contains("role.toml:13: step fetch ") && e.contains(says), "{name}: {e}");
+        }
+        // a step of the menu that does not go to the network still takes no reach from the role
+        let e = errors("suite-reach", &GOOD.replace("use = \"find-suite\"", "use = \"find-suite\"\nreach = { network = \"web\" }"));
+        assert!(e.contains("its reach is the menu's, not the role's"), "{e}");
+    }
 
     #[test]
     fn a_role_in_toml_reads_into_the_manifest() {
