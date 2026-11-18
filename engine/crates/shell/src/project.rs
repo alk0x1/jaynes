@@ -52,7 +52,54 @@ fn git_on(git_dir: &Path, work: &Path, args: &[&str]) -> Result<String, String> 
     let mut c = git_command();
     c.arg("--git-dir").arg(git_dir).arg("--work-tree").arg(work);
     c.args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]);
+    // nor the person's own configuration, nor the system's: a filter they set up (git-lfs) would run on the agent's
+    // files, out of any box, and reach what the agent's attributes point it at
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
     run(c, args)
+}
+
+/// What a step changed between two of the copy's states, as git shows it, through the engine's repository.
+pub fn diff(copy: &Path, from: &str, to: &str) -> Option<String> {
+    git_on(&git_dir(copy), copy, &["diff", "--no-color", "--no-ext-diff", "--no-textconv", from, to]).ok().map(|d| d + "\n")
+}
+
+/// Every .git, folder or file, below the copy's top that an agent left: a repository nested in the copy would have the
+/// engine's git run its configuration and hooks, so the change that holds one is refused. Links are not followed.
+fn nested_git(dir: &Path) -> Vec<String> {
+    fn walk(root: &Path, at: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(at) else { return };
+        for e in entries.flatten() {
+            let path = e.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            let rel = path.strip_prefix(root).map(|r| r.display().to_string()).unwrap_or_default();
+            if e.file_name() == ".git" {
+                if at != root {
+                    out.push(rel);
+                }
+                continue;
+            }
+            if meta.is_dir() && rel != EXCHANGE {
+                walk(root, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// What the person is told before a run starts on their repository: what of it the copy does not hold.
+pub fn warnings(source: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let attributes = std::fs::read_to_string(source.join(".gitattributes")).unwrap_or_default();
+    if attributes.lines().any(|l| l.split_whitespace().skip(1).any(|a| a == "filter=lfs")) {
+        out.push("the project keeps files in git-lfs: the run's copy holds their pointers, not their content, so a step or a check that needs them fails".to_string());
+    }
+    if source.join(".gitmodules").is_file() {
+        out.push("the project has submodules: the run's copy comes without their content, so a step or a check that needs them fails".to_string());
+    }
+    out
 }
 
 /// The engine's own repository for the copy in `copy`, beside it in the run's folder, out of every agent's reach.
@@ -246,6 +293,17 @@ impl Copy {
     /// Stage what an attempt changed and say what it changed, with the fingerprint of the whole tree. Paths
     /// `write` does not let through are refused: the copy goes back to where it was, and the paths come back.
     pub fn stage(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
+        // before git looks at the tree: a repository nested in it is refused, and removed with the rest of the attempt
+        let nested = nested_git(&self.dir);
+        if !nested.is_empty() {
+            for n in &nested {
+                let p = self.dir.join(n);
+                let gone = if std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+                gone.map_err(|e| Err(format!("Jaynes could not remove the repository {n} nested in the copy: {e}")))?;
+            }
+            self.discard().map_err(Err)?;
+            return Err(Ok(nested.iter().map(|n| format!("{n} (a repository nested in the copy: a run creates or changes no submodule)")).collect()));
+        }
         self.g(&["add", "-A"]).map_err(Err)?;
         let stat = self.g(&["diff", "--cached", "--numstat", "--no-renames"]).map_err(Err)?;
         let mut changed = Vec::new();
@@ -490,6 +548,33 @@ mod git_tests {
         assert_eq!(git(&dir, &["status", "--porcelain"]).expect("status"), "");
         let copy = Copy { source: source.clone(), dir: dir.clone(), git: git_dir(&dir), branch: "jaynes/r".into() };
         deliver_merge_undo(&copy);
+    }
+
+    #[test]
+    fn the_person_is_told_what_of_their_project_the_copy_does_not_hold() {
+        let base = std::env::temp_dir().join(format!("jaynes-git-warn-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("dir");
+        assert!(warnings(&base).is_empty());
+        std::fs::write(base.join(".gitattributes"), "*.txt text\n*.bin filter=lfs diff=lfs merge=lfs -text\n").expect("write");
+        std::fs::write(base.join(".gitmodules"), "[submodule \"lib\"]\n\tpath = lib\n").expect("write");
+        let w = warnings(&base);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[0].contains("git-lfs") && w[1].contains("submodules"), "{w:?}");
+    }
+
+    #[test]
+    fn no_git_of_the_engine_runs_on_a_copy_but_through_its_own_repository() {
+        // only project.rs runs git on a run's copy; install.rs and index.rs clone roles and indexes, never a copy
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for e in std::fs::read_dir(&src).expect("src").flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if ["project.rs", "install.rs", "index.rs"].contains(&name.as_str()) {
+                continue;
+            }
+            let text = std::fs::read_to_string(e.path()).expect("read");
+            assert!(!text.contains("Command::new(\"git\")"), "{name} runs git itself: it goes through project.rs");
+        }
     }
 
     #[test]

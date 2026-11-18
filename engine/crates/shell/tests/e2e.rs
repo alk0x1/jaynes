@@ -1763,3 +1763,97 @@ fn an_output_that_is_a_link_out_of_the_copy_is_not_read() {
     let (_, log) = engine(&s, &["log", "link"]);
     assert!(!log.contains("a secret of the account"), "the record holds what the link pointed at");
 }
+
+/// A marker program: it writes its name in `marks` and passes its input through, as a filter would.
+fn marker(marks: &Path, name: &str) -> PathBuf {
+    std::fs::create_dir_all(marks).expect("marks");
+    let p = marks.join(format!("run-{name}.sh"));
+    std::fs::write(&p, format!("#!/bin/sh\ntouch {}/ran-{name}\ncat\n", marks.display())).expect("write");
+    std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
+    p
+}
+
+fn ran(marks: &Path) -> Vec<String> {
+    std::fs::read_dir(marks).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("ran-")).collect()).unwrap_or_default()
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_repository_an_agent_nests_in_the_copy_is_refused_and_nothing_of_it_runs() {
+    let s = scratch("git-nested");
+    let marks = s.home.parent().expect("base").join("marks");
+    let (fsmon, clean) = (marker(&marks, "fsmonitor"), marker(&marks, "clean"));
+    let hook = marker(&marks, "post-index-change");
+    let agent = format!(
+        // the agent makes the nested repository first and sets up what runs after, so nothing it runs itself leaves a mark
+        "perl -pi -e 's/hello/hi/' greeting.txt && mkdir -p sub && cd sub && git init -q && echo x > f.txt && printf 'f.txt filter=mine\\n' > .gitattributes && \
+         git add -A && git -c user.name=a -c user.email=a@a commit -q -m nested && git config core.fsmonitor {fsmon} && \
+         git config filter.mine.clean {clean} && cp {hook} .git/hooks/post-index-change && echo y > f.txt && cd .. && {OUTPUT}",
+        fsmon = fsmon.display(), clean = clean.display(), hook = hook.display()
+    );
+    let out = start(&s, "nested", &agent);
+    assert!(out.contains("sub/.git"), "the nested repository is not named as refused: {out}");
+    assert!(ran(&marks).is_empty(), "the engine's git ran what the nested repository set up: {:?}", ran(&marks));
+    let e = events(&s, "nested");
+    assert!(!e.iter().any(|e| e["type"] == "StepDone" && e["step"] == "change"), "a change with a nested repository was taken");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_engine_s_git_reads_none_of_the_person_s_own_configuration_on_the_copy() {
+    let s = scratch("git-global");
+    let marks = s.home.parent().expect("base").join("marks");
+    // the person's own configuration defines a filter, as git-lfs does; the agent's attributes call it on every file
+    let home = s.home.parent().expect("base").join("person-home");
+    std::fs::create_dir_all(&home).expect("home");
+    let clean = marker(&marks, "global-clean");
+    std::fs::write(home.join(".gitconfig"), format!("[filter \"x\"]\n\tclean = {}\n\tsmudge = {}\n", clean.display(), clean.display())).expect("config");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf '* filter=x\\n' > .gitattributes && {OUTPUT}");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let out = Command::new(BIN)
+        .args(["start", "--run", "global", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("HOME", &home)
+        .output()
+        .expect("engine");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(said.contains("delivered"), "{said}");
+    assert!(ran(&marks).is_empty(), "the engine's git ran a filter of the person's own configuration on the agent's files: {:?}", ran(&marks));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_git_file_pointing_elsewhere_and_a_bare_repository_in_the_tree_change_nothing_the_engine_does() {
+    let s = scratch("git-pointer");
+    let marks = s.home.parent().expect("base").join("marks");
+    let hook = marker(&marks, "elsewhere-hook");
+    let elsewhere = s.home.parent().expect("base").join("elsewhere.git");
+    let ok = Command::new("git").args(["init", "-q", "--bare"]).arg(&elsewhere).status().expect("git").success();
+    assert!(ok);
+    std::fs::copy(&hook, elsewhere.join("hooks/post-index-change")).expect("hook");
+    std::fs::copy(&hook, elsewhere.join("hooks/reference-transaction")).expect("hook");
+    // the agent swaps its .git for a file pointing at another repository, and leaves a bare repository in the tree
+    let agent = format!(
+        "perl -pi -e 's/hello/hi/' greeting.txt && rm -rf .git && printf 'gitdir: {}\\n' > .git && git init -q --bare vendor/inner.git && \
+         cp {} vendor/inner.git/hooks/post-index-change && {OUTPUT}",
+        elsewhere.display(), hook.display()
+    );
+    let out = start(&s, "pointer", &agent);
+    assert!(out.contains("delivered"), "{out}");
+    assert!(ran(&marks).is_empty(), "the engine's git ran a hook of a repository the agent pointed at: {:?}", ran(&marks));
+    let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/pointer:greeting.txt"]).output().expect("git");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_start_says_when_the_copy_lacks_git_lfs_content_or_submodules() {
+    let s = scratch("git-notes");
+    std::fs::write(s.project.join(".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n").expect("write");
+    std::fs::write(s.project.join(".gitmodules"), "[submodule \"lib\"]\n\tpath = lib\n\turl = ../lib\n").expect("write");
+    let out = start(&s, "notes", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
+    assert!(out.contains("note: the project keeps files in git-lfs"), "{out}");
+    assert!(out.contains("note: the project has submodules"), "{out}");
+    assert!(out.contains("delivered"), "the run is not refused: {out}");
+}

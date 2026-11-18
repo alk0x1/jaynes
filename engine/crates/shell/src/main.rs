@@ -386,6 +386,9 @@ fn start(args: &[String]) -> Result<(), String> {
     drive::keep_engine(&home())?;
     let branch = format!("jaynes/{id}");
     if let Some(p) = &project {
+        for w in project::warnings(p) {
+            say(&format!("note: {w}"));
+        }
         project::make(manifest.target, p, &building.join("project"), &branch)?;
     }
     drop(role);

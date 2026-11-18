@@ -30,3 +30,16 @@ JAYNES_PYTHON=../.venv/bin/python PYTHONPATH=../src \
 | `crates/shell/src/index.rs` | the index: `jaynes add NAME`, and `jaynes index check` for its CI |
 
 The record lives in `$JAYNES_ENGINE_HOME` (default `~/.jaynes/engine`), apart from the Python engine's.
+
+## The run's copy of a repository
+
+A run works in a copy of the person's repository, in its own folder (`runs/RUN/project`). The engine's git for it is
+a repository beside the copy (`runs/RUN/project.git`), named explicitly in every command, with hooks and the file
+monitor off and none of the person's own or the system's git configuration: nothing an agent writes in the copy, its
+`.git` included, is run by the engine. The copy's `.git` is the agent's, for git status and git diff. So:
+
+- a step creates or changes no submodule: a change that leaves a repository nested in the copy is refused;
+- files kept in git-lfs are pointers in the copy, and submodules come without their content: the start says so;
+- `.gitattributes`, `.gitmodules` and `.lfsconfig`, in any folder, are on the floor of the risk, since the person's own
+  git obeys them when the delivery lands.
+

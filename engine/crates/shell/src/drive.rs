@@ -319,16 +319,7 @@ pub fn step_diff(home: &Path, run: &str, step: &str) -> Option<String> {
         .get(step)
         .cloned()
         .unwrap_or_else(|| std::fs::read_to_string(git.join("jaynes-base")).unwrap_or_default().trim().to_string());
-    // the engine's own repository for the copy, never one an agent wrote in, with nothing set up that runs a program
-    let out = std::process::Command::new("git")
-        .arg("--git-dir")
-        .arg(&git)
-        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "diff.external=", "diff", "--no-color", "--no-ext-diff", "--no-textconv", &parent, &commit])
-        .env_remove("GIT_EXTERNAL_DIFF")
-        .env_remove("GIT_DIR")
-        .output()
-        .ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    crate::project::diff(&copy, &parent, &commit)
 }
 
 /// How long a finished run keeps its copy of the project: a week, or `$JAYNES_KEEP_COPIES_SECONDS`.

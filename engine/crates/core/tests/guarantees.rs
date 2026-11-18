@@ -1158,6 +1158,25 @@ fn g5_the_ceiling_stops_new_attempts() {
 }
 
 #[test]
+fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
+    for path in [".gitattributes", "lib/.gitattributes", ".gitmodules", ".lfsconfig", "vendor/.lfsconfig"] {
+        let mut change = step("change", Executor::Agent);
+        change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
+        let (mut run, cmds) = start(vec![change]);
+        assert_eq!(run.risk, Risk::Low);
+        let c = probe_ok(&mut run, cmds);
+        let t = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
+        feed(&mut run, Input::AttemptEnded {
+            step: "change".to_string(),
+            attempt: t,
+            fix: 0,
+            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false }], usage: Usage::default(), session: None },
+        });
+        assert_eq!(run.risk, Risk::High, "G7 {path} left the run at low risk");
+    }
+}
+
+#[test]
 fn g7_touching_ci_raises_the_risk_and_owes_the_full_path() {
     let mut review = step("review", Executor::Agent);
     review.from_risk = Risk::High;

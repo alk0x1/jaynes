@@ -30,12 +30,12 @@ pub const SMALL_LINES: u64 = 30;
 pub const SMALL_FILES: usize = 5;
 
 /// Paths that trusted tools run or obey later, outside any box: agents' and editors' settings and instructions,
-/// git attributes and hooks, direnv, interpreters and package scripts, test and build entry points, dev
+/// git attributes, submodules, git-lfs settings and hooks (the person's own git obeys them when the delivery lands), direnv, interpreters and package scripts, test and build entry points, dev
 /// containers, CI. Ported from the Python engine (`jaynes.project.FLOOR`).
 pub const FLOOR: &[&str] = &[
     "**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.vscode/**", "**/.idea/**",
     "**/.zed/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules",
-    "**/.git*", "**/.husky/**", "**/.pre-commit-config.yaml", "**/.envrc",
+    "**/.git*", "**/.gitattributes", "**/.gitmodules", "**/.lfsconfig", "**/.husky/**", "**/.pre-commit-config.yaml", "**/.envrc",
     "**/.venv/**", "**/venv/**", "**/package.json", "**/.npmrc", "**/.yarnrc*", "**/pyproject.toml",
     "**/setup.py", "**/setup.cfg", "**/sitecustomize.py", "**/usercustomize.py", "**/conftest.py",
     "**/Makefile", "**/GNUmakefile", "**/.devcontainer/**", ".gitlab-ci.yml", ".circleci/**", ".buildkite/**",
@@ -203,6 +203,10 @@ mod tests {
     fn floor_lines_and_files_raise_it() {
         assert_eq!(of_change(Target::Repository, &[c(".github/workflows/ci.yml", 1)]).0, Risk::High);
         assert_eq!(of_change(Target::Repository, &[c("PyProject.toml", 1)]).0, Risk::High);
+        // what the person's own git obeys when the delivery lands in their repository, in any folder
+        for p in ["docs/.gitattributes", ".gitmodules", "vendor/.lfsconfig", ".lfsconfig"] {
+            assert_eq!(of_change(Target::Repository, &[c(p, 1)]).0, Risk::High, "{p}");
+        }
         assert_eq!(of_change(Target::Repository, &[c("src/a.py", 31)]).0, Risk::High);
         let many: Vec<Changed> = (0..6).map(|i| c(&format!("src/{i}.py"), 1)).collect();
         assert_eq!(of_change(Target::Repository, &many).0, Risk::High);
