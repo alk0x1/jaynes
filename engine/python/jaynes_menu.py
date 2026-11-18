@@ -1244,6 +1244,34 @@ def quote_windows(call: Call, params: Params) -> Any:
     return out
 
 
+# --- the cases a check comes with ------------------------------------------------------------------------------
+#
+# A check of the menu comes with the cases it must accept and refuse, in cases/NAME/accept.json and reject.json. A
+# case reader turns one case into the check's verdict, the way a run would reach it.
+
+CASE_FILL = " ".join(["This paragraph only makes the page long enough to count as a page with text of its own."] * 4)
+
+
+def quotes_found_case(case: dict[str, Any]) -> Any:
+    """quotes-found's verdict on a case: its page (``page``, with FILL as a long paragraph, encoded in
+    ``page_charset`` or UTF-8, of content type ``type``) downloaded by fetch-pages from ``url`` without the network,
+    and its ``quote`` cited at ``cite``, or at ``url``."""
+    body = case["page"].replace("FILL", CASE_FILL).encode(case.get("page_charset") or "utf-8")
+
+    def get(url: str) -> dict[str, Any]:
+        if url != case["url"]:
+            raise Unread("the server answered 404")
+        return {"final_url": url, "type": case["type"], "body": body, "asked": [url]}
+
+    call = {"given": [{"step": "read", "output": {"sources": [{"url": case["url"], "quotes": [case["quote"]]}]}}]}
+    fetched = fetch_pages(call, {"pages": "read.sources"}, download=get)
+    claim = {"url": case.get("cite") or case["url"], "quote": case["quote"]}
+    return quotes_found({"output": {"claims": [claim]}, "given": [{"step": "fetch", "output": fetched}]}, {"field": "claims", "pages": "fetch"})
+
+
+CASE_READERS: dict[str, Callable[[dict[str, Any]], Any]] = {"quotes-found": quotes_found_case}
+
+
 STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,
                                                        "fetch-pages": fetch_pages, "quote-windows": quote_windows}
 CHECKS: dict[str, Callable[[Call, Params], Any]] = {
