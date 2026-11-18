@@ -267,3 +267,131 @@ fn the_quotes_of_a_note_are_shown_in_their_pages_at_a_stop_of_jaynes_s_own() {
     assert!(item["aspects"][0]["text"].as_str().unwrap_or("").contains("1. \"A cache MUST NOT store a response\""), "{items}");
 }
 
+/// A terminal for the person's answer: the engine takes an answer as the person's only from one.
+const TTY: &str = r#"
+import os, pty, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+while True:
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        break
+    if not data:
+        break
+    os.write(1, data)
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+"#;
+
+/// The windows role run end to end, with an agent that is a shell script and pages written as fetch-pages writes
+/// them (no network in a test): the agent's fetch step stands in for Jaynes's own here, which is what lets the test
+/// run offline, and changes nothing of what the windows step and its stop do.
+const SENT_BACK: &str = r#"# A test role: the windows of a note's quotes send the note back.
+
+role = "sent-back"
+version = "1.0.0"
+
+[[step]]
+name = "read"
+reach = { project = "read" }
+instructions = "Find sources for {{request}}."
+
+[step.output]
+links = { type = "array", items = "string" }
+
+[[step]]
+name = "fetch"
+needs = ["read"]
+reach = { project = "read" }
+instructions = "Fetched pages of {{read.links}}."
+
+[step.output]
+pages = { type = "array", items = { type = "object", fields = { url = "string", read = "boolean", sha256 = "string", text_sha256 = "string" } } }
+texts = "object"
+any_read = "boolean"
+
+[[step]]
+name = "note"
+needs = ["read", "fetch"]
+reach = { project = "write", write = ["notes/**"] }
+instructions = "Write the note."
+checks = [{ use = "quotes-found", field = "claims", pages = "fetch" }]
+
+[step.output]
+reading = "string"
+claims = { type = "array", items = { type = "object", fields = { url = "string", quote = "string" } } }
+
+[[step]]
+name = "windows"
+by = "jaynes"
+use = "quote-windows"
+needs = ["note", "fetch"]
+with = { claims = "note.claims", pages = "fetch", beside = "note.reading" }
+stop = { ask = "Do the sources say what the note says?", verdicts = ["keep", "change"], redo = "note" }
+show = { label = "The note's quotations in their pages", detail = "{{beside}}", aspects = [{ label = "Quotations", text = "{{windows}}" }] }
+"#;
+
+#[test]
+fn sent_back_at_the_windows_the_note_is_written_again_and_the_windows_ask_again_with_it() {
+    let s = scratch("sent-back");
+    std::fs::write(s.role.join("role.toml"), SENT_BACK).expect("write");
+    let base = s.home.parent().expect("base").to_path_buf();
+    let project = base.join("project");
+    std::fs::create_dir_all(project.join("notes")).expect("dir");
+    std::fs::write(project.join("README.md"), "lab\n").expect("write");
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "start"]] {
+        assert!(Command::new("git").arg("-C").arg(&project).args(&args).status().expect("git").success());
+    }
+    let text = "HTTP Caching\n\nA cache MUST NOT store a response when the no-store directive is present.\n\nSome guides claim that a cache MAY keep a no-store response for an hour. That is wrong.\n";
+    let digest = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let fetched = json!({"pages": [{"url": "https://example.org/caching", "read": true, "sha256": "page", "text_sha256": digest}],
+                         "texts": {"https://example.org/caching": text}, "any_read": true});
+    std::fs::write(base.join("fetch.json"), fetched.to_string()).expect("write");
+    // the note quotes the denied claim first; sent back, it quotes what the page says
+    let first = json!({"reading": "Reading, not measured: one.", "claims": [{"url": "https://example.org/caching", "quote": "a cache MAY keep a no-store response for an hour"}]});
+    let second = json!({"reading": "Reading, not measured: two.", "claims": [{"url": "https://example.org/caching", "quote": "A cache MUST NOT store a response when the no-store directive is present."}]});
+    std::fs::write(base.join("note-1.json"), first.to_string()).expect("write");
+    std::fs::write(base.join("note-2.json"), second.to_string()).expect("write");
+    let agent = base.join("agent.sh");
+    std::fs::write(&agent, format!(r#"prompt=$(cat)
+case "$prompt" in
+  *"Find sources"*) echo '{{"links":["https://example.org/caching"]}}' > .jaynes/output.json ;;
+  *"Fetched pages"*) cp {b}/fetch.json .jaynes/output.json ;;
+  *"Write the note"*) n=$(cat {b}/notes 2>/dev/null || echo 0); n=$((n+1)); echo $n > {b}/notes; cp {b}/note-$n.json .jaynes/output.json ;;
+esac
+echo '{{"tokens":1}}'
+"#, b = base.display())).expect("write");
+    let agent_arg = format!("command:sh {}", agent.display());
+    let (ok, out) = engine(&s, &["start", "--run", "back", "--role", s.role.to_str().expect("path"), "--project", project.to_str().expect("path"),
+                                 "--request", "what no-store asks", "--agent", &agent_arg]);
+    assert!(ok && out.contains("Do the sources say what the note says?"), "{out}");
+    let log = |s: &Scratch| -> Vec<Value> {
+        let (_, out) = engine(s, &["log", "back"]);
+        out.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    };
+    let asked: Vec<Value> = log(&s).into_iter().filter(|e| e["type"] == "QuestionOpened").map(|e| e["question"].clone()).collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let q = asked[0]["id"].as_str().expect("id").to_string();
+    // the person, at a terminal, sends the note back from the windows
+    let said = Command::new("python3").args(["-c", TTY, BIN, "answer", "back", &q, "windows=change:S1 quotes that claim only to deny it", "--send"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", "python3").env("JAYNES_AGENT", &agent_arg)
+        .output().expect("answer");
+    let said = String::from_utf8_lossy(&said.stdout).to_string();
+    let events = log(&s);
+    let ran = |step: &str| events.iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == step).count();
+    assert_eq!((ran("read"), ran("fetch"), ran("note")), (1, 1, 2), "only the note is written again: {said}");
+    assert_eq!(ran("windows"), 2, "the windows are made again from the new note: {said}");
+    let again: Vec<Value> = events.iter().filter(|e| e["type"] == "QuestionOpened").map(|e| e["question"].clone()).collect();
+    assert_eq!(again.len(), 2, "{said}");
+    assert_eq!(again[1]["step"], "windows");
+    let shown = again[1]["items"].to_string();
+    assert!(!shown.is_empty());
+    // the run asks again, at the windows, about what the new note made
+    let (_, show) = engine(&s, &["show", "back"]);
+    assert!(show.contains("? q2-windows at windows") && show.contains("windows          role     round 1  done"), "{show}");
+    // and the note that came back was told why
+    let notes: Vec<String> = events.iter().filter(|e| e["type"] == "StepInvalidated" && e["step"] == "note").map(|e| e.to_string()).collect();
+    assert!(notes.iter().any(|e| e.contains("S1 quotes that claim only to deny it")), "{notes:?}");
+}
+
