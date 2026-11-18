@@ -160,6 +160,9 @@ def linux_box() -> str | None:
 def linux_argv(exe: str, script: str, box: Box) -> list[str]:
     """The argv that runs ``script`` in the Linux box: what may be written, what is hidden (the one list,
     hidden_paths), what is read again inside it, and the network."""
+    if box.runs:
+        # the Linux box has no list of the programs a command may start yet: it never runs as if it had one
+        raise Unavailable("the Linux box cannot yet hold a command to a list of programs, so it runs none")
     argv = [exe, "box"]
     for w in box.writable:
         argv += ["--write", str(w)]
