@@ -1632,7 +1632,7 @@ mod tests {
         });
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![first, look], target: Default::default(), delivery: Default::default() };
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
-        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None };
+        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None , person: None};
         store.decide("w", &start).expect("start");
         let run = store.state("w").expect("state").expect("run");
         let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };

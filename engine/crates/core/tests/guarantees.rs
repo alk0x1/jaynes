@@ -790,7 +790,8 @@ impl World {
         }
         if let Some(cases) = self.cases.as_mut() {
             cases.push(answer_case(&run, &answer, accepted, holds));
-            if accepted {
+            // whether the run leaves its box sends no work back: it has no effects case
+            if accepted && q.kind != QuestionKind::Unbox {
                 let i = run.manifest.index(&q.step).expect("step");
                 let person = run.manifest.steps[i].executor == Executor::Person;
                 let items: Vec<serde_json::Value> = q
@@ -966,6 +967,8 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         let (n, k) = match w.rng.below(3) { 0 => (40, 0), 1 => (30, 12), _ => (5, 0) };
         attention.insert(s.name.clone(), Count { key, n, k, pending: 0, braked: w.rng.chance(25) });
     }
+    // some runs have the person's device paired, and some of those ask to leave their box (G18)
+    let person = if w.rng.chance(30) { Some(jaynes_core::io::StartPerson { keys: paired_keys(), nonce: format!("start-{seed}"), unboxed: w.rng.chance(40) }) } else { None };
     let started = w.send(Input::Start {
         run: format!("run-{seed}"),
         request: "change the button's text".to_string(),
@@ -974,8 +977,7 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         agent: "claude:m1".to_string(),
         raise,
         attention, task: None, arm: None,
-        // some runs have the person's device paired, and some of those ask to leave their box (G18)
-        person: w.rng.chance(30).then(|| jaynes_core::io::StartPerson { keys: paired_keys(), nonce: format!("start-{seed}"), unboxed: w.rng.chance(40) }),
+        person,
     });
     (manifest, started)
 }
