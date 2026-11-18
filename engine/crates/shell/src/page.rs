@@ -591,8 +591,27 @@ impl Page {
     }
 
     fn act(&self, body: &Value, by: By) -> Result<Value, String> {
+        act_in(&self.home, &self.exe, body, by)
+    }
+
+    /// Record an input now and carry the run on in a process of its own, or leave it in the inbox of the process
+    /// that drives the run.
+    fn submit(&self, run: &Run, input: Input) -> Result<Value, String> {
+        submit_in(&self.home, &self.exe, run, input)
+    }
+}
+
+fn submit_in(home: &std::path::Path, exe: &std::path::Path, run: &Run, input: Input) -> Result<Value, String> {
+    let recorded = drive::submit(home, exe, run, input)?;
+    Ok(json!({"ok": true, "recorded": recorded}))
+}
+
+/// What the person does to a run from its page, from a body as the page's /api/act takes it (the app sends the
+/// same): halt, resume, continue, raise the risk or the ceiling, abandon, undo, correct. `exe` is the program that
+/// carries the run on; what `by` may do the engine decides, as for the page.
+pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: By) -> Result<Value, String> {
         let run_id = body["run"].as_str().ok_or("which run?")?;
-        let run = self.store()?.state(run_id)?.ok_or("no such run")?;
+        let run = Store::open(&home.join("record.sqlite3"))?.state(run_id)?.ok_or("no such run")?;
         let input = match body["action"].as_str().unwrap_or("") {
             "halt" => Input::Halt { by },
             "resume" => Input::Resume { by },
@@ -604,8 +623,8 @@ impl Page {
                 Input::RaiseCeiling { ceiling: jaynes_core::risk::Ceiling { seconds: c.seconds + 1800, tokens: c.tokens + 2_000_000 }, by }
             }
             "undo" => {
-                let mut store = self.store()?;
-                let reverted = drive::undo(&mut store, &self.home, run_id, body["note"].as_str().unwrap_or("").to_string(), by)?;
+                let mut store = Store::open(&home.join("record.sqlite3"))?;
+                let reverted = drive::undo(&mut store, home, run_id, body["note"].as_str().unwrap_or("").to_string(), by)?;
                 return Ok(json!({"ok": true, "recorded": reverted}));
             }
             "correct" => Input::Correct {
@@ -615,16 +634,10 @@ impl Page {
             },
             other => return Err(format!("no action {other}")),
         };
-        self.submit(&run, input)
-    }
+        submit_in(home, exe, &run, input)
+}
 
-    /// Record an input now and carry the run on in a process of its own, or leave it in the inbox of the process
-    /// that drives the run.
-    fn submit(&self, run: &Run, input: Input) -> Result<Value, String> {
-        let recorded = drive::submit(&self.home, &self.exe, run, input)?;
-        Ok(json!({"ok": true, "recorded": recorded}))
-    }
-
+impl Page {
     fn render(&self, view: View) -> Result<String, String> {
         let store = self.store()?;
         let mut waiting: Vec<(Run, QuestionState)> = Vec::new();
@@ -1876,6 +1889,76 @@ mod tests {
         let sent = send(&ours, started + std::time::Duration::from_secs(1), &[&b"HTTP/1.1 200 OK\r\n\r\n"[..], &big[..]]);
         assert!(sent.is_err(), "the whole reply went");
         assert!(started.elapsed() < std::time::Duration::from_millis(2500), "{:?}", started.elapsed());
+    }
+
+    /// A home with run r1 waiting at its plan's question, and the run's folder, where a page's act takes its lock.
+    fn waiting(name: &str) -> PathBuf {
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-act-in-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs/r1")).expect("dir");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "r", "version": "1", "protocol": 1,
+            "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };
+        let mut events = decide(None, &start).expect("start").events;
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+            offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        events.push(Event::QuestionOpened { question });
+        Store::open(&home.join("record.sqlite3")).expect("store").append("r1", &events).expect("append");
+        home
+    }
+
+    #[test]
+    fn act_in_refuses_and_records_what_the_page_s_act_does() {
+        use std::path::Path;
+        // the app sends a run's controls through act_in; the page through its /api/act: one home each, the same
+        // bodies from the same people, and the same replies and the same record after each
+        let exe = PathBuf::from("/usr/bin/true");
+        let page = Page { home: waiting("page"), port: 8750, key: "k3y".into(), exe: exe.clone() };
+        let app = waiting("app");
+        let agent = || By::Agent { who: "an agent".into() };
+        let steps: Vec<(Value, By)> = vec![
+            (json!({"action": "halt"}), By::Person),
+            (json!({"run": "nope", "action": "halt"}), By::Person),
+            (json!({"run": "r1", "action": "fly"}), By::Person),
+            (json!({"run": "r1", "action": "resume"}), agent()),
+            (json!({"run": "r1", "action": "raise-risk"}), agent()),
+            (json!({"run": "r1", "action": "halt"}), agent()),
+            (json!({"run": "r1", "action": "resume"}), agent()),
+            (json!({"run": "r1", "action": "halt"}), By::Person),
+            (json!({"run": "r1", "action": "raise-risk"}), By::Person),
+            (json!({"run": "r1", "action": "raise-ceiling"}), By::Person),
+            (json!({"run": "r1", "action": "correct", "note": "the plan forgot the tests", "step": "plan"}), By::Person),
+            (json!({"run": "r1", "action": "undo", "note": "back"}), By::Person),
+            (json!({"run": "r1", "action": "resume"}), By::Person),
+            (json!({"run": "r1", "action": "abandon"}), agent()),
+            (json!({"run": "r1", "action": "abandon"}), By::Person),
+            (json!({"run": "r1", "action": "halt"}), By::Person),
+        ];
+        let (mut accepted, mut refused) = (0, 0);
+        for (body, by) in steps {
+            let by_page = page.act(&body, by.clone());
+            let by_app = act_in(&app, &exe, &body, by.clone());
+            assert_eq!(by_page, by_app, "{body} by {by:?}");
+            if by_page.is_ok() { accepted += 1 } else { refused += 1 }
+            let record = |home: &Path| {
+                let store = Store::open(&home.join("record.sqlite3")).expect("store");
+                serde_json::to_value(store.events("r1").expect("events")).expect("json")
+            };
+            assert_eq!(record(&page.home), record(&app), "after {body} by {by:?}");
+        }
+        assert!(accepted >= 5 && refused >= 5, "the steps try both sides: {accepted} accepted, {refused} refused");
+        let taken = |home: &Path| Store::open(&home.join("record.sqlite3")).expect("store").inbox_take("r1").expect("inbox");
+        assert_eq!(serde_json::to_value(taken(&page.home)).expect("json"), serde_json::to_value(taken(&app)).expect("json"));
+        for home in [&page.home, &app] {
+            let _gone = std::fs::remove_dir_all(home);
+        }
     }
 
     #[test]
