@@ -468,7 +468,7 @@ footer .wrap { display: flex; gap: 20px; justify-content: space-between; flex-wr
       <h2 id="g-h" style="font-size:clamp(32px,4.2vw,50px);line-height:1.06">A stop is sampled only when the evidence says so.</h2>
       <p>If the real rate at which you would change a stop's answer is at or above its budget, the chance Jaynes ever makes that stop sampled is <b>at most 5%</b>, no matter how often it checks.</p>
       <p>The usual shortcut, recomputing a confidence bound after every answer and switching the first time it fits, quietly breaks that promise. Run both and see.</p>
-      <p>It is one of seventeen sentences the engine promises, each tested on thousands of random runs; twelve are proved in Lean for a model of the engine's core that a test compares with the code. <a href="https://github.com/alk0x1/jaynes/blob/main/docs/guarantees.md">Read them</a>.</p>
+      <p>It is one of eighteen sentences the engine promises, each tested on thousands of random runs; thirteen are proved in Lean for a model of the engine's core that a test compares with the code. <a href="https://github.com/alk0x1/jaynes/blob/main/docs/guarantees.md">Read them</a>.</p>
     </div>
     <div class="card simu">
       <div class="stage-top"><span>true change rate <b>5%</b> · budget <b>5%</b> · up to <b>2,000</b> answers</span><button class="btn solid" type="button" id="s-run">Run 1,000 simulations</button></div>
@@ -530,7 +530,7 @@ curl -fsSL https://jaynes.dev/install.sh | sh
       <table>
         <thead><tr><th>Part</th><th>State</th></tr></thead>
         <tbody>
-          <tr><td>Core and its seventeen guarantees; twelve proved in Lean and compared with the code</td><td><span class="chip green">works today</span></td></tr>
+          <tr><td>Core and its eighteen guarantees; thirteen proved in Lean for a model of the core that a test compares with the code</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>Claude Code, one step at a time: per-step settings, leaves asked mid-turn, fixes in place</td><td><span class="chip green">checked with real turns</span></td></tr>
           <tr><td>Runs that go on past a stop: you answer later, and only what used it runs again</td><td><span class="chip green">works today</span></td></tr>
           <tr><td>The page: questions across runs, verdicts per item with pictures, context, each run's view</td><td><span class="chip green">works today</span></td></tr>

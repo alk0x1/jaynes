@@ -4,7 +4,7 @@
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
-G1, G2, G3, G4, G5, G9, G10, G11, G12, G13 and G14 (its order, and that the core never does an act again), and the rule of G17 (when a stop may skip asking), are also
+G1, G2, G3, G4, G5, G9, G10, G11, G12, G13, G14 (its order, and that the core never does an act again) and G19 (a delivery that holds a merge goes out only with the person's answer about it), and the rule of G17 (when a stop may skip asking), are also
 proved, in Lean, for a model of the core's rules that a test compares with the core on every state of 800 random
 runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,000 streams checks it.
 
