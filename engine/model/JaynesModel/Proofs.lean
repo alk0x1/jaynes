@@ -273,31 +273,31 @@ namespace Jaynes
 
 /-- **G9.** A rule never answers from outside the core. -/
 theorem g9_no_rule (a : AnswerCase) (h : a.who = .rule) : a.accepts = false := by
-  simp [AnswerCase.accepts, AnswerCase.acceptsActed, AnswerCase.acceptsMerge, h]
+  simp [AnswerCase.accepts, AnswerCase.acceptsActed, AnswerCase.acceptsMerge, AnswerCase.acceptsUnbox, AnswerCase.proofOk, h]
 
 /-- **G9.** An agent's answer is taken only to let a result go on as it is, at a stop the role marks a release,
     never at the person's own step nor at a braked stop, never carrying context, and never over an answer. -/
 theorem g9_agent (a : AnswerCase) (h : a.accepts = true) (ha : a.who = .agent) :
     a.decision = true ∧ a.personStep = false ∧ a.input = false ∧ a.release = true ∧ a.allKeep = true ∧
       a.braked = false ∧ a.hasContext = false ∧ a.answered = false := by
-  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsMerge at h
+  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsMerge AnswerCase.acceptsUnbox at h
   simp only [ha] at h
   repeat' (split at h <;> try simp at h)
   all_goals simp_all
 
 /-- **G10.** An answer is taken only for the question as it stands: not replaced, and as it was shown. -/
 theorem g10_shown (a : AnswerCase) (h : a.accepts = true) : a.shownMatches = true ∧ a.superseded = false := by
-  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsMerge at h
+  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsMerge AnswerCase.acceptsUnbox at h
   repeat' (split at h <;> try simp at h)
   all_goals simp_all
 
 /-- **G14**, the person's order: what becomes of an act already done is the person's alone to decide, once. -/
 theorem g14_acted_answer (a : AnswerCase) (hx : a.acted = true) (h : a.accepts = true) :
     a.who = .person ∧ a.answered = false := by
-  unfold AnswerCase.accepts at h
-  simp only [hx, ↓reduceIte] at h
-  unfold AnswerCase.acceptsActed at h
-  cases hw : a.who <;> cases ha : a.answered <;> simp_all
+  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsUnbox at h
+  simp only [hx] at h
+  repeat' (split at h <;> try simp at h)
+  all_goals cases hw : a.who <;> cases ha : a.answered <;> simp_all
 
 /-! ## What the person kept -/
 
@@ -437,10 +437,10 @@ theorem g19_merge_waits {r : Run} (h : r.next = .deliver) (hh : r.mergeHeld = tr
 
 /-- **G19.** The answer about a merge is the person's alone, given once, about the delivery that would land: no
     agent and no rule gives it, and an answer to a question about an earlier delivery is not taken. -/
-theorem g19_merge_answer (a : AnswerCase) (hm : a.merge = true) (hx : a.acted = false) (h : a.accepts = true) :
-    a.who = .person ∧ a.current = true ∧ a.answered = false := by
+theorem g19_merge_answer (a : AnswerCase) (hm : a.merge = true) (hx : a.acted = false) (hu : a.unbox = false)
+    (h : a.accepts = true) : a.who = .person ∧ a.current = true ∧ a.answered = false := by
   unfold AnswerCase.accepts at h
-  simp only [hx, hm, ↓reduceIte, Bool.false_eq_true] at h
+  cases hp : a.proofOk <;> simp only [hp, hx, hm, hu, Bool.not_false, Bool.not_true, ↓reduceIte, Bool.false_eq_true] at h
   unfold AnswerCase.acceptsMerge at h
   cases hw : a.who <;> simp_all
 
@@ -448,5 +448,41 @@ theorem g19_merge_answer (a : AnswerCase) (hm : a.merge = true) (hx : a.acted = 
     nothing does. -/
 theorem g19_merge_answer_reruns_nothing (c : EffectCase) (h : c.merge = true) : c.said = [] ∧ c.did = [] := by
   simp [EffectCase.said, EffectCase.did, h]
+
+/-! ## The person's proof (G18, G14) -/
+
+/-- **G18, G14.** An answer that opens the box, or orders an act again where a device of the person's is paired, is
+    taken only with a proof that holds for this run: one of the keys the run recorded, over this run's message (its
+    id, how it started, a nonce not used before, and the answer itself). -/
+theorem g18_needs_proof (a : AnswerCase) (hn : a.needsProof = true) (h : a.accepts = true) :
+    a.proofGiven = true ∧ a.proofHolds = true := by
+  unfold AnswerCase.accepts at h
+  split at h
+  · simp at h
+  · rename_i hp
+    simp [AnswerCase.proofOk, hn] at hp
+    exact ⟨hp.2.1, hp.2.2⟩
+
+/-- **G18.** A proof that does not hold, or is not the person's, makes the answer refused whatever it says. -/
+theorem g18_bad_proof (a : AnswerCase) (hg : a.proofGiven = true) (hb : a.proofHolds = false ∨ a.who ≠ .person) :
+    a.accepts = false := by
+  unfold AnswerCase.accepts
+  have : a.proofOk = false := by
+    unfold AnswerCase.proofOk
+    rcases hb with hb | hb <;> simp [hg, hb]
+  simp [this]
+
+/-- **G18.** Leaving the box is the person's answer alone, once. -/
+theorem g18_unbox_person (a : AnswerCase) (hu : a.unbox = true) (h : a.accepts = true) :
+    a.who = .person ∧ a.answered = false := by
+  unfold AnswerCase.accepts AnswerCase.acceptsUnbox at h
+  simp only [hu] at h
+  repeat' (split at h <;> try simp at h)
+  all_goals simp_all
+
+/-- **G18.** A run that asked to leave its box makes no other move before the person said whether it may: nothing
+    runs on the project before then. -/
+theorem g18_box_first (r : Run) (hs : r.stopped = false) (hp : r.unboxPending = true) : r.move = .waitBox := by
+  simp [Run.move, hs, hp]
 
 end Jaynes

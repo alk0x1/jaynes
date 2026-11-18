@@ -16,7 +16,7 @@ def main : IO UInt32 := do
         let kind ← j.getObjValAs? String "kind"
         let expected ← j.getObjValAs? String "expected"
         let got ← match kind with
-          | "move" => do pure (← j.getObjValAs? Run "run").next.render
+          | "move" => do pure (← j.getObjValAs? Run "run").move.render
           | "answer" => do pure (if (← j.getObjValAs? AnswerCase "case").accepts then "taken" else "refused")
           | "gate" => do pure (← j.getObjValAs? GateCase "case").outcome.render
           | "effects" => do

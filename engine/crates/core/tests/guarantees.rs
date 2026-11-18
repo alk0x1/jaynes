@@ -11,6 +11,9 @@ use jaynes_core::risk::{self, Changed, Risk};
 use jaynes_core::run::{Phase, Run, Status};
 use jaynes_core::attention::{stop_key, Count};
 use jaynes_core::{chain, decide, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input};
+use jaynes_core::proof::{self, KeyKind, PersonKey, Proof};
+use jaynes_core::run::UNBOX;
+use p256::ecdsa::signature::Signer;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +43,26 @@ const ALL_VERDICTS: [VerdictKind; 5] =
     [VerdictKind::Keep, VerdictKind::Change, VerdictKind::Redo, VerdictKind::Drop, VerdictKind::Skip];
 
 /// A random role that keeps every rule of `Manifest::validate`.
+/// The person's two device keys, as their secure chip holds them, and their public halves as the engine pairs them.
+fn device(kind: KeyKind) -> p256::ecdsa::SigningKey {
+    p256::ecdsa::SigningKey::from_bytes(&[if kind == KeyKind::Biometry { 5 } else { 6 }; 32].into()).expect("key")
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn paired_keys() -> Vec<PersonKey> {
+    [KeyKind::Biometry, KeyKind::Presence].into_iter().map(|kind| PersonKey { kind, public: hex(device(kind).verifying_key().to_encoded_point(false).as_bytes()) }).collect()
+}
+
+/// `input` with a proof by `with`, said to be the person's key of `kind`, over a run that started as `started`.
+fn proved_by(run: &str, started: &Digest, input: Input, nonce: &str, kind: KeyKind, with: &p256::ecdsa::SigningKey) -> Input {
+    let message = proof::input_message(run, started, nonce, &input);
+    let s: p256::ecdsa::Signature = with.sign(&message);
+    Input::Proved { signed: Box::new(input), nonce: nonce.to_string(), proof: Proof::Device { key: kind, signature: hex(s.to_der().as_bytes()) } }
+}
+
 fn role(rng: &mut Rng) -> Manifest {
     for _ in 0..200 {
         let n = 1 + rng.below(6);
@@ -166,6 +189,8 @@ fn role(rng: &mut Rng) -> Manifest {
 // --- the world --------------------------------------------------------------------------------------------------
 
 struct World {
+    /// Proofs made so far, for their nonces.
+    proofs: u64,
     rng: Rng,
     run: Option<Run>,
     log: Vec<Event>,
@@ -183,6 +208,7 @@ struct World {
 impl World {
     fn new(seed: u64) -> World {
         World {
+            proofs: 0,
             rng: Rng(seed | 1),
             run: None,
             log: Vec::new(),
@@ -263,6 +289,16 @@ impl World {
                 }
             };
             let (Some(pre), Some(post)) = (pre, state.as_ref()) else { continue };
+            // G18: nothing runs on the project, nor is delivered, before the person said whether the run leaves its box
+            if pre.unbox_pending() {
+                assert!(
+                    !matches!(e, Event::AttemptStarted { .. } | Event::ProbeAsked { .. } | Event::DeliveryAsked { .. }),
+                    "seed {seed}: G18 {} before the person answered whether the run leaves its box", e.name()
+                );
+            }
+            if !pre.unboxed() && post.unboxed() {
+                assert!(matches!(input, Input::Proved { .. }), "seed {seed}: G18 the box opened without the person's proof");
+            }
             // G7: the risk only goes up, by a rule or by the person.
             assert!(post.risk >= pre.risk, "seed {seed}: G7 the risk went down");
             if let Event::RiskRaised { by, .. } = e {
@@ -729,9 +765,31 @@ impl World {
         }
         let context = if by.person() { context } else { String::new() };
         let answer = Answer { back: Default::default(), question: q.id.clone(), shown, verdicts, by: by.clone() , context };
-        let accepted = self.send(Input::Answer { answer: answer.clone() });
+        // with the person's device paired, an answer may come with a proof: theirs for this run, another key's, one
+        // made for another run of the same id, or one used already
+        self.proofs += 1;
+        let nonce = format!("n{}", self.proofs);
+        let proof = if run.person_keys.is_empty() { None } else {
+            match self.rng.below(10) {
+                0..=4 => Some((proved_by(&run.id, &run.started, Input::Answer { answer: answer.clone() }, &nonce, KeyKind::Presence, &device(KeyKind::Presence)), true)),
+                5 => Some((proved_by(&run.id, &run.started, Input::Answer { answer: answer.clone() }, &nonce, KeyKind::Presence, &p256::ecdsa::SigningKey::from_bytes(&[9; 32].into()).expect("key")), false)),
+                6 => Some((proved_by(&run.id, &Digest("another start".to_string()), Input::Answer { answer: answer.clone() }, &nonce, KeyKind::Biometry, &device(KeyKind::Biometry)), false)),
+                7 => run.nonces.iter().next().map(|used| (proved_by(&run.id, &run.started, Input::Answer { answer: answer.clone() }, used, KeyKind::Presence, &device(KeyKind::Presence)), false)),
+                _ => None,
+            }
+        };
+        let accepted = match &proof {
+            Some((input, _)) => self.send(input.clone()),
+            None => self.send(Input::Answer { answer: answer.clone() }),
+        };
+        let holds = proof.as_ref().map(|(_, h)| *h);
+        // G14, G18: what lets out what cannot be undone, or opens the box, is taken only with the device's proof
+        let need = jaynes_core::decide::requires(&run, &q.id, !answer.sends_back());
+        if accepted && need != jaynes_core::proof::Requires::Word {
+            assert_eq!(holds, Some(true), "seed {}: G18 an answer that needed the device's proof was taken without it: {answer:?}", self.seed);
+        }
         if let Some(cases) = self.cases.as_mut() {
-            cases.push(answer_case(&run, &answer, accepted));
+            cases.push(answer_case(&run, &answer, accepted, holds));
             if accepted {
                 let i = run.manifest.index(&q.step).expect("step");
                 let person = run.manifest.steps[i].executor == Executor::Person;
@@ -915,7 +973,9 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         role_fingerprint: fingerprint,
         agent: "claude:m1".to_string(),
         raise,
-        attention, task: None, arm: None, person: None,
+        attention, task: None, arm: None,
+        // some runs have the person's device paired, and some of those ask to leave their box (G18)
+        person: w.rng.chance(30).then(|| jaynes_core::io::StartPerson { keys: paired_keys(), nonce: format!("start-{seed}"), unboxed: w.rng.chance(40) }),
     });
     (manifest, started)
 }
@@ -1700,6 +1760,8 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::QuestionSuperseded { .. } => hit("question superseded"),
                 Event::Delivered { .. } => hit("delivered"),
                 Event::StopSkipped { .. } => hit("a certified stop skipped"),
+                Event::Proved { .. } => hit("an answer with the device's proof"),
+                Event::AnswerRecorded { answer, .. } if answer.question == UNBOX && answer.verdict("box") == Verdict::Keep => hit("let out of its box"),
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Acted => hit("an act held, not done again"),
                 Event::ActKept { .. } => hit("an act kept as it acted"),
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Merge => hit("a merge held for the person"),
@@ -1713,7 +1775,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
-        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
+        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person", "an answer with the device's proof", "let out of its box",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -2122,6 +2184,7 @@ fn model_case(run: &Run) -> String {
         "mergeHeld": run.manifest.lands() && !run.undone && !run.merge_holds().is_empty(),
         "mergeAnswered": run.merge_answer(&run.delivery().0).is_some(),
         "mergeAsked": run.merge_open(&run.delivery().0).is_some(),
+        "unboxPending": run.unbox_pending(),
     });
     // The core's first move from this state; a run waiting is put back to running, so its wait shows as a move.
     let mut fresh = run.clone();
@@ -2140,6 +2203,7 @@ fn model_case(run: &Run) -> String {
                 Some(Event::StopSkipped { step, .. }) => format!("skip {}", index(step)),
                 Some(Event::StepInvalidated { step, .. }) => format!("invalidate {}", index(step)),
                 Some(Event::Waiting { step: Some(s), .. }) => format!("wait {}", index(s)),
+                Some(Event::Waiting { step: None, on, .. }) if on.len() == 1 && on[0] == UNBOX => "wait box".to_string(),
                 Some(Event::Waiting { step: None, .. }) => "wait answers".to_string(),
                 Some(Event::Blocked { .. }) => "block".to_string(),
                 Some(Event::ProbeAsked { step }) => format!("probe {}", index(step)),
@@ -2154,14 +2218,16 @@ fn model_case(run: &Run) -> String {
 }
 
 /// An answer as the model judges it (`AnswerCase`), with whether the core took it.
-fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
+fn answer_case(run: &Run, answer: &Answer, taken: bool, proof: Option<bool>) -> String {
     let q = &run.questions[&answer.question];
     let i = run.manifest.index(&q.question.step).expect("step");
     let d = &run.manifest.steps[i];
     let s = &run.steps[i];
     let acted = q.question.kind == QuestionKind::Acted;
     let merge = q.question.kind == QuestionKind::Merge;
-    let valid = if merge {
+    let valid = if q.question.kind == QuestionKind::Unbox {
+        answer.verdicts.len() == 1 && matches!(answer.verdicts.get("box"), Some(Verdict::Keep | Verdict::Drop)) && answer.back.is_empty()
+    } else if merge {
         answer.verdicts.keys().all(|id| q.question.items.iter().any(|x| &x.id == id)) && answer.back.is_empty()
             && q.question.items.iter().all(|x| matches!(answer.verdicts.get(&x.id), Some(Verdict::Keep | Verdict::Drop)))
     } else if acted {
@@ -2193,6 +2259,10 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
         "acted": acted,
         "merge": merge,
         "current": !merge || run.merges.get(&q.question.id) == Some(&run.delivery().0),
+        "unbox": q.question.kind == QuestionKind::Unbox,
+        "keysPaired": !run.person_keys.is_empty(),
+        "proofGiven": proof.is_some(),
+        "proofHolds": proof == Some(true),
     });
     serde_json::json!({"kind": "answer", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
 }

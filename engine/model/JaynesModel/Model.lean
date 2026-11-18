@@ -92,6 +92,8 @@ structure Run where
   mergeAnswered : Bool
   /-- G19: a question about this very delivery waits for the person -/
   mergeAsked : Bool
+  /-- the run asked to leave its box and the person has not yet said whether it may -/
+  unboxPending : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 inductive Move where
@@ -108,6 +110,7 @@ inductive Move where
   /-- G19: ask the person about what the merge would bring in -/
   | askMerge
   | finish
+  | waitBox
   deriving DecidableEq, Repr
 
 def Move.render : Move → String
@@ -123,6 +126,7 @@ def Move.render : Move → String
   | .deliver => "deliver"
   | .askMerge => "ask merge"
   | .finish => "finish"
+  | .waitBox => "wait box"
 
 namespace Run
 
@@ -212,6 +216,11 @@ def next (r : Run) : Move :=
       | none => r.settled
       | some i => r.moveAt i
 
+/-- The core's move, the box first: a run that asked to leave its box waits for the person's answer before any
+    other move, so nothing runs on the project before it. -/
+def move (r : Run) : Move :=
+  if !r.stopped && r.unboxPending then .waitBox else r.next
+
 end Run
 end Jaynes
 
@@ -253,6 +262,14 @@ structure AnswerCase where
   merge : Bool
   /-- G19: the delivery it was asked about is the one that would land now -/
   current : Bool
+  /-- the question is whether the run may leave its box -/
+  unbox : Bool
+  /-- a device of the person's is paired with the run -/
+  keysPaired : Bool
+  /-- the answer came with a proof -/
+  proofGiven : Bool
+  /-- that proof holds: one of the run's keys, over this run's message, with a nonce not used before -/
+  proofHolds : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 /-- An act already done is the person's alone to keep or to order again, once. -/
@@ -263,8 +280,23 @@ def AnswerCase.acceptsActed (a : AnswerCase) : Bool :=
 def AnswerCase.acceptsMerge (a : AnswerCase) : Bool :=
   a.who == .person && !a.answered && !a.superseded && a.current && a.shownMatches && a.verdictsValid
 
+/-- Whether the answer needs the device's proof (G14, G18): opening the box, and acting again after an act when a
+    device is paired. -/
+def AnswerCase.needsProof (a : AnswerCase) : Bool :=
+  (a.unbox && a.allKeep) || (a.acted && !a.allKeep && a.keysPaired)
+
+/-- Leaving the box is the person's answer alone, once. -/
+def AnswerCase.acceptsUnbox (a : AnswerCase) : Bool :=
+  a.who == .person && !a.answered && !a.superseded && a.shownMatches && a.verdictsValid
+
+/-- A proof given must hold and be the person's, and an answer that needs one has one that holds. -/
+def AnswerCase.proofOk (a : AnswerCase) : Bool :=
+  (!a.proofGiven || (a.proofHolds && a.who == .person)) && (!a.needsProof || (a.proofGiven && a.proofHolds))
+
 def AnswerCase.accepts (a : AnswerCase) : Bool :=
-  if a.acted then a.acceptsActed
+  if !a.proofOk then false
+  else if a.unbox then a.acceptsUnbox
+  else if a.acted then a.acceptsActed
   else if a.merge then a.acceptsMerge
   else if a.who == .rule then false
   else if a.superseded then false
