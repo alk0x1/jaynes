@@ -232,10 +232,21 @@ fn started_at(pid: u32) -> Option<String> {
     (out.status.success() && !said.is_empty()).then_some(said)
 }
 
-/// Note the agent's or the role's process in `pidfile`: its group and when it started, so a process that takes
-/// the run after a crash stops that group and no later one given the same number.
+/// Note the agent's or the role's process in `pidfile`: its group at once, so an abandon or a halt that comes as
+/// soon as it began finds it; then, put in whole, with when it started, so a process that takes the run after a
+/// crash stops that group and no later one given the same number. When it started takes macOS a run of ps, which a
+/// loaded machine makes slower than the agent's first move, so it comes second.
 pub fn note_process(pidfile: &Path, pid: u32) -> std::io::Result<()> {
-    std::fs::write(pidfile, format!("{pid} {}", started_at(pid).unwrap_or_default()))
+    std::fs::write(pidfile, pid.to_string())?;
+    let Some(at) = started_at(pid) else { return Ok(()) };
+    let whole = pidfile.with_extension("pid.new");
+    std::fs::write(&whole, format!("{pid} {at}"))?;
+    // a stop that took the note meanwhile left nothing to note
+    if pidfile.exists() {
+        std::fs::rename(&whole, pidfile)
+    } else {
+        std::fs::remove_file(&whole)
+    }
 }
 
 /// Stop the process group `pgid`, gently then for good: true when something of it ran. An error when the system

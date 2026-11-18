@@ -743,13 +743,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("start");
-    for _ in 0..100 {
-        if mark.join("started").exists() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    assert!(mark.join("started").exists(), "the agent started");
+    agent_started(&mark);
     // the engine dies at once, as with kill -9: nothing of it runs any more, and its agent goes on
     let _killed = engine_process.kill();
     let _waited = engine_process.wait();
@@ -875,10 +869,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().expect("start");
-    for _ in 0..100 {
-        if mark.join("started").exists() { break; }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    agent_started(&mark);
     let attempt = events(&s, "leave").iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == "change").count();
     let cwd = s.home.join("runs/leave/project");
     let mut child = jaynes()
@@ -1092,17 +1083,23 @@ fn abandoning_a_run_stops_its_agent_at_once() {
     std::fs::create_dir_all(&mark).expect("dir");
     let agent = format!("touch {m}/started; sleep 30; touch {m}/finished", m = mark.display());
     let role = root().join("crates/shell/tests/roles/small-change");
+    // a machine where ps is slow, as a loaded runner is: Jaynes notes the agent's process before it asks ps when the
+    // process started, so an abandon that comes as soon as the agent began still finds it
+    let slow = s.home.join("slow-ps");
+    std::fs::create_dir_all(&slow).expect("dir");
+    std::fs::write(slow.join("ps"), "#!/bin/sh\nsleep 2\nexec /bin/ps \"$@\"\n").expect("write");
+    std::fs::set_permissions(slow.join("ps"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
+    let path = format!("{}:{}", slow.display(), std::env::var("PATH").unwrap_or_default());
     let mut run = jaynes()
         .args(["start", "--run", "abandon", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("PATH", path)
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().expect("start");
-    for _ in 0..100 {
-        if mark.join("started").exists() { break; }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    let pgid = std::fs::read_to_string(s.home.join("runs/abandon/agent.pid")).expect("noted");
+    agent_started(&mark);
+    // Jaynes noted the agent's process before the agent did anything: an abandon or a halt that comes at once finds it
+    let pgid = std::fs::read_to_string(s.home.join("runs/abandon/agent.pid")).expect("the agent's process was not noted by the time the agent started");
     let abandoned = tty()
         .args([BIN, "abandon", "abandon"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -1113,6 +1110,16 @@ fn abandoning_a_run_stops_its_agent_at_once() {
     let _done = run.wait();
     assert!(!mark.join("finished").exists());
     assert!(types(&events(&s, "abandon")).contains(&"RunFinished".to_string()));
+}
+
+/// Wait for a test's agent to say it started (`started` in `mark`), looking often, so what a test reads next is read
+/// as soon as the agent began; past 20 s it fails saying so, never goes on as if it had.
+fn agent_started(mark: &Path) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !mark.join("started").exists() {
+        assert!(std::time::Instant::now() < until, "the agent did not start within 20 s ({} never appeared)", mark.join("started").display());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
 }
 
 /// A page process that dies with its test, even when the test panics, so it never holds the test's output open.
