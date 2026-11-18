@@ -40,6 +40,7 @@ mod run_actions;
 mod palette;
 mod run_waits;
 mod trail;
+mod unseen;
 mod presence;
 mod rail;
 mod settings;
@@ -1670,7 +1671,11 @@ fn main() {
         trail::fail(&format!("this herdr-core cannot serve the app: {e:?}"));
     }
 
-    let app = gpui_platform::application();
+    let mut app = gpui_platform::application();
+    // a test drawing its windows into pictures runs unseen: no Dock icon, no menu bar (unseen.rs)
+    if unseen::on() {
+        app = app.with_activation_policy(ActivationPolicy::Accessory);
+    }
     // the Dock icon clicked while the app runs: its window comes back
     app.on_reopen(show_main);
     app.run(move |cx| {
@@ -1819,6 +1824,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         app_id: Some("jaynes-app".into()),
         focus: crate::testing::var("JAYNES_APP_SHOT").is_none(),
+        // drawn into pictures, never onto a screen
+        show: !unseen::on(),
         // the top bar is the app's own: a tab dragged there moves the tab, not the window, which the bar's empty
         // parts move themselves (start_window_move); otherwise AppKit drags the window from the whole titlebar strip
         app_owns_titlebar_drag: true,
@@ -2136,6 +2143,10 @@ pub(crate) fn hide_main(window: &mut Window) {
 
 /// Brings the main window back as it was, in front: a click on the Dock, on the menu bar item or on a notice.
 pub(crate) fn show_main(cx: &mut App) {
+    // a test drawing pictures never puts its window on a screen
+    if unseen::on() {
+        return tracing::info!("unseen: the main window stays off every screen");
+    }
     if let Some(main) = MAIN.with(|m| m.get()) {
         let _ = main.update(cx, |_, window, cx| {
             set_shown(window, true);
@@ -2230,8 +2241,19 @@ pub(crate) fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut 
         // The app quits with its window, so the loop ends with it.
         for n in 0u64.. {
             cx.background_executor().timer(std::time::Duration::from_millis(every)).await;
+            // unseen, or no picture: a window on the person's screen, or the app in front, ends the test app
+            if let Some(why) = cx.update(|_| unseen::breach()) {
+                tracing::error!("unseen: {why}: no picture, and the test app ends");
+                cx.update(|cx| cx.quit());
+                break;
+            }
+            tracing::info!("unseen before picture {n}: no window on a screen, not in front, nothing asked");
             cx.update(terminal::flush_output_clock);
             let path = std::path::PathBuf::from(path.to_string_lossy().replace("{n}", &format!("{n:05}")));
+            // a window closed since (Settings): its pictures end with it
+            if !cx.update(|cx| cx.windows().contains(&window)) {
+                break;
+            }
             let shot = window.render_current_to_image(cx).and_then(|image| {
                 image.save_with_format(&path, image::ImageFormat::Png)?;
                 Ok(())

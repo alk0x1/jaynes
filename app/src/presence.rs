@@ -4,6 +4,11 @@
 /// Asks macOS for the person's touch, saying why; resolves to whether they gave it.
 pub fn ask(reason: &str) -> async_channel::Receiver<Result<(), String>> {
     let (tx, rx) = async_channel::bounded(1);
+    if crate::unseen::on() {
+        crate::unseen::refused("Touch ID");
+        let _sent = tx.try_send(Err("a test app drawing pictures asks no touch".into()));
+        return rx;
+    }
     ask_with(reason, tx);
     rx
 }

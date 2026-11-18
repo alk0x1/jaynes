@@ -19,6 +19,10 @@ pub fn click() {
 
 /// Shows the count of stops that wait, in the menu bar and on the Dock icon. Runs on the main thread.
 pub fn show(waiting: usize) {
+    // a test drawing pictures puts nothing in the person's menu bar
+    if crate::unseen::on() {
+        return;
+    }
     platform::show(waiting);
 }
 

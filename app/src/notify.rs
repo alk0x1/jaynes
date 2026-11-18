@@ -19,6 +19,10 @@ pub fn post(news: &[News], looking: bool) {
         }
         return;
     }
+    // a test drawing pictures posts no notice on the person's screen
+    if crate::unseen::on() {
+        return crate::unseen::refused("a notice");
+    }
     if looking {
         return;
     }

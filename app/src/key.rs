@@ -30,6 +30,11 @@ impl Key {
             let seed: [u8; 32] = seed.try_into().map_err(|_| "the test key is not 32 bytes")?;
             return Ok(Key { signing: SigningKey::from_bytes(&seed) });
         }
+        // a test drawing pictures never asks the person's keychain: only its own key, in its own file
+        if crate::unseen::on() {
+            crate::unseen::refused("a keychain item");
+            return Err("a test app drawing pictures takes its key from JAYNES_APP_TEST_KEY only".into());
+        }
         let seed = match get_generic_password(SERVICE, ACCOUNT) {
             Ok(bytes) => bytes,
             Err(_) => {
