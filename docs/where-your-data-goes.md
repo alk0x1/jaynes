@@ -90,10 +90,13 @@ partial (in Claude Code the sandbox covers shell commands only):
 
 The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS. It
 denies the network except local TCP ports and sends no UDP, and it hides what the engine keeps (the page's key and
-log, the record, other runs). **The known limit:** so that a test suite's own servers work, the commands reach any
-local TCP port on the machine, so everything else that listens there too: a browser's debugger, a database without
-a password, the Jaynes page (without its key, so what comes through it is not you). A command may also serve on
-`0.0.0.0` while it runs, where other machines on your network can reach it.
+log, the record, other runs). The local ports are a list, closed by default: the commands bind and reach only the
+free ports the run reserved for them (handed over in `JAYNES_PORTS`) and the ones the step or the check names in the
+role (`local_ports`), never the Jaynes page's; a suite that serves on another port is stopped, and told which port
+and how to take one of its own. **The known limits:** where you open one project's checks to every local port
+(`jaynes project open-ports`, at a terminal), its commands reach everything that listens on the machine, the Jaynes
+page among them (without its key, so what comes through it is not you). A command may also serve on `0.0.0.0` while
+it runs, where other machines on your network can reach it.
 
 ## What this page does not promise
 
