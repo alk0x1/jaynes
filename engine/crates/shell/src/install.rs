@@ -253,16 +253,33 @@ pub fn list(home: &Path) -> Vec<(String, String, String, String)> {
 }
 
 /// The page's key, kept under the home so the page's address stays the same across its restarts.
+/// Readable by its owner alone: whoever reads it answers as the person. A file an earlier version left readable by
+/// all is tightened when it is read.
 pub fn page_key(home: &Path) -> String {
     let file = home.join("page.key");
     if let Ok(k) = std::fs::read_to_string(&file)
         && k.trim().len() >= 16 {
+            owner_only(&file);
             return k.trim().to_string();
         }
     let k = crate::page::key();
     let _made = std::fs::create_dir_all(home);
-    let _written = std::fs::write(&file, &k);
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    let _written = open.open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, k.as_bytes()));
+    owner_only(&file);
     k
+}
+
+/// The file readable and writable by its owner alone.
+fn owner_only(file: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _tightened = std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600));
+    }
 }
 
 pub const PORT: u16 = 8750;

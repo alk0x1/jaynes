@@ -71,7 +71,12 @@ impl Page {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
             });
         }
-        say(&format!("the page: http://127.0.0.1:{}/?key={}", self.port, self.key));
+        // the key never goes to what the page says, which Jaynes keeps in page.log: whoever needs it reads its file
+        say(&format!(
+            "the page: http://127.0.0.1:{port}/ . Open it with its key: http://127.0.0.1:{port}/?key= followed by what {} holds",
+            self.home.join("page.key").display(),
+            port = self.port
+        ));
         for stream in listener.incoming().flatten() {
             // each connection on its own, with a deadline: one that says nothing, or never ends its head, holds no
             // other, and one whose request breaks its handler ends alone, never the page

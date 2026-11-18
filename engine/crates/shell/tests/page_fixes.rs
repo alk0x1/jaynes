@@ -113,3 +113,36 @@ fn a_connection_that_says_nothing_holds_no_other() {
     assert!(get(port, "/api/version").expect("still up").starts_with("HTTP/1.1 200"));
     drop(endless);
 }
+
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).expect("metadata").permissions().mode() & 0o777
+}
+
+#[test]
+#[cfg(unix)]
+fn the_key_is_the_person_s_alone_and_never_in_the_log() {
+    use std::os::unix::fs::PermissionsExt;
+    // made by the page: readable by its owner only, and not in what the page says
+    let base = home("made");
+    let port = port(2);
+    let made = page(&base, port, None);
+    let file = base.join("home/page.key");
+    let key = std::fs::read_to_string(&file).expect("the page made its key");
+    assert_eq!(mode(&file), 0o600);
+    drop(made);
+    let said = std::fs::read_to_string(base.join("said.txt")).expect("said");
+    assert!(said.contains(&format!("the page: http://127.0.0.1:{port}/")), "{said}");
+    assert!(!said.contains(key.trim()), "the key went to the log: {said}");
+    // kept by an earlier version, readable by all: tightened when it is read
+    let base = home("kept");
+    let file = base.join("home/page.key");
+    std::fs::write(&file, "0123456789abcdef0123456789abcdef").expect("write");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    let _kept = page(&base, port, None);
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(std::fs::read_to_string(&file).expect("read"), "0123456789abcdef0123456789abcdef", "the same key goes on");
+    let said = std::fs::read_to_string(base.join("said.txt")).expect("said");
+    assert!(!said.contains("0123456789abcdef"), "{said}");
+}
