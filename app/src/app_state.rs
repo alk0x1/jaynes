@@ -1,7 +1,7 @@
 //! What the window showed, kept for the next time the app opens (app-state.json in the engine's home,
 //! ~/.jaynes/engine, beside the settings and apart from them):
 //! what the middle showed (Claude Code, an agent, a run or the Inbox), whether the column, the steps panel and Changes
-//! showed, the run tabs the person closed, and where the window stood. Only what is seen: an agent by its address, a
+//! showed, the run tabs the person closed, the finished runs they cleared from the column, and where the window stood. Only what is seen: an agent by its address, a
 //! run by its id, a closed tab by its mark and a fingerprint of its line, never a stop's words, a key or a folder.
 //! Reading it only shows things: an agent or a run no longer there, or a file this app cannot read, opens on Claude
 //! Code, and the log says why.
@@ -64,6 +64,8 @@ pub struct State {
     pub frame: Option<Frame>,
     /// The bars' widths as the person dragged them (bars.rs); none is the bar's own.
     pub widths: Widths,
+    /// The finished runs the person cleared from the column, by id: still in the record and in `jaynes runs`.
+    pub cleared: Vec<String>,
 }
 
 /// How wide the person left each bar.
@@ -77,7 +79,7 @@ pub struct Widths {
 
 impl Default for State {
     fn default() -> Self {
-        State { open: Open::Main, column: true, steps: true, changes: false, closed: Vec::new(), frame: None, widths: Widths::default() }
+        State { open: Open::Main, column: true, steps: true, changes: false, closed: Vec::new(), frame: None, widths: Widths::default(), cleared: Vec::new() }
     }
 }
 
@@ -195,6 +197,7 @@ mod tests {
             closed: vec![Closed { run: "r1".into(), mark: "needs".into(), line: fingerprint("Pick one") }],
             frame: Some(Frame { x: 10., y: 20., width: 1200., height: 800., screen: Some(2) }),
             widths: Widths { column: Some(52.), steps: Some(410.), changes: None },
+            cleared: vec!["r7".into(), "r8".into()],
         };
         save(&p, &s).unwrap();
         assert_eq!(load(&p), (s, None));

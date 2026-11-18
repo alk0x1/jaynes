@@ -737,7 +737,7 @@ impl Root {
             (None, false, None) => app_state::Open::Main,
         };
         let frame = Some(app_state::frame_of(window.window_bounds().get_bounds(), window.display(cx).map(|d| d.id().into())));
-        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept() }
+        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept(), cleared: self.side.read(cx).cleared_kept(cx) }
     }
 
     /// Keeps what the window shows when it changed, once what stood was shown again.
@@ -1866,7 +1866,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let runs = cx.new(model::Runs::new);
         let agents = cx.new(|cx| agents::Agents::new(core.clone(), cx));
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), agents.clone(), cx));
-        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), cx));
+        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), state.cleared.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
         let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));
@@ -1889,6 +1889,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.notify();
             })
             .detach();
+            // a run cleared from the column or brought back: kept with what the window shows
+            cx.subscribe(&side, |_: &mut Root, _, _: &side::Cleared, cx| cx.notify()).detach();
             // a tab split or a pane gone, here or in Herdr: the panes shown follow
             cx.observe(&agents, |this: &mut Root, _, cx| {
                 this.show_what_stood(cx);

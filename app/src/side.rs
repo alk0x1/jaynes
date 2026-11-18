@@ -24,6 +24,9 @@ pub struct Side {
     folded: HashSet<String>,
     /// Whether the finished runs show, under their count.
     show_finished: bool,
+    /// The finished runs the person cleared from the column (by id), and whether they show, faint, to bring back.
+    cleared: HashSet<String>,
+    show_cleared: bool,
     /// Whether the column is the rail (bars.rs): the window says so, as the person drags its edge.
     pub rail: bool,
 }
@@ -32,6 +35,11 @@ pub struct Side {
 pub struct Widen;
 
 impl EventEmitter<Widen> for Side {}
+
+/// The person cleared a run from the column, or brought one back: the window keeps it (app_state.rs).
+pub struct Cleared;
+
+impl EventEmitter<Cleared> for Side {}
 
 /// The column in the order the person chose ("Needs you first"): what waits for them, runs and agents in one list;
 /// then the runs at work; then the finished runs, folded to a count; then the spaces with the agents that do not
@@ -43,8 +51,10 @@ struct Order {
     asking: Vec<(String, Agent)>,
     /// The runs not finished that wait on nothing: working, halted, blocked.
     at_work: Vec<Row>,
-    /// The finished runs (delivered, merged, undone, abandoned), by project as the record lists them.
+    /// The finished runs (delivered, merged, undone, abandoned), by project as the record lists them, but the
+    /// cleared ones, which are apart: a run that waits for the person or works is never cleared.
     finished: Vec<(String, Vec<Row>)>,
+    cleared: Vec<Row>,
     /// Each space with its agents that are not in `asking`.
     spaces: Vec<(agents::Space, Vec<Agent>)>,
 }
@@ -64,11 +74,13 @@ fn finished(m: Mark) -> bool {
     matches!(m, Mark::Delivered | Mark::Merged | Mark::Undone | Mark::Abandoned)
 }
 
-fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space]) -> Order {
+fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space], cleared: &HashSet<String>) -> Order {
     let mut o = Order { needs: listing.needs.clone(), ..Order::default() };
     for (project, rows) in &listing.projects {
         let (done, open): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|r| finished(r.mark));
         o.at_work.extend(open.into_iter().cloned());
+        let (gone, done): (Vec<&Row>, Vec<&Row>) = done.into_iter().partition(|r| cleared.contains(&r.id));
+        o.cleared.extend(gone.into_iter().cloned());
         if !done.is_empty() {
             o.finished.push((project.clone(), done.into_iter().cloned().collect()));
         }
@@ -79,6 +91,17 @@ fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space]) -> 
         o.spaces.push((space.clone(), rest.into_iter().cloned().collect()));
     }
     o
+}
+
+/// The cleared runs as kept: those still finished in the record, once it was read (before, or when it cannot be
+/// read, every one, so none is lost to a record not read yet).
+fn kept_cleared(cleared: &HashSet<String>, listing: Option<&jaynes_shell::listing::Listing>) -> Vec<String> {
+    let mut kept: Vec<String> = match listing {
+        Some(l) => cleared.iter().filter(|id| l.projects.iter().flat_map(|(_, rows)| rows).any(|r| &r.id == *id && finished(r.mark))).cloned().collect(),
+        None => cleared.iter().cloned().collect(),
+    };
+    kept.sort();
+    kept
 }
 
 /// What a run at work says at the right of its name: where it is ("step 2 of 4"), or that it halted or is blocked.
@@ -130,11 +153,52 @@ fn dot(color: u32) -> Div {
 }
 
 impl Side {
-    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cleared: Vec<String>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
         cx.observe(&agents, |_, _, cx| cx.notify()).detach();
         cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
-        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, rail: false }
+        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), show_cleared: false, rail: false }
+    }
+
+    /// The cleared runs, as the window keeps them.
+    pub fn cleared_kept(&self, cx: &App) -> Vec<String> {
+        let runs = self.runs.read(cx);
+        let read = runs.read_once && runs.trouble.is_none();
+        kept_cleared(&self.cleared, read.then_some(&runs.snap.listing))
+    }
+
+    fn clear(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        self.cleared.extend(ids);
+        cx.emit(Cleared);
+        cx.notify();
+    }
+
+    fn bring_back(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.cleared.remove(id);
+        cx.emit(Cleared);
+        cx.notify();
+    }
+
+    /// At the right of a finished run: an x that clears it from the column, or, on a cleared one, ↺ to bring it back.
+    fn row_control(&self, id: &str, back: bool, cx: &mut Context<Self>) -> AnyElement {
+        let id = id.to_owned();
+        div()
+            .id(SharedString::from(format!("{}-{id}", if back { "back" } else { "clear" })))
+            .flex_none()
+            .px(px(4.))
+            .rounded(px(4.))
+            .text_size(px(11.))
+            .text_color(rgb(look::faint()))
+            .hover(|d| d.bg(rgb(look::line())).text_color(rgb(look::text())))
+            .cursor_pointer()
+            .tooltip(look::tip(if back { "Bring back to the column" } else { "Clear from the column: the run stays in the record" }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                // the press is the control's, not the row's, which would open the run
+                cx.stop_propagation();
+                if back { this.bring_back(&id, cx) } else { this.clear(vec![id.clone()], cx) }
+            }))
+            .child(if back { "↺".into_any_element() } else { look::icon(look::Icon::Close, 10., look::faint()).into_any_element() })
+            .into_any_element()
     }
 
     fn fold(&mut self, key: &str, cx: &mut Context<Self>) {
@@ -287,7 +351,7 @@ impl Side {
     }
 
     /// A run: its mark and its request, with a word at the right (`tag`) and its line under it (`line`).
-    fn row(&self, row: &Row, on: bool, tag: Option<(String, u32)>, line: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    fn row(&self, row: &Row, on: bool, tag: Option<(String, u32)>, line: bool, end: Option<AnyElement>, cx: &mut Context<Self>) -> impl IntoElement {
         let id = row.id.clone();
         let tabs = self.tabs.clone();
         div()
@@ -319,6 +383,7 @@ impl Side {
                     )
                     .when(line, |d| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::amber() } else { look::dim() })).child(row.line.clone()))),
             )
+            .children(end)
     }
 
     /// The finished runs' count, that shows or hides them.
@@ -341,6 +406,46 @@ impl Side {
             }))
             .child(div().w(px(10.)).child(if shown { "▾" } else { "▸" }))
             .child(format!("{n} finished · {}", if shown { "Hide" } else { "Show" }))
+            .child(div().flex_1())
+            .when(shown, |d| {
+                d.child(
+                    div()
+                        .id("clear-finished")
+                        .px(px(4.))
+                        .rounded(px(4.))
+                        .hover(|d| d.bg(rgb(look::line())).text_color(rgb(look::text())))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let runs = this.runs.read(cx);
+                            let ids = runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| finished(r.mark)).map(|r| r.id.clone()).collect();
+                            this.clear(ids, cx);
+                        }))
+                        .child("Clear finished"),
+                )
+            })
+    }
+
+    /// The cleared runs' count, that shows them faint, each with ↺ to bring it back.
+    fn cleared_line(&self, n: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let shown = self.show_cleared;
+        div()
+            .id("cleared")
+            .mx(px(8.))
+            .px(px(10.))
+            .py(px(5.))
+            .flex()
+            .gap(px(6.))
+            .cursor_pointer()
+            .text_size(px(11.5))
+            .text_color(rgb(look::faint()))
+            .hover(|d| d.text_color(rgb(look::dim())))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.show_cleared = !this.show_cleared;
+                cx.notify();
+            }))
+            .child(div().w(px(10.)).child(if shown { "▾" } else { "▸" }))
+            .child(format!("{n} cleared · {}", if shown { "Hide" } else { "Show" }))
     }
 }
 
@@ -379,7 +484,7 @@ impl Side {
         let runs = self.runs.read(cx);
         let (listing, selected) = (runs.snap.listing.clone(), runs.selected.clone());
         let agents = self.agents.read(cx);
-        let o = order(&listing, &agents.spaces);
+        let o = order(&listing, &agents.spaces, &self.cleared);
         let (waiting, review) = agents.counts();
         let tabs = self.tabs.read(cx);
         let (open, inbox_on) = (tabs.agent.as_ref().map(|(a, _)| a.clone()), tabs.inbox);
@@ -480,7 +585,7 @@ impl Render for Side {
         let (listing, selected, trouble) = (runs.snap.listing.clone(), runs.selected.clone(), runs.trouble.clone());
         let agents = self.agents.read(cx);
         let core_trouble = agents.trouble.clone();
-        let o = order(&listing, &agents.spaces);
+        let o = order(&listing, &agents.spaces, &self.cleared);
         let (waiting, review) = agents.counts();
         let now = agents::now_ms();
         let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
@@ -494,7 +599,7 @@ impl Render for Side {
             list = list.child(self.section("§needs", "Needs you", Some(needs), look::amber(), cx));
             if !self.folded.contains("§needs") {
                 for row in &o.needs {
-                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(("run".into(), look::faint())), true, cx));
+                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(("run".into(), look::faint())), true, None, cx));
                 }
                 for (space, a) in &o.asking {
                     list = list.child(self.asking(space, a, open.as_deref() == Some(a.address.as_str()), cx));
@@ -509,12 +614,12 @@ impl Render for Side {
         } else if listing.needs.is_empty() && listing.projects.is_empty() {
             list = list.child(heading("Runs", look::faint()));
             list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No runs yet."));
-        } else if !o.at_work.is_empty() || o.finished_count() > 0 {
+        } else if !o.at_work.is_empty() || o.finished_count() > 0 || !o.cleared.is_empty() {
             list = list.child(self.section("§work", "Runs at work", Some(o.at_work.len()), look::faint(), cx));
             if !self.folded.contains("§work") {
                 for row in &o.at_work {
                     let tag = (at_work_tag(row), if row.mark == Mark::Working { look::blue() } else { look::colour(row.mark) });
-                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(tag), false, cx));
+                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(tag), false, None, cx));
                 }
                 if o.finished_count() > 0 {
                     list = list.child(self.finished_line(o.finished_count(), cx));
@@ -522,8 +627,19 @@ impl Render for Side {
                         for (project, rows) in &o.finished {
                             list = list.child(heading(project, look::faint()));
                             for row in rows {
-                                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), None, true, cx));
+                                let x = self.row_control(&row.id, false, cx);
+                                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), None, true, Some(x), cx));
                             }
+                        }
+                    }
+                }
+                // cleared from the column, still in the record: shown faint on asking, each to bring back
+                if !o.cleared.is_empty() {
+                    list = list.child(self.cleared_line(o.cleared.len(), cx));
+                    if self.show_cleared {
+                        for row in &o.cleared {
+                            let back = self.row_control(&row.id, true, cx);
+                            list = list.child(div().opacity(0.55).child(self.row(row, selected.as_deref() == Some(row.id.as_str()), None, true, Some(back), cx)));
                         }
                     }
                 }
@@ -557,7 +673,8 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agents, at_work_tag, order};
+    use super::{Agent, Mark, Order, Row, State, agents, at_work_tag, kept_cleared, order};
+    use std::collections::HashSet;
     use jaynes_shell::listing::Listing;
 
     fn agent(address: &str, state: State) -> Agent {
@@ -578,7 +695,7 @@ mod tests {
             agents: vec![agent("w1:t1", State::Working), agent("w1:t2", State::Waiting), agent("w1:t3", State::Error), agent("w1:t4", State::ToReview)],
             tabs: Vec::new(),
         }];
-        let o = order(&listing, &spaces);
+        let o = order(&listing, &spaces, &HashSet::new());
         assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q"]);
         assert_eq!(o.asking.iter().map(|(s, a)| format!("{s} {}", a.address)).collect::<Vec<_>>(), ["jaynes w1:t2", "jaynes w1:t3"]);
         // to review is not waiting: it stays in its space, with the one at work
@@ -595,7 +712,7 @@ mod tests {
                 ("notes".into(), vec![row("f", Mark::Undone, "reverted by you"), row("g", Mark::Delivered, "delivered")]),
             ],
         };
-        let o = order(&listing, &[]);
+        let o = order(&listing, &[], &HashSet::new());
         assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "c", "e"]);
         let finished: Vec<(String, Vec<String>)> = o.finished.iter().map(|(p, rows)| (p.clone(), rows.iter().map(|r| r.id.clone()).collect())).collect();
         assert_eq!(finished, [("my-app".to_string(), vec!["b".to_string()]), ("api".into(), vec!["d".into()]), ("notes".into(), vec!["f".into(), "g".into()])]);
@@ -606,8 +723,32 @@ mod tests {
     }
 
     #[test]
+    fn a_cleared_run_leaves_the_finished_for_its_own_list_and_one_that_waits_or_works_never_leaves() {
+        let listing = Listing {
+            needs: vec![row("q", Mark::Needs, "Keep this fix?")],
+            projects: vec![("my-app".into(), vec![row("a", Mark::Working, "step 2 of 4, running"), row("b", Mark::Merged, "merged"), row("c", Mark::Abandoned, "abandoned"), row("d", Mark::Undone, "reverted by you")])],
+        };
+        // q and a are asked to be cleared too, as a stale id would be: they stay where they are
+        let cleared: HashSet<String> = ["q", "a", "b", "d"].map(String::from).into();
+        let o = order(&listing, &[], &cleared);
+        assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q"]);
+        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(o.finished.iter().flat_map(|(_, rows)| rows).map(|r| r.id.as_str()).collect::<Vec<_>>(), ["c"]);
+        assert_eq!(o.cleared.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["b", "d"]);
+    }
+
+    #[test]
+    fn the_cleared_runs_are_kept_while_finished_in_the_record_and_all_kept_before_it_is_read() {
+        let listing = Listing { needs: vec![row("q", Mark::Needs, "?")], projects: vec![("p".into(), vec![row("b", Mark::Merged, "merged"), row("a", Mark::Working, "step 1 of 2, running")])] };
+        let cleared: HashSet<String> = ["b", "a", "q", "gone"].map(String::from).into();
+        assert_eq!(kept_cleared(&cleared, Some(&listing)), ["b"]);
+        // the record not read yet, or not readable: nothing is dropped
+        assert_eq!(kept_cleared(&cleared, None), ["a", "b", "gone", "q"]);
+    }
+
+    #[test]
     fn nothing_waits_nothing_works_the_column_is_its_spaces() {
-        let o = order(&Listing::default(), &[]);
+        let o = order(&Listing::default(), &[], &HashSet::new());
         assert_eq!(o, Order::default());
     }
 }
