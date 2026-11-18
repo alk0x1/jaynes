@@ -1,6 +1,8 @@
 //! The guard does nothing where it was not needed: no network and no file written before it has to ask. The person's
 //! GitHub user, which passes freely when no owners are set, is read from gh's own hosts file, never asked of GitHub,
-//! and never saved. Run as Claude Code runs it, with a gh and a git on the PATH that note every call.
+//! and never saved. A remote's user and password, which a token in its address is, never reach the question: the
+//! person reads it, and so does the model. Run as Claude Code runs it, with a gh and a git on the PATH that note every
+//! call.
 
 use serde_json::{json, Value};
 use std::io::Write;
@@ -149,4 +151,26 @@ fn what_cannot_be_held_runs_no_program_at_all() {
     }
     assert_eq!(w.calls(), Vec::<String>::new(), "the guard ran programs for commands it does not hold");
     assert!(!w.home().exists());
+}
+
+#[test]
+fn a_remote_s_user_and_password_never_reach_the_question() {
+    let w = World::new("secret", Some("me"));
+    w.remote("https://deploy:s3cr3t-tok@gitlab.example.com/team/thing.git");
+    let cases = [
+        "git push origin main",
+        "git push https://deploy:s3cr3t-tok@gitlab.example.com/team/thing.git main",
+        "git push ssh://deploy:s3cr3t-tok@gitlab.example.com/team/thing.git main",
+        "git push 'https://deploy:s3cr3t@tok@gitlab.example.com/team/thing.git' main",
+        "gh pr create -R https://deploy:s3cr3t-tok@gitlab.example.com/team/thing --fill",
+        "gh pr merge --repo=https://deploy:s3cr3t-tok@gitlab.example.com/team/thing 3",
+        "git push https://x-access-token:s3cr3t-tok@github.com/someone-else/thing.git main",
+    ];
+    for command in cases {
+        let said = w.guard("Bash", bash(command));
+        assert!(asks(&said), "{command}: {said:?}");
+        let why = said.as_ref().map(|v| v["hookSpecificOutput"]["permissionDecisionReason"].to_string()).unwrap_or_default();
+        assert!(!why.contains("s3cr3t") && !why.contains("deploy") && !why.contains("x-access-token"), "{command}: {why}");
+        assert!(why.contains("gitlab.example.com/team/thing") || why.contains("github.com/someone-else/thing"), "{command}: where is still said: {why}");
+    }
 }

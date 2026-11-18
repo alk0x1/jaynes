@@ -354,6 +354,13 @@ REPO_VALUE_FLAGS = {"-d", "--description", "-h", "--homepage", "-t", "--team", "
                     "--gitignore", "-l", "--license", "-s", "--source", "-r", "--remote"}  # gh repo create's
 
 
+def without_userinfo(url: str) -> str:
+    """url without its user and password: a token in a remote's address is a secret, and the question is read by the
+    person and by the model. Everything after the scheme up to the last @ before the path goes."""
+    m = re.match(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@(.*)", url.strip(), re.S)
+    return m.group(1) + m.group(2) if m else url.strip()
+
+
 def github_of(url: str) -> tuple[str, str] | None:
     """(owner, name) of a GitHub remote URL or owner/name, or None when it is not on GitHub."""
     url = url.strip()
@@ -393,7 +400,7 @@ def remote_target(cwd: str, gitdir: list[str], remote: str = "origin") -> Target
         return Target(None, f"the repository in {cwd} (it has no {remote} remote)")
     repo = github_of(url)
     if repo is None:
-        return Target(None, f"{url} (not on GitHub)")
+        return Target(None, f"{without_userinfo(url)} (not on GitHub)")
     return Target(repo, f"github.com/{repo[0]}/{repo[1]}")
 
 
@@ -465,7 +472,7 @@ def holds(cmd: Simple) -> list[tuple[str, Target]]:
         elif repo is None and "/" not in named:
             return [(says, Target(None, f"{named} under your GitHub user"))]
         if repo is None:
-            return [(says, Target(None, named))]
+            return [(says, Target(None, without_userinfo(named)))]
         return [(says, Target(repo, f"github.com/{repo[0]}/{repo[1]}"))]
     if key == ("repo", "create"):
         return [(says, Target(None, "it does not name"))]
