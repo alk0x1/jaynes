@@ -193,7 +193,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 fn announce_version(s: &Scratch, world: &World, change: impl Fn(String) -> String) -> PathBuf {
     let from = roles().join("announce-version");
     let into = s.base.join("announce-version");
-    for part in ["steps", "checks"] {
+    for part in ["steps", "checks", "cases/announced"] {
         std::fs::create_dir_all(into.join(part)).expect("dir");
         for entry in std::fs::read_dir(from.join(part)).expect("read").flatten() {
             std::fs::copy(entry.path(), into.join(part).join(entry.file_name())).expect("copy");
@@ -245,7 +245,7 @@ fn three_scripts_of_a_role_run_to_the_end_with_no_agent() {
     assert!(out.contains("finished: delivered"), "{out}");
     let e = events(&s, "whole");
     // every step is the role's own script, each ran once, in the role's order, and no agent started
-    assert_eq!(started(&e), ["survey", "stamp", "announce"], "{out}");
+    assert_eq!(started(&e), ["survey", "stamp", "announce", "read-registry"], "{out}");
     assert!(!out.contains("an agent was started"), "{out}");
     // a role with a step that cannot be undone runs at high risk from its first step
     assert_eq!(e[0]["risk"], "high", "{}", e[0]);
@@ -275,12 +275,15 @@ fn three_scripts_of_a_role_run_to_the_end_with_no_agent() {
     assert_eq!(sent[0].body["version"], "1.4.0");
     assert!(sent[0].body["notes"].as_str().is_some_and(|n| n.contains("Faster start")), "it was given the output of the steps it needs: {:?}", sent[0]);
 
-    // the state of the world is proved by a check that asks the world, not by what the script said of itself
-    let judged = of(&e, "ChecksJudged", "announce");
+    // the state of the world is read by a step of the role, and a check judges the reading, not what the script that
+    // acted said of itself
+    let reading = &of(&e, "StepDone", "read-registry")[0];
+    assert_eq!(reading["changed"], json!([]));
+    let judged = of(&e, "ChecksJudged", "read-registry");
     let announced = judged[0]["checks"].as_array().and_then(|c| c.iter().find(|c| c["check"] == "announced")).expect("the check ran");
     assert_eq!((announced["passed"].clone(), announced["blocked"].clone()), (json!(true), json!(false)), "{announced}");
     // each output follows the format its step declares
-    for step in ["survey", "stamp", "announce"] {
+    for step in ["survey", "stamp", "announce", "read-registry"] {
         let checks = of(&e, "ChecksJudged", step)[0]["checks"].to_string();
         assert!(checks.contains("output-follows-schema"), "{step}: {checks}");
     }
@@ -629,7 +632,7 @@ fn jaynes_check_reads_a_role_of_scripts_and_says_its_runs_start_at_high_risk() {
     let s = scratch("check", "http://127.0.0.1:1");
     let (ok, out) = engine(&s, &["check", roles().join("announce-version").to_str().expect("path")]);
     assert!(ok, "{out}");
-    assert!(out.contains("✔ announce-version 1.0.0 reads: survey → stamp → announce"), "{out}");
+    assert!(out.contains("✔ announce-version 1.0.0 reads: survey → stamp → announce → read-registry"), "{out}");
     assert!(out.lines().any(|l| l.starts_with("! ") && l.contains("announce cannot be undone") && l.contains("high risk")), "an author is told what the step costs every run: {out}");
     assert!(out.contains("✔ \"Nothing is announced before the changelog has the version's entry\": proved"), "{out}");
     // what each step does to the world, as resolved, so silence is never guessed
@@ -637,6 +640,7 @@ fn jaynes_check_reads_a_role_of_scripts_and_says_its_runs_start_at_high_risk() {
         "  survey: none: it only reads the project",
         "  stamp: none: it changes only the run's copy, which Jaynes throws away or delivers",
         "  announce: irreversible, as the role declares, and a repeat is harmless (idempotent); it reaches the local port 18473",
+        "  read-registry: none, as the role says and nothing checks; it reaches the local port 18473",
     ] {
         assert!(out.lines().any(|l| l == line), "{line}\nis not in:\n{out}");
     }
@@ -649,10 +653,10 @@ fn jaynes_check_reads_a_role_of_scripts_and_says_its_runs_start_at_high_risk() {
     }
     assert!(out.contains("not refused") && out.contains("not promised"), "{out}");
     // what the role claims of each delivery, and what proves each claim in a run
-    assert!(out.contains("  claim \"The registry lists the version\": proved in a run when the check announced of announce passes"), "{out}");
+    assert!(out.contains("  claim \"The registry lists the version\": proved in a run when the check announced of read-registry passes"), "{out}");
     assert!(out.contains("  claim \"The entry's words are the ones the release needs\": nothing checks it: the role writes the request as it came, and no person is asked"), "{out}");
-    // the check that asks the registry comes with no cases yet: untested, and the claim it proves never is
-    assert!(out.contains("! check announced of announce has no cases: untested."), "{out}");
+    // the check that judges the reading comes with no cases until its rejects are written by someone else: untested
+    assert!(out.contains("! check announced of read-registry has no cases: untested."), "{out}");
 }
 
 #[test]

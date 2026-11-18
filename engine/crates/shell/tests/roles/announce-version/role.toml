@@ -1,7 +1,8 @@
 # announce-version: writes the entry of the project's version in its changelog and announces that version to the
 # project's registry. No agent works: each step is a script of this folder, which Jaynes runs in its box.
 #
-# What cannot be undone here is the announcement. It starts only once every answer it rests on is the person's, and
+# What cannot be undone here is the announcement. What the registry then lists is read by a step of the role and
+# judged by a check, which comes with cases since it judges only what was read. It starts only once every answer it rests on is the person's, and
 # the registry is given the run's key, so an announcement sent twice counts once.
 
 role = "announce-version"
@@ -41,13 +42,29 @@ reach = { local_ports = [18473] }
 effect = "irreversible"
 idempotent = true
 about = "Announces the version to the registry. This cannot be undone."
-checks = [
-  "output-follows-schema",
-  { script = "checks/announced.py", kind = "open", about = "the registry lists the version" },
-]
+checks = ["output-follows-schema"]
 
 [step.output]
 id = { type = "string", about = "the registry's id for the announcement" }
+
+# What the registry lists is read by a step of the role and kept with when it was read; the check judges only that
+# reading, so the cases it comes with can stand for any reading. The reader itself is not checked.
+[[step]]
+name = "read-registry"
+by = "role"
+script = "steps/read_registry.py"
+needs = ["survey", "announce"]
+reach = { local_ports = [18473] }
+effect = "none"
+about = "Reads what the registry lists, and when."
+checks = [
+  "output-follows-schema",
+  { script = "checks/announced.py", kind = "open", about = "the reading of the registry lists the version under the id the announcement got" },
+]
+
+[step.output]
+listed = { type = "array", about = "what the registry listed: each an id and a version" }
+read_at = { type = "string", about = "when the registry was read, in UTC" }
 
 [[promise]]
 says = "Nothing is announced before the changelog has the version's entry"
@@ -60,7 +77,7 @@ proved_by = "check output-follows-schema of stamp passed"
 
 [[claim]]
 says = "The registry lists the version"
-proved_by = "check announced of announce passed"
+proved_by = "check announced of read-registry passed"
 
 [[claim]]
 says = "The entry's words are the ones the release needs"
