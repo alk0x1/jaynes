@@ -293,7 +293,7 @@ impl Run {
                     }
                 }
             }
-            Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session } => {
+            Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session, .. } => {
                 self.spent.add(*usage);
                 let acts = self.manifest.index(step).is_some_and(|i| self.manifest.steps[i].effect.acts() && !self.manifest.steps[i].repeats_safely());
                 if let Some(s) = self.step_mut(step) {

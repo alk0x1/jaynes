@@ -72,6 +72,8 @@ pub struct Turn {
     pub ended: Ended,
     /// The guards Jaynes set for the turn, as the agent program read them.
     pub applied: Value,
+    /// What the agent reached of the network, when it went through Jaynes's proxy to its model.
+    pub network: Option<jaynes_core::event::Network>,
 }
 
 pub trait Agent {
@@ -334,7 +336,7 @@ impl Agent for Shell {
                 }
             }
         };
-        Turn { ended, applied }
+        Turn { ended, applied, network: None }
     }
 }
 
@@ -504,7 +506,7 @@ impl Agent for Claude {
     fn turn(&self, spec: Spec<'_>) -> Turn {
         let settings = self.settings(spec.cwd, spec.reach, spec.reads, spec.permit.is_some());
         let Some(claude) = binary("claude") else {
-            return Turn { ended: Ended::Fault { reason: "Claude Code is not installed".to_string() }, applied: settings };
+            return Turn { ended: Ended::Fault { reason: "Claude Code is not installed".to_string() }, applied: settings, network: None };
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
@@ -587,11 +589,18 @@ impl Agent for Claude {
                 }
             }
         };
-        Turn { ended, applied }
+        Turn { ended, applied, network: None }
     }
 }
 
 // --- Codex -------------------------------------------------------------------------------------------------------
+
+/// The host Codex reaches its model at, with a key of the OpenAI API: written here, never the agent's nor the role's.
+pub const CODEX_MODEL_HOST: &str = "api.openai.com";
+/// The variables Codex reads its key from: the person's, passed to the agent's command alone.
+const CODEX_KEYS: [&str; 2] = ["OPENAI_API_KEY", "CODEX_API_KEY"];
+/// A proxy of the person's environment would take the agent's connections around Jaynes's: none reaches it.
+const PROXIES: [&str; 8] = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
 
 /// Why the real Codex does not run yet.
 pub const CODEX_NOT_YET: &str = "Codex does not run yet: Jaynes runs it only inside its own box, and from there Codex cannot reach its model until Jaynes opens a way to it";
@@ -631,7 +640,7 @@ impl Codex {
     /// The command line that runs `args` inside Jaynes's box, from the role library's box.
     /// As Claude Code's settings follow the step's reach, so does the box: a step that reads the project writes only
     /// Jaynes's exchange in it, and one without commands starts nothing but the program.
-    fn boxed(&self, program: &Path, cwd: &Path, tmp: &Path, reach: &Reach, args: &[String]) -> Result<Vec<String>, String> {
+    fn boxed(&self, program: &Path, cwd: &Path, tmp: &Path, reach: &Reach, port: u16, args: &[String]) -> Result<Vec<String>, String> {
         let library = self.library.as_ref().ok_or("Jaynes has no box library for Codex in this run")?;
         let python = std::env::var("JAYNES_PYTHON").unwrap_or_else(|_| "python3".to_string());
         let mut flags: Vec<&str> = Vec::new();
@@ -641,6 +650,9 @@ impl Codex {
         if !reach.commands {
             flags.push("--no-commands");
         }
+        // the one port the box lets it reach: Jaynes's proxy to its model
+        let port = format!("--port={port}");
+        flags.push(&port);
         let done = Command::new(python)
             .arg(library.join("jaynes_box.py"))
             .args(["agent", &cwd.display().to_string(), &tmp.display().to_string()])
@@ -679,19 +691,35 @@ impl Agent for Codex {
         let args = self.arguments(spec.cwd, spec.session);
         let applied = json!({"program": "codex", "model": self.model, "arguments": args, "in": "Jaynes's box", "resume": spec.session});
         let Some(program) = &self.program else {
-            return Turn { ended: Ended::Fault { reason: CODEX_NOT_YET.to_string() }, applied };
+            return Turn { ended: Ended::Fault { reason: CODEX_NOT_YET.to_string() }, applied, network: None };
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
-        let argv = match self.boxed(program, spec.cwd, &tmp, spec.reach, &args) {
+        // its model, through a proxy outside the box that passes only a tunnel to the host, for this turn alone
+        // Limit (agent): Inside the TLS the proxy passes, it reads nothing: a request to the model's host that names another site within it (domain fronting) is not seen.
+        let proxy = match crate::model_proxy::start(CODEX_MODEL_HOST) {
+            Ok(p) => p,
+            Err(reason) => return Turn { ended: Ended::Fault { reason }, applied, network: None },
+        };
+        let argv = match self.boxed(program, spec.cwd, &tmp, spec.reach, proxy.port, &args) {
             Ok(argv) if !argv.is_empty() => argv,
-            Ok(_) => return Turn { ended: Ended::Fault { reason: "Jaynes's box gave an empty command line for Codex".into() }, applied },
-            Err(reason) => return Turn { ended: Ended::Fault { reason }, applied },
+            Ok(_) => return Turn { ended: Ended::Fault { reason: "Jaynes's box gave an empty command line for Codex".into() }, applied, network: None },
+            Err(reason) => return Turn { ended: Ended::Fault { reason }, applied, network: None },
         };
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]).current_dir(spec.cwd).env("TMPDIR", &tmp);
         for (k, v) in &spec.env {
             cmd.env(k, v);
+        }
+        for k in PROXIES {
+            cmd.env_remove(k);
+        }
+        cmd.env("HTTPS_PROXY", proxy.url()).env("https_proxy", proxy.url());
+        // the person's key, in the command's environment only: never in what the turn records, nor in its folder
+        for k in CODEX_KEYS {
+            if let Ok(v) = std::env::var(k) {
+                cmd.env(k, v);
+            }
         }
         let ended = match run(cmd, spec.prompt, spec.deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session, live(spec.transcript.as_deref())) {
             Err(reason) => Ended::Fault { reason },
@@ -714,7 +742,10 @@ impl Agent for Codex {
                 }
             }
         };
-        Turn { ended, applied }
+        let host = proxy.host();
+        let tally = proxy.finish();
+        let network = jaynes_core::event::Network { host, reached: tally.reached, refused: tally.refused, refused_beyond: tally.more };
+        Turn { ended, applied, network: Some(network) }
     }
 }
 

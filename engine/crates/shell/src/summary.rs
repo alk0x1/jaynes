@@ -672,7 +672,7 @@ mod tests {
     }
 
     fn delivered(step: &str, attempt: u32, seconds: u64, tokens: u64) -> Event {
-        Event::AttemptDelivered { step: step.into(), attempt, fix: 0, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage { seconds, tokens, cached: 0 }, session: None }
+        Event::AttemptDelivered { step: step.into(), attempt, fix: 0, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage { seconds, tokens, cached: 0 }, session: None, network: None }
     }
 
     fn done(step: &str) -> Event {
@@ -715,7 +715,7 @@ mod tests {
             (t0 + 39_710, attempt("change", 1)),
             (t0 + 39_900, delivered("change", 1, 190, 100_000)),
             (t0 + 39_910, judged(false)),
-            (t0 + 39_910, Event::AttemptFailed { step: "change".into(), attempt: 1, reasons: vec!["cases-pass".into()], usage: Usage::default(), spent: true }),
+            (t0 + 39_910, Event::AttemptFailed { step: "change".into(), attempt: 1, reasons: vec!["cases-pass".into()], usage: Usage::default(), spent: true, network: None }),
             (t0 + 39_920, attempt("change", 2)),
             (t0 + 40_400, delivered("change", 2, 480, 132_250)),
             (t0 + 40_410, judged(true)),

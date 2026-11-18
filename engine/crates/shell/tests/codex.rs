@@ -76,12 +76,32 @@ fn engine(s: &Scratch, codex: Option<&Path>, args: &[&str]) -> (bool, String) {
         .env("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", guard.display()))
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", "python3")
         .env("PYTHONPATH", "").env("JAYNES_CHROME", browser()).env_remove("JAYNES_CODEX")
-        .env_remove("JAYNES_UNDERSTAND").env_remove("JAYNES_CLAUDE_MODEL");
+        .env_remove("JAYNES_UNDERSTAND").env_remove("JAYNES_CLAUDE_MODEL")
+        // the person's own key never rides into a test, nor their proxies
+        .env_remove("OPENAI_API_KEY").env_remove("CODEX_API_KEY").env_remove("JAYNES_TEST_MODEL_AT");
+    for k in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"] {
+        c.env_remove(k);
+    }
     if let Some(p) = codex {
         c.env("JAYNES_CODEX", p);
     }
+    for (k, v) in EXTRA.with(|e| e.borrow().clone()) {
+        c.env(k, v);
+    }
     let out = c.output().expect("engine");
     (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+thread_local! {
+    /// Variables a test gives the engine besides its own, for the length of `with_env`.
+    static EXTRA: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn with_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+    EXTRA.with(|e| *e.borrow_mut() = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
+    let out = f();
+    EXTRA.with(|e| e.borrow_mut().clear());
+    out
 }
 
 fn start(s: &Scratch, run: &str, codex: Option<&Path>) -> String {
@@ -386,4 +406,128 @@ fn a_write_the_box_refused_that_the_step_may_make_is_jaynes_s_fault_and_spends_n
     let codex = stand_in(&s, &format!("{} && {} && {OUTPUT} && {}", started("th-1"), failed("greeting.txt"), completed(10, 0, 10)), 0);
     let out = start_role(&s, "refused-read", &role, Some(&codex));
     assert!(!out.contains("blocked (Jaynes)"), "{out}");
+}
+
+/// The real interpreter, as a step's command names it in the box (/usr/bin/python3 is a shim that goes through xcrun).
+fn python() -> String {
+    let out = Command::new("python3").args(["-c", "import sys; print(sys.executable)"]).output().expect("python");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+const KEY: &str = "sk-planted-for-this-test-only";
+
+/// Codex reaches its model, and nothing else, through Jaynes's proxy: in a test build the model's host
+/// (api.openai.com) is sent to a server of the test's, which takes the place of OpenAI's, so no model is reached and
+/// no credit spent. From inside the box the stand-in tries the host, which passes once with its own TLS name, and
+/// what must not pass: another name, an address by number, another port, plain HTTP, a TLS name other than the
+/// host's, and a server of this machine reached directly or through a proxy of the person's own environment. The key
+/// the person gave reaches the agent's environment and no byte of the record or of the run's folder; the record, never
+/// the copy the agent writes, holds what the proxy let through and refused.
+#[test]
+#[cfg_attr(any(not(target_os = "macos"), not(feature = "test-model-host")), ignore = "needs the box (macOS) and a test build: cargo test -p jaynes-shell --features test-model-host --test codex")]
+fn codex_reaches_its_model_s_host_through_jaynes_s_proxy_and_nothing_else() {
+    let s = scratch("proxy");
+    // the model's host, as the test build is told it, and a server of this machine that nothing may reach
+    let model = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let model_at = model.local_addr().expect("addr");
+    let other = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    other.set_nonblocking(true).expect("nonblocking");
+    let other_port = other.local_addr().expect("addr").port();
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+    let kept = heard.clone();
+    std::thread::spawn(move || {
+        for conn in model.incoming().flatten() {
+            let mut conn = conn;
+            let _set = conn.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut first = vec![0u8; 4096];
+            let n = std::io::Read::read(&mut conn, &mut first).unwrap_or(0);
+            first.truncate(n);
+            if let Ok(mut h) = kept.lock() {
+                h.push(first);
+            }
+        }
+    });
+    let py = python();
+    let sni = format!(
+        r#"'{py}' -c 'import os, socket, ssl
+h, p = os.environ["HTTPS_PROXY"].split("//")[-1].rsplit(":", 1)
+s = socket.create_connection((h, int(p)), 5)
+s.sendall(b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n")
+s.recv(1024)
+c = ssl.create_default_context(); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
+try:
+    c.wrap_socket(s, server_hostname="elsewhere.example").do_handshake()
+except Exception:
+    pass'"#
+    );
+    let try_ = |name: &str, cmd: &str| format!("{{ {cmd} >/dev/null 2>&1; echo \"{name} $?\" >> .jaynes/net.txt; }}");
+    let body = [
+        started("th-1"),
+        "perl -pi -e 's/hello/hi/' greeting.txt".to_string(),
+        format!("{{ [ \"$OPENAI_API_KEY\" = '{KEY}' ] && echo has-the-key > .jaynes/key.txt; }}; true"),
+        // never a try without the proxy: the box would refuse it, and nothing goes out unasked
+        "{ [ -n \"$HTTPS_PROXY\" ] || { echo no-proxy >> .jaynes/net.txt; }; }".to_string(),
+        "if [ -n \"$HTTPS_PROXY\" ]; then".to_string(),
+        try_("host", "curl -sk -m 5 --proxy \"$HTTPS_PROXY\" https://api.openai.com/v1/models"),
+        try_("other-name", "curl -sk -m 5 --proxy \"$HTTPS_PROXY\" https://example.com/"),
+        try_("by-number", &format!("curl -sk -m 5 --proxy \"$HTTPS_PROXY\" https://127.0.0.1:{other_port}/")),
+        try_("other-port", "curl -sk -m 5 --proxy \"$HTTPS_PROXY\" https://api.openai.com:8443/"),
+        try_("plain-http", "curl -s -m 5 --proxy \"$HTTPS_PROXY\" http://api.openai.com/"),
+        try_("other-tls-name", &sni),
+        "fi".to_string(),
+        try_("direct", &format!("curl -s -m 2 http://127.0.0.1:{}/", model_at.port())),
+        OUTPUT.to_string(),
+        completed(10, 0, 10),
+    ]
+    .join("\n");
+    let codex = stand_in(&s, &body, 0);
+    let at = model_at.to_string();
+    // a proxy of the person's own, which would take the agent's connections around Jaynes's: the server nothing reaches
+    let theirs = format!("http://127.0.0.1:{other_port}");
+    let vars = [("JAYNES_TEST_MODEL_AT", at.as_str()), ("OPENAI_API_KEY", KEY), ("HTTPS_PROXY", theirs.as_str()), ("ALL_PROXY", theirs.as_str())];
+    let out = with_env(&vars, || start(&s, "proxy", Some(&codex)));
+    assert!(out.contains("finished: delivered"), "{out}");
+    let net = in_copy(&s, "proxy", ".jaynes/net.txt");
+    assert!(!net.contains("no-proxy"), "the agent was given no proxy:\n{net}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let heard = heard.lock().expect("heard").clone();
+    assert_eq!(heard.len(), 1, "the model's host was reached once, by the host's own try: {} times\n{net}", heard.len());
+    assert!(heard[0].first() == Some(&0x16) && heard[0].windows(14).any(|w| w == b"api.openai.com"), "a TLS hello naming the host reached it");
+    assert!(other.accept().is_err(), "a server of this machine was reached");
+    // what the record holds of the proxy, on the event that closed the attempt; the copy, which the agent writes,
+    // holds none of it
+    let e = events(&s, "proxy");
+    let delivered = e.iter().find(|e| e["type"] == "AttemptDelivered" && e["step"] == "change").expect("AttemptDelivered");
+    assert_eq!(delivered["network"]["host"], "api.openai.com:443", "{delivered}");
+    assert_eq!(delivered["network"]["reached"], 1, "{delivered}");
+    let applied: Value = serde_json::from_str(&in_copy(&s, "proxy", ".jaynes/applied-1-0.json")).expect("applied");
+    assert!(applied.get("network").is_none(), "a tally the agent could rewrite is kept in its copy: {applied}");
+    let refused = delivered["network"]["refused"].to_string();
+    for why in ["example.com", "by number", "8443", "GET", "elsewhere.example"] {
+        assert!(refused.contains(why), "refused {why}: {refused}");
+    }
+    // the key reached the agent, and nothing Jaynes keeps
+    assert_eq!(in_copy(&s, "proxy", ".jaynes/key.txt").trim(), "has-the-key", "the agent was not given the key");
+    let mut stack = vec![s.home.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if std::fs::read(&p).unwrap_or_default().windows(KEY.len()).any(|w| w == KEY.as_bytes()) {
+                panic!("the key is in {}", p.display());
+            }
+        }
+    }
+}
+
+/// A build for people never sends the model's host elsewhere: with the test's variable set it refuses the turn,
+/// saying why, and reaches nothing.
+#[test]
+#[cfg_attr(any(not(target_os = "macos"), feature = "test-model-host"), ignore = "a build for people: cargo test without --features test-model-host, on macOS")]
+fn a_build_for_people_refuses_to_send_the_model_s_host_elsewhere() {
+    let s = scratch("no-test-host");
+    let codex = stand_in(&s, &format!("{}\n{OUTPUT}\n{}", started("th-1"), completed(1, 0, 1)), 0);
+    let out = with_env(&[("JAYNES_TEST_MODEL_AT", "127.0.0.1:9")], || start(&s, "no-test-host", Some(&codex)));
+    assert!(!out.contains("finished: delivered") && out.contains("JAYNES_TEST_MODEL_AT is read only by a test build"), "{out}");
 }

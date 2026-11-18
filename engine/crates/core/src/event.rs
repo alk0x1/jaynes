@@ -8,6 +8,18 @@ use crate::question::{Answer, By, Item, Question};
 use crate::risk::{Ceiling, Ceilings, Changed, Risk};
 use serde::{Deserialize, Serialize};
 
+/// What an agent program reached of the network in one attempt, as the engine's proxy to its model counted it outside
+/// the box: the one host it lets through, how many tunnels reached it, and what it refused, with why. Recorded, never
+/// decided on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Network {
+    pub host: String,
+    pub reached: u32,
+    pub refused: Vec<String>,
+    /// Refusals past the ones kept word for word.
+    pub refused_beyond: u32,
+}
+
 /// Time and tokens one attempt took, from the agent program's own meter as the shell read it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Usage {
@@ -147,6 +159,9 @@ pub enum Event {
         changed: Vec<Changed>,
         usage: Usage,
         session: Option<String>,
+        /// What the agent reached of the network, when it went through the engine's proxy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<Network>,
     },
     AttemptFailed {
         step: String,
@@ -155,11 +170,17 @@ pub enum Event {
         usage: Usage,
         /// Whether the failure was the agent's and spent the attempt.
         spent: bool,
+        /// What the agent reached of the network, when it went through the engine's proxy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<Network>,
     },
     AttemptInterrupted {
         step: String,
         attempt: u32,
         reason: String,
+        /// What the agent reached of the network, when it went through the engine's proxy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<Network>,
     },
     /// A report that came for an attempt no longer under way. Recorded, and changes nothing.
     StaleReport {
@@ -200,6 +221,9 @@ pub enum Event {
         reason: String,
         usage: Usage,
         session: Option<String>,
+        /// What the agent reached of the network, when it went through the engine's proxy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<Network>,
     },
     StepDone {
         step: String,
