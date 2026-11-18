@@ -677,6 +677,8 @@ fn send(mut s: Store, id: &str, input: Input) -> Result<(), String> {
             let end = d.drive(input)?;
             print_state(&end);
         }
+        // only a run another process drives takes the input in its inbox: any other refusal is said
+        Err(e) if e != drive::DRIVEN => return Err(e),
         Err(_) => {
             s.inbox_put(id, &input)?;
             // Abandoning or halting stops the agent at once, after the input is left for the run's process.
