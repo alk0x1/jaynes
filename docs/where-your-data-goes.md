@@ -21,7 +21,8 @@ is said at the end, so nobody reads more into it.
 - **The guard.** The guard that asks before what cannot be undone in git reaches no network and writes no file. Its
   switch and the owners whose repositories pass freely are in `~/.jaynes/guard.json`, which only the page's Setup
   writes; when you set no owners, the owner that passes is the GitHub user `gh` is signed in as, read from gh's own
-  `hosts.yml`. A command it does not hold runs no program; for one it holds, it asks `git` for the remote's address.
+  `hosts.yml`. A command it does not hold runs no program; for one it holds, it asks `git` for the remote's address,
+  and reads the project's `.jaynes.toml`, which may make it stricter there and never turns it off.
 
 ## What lands in your repository
 

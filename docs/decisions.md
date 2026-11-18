@@ -2,6 +2,28 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
+## 2026-11-18: Jaynes can be off in a session or a project; its guard only by the person
+
+**Decided.** The plugin's two parts turn off apart. The conducting part, the
+skill and the MCP tools, is off in a session started with `JAYNES_OFF` set, and
+in a project whose `.jaynes.toml`, at the root of its git repository, says
+`conduct = false`. That file may also make the guard stricter
+(`guard = "strict"`: it asks even on the person's own repositories), never turn
+it off: `guard = false` there does nothing, and the session says why. The guard
+is turned off only in the person's settings, everywhere or in some projects
+(`off_in` in `~/.jaynes/guard.json`), which only Setup writes; it asks before
+any edit of a project's `.jaynes.toml`. A session says at its start what is off,
+and says nothing when all is on.
+
+**Why.** Someone who works on Jaynes, or a tool built on it, needs it out of
+the way without losing the guard. A file in the project is what an agent can
+write and what a cloned repository brings, so it may add care and never remove
+it: a project's own config adds checks the same way in pre-commit.
+
+**Costs.** Setup does not yet edit `off_in`; until it does, it is written by
+hand in `guard.json`. The skill's description still loads in a session where
+Jaynes is off: the session's first words tell the model not to use it.
+
 ## 2026-11-18: The page's one origin is localhost
 
 **Decided.** The page lives at `http://localhost:PORT`, and only a request with

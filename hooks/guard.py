@@ -18,6 +18,8 @@ import os
 import re
 import sys
 
+import switch  # beside this file: a project's own switch, .jaynes.toml
+
 HERE = os.path.dirname(os.path.realpath(__file__))
 GIT_TIMEOUT = 5.0
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
@@ -469,8 +471,11 @@ def own_paths() -> tuple[list[str], list[str]]:
 
 
 def is_own(path: str, removing: bool = False) -> bool:
-    """Whether path is one of the guard's files; when removing, also any folder holding them."""
+    """Whether path is one of the guard's files, or a project's switch; when removing, also any folder holding the
+    guard's files."""
     real = os.path.realpath(path)
+    if switch.is_switch(real):
+        return True
     folders, files = own_paths()
     for p in folders + files:
         if real == p or (p in folders and real.startswith(p + os.sep)):
@@ -518,6 +523,12 @@ def ask(reason: str) -> None:
 
 OWN_REASON = ("This changes the guard's own files ({path}), which would let it be turned off without you. "
               "The guard asks first; to change its settings, use the Setup page of Jaynes.")
+SWITCH_REASON = ("This changes {path}, the project's switch for Jaynes, which decides whether Jaynes works in this "
+                 "project and how strict its guard is here. The guard asks first.")
+
+
+def own_reason(path: str) -> str:
+    return (SWITCH_REASON if switch.is_switch(path) else OWN_REASON).format(path=path)
 
 
 def decide(event: dict[str, object]) -> str | None:
@@ -528,12 +539,13 @@ def decide(event: dict[str, object]) -> str | None:
     if not isinstance(tool_input, dict) or not isinstance(tool, str):
         return None
     cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
-    if not is_on(read_settings()):
+    settings = read_settings()
+    if not is_on(settings):
         return None
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
         if isinstance(path, str) and path and is_own(resolve(cwd, path)):
-            return OWN_REASON.format(path=path)
+            return own_reason(path)
         return None
     if tool != "Bash":
         return None
@@ -544,11 +556,13 @@ def decide(event: dict[str, object]) -> str | None:
     for cmd in commands:
         own = writes_own(cmd)
         if own:
-            return OWN_REASON.format(path=own)
+            return own_reason(own)
     held = [h for cmd in commands for h in holds(cmd)]
-    if not held:
-        return None
-    owners: list[str] | None = None
+    if not held or switch.off_in(cwd, settings):
+        return None  # off in this project is the person's word, in their settings; a project's file cannot say it
+    project = switch.read(cwd)
+    strict = project["guard"] == "strict"
+    owners: list[str] | None = [] if strict else None
     said: list[str] = []
     for says, target in held:
         if target.repo is not None:
@@ -556,7 +570,8 @@ def decide(event: dict[str, object]) -> str | None:
                 owners = [o.lower() for o in free_owners()]
             if target.repo[0].lower() in owners:
                 continue
-            why = ("whose owner is not one of your free owners" if owners else
+            why = (f"and {project['path']} asks before every one in this project" if strict else
+                   "whose owner is not one of your free owners" if owners else
                    "and you have no free owners yet (gh is signed in as no GitHub user)")
             said.append(f"{says.format(where=target.words)}, {why}.")
         else:

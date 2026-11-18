@@ -4,6 +4,9 @@ The plugin has two parts. The conducting part, the skill and the MCP tools, is o
 JAYNES_OFF set (to anything but nothing, 0, false, no or off, as ``jaynes mcp`` reads it). The guard keeps its own
 switch, "on" in $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json), and JAYNES_OFF never turns it off.
 
+A project may turn the conducting part off with its own switch, .jaynes.toml (see switch.py), and make the guard
+stricter, never turn it off; the person may turn the guard off in a project in their settings ("off_in").
+
 When something is off, the person reads which in the session, and the model is told not to use what is off. When
 all is on it says nothing, so a session spends nothing on it. It only reads: no network, no file written, standard
 library only, since it runs before jaynes may be installed.
@@ -15,44 +18,66 @@ import json
 import os
 import sys
 
+import switch
+
 
 def conducting_off() -> bool:
     return os.environ.get("JAYNES_OFF", "").strip().lower() not in ("", "0", "false", "no", "off")
 
 
-def guard_on() -> bool:
-    """The guard's own switch, read as the guard reads it: on unless its settings say "on": false."""
+def settings() -> dict[str, object]:
+    """The guard's settings, as the guard reads them; {} when missing or broken."""
     home = os.environ.get("JAYNES_HOME") or os.path.join(os.path.expanduser("~"), ".jaynes")
     try:
         with open(os.path.join(os.path.expanduser(home), "guard.json"), encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return True
-    on = data.get("on", True) if isinstance(data, dict) else True
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def guard_on(data: dict[str, object]) -> bool:
+    on = data.get("on", True)
     return on if isinstance(on, bool) else True
 
 
-GUARD_ON = "its guard is on: it still asks before git and GitHub actions that cannot be undone"
-GUARD_OFF = "its guard is off (the Setup page of Jaynes turns it on): it does not ask before git and GitHub actions that cannot be undone"
+ACTIONS = "git and GitHub actions that cannot be undone"
 
 
-def said() -> dict[str, object] | None:
-    off, guard = conducting_off(), guard_on()
-    if not off and guard:
+def said(cwd: str) -> dict[str, object] | None:
+    data, project = settings(), switch.read(cwd)
+    if conducting_off():
+        conduct: str | None = "Jaynes is off in this session (JAYNES_OFF)"
+    elif not project["conduct"]:
+        conduct = f"Jaynes is off in this project ({project['path']} says conduct = false)"
+    else:
+        conduct = None
+    if not guard_on(data):
+        guard = f"its guard is off (the Setup page of Jaynes turns it on): it does not ask before {ACTIONS}"
+    elif switch.off_in(cwd, data):
+        guard = f"its guard is off in this project (your settings, on the Setup page of Jaynes): it does not ask before {ACTIONS}"
+    elif project["guard"] == "strict":
+        guard = f"its guard is strict in this project ({project['path']}): it asks before every one of the {ACTIONS}, even on your own repositories"
+    else:
+        guard = f"its guard is on: it still asks before {ACTIONS}"
+    refused = (f" {project['path']} says guard = false, which a project's file cannot do, since an agent or a cloned "
+               "repository can write it: the guard stays on here. To turn it off in this project, use the Setup page "
+               "of Jaynes." if project["asked_guard_off"] and guard_on(data) and not switch.off_in(cwd, data) else "")
+    plain = guard.startswith("its guard is on")
+    if conduct is None and plain and not refused:
         return None
-    if off:
-        person = f"Jaynes is off in this session (JAYNES_OFF): no skill, no tools; {GUARD_ON if guard else GUARD_OFF}."
-        model = ("Jaynes is off in this session (JAYNES_OFF is set): do not use the jaynes skill or the Jaynes MCP "
-                 "tools, and make agreed changes yourself.")
-        return {"systemMessage": person,
-                "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": model}}
-    return {"systemMessage": f"Jaynes is on in this session, and {GUARD_OFF}."}
+    if conduct is None:
+        return {"systemMessage": f"Jaynes is on here, and {guard}.{refused}"}
+    model = (f"{conduct}: do not use the jaynes skill or the Jaynes MCP tools, and make agreed changes yourself.")
+    return {"systemMessage": f"{conduct}: no skill, no tools; {guard}.{refused}",
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": model}}
 
 
 def main() -> int:
     try:
-        sys.stdin.read()
-        out = said()
+        event = json.loads(sys.stdin.read() or "null")
+        cwd = event.get("cwd") if isinstance(event, dict) else None
+        out = said(cwd if isinstance(cwd, str) and cwd else os.getcwd())
         if out:
             print(json.dumps(out))
     except Exception as err:  # never in the way of a session

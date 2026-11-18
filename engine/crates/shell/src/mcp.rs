@@ -70,6 +70,28 @@ pub fn serve(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The project's switch when it turns Jaynes off there: `.jaynes.toml` at the root of the git repository holding
+/// `project` (found going up until a folder holds `.git`), saying `conduct = false`. The plugin's hooks read the same
+/// file (hooks/switch.py); a file above that root is not the project's.
+pub fn conducting_off_in(project: &Path) -> Option<std::path::PathBuf> {
+    let mut here = project.canonicalize().ok()?;
+    let root = loop {
+        if here.join(".git").exists() {
+            break here;
+        }
+        here = here.parent()?.to_path_buf();
+    };
+    let file = root.join(".jaynes.toml");
+    let text = std::fs::read_to_string(&file).ok()?;
+    // read line by line as the hooks read it, so a file one TOML reader would refuse means the same to both
+    let off = text
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with('['))
+        .filter_map(|l| l.split_once('='))
+        .any(|(k, v)| k.trim() == "conduct" && v.split('#').next().unwrap_or("").trim() == "false");
+    off.then_some(file)
+}
+
 fn agent() -> By {
     By::Agent { who: "an agent through the Jaynes plugin".into() }
 }
@@ -97,6 +119,9 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             let role = text(args, "role")?;
             let project = text(args, "project")?;
             let request = text(args, "request")?;
+            if let Some(file) = conducting_off_in(Path::new(project)) {
+                return Err(format!("{} says conduct = false: Jaynes stays out of this project, so make the change without it. The person removes that line to use Jaynes here.", file.display()));
+            }
             let run = drive::launch(home, &exe, role, project, request, args["risk"].as_str() == Some("high"))?;
             Ok(format!(
                 "Run {run} started; it goes on by itself. What needs the person is on the page, {}. `run` with {run} says where it is.",
