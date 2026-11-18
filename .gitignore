@@ -8,3 +8,5 @@ dist/
 .jaynes/
 docs/research/
 docs/prototypes/
+docs/specs/
+docs/design-directions/

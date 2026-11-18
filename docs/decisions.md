@@ -138,8 +138,7 @@ back in a later round.
 pre-marked guess and a free text field, answered once on one screen. A stop
 shows the output as decisions with fixed ids, each accepted or rejected with a
 note; accepted ones are locked against the agent, checked by code, and only the
-rejected ones are redone. "Why?" explains a step and never changes it. Design
-in docs/specs/2026-11-11-decisions-at-stops-design.md.
+rejected ones are redone. "Why?" explains a step and never changes it.
 
 - Why: on a real run the person disagreed with one line and Return redid
   everything, twice, until two specialists deadlocked on that line.

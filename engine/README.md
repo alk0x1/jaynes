@@ -1,8 +1,7 @@
 # The redesigned engine
 
 A small core in Rust that is a pure function, a shell around it, and roles outside it behind a fixed protocol.
-The design and what this slice leaves out: `docs/specs/2026-11-12-engine-redesign-design.md`. What the core
-promises: `docs/guarantees.md`.
+What the core promises: `docs/guarantees.md`.
 
 ```
 cargo test                      # the core's guarantees on random runs, and the engine end to end
