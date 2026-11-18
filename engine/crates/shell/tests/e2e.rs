@@ -526,7 +526,7 @@ fn http(port: u16, raw: &str) -> String {
 fn post(port: u16, path: &str, body: &str, me: &str) -> Value {
     let key = me.strip_prefix("jaynes_key=").map(|k| format!("X-Jaynes-Key: {k}\r\n")).unwrap_or_default();
     let raw = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\n{key}Content-Length: {}\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\n{key}Content-Length: {}\r\n\r\n{body}",
         body.len()
     );
     let out = http(port, &raw);
@@ -556,9 +556,9 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     page_up(port);
     // another address is refused, an old link with the key goes on to the fragment, and the question is on the page
     assert!(http(port, &format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n")).starts_with("HTTP/1.1 403"));
-    let keyed = http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let keyed = http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(keyed.contains("Location: /#key=k3y\r\n"), "{keyed}");
-    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(home.contains("The change turned out bigger than a small one"), "{home}");
     // each run shows its steps as a strip, as the earlier page did
     assert!(home.contains("<div class=\"strip\"><i class=\"\" title=\"runner\"></i><i class=\"waiting\" title=\"change\"></i></div>"), "{home}");
@@ -587,9 +587,9 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let answered = events(&s, "page").into_iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
     assert_eq!(answered["answer"]["by"]["by"], "person");
     // with nothing waiting, the page opens on home: what was delivered, newest first, each a link to its run
-    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let home = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(home.contains("<h2>Delivered</h2>") && home.contains("<a class=\"hrow\" href=\"/run/page\">") && home.contains("Nothing waits for you"), "{home}");
-    assert!(http(port, &format!("GET /home HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).contains("<a class=\"hrow\" href=\"/run/page\">"));
+    assert!(http(port, &format!("GET /home HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n")).contains("<a class=\"hrow\" href=\"/run/page\">"));
     assert_eq!(answered["answer"]["context"], "for accountants");
 }
 
@@ -724,7 +724,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
         .expect("page");
     page_up(port);
     let me = "jaynes_key=k3y";
-    let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you"), "{view}");
     // what the run waits for is the first thing to do there: a way to the question, apart from the run's controls
     assert!(view.contains("<a class=\"answer\" href=\"/q/acts/"), "{view}");
@@ -739,7 +739,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"halt"}"#, "")["ok"], true);
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"resume"}"#, "")["ok"], false);
-    let halted = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    let halted = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(halted.contains("data-act=\"resume\""), "{halted}");
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"resume"}"#, me)["ok"], true);
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -747,7 +747,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let r = post(port, "/api/act", r#"{"run":"acts","action":"correct","note":"the Makefile lost its tests","step":"change"}"#, me);
     assert_eq!(r["ok"], true, "{r}");
     std::thread::sleep(std::time::Duration::from_millis(500));
-    let version = http(port, &format!("GET /api/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let version = http(port, &format!("GET /api/version HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(version.contains("\"seq\""), "{version}");
     let t = types(&events(&s, "acts"));
     for want in ["Halted", "Resumed", "DeliveryCorrected"] {
@@ -923,7 +923,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
         .map(Page)
         .expect("page");
     page_up(port);
-    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(html.contains("ink on newsprint"), "the item's sentence is shown");
     assert!(html.contains("<img src=\"data:image/svg+xml;base64,"), "the item's picture is shown");
     // the picture was kept by its fingerprint, apart from the run's copy
@@ -1073,7 +1073,7 @@ fn the_person_starts_a_run_from_the_page() {
         .expect("page");
     page_up(port);
     let me = "jaynes_key=k3y";
-    let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(form.contains("<form id=\"start\"") && form.contains("name=\"request\""), "{form}");
     let role = root().join("crates/shell/tests/roles/small-change");
     let body = serde_json::json!({"role": role, "project": s.project, "request": "say hi instead of hello", "risk": "low"}).to_string();
@@ -1091,7 +1091,7 @@ fn the_person_starts_a_run_from_the_page() {
         }
     }
     assert!(finished, "{}", std::fs::read_to_string(s.home.join(format!("start-{run}.log"))).unwrap_or_default());
-    let view = http(port, &format!("GET /run/{run} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    let view = http(port, &format!("GET /run/{run} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("say hi instead of hello") && view.contains("Finished: delivered"), "{view}");
 }
 
@@ -1120,7 +1120,7 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
         .expect("page");
     page_up(port);
     let me = "jaynes_key=k3y";
-    let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
+    let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     let setup = get("/setup");
     assert!(setup.contains("<h2>Guard</h2>") && setup.contains("chip green\">on") && setup.contains("aaaaaaa"), "{setup}");
     // only the person changes the guard
@@ -1282,7 +1282,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
         .map(Page)
         .expect("page");
     page_up(port);
-    let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
 }
 
@@ -1525,14 +1525,14 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
         .map(Page)
         .expect("page");
     page_up(port);
-    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let html = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     let link = html.split("<a class=\"open\" href=\"/page/").nth(1).and_then(|r| r.split('"').next()).expect("a link to the page").to_string();
     assert!(pages.contains(&&link), "{link} {pages:?}");
-    let served = http(port, &format!("GET /page/{link} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    let served = http(port, &format!("GET /page/{link} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(served.starts_with("HTTP/1.1 200") && served.contains("<h1>"), "{served}");
     assert!(served.contains("Content-Security-Policy: sandbox allow-scripts;"), "{served}");
     // only a kept page by its fingerprint is served, never a path
-    assert!(http(port, &format!("GET /page/..%2Fpage.key HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).starts_with("HTTP/1.1 404"));
+    assert!(http(port, &format!("GET /page/..%2Fpage.key HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n")).starts_with("HTTP/1.1 404"));
 }
 
 /// Answer as the person, at a terminal.

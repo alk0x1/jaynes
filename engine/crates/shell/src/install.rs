@@ -287,7 +287,7 @@ pub const PORT: u16 = 8750;
 /// Start the page in a process of its own if nothing answers on its port, and open it in the browser with its
 /// key, which is never printed where an agent reads it. The page's address without the key.
 pub fn ensure_page(home: &Path) -> String {
-    let address = format!("http://127.0.0.1:{PORT}/");
+    let address = format!("http://localhost:{PORT}/");
     if std::env::var("JAYNES_NO_PAGE").is_ok() || std::net::TcpStream::connect(("127.0.0.1", PORT)).is_ok() {
         return address;
     }
@@ -335,7 +335,7 @@ pub const GUIDE: &str = "How to carry out an agreed change through Jaynes
    From a shell with a sandbox of its own (as Claude Code's Bash with its sandbox on), Jaynes cannot put its box around
    the project's commands, and the run refuses them: use the tool, or a terminal of the person's.
 3. Tell the person that the run goes on by itself and that what needs them is on the page Jaynes opens in their
-   browser (http://127.0.0.1:8750). Do not answer for them.
+   browser (http://localhost:8750). Do not answer for them.
 4. `jaynes show <run>` says where a run is; `jaynes runs` lists them. When it finishes, its branch is jaynes/<run> in
    the project, or, for a role that merges, the change is already on the branch the run started from.
 

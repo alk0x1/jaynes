@@ -75,7 +75,7 @@ Only the plugin, from Claude Code (the `jaynes` command is then built with Rust'
 
 Then work as usual: approve a plan ("go ahead", "do it") and your agent hands
 it to Jaynes. Where a run needs you, you answer in the app, or on the page at
-http://127.0.0.1:8750, which Jaynes opens in your browser.
+http://localhost:8750, which Jaynes opens in your browser.
 
 The plugin also brings a guard: before a git or GitHub action that cannot be
 undone, such as a push, it asks you.

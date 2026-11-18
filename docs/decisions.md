@@ -2,7 +2,24 @@
 
 What was decided, what it costs, and what is still open. Newest first.
 
-## 2026-11-17: The page's key leaves the cookie
+## 2026-11-18: The page's one origin is localhost
+
+**Decided.** The page lives at `http://localhost:PORT`, and only a request with
+the page's key from that origin is the person's. It listens on 127.0.0.1 and on
+::1, so no other program answers for localhost; when another program holds
+::1 at its port, the page does not start and says why, and a machine without
+IPv6 has only 127.0.0.1. A page opened by number (`127.0.0.1:PORT`) is sent on
+to localhost with its path and query, and the browser takes the key's fragment
+along; a program that sends no origin may still speak by number, as an agent.
+The page serves at most 64 connections at once and closes the rest at once.
+
+**Why.** Proving the person with a passkey works only on localhost, never on a
+number, and an origin the page does not hold whole could be answered by
+another program.
+
+**Tradeoffs.** The browser keeps the key per origin: whoever had the page open
+at 127.0.0.1 opens the link once again after updating.
+
 
 **Decided.** The link the page prints carries its key in the fragment
 (`/#key=...`), which a browser never sends to a server. The page keeps it for

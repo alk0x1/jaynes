@@ -28,7 +28,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
   summary RUN             what a finished run did, in Markdown, to paste in a merge request or a note
-  page [--port N]         the page where you answer, on 127.0.0.1 (default port 8750)
+  page [--port N]         the page where you answer, at http://localhost:8750 (or the port given)
   add NAME|SOURCE | remove NAME | roles   install a role (by name from the index, a folder, or URL#path), remove one, list them
   index check DIR [--write]   check an index: every role's content and promises, proved again
   guide                   how an agent carries out a change through Jaynes

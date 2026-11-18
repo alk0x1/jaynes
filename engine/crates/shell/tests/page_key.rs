@@ -1,4 +1,4 @@
-//! The page's key, end to end: it never rides in a cookie, which every server on 127.0.0.1 receives whatever its
+//! The page's key, end to end: it never rides in a cookie, which every server on the machine's name receives whatever its
 //! port, and only a request from the page's own origin that carries it counts as the person. What the page shows
 //! from agents never runs as a script there, since a script of the page's origin can read the key.
 
@@ -27,13 +27,13 @@ fn http(port: u16, raw: &str) -> String {
 }
 
 fn get(port: u16, path: &str, extra: &str) -> String {
-    http(port, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{extra}\r\n"))
+    http(port, &format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\n{extra}\r\n"))
 }
 
 /// A POST with the headers given, each line ending in \r\n.
 fn post(port: u16, path: &str, headers: &str) -> String {
     let body = "{}";
-    http(port, &format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\n\r\n{body}", body.len()))
+    http(port, &format!("POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\n\r\n{body}", body.len()))
 }
 
 fn json(reply: &str) -> serde_json::Value {
@@ -66,7 +66,7 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
         .output()
         .expect("start");
     assert!(started.status.success(), "{}{}", String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
-    let port = 20750 + (std::process::id() % 1000) as u16 * 4 % 4000 + ["cookie", "origin", "script", "broken"].iter().position(|n| *n == name).unwrap_or(0) as u16;
+    let port = 20750 + (std::process::id() % 1000) as u16 * 4 % 4000 + ["cookie", "origin", "script", "broken", "both"].iter().position(|n| *n == name).unwrap_or(0) as u16;
     let said = std::fs::File::create(base.join("said.txt")).expect("said");
     let child = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
@@ -85,7 +85,7 @@ fn the_page_s_key_never_rides_in_a_cookie() {
     // the page says where its key is, never the key, and the way in it names carries it in the fragment, which a
     // browser never sends to any server
     let said = std::fs::read_to_string(base.join("said.txt")).expect("said");
-    assert!(said.contains(&format!("the page: http://127.0.0.1:{port}/ . Open it with its key: http://127.0.0.1:{port}/#key= followed by")), "{said}");
+    assert!(said.contains(&format!("the page: http://localhost:{port}/ . Open it with its key: http://localhost:{port}/#key= followed by")), "{said}");
     assert!(!said.contains("k3y"), "{said}");
     // an old link with the key in its query still works once: it goes to the fragment and clears the old cookie
     let old = get(port, "/run/marked?key=k3y", "");
@@ -107,7 +107,7 @@ fn the_page_s_key_never_rides_in_a_cookie() {
         assert!(!reply.contains("Set-Cookie"), "{path}: {reply}");
     }
     // the old cookie no longer makes anyone the person
-    let r = json(&post(port, "/api/whoami", &format!("Origin: http://127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n")));
+    let r = json(&post(port, "/api/whoami", &format!("Origin: http://localhost:{port}\r\nCookie: jaynes_key=k3y\r\n")));
     assert_eq!(r["person"], false, "{r}");
 }
 
@@ -115,21 +115,32 @@ fn the_page_s_key_never_rides_in_a_cookie() {
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn only_a_request_from_the_page_s_own_origin_with_its_key_counts_as_the_person() {
     let (_page, port, _base) = page("origin");
-    let ours = format!("Origin: http://127.0.0.1:{port}\r\n");
+    let ours = format!("Origin: http://localhost:{port}\r\n");
     let key = "X-Jaynes-Key: k3y\r\n";
     assert_eq!(json(&post(port, "/api/whoami", &format!("{ours}{key}")))["person"], true);
-    // localhost is not this page: the page listens on 127.0.0.1, and another server can answer localhost on ::1
-    assert!(post(port, "/api/whoami", &format!("Origin: http://localhost:{port}\r\n{key}")).starts_with("HTTP/1.1 403"));
-    let named = http(port, &format!("GET /run/marked HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
-    assert!(named.starts_with("HTTP/1.1 303") && named.contains(&format!("Location: http://127.0.0.1:{port}/\r\n")), "{named}");
+    // the page's one origin is localhost: 127.0.0.1 names the same machine but is not the page's origin
+    let numbers = format!("Origin: http://127.0.0.1:{port}\r\n");
+    assert!(post(port, "/api/whoami", &format!("{numbers}{key}")).starts_with("HTTP/1.1 403"));
+    let by_number = |raw: String| http(port, &raw);
+    // an old link or bookmark by number goes on to localhost, path and query kept (the browser takes the fragment along)
+    let old = by_number(format!("GET /run/marked?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    assert!(old.starts_with("HTTP/1.1 308") && old.contains(&format!("Location: http://localhost:{port}/run/marked?x=1\r\n")), "{old}");
+    // and the cookie an earlier version kept for that name is cleared there, since cookies are kept by name
+    assert!(old.contains("Set-Cookie: jaynes_key=; Path=/; Max-Age=0"), "{old}");
+    let away = by_number(format!("GET //evil.example/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
+    assert!(away.contains(&format!("Location: http://localhost:{port}//evil.example/x\r\n")), "never another host: {away}");
+    // an agent or the MCP server, which send no origin, may still speak by number, as an agent
+    let agent = by_number(format!("POST /api/whoami HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n{key}Content-Length: 2\r\n\r\n{{}}"));
+    assert_eq!(json(&agent)["person"], false, "{agent}");
     // the key alone, from a program that sends no origin, is not the person
     assert_eq!(json(&post(port, "/api/whoami", key))["person"], false);
     // a wrong key, or none, is not the person
     assert_eq!(json(&post(port, "/api/whoami", &format!("{ours}X-Jaynes-Key: k3y0\r\n")))["person"], false);
     assert_eq!(json(&post(port, "/api/whoami", &ours))["person"], false);
     // another app on this machine, or any site, is refused outright, key or not
-    let alike = format!("http://127.0.0.1:{port}.evil.example");
-    for other in ["http://127.0.0.1:3000", "http://localhost:5173", "https://example.com", "null", alike.as_str()] {
+    let alike = format!("http://localhost:{port}.evil.example");
+    let numbered = format!("http://127.0.0.1:{port}");
+    for other in ["http://127.0.0.1:3000", "http://localhost:5173", "https://example.com", "null", alike.as_str(), numbered.as_str()] {
         let reply = post(port, "/api/whoami", &format!("Origin: {other}\r\n{key}"));
         assert!(reply.starts_with("HTTP/1.1 403"), "{other}: {reply}");
         let reply = post(port, "/api/answer", &format!("Origin: {other}\r\n{key}"));
@@ -191,4 +202,18 @@ fn a_request_that_breaks_its_handler_does_not_stop_the_page() {
     assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
     // and the page goes on answering
     assert!(get(port, "/home", "").starts_with("HTTP/1.1 200"));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_page_is_reached_by_localhost_on_both_of_its_addresses() {
+    let (_page, port, _base) = page("both");
+    for address in ["127.0.0.1", "::1"] {
+        use std::io::{Read, Write};
+        let mut s = std::net::TcpStream::connect((address, port)).unwrap_or_else(|e| panic!("{address}: {e}"));
+        s.write_all(format!("GET /api/version HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes()).expect("write");
+        let mut out = String::new();
+        let _read = s.read_to_string(&mut out);
+        assert!(out.starts_with("HTTP/1.1 200"), "{address}: {out}");
+    }
 }

@@ -1,8 +1,8 @@
 //! The page: the questions waiting for the person, one at a time, answered in rows with a line of context.
 //!
-//! A local web server on 127.0.0.1. Whoever opened the link with the page's key (kept as a cookie for a year, through
-//! the browser's restarts) answers as the person; anyone else is an agent, and the core refuses what an agent may
-//! not answer. What an answer will do is written by the core (`jaynes_core::effects`) and fetched as the person marks
+//! A local web server whose one origin is http://localhost:PORT: it listens on 127.0.0.1 and on ::1, so no other
+//! program answers for that name. Whoever opened the link with the page's key (kept by the browser for that origin)
+//! answers as the person; anyone else is an agent, and the core refuses what an agent may not answer. What an answer will do is written by the core (`jaynes_core::effects`) and fetched as the person marks
 //! the rows; the page never writes it.
 //! Requests must name this server as their host and origin, and posts must be JSON, so another site open in the
 //! same browser cannot answer.
@@ -30,6 +30,8 @@ pub struct Page {
 
 struct Request {
     method: String,
+    /// The path and query as they came, for a request sent on to the page's name.
+    target: String,
     path: String,
     query: BTreeMap<String, String>,
     headers: BTreeMap<String, String>,
@@ -50,6 +52,35 @@ pub fn key() -> Result<String, String> {
 static RUNNING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 /// The newest commit where Jaynes is published, asked once an hour.
 static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Connections the page serves at once, on both of its addresses.
+const MOST_AT_ONCE: usize = 64;
+static AT_ONCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A connection's place among those served at once, given back when it ends, however it ends.
+struct Turn;
+
+impl Turn {
+    fn take() -> Option<Turn> {
+        use std::sync::atomic::Ordering;
+        let mut n = AT_ONCE.load(Ordering::SeqCst);
+        loop {
+            if n >= MOST_AT_ONCE {
+                return None;
+            }
+            match AT_ONCE.compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(Turn),
+                Err(now) => n = now,
+            }
+        }
+    }
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        AT_ONCE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// How long the page waits for a connection to send its request, or to take its reply.
 const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 /// The most a request's head may hold, and its body: the page's own are far smaller.
@@ -62,6 +93,21 @@ static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 impl Page {
     pub fn serve(&self) -> Result<(), String> {
         let listener = TcpListener::bind(("127.0.0.1", self.port)).map_err(|e| format!("cannot listen on {}: {e}", self.port))?;
+        // localhost is the page's origin, and the browser may reach it on ::1: the page holds that address too, or
+        // another program there would answer for the page. A machine without IPv6 has nothing there to hold.
+        let six = match TcpListener::bind(("::1", self.port)) {
+            Ok(l) => Some(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                return Err(format!(
+                    "another program answers on [::1]:{}, and it would answer for localhost, the page's origin: the page does not start. Stop that program, or give the page another port",
+                    self.port
+                ));
+            }
+            Err(e) => {
+                say(&format!("no IPv6 here ({e}): the page listens on 127.0.0.1 alone, which is all localhost reaches"));
+                None
+            }
+        };
         RUNNING.get_or_init(crate::install::installed_commit);
         if std::env::var("JAYNES_NO_UPDATE_CHECK").is_err() {
             std::thread::spawn(|| loop {
@@ -75,26 +121,40 @@ impl Page {
         }
         // the key never goes to what the page says, which Jaynes keeps in page.log: whoever needs it reads its file
         say(&format!(
-            "the page: http://127.0.0.1:{port}/ . Open it with its key: http://127.0.0.1:{port}/#key= followed by what {} holds",
+            "the page: http://localhost:{port}/ . Open it with its key: http://localhost:{port}/#key= followed by what {} holds",
             self.home.join("page.key").display(),
             port = self.port
         ));
+        if let Some(six) = six {
+            let page = self.clone();
+            let _started = std::thread::Builder::new().name("page-six".into()).spawn(move || page.accept(&six));
+        }
+        self.accept(&listener);
+        Ok(())
+    }
+
+    /// Answer what comes to one address. Each connection on its own, with a deadline: one that says nothing, or never
+    /// ends its head, holds no other, and one whose request breaks its handler ends alone, never the page. Past
+    /// [`MOST_AT_ONCE`] in service, a new connection is closed at once.
+    fn accept(&self, listener: &TcpListener) {
         for stream in listener.incoming().flatten() {
-            // each connection on its own, with a deadline: one that says nothing, or never ends its head, holds no
-            // other, and one whose request breaks its handler ends alone, never the page
+            let Some(turn) = Turn::take() else {
+                drop(stream);
+                continue;
+            };
             let _deadline = stream.set_read_timeout(Some(READ_DEADLINE)).and_then(|()| stream.set_write_timeout(Some(READ_DEADLINE)));
             let page = self.clone();
             let _started = std::thread::Builder::new().name("page-connection".into()).spawn(move || {
                 let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream)));
+                drop(turn);
             });
         }
-        Ok(())
     }
 
     fn handle(&self, mut stream: TcpStream) -> Result<(), String> {
         let req = read(&stream)?;
         // reading the person's words takes a model's time: it is answered on a thread of its own, and the page goes on
-        if req.method == "POST" && req.path == "/api/understand" && self.local(req.headers.get("host"), false) {
+        if req.method == "POST" && req.path == "/api/understand" && self.host(&req) != Host::Other {
             let json_body = req.headers.get("content-type").is_some_and(|c| c.starts_with("application/json"));
             let origin_ok = req.headers.get("origin").is_none_or(|o| self.local(Some(o), true));
             if json_body && origin_ok {
@@ -125,12 +185,22 @@ impl Page {
         stream.write_all(body.as_bytes()).map_err(|e| e.to_string())
     }
 
-    /// Whether a Host (or, with `scheme`, an Origin) is this page's, exactly. Only 127.0.0.1: the page listens there, and
-    /// another server may answer localhost on ::1.
+    /// Whether an Origin is this page's, exactly: http://localhost:PORT, its one origin.
     fn local(&self, value: Option<&String>, scheme: bool) -> bool {
         let p = self.port;
-        let ours = if scheme { format!("http://127.0.0.1:{p}") } else { format!("127.0.0.1:{p}") };
+        let ours = if scheme { format!("http://localhost:{p}") } else { format!("localhost:{p}") };
         value.is_some_and(|v| *v == ours)
+    }
+
+    /// How a request names the page: by its name, by one of its numbers (which a browser is sent on from, and a
+    /// program may still use, as an agent), or not at all.
+    fn host(&self, req: &Request) -> Host {
+        let p = self.port;
+        match req.headers.get("host").map(String::as_str) {
+            Some(h) if h == format!("localhost:{p}") => Host::Name,
+            Some(h) if h == format!("127.0.0.1:{p}") || h == format!("[::1]:{p}") => Host::Number,
+            _ => Host::Other,
+        }
     }
 
     /// Whether a request is the person's: it carries the page's key in its header and comes from the page's own
@@ -147,12 +217,20 @@ impl Page {
     }
 
     fn route(&self, req: &Request) -> (&'static str, &'static str, String, Vec<(String, String)>) {
-        // the page by the name localhost goes on to its own address; the fragment of the link goes with it
-        if req.method == "GET" && req.headers.get("host").is_some_and(|h| *h == format!("localhost:{}", self.port)) {
-            return ("303 See Other", "text/plain", String::new(), vec![("Location".into(), format!("http://127.0.0.1:{}/", self.port))]);
-        }
-        if !self.local(req.headers.get("host"), false) {
-            return ("403 Forbidden", "text/plain", "this page answers only on its own local address".into(), vec![]);
+        match self.host(req) {
+            Host::Name => {}
+            // an old link or bookmark by number goes on to the page's name, path and query kept, and the browser takes
+            // the fragment along; the cookie earlier versions kept for that name is cleared there
+            Host::Number if req.method == "GET" => {
+                let mut headers = vec![("Location".to_string(), format!("http://localhost:{}{}", self.port, req.target))];
+                if Self::old_cookie(req) {
+                    headers.push(("Set-Cookie".into(), CLEAR.into()));
+                }
+                return ("308 Permanent Redirect", "text/plain", String::new(), headers);
+            }
+            // a program, such as an agent, may still speak to the page by number, and never as the person
+            Host::Number if req.headers.get("origin").is_none() => {}
+            _ => return ("403 Forbidden", "text/plain", "this page answers only on its own local address".into(), vec![]),
         }
         if req.method == "GET" {
             // a link of earlier versions, with the key in its query: it goes on to the fragment, and the old cookie goes
@@ -1122,7 +1200,7 @@ fn read(stream: &TcpStream) -> Result<Request, String> {
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let target = parts.next().unwrap_or("/").to_string();
-    let (path, q) = target.split_once('?').map(|(p, q)| (p.to_string(), q.to_string())).unwrap_or((target, String::new()));
+    let (path, q) = target.split_once('?').map(|(p, q)| (p.to_string(), q.to_string())).unwrap_or((target.clone(), String::new()));
     let query = q.split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let mut headers = BTreeMap::new();
     let mut head = line.len() as u64;
@@ -1143,7 +1221,7 @@ fn read(stream: &TcpStream) -> Result<Request, String> {
     let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(MOST_BODY as usize);
     let mut body = vec![0u8; len];
     r.read_exact(&mut body).map_err(|e| e.to_string())?;
-    Ok(Request { method, path, query, headers, body })
+    Ok(Request { method, target, path, query, headers, body })
 }
 
 /// The script that holds the page's key, served from /key.js before the page's own. The key comes once in the link's
@@ -1396,6 +1474,15 @@ setInterval(async () => {
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 /// What clears the cookie earlier versions kept the key in: every server on 127.0.0.1 received it, whatever its port.
+/// How a request names the page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Host {
+    Name,
+    Number,
+    Other,
+}
+
+/// What clears the cookie earlier versions kept the key in.
 const CLEAR: &str = "jaynes_key=; Path=/; Max-Age=0";
 
 const PAGE: &str = r##"<!doctype html>
