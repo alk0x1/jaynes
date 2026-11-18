@@ -190,6 +190,20 @@ class Download(unittest.TestCase):
             net = self.refused(url, "https")
             self.assertEqual(net.sent, [], url)
 
+    def test_an_address_written_as_a_number_readers_do_not_agree_on_is_not_sent(self):
+        # the system's resolver reads 0177 as decimal, 177, and a browser as octal, 127: the page the address means
+        # is not the page that would be downloaded, so neither is
+        for url in ["https://0177.0.0.1/", "https://0x7f.0.0.1/", "https://2130706433/", "https://127.1/", "https://010.0.0.1/",
+                    "https://1.2.3.04/", "https://1.2.3/", "https://1.2.3.4.5/", "https://256.1.1.1/", "https://0x5db8d822/"]:
+            net = Net(names={})
+            net.resolve = lambda host, names=net.names: [PUBLIC]  # whatever a resolver would say
+            self.assertEqual(self.refused(url, "a number in a form that readers do not agree on", net).sent, [], url)
+
+    def test_an_address_written_as_four_plain_numbers_and_a_name_of_hex_letters_are_read(self):
+        net = Net(names={"93.184.216.34": [PUBLIC], "bad.cafe": [PUBLIC]}, pages={"93.184.216.34/": page(), "bad.cafe/": page()})
+        self.assertEqual(net.download("https://93.184.216.34/")["body"], HTML)
+        self.assertEqual(net.download("https://bad.cafe/")["body"], HTML)
+
     def test_no_name_and_password_in_the_address(self):
         self.assertEqual(self.refused("https://user:pw@example.org/", "name or password").sent, [])
 

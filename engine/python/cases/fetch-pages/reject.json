@@ -1142,5 +1142,20 @@
    }
   },
   "expect": "reject"
+ },
+ {
+  "id": "loopback-octal",
+  "hole": "0177.0.0.1 is 127.0.0.1 written in octal, as browsers and inet_aton read it; a resolver that reads 0177 as decimal sends to 177.0.0.1, a host of the internet that is not the address the agent listed",
+  "url": "https://0177.0.0.1/",
+  "answers": {
+   "https://0177.0.0.1/": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/html; charset=utf-8"
+    },
+    "body": "<p>FILL</p>"
+   }
+  },
+  "expect": "reject"
  }
 ]

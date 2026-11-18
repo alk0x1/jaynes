@@ -87,11 +87,17 @@ class TheReader(unittest.TestCase):
             with never:
                 got = menu.CASE_READERS["fetch-pages"]({"id": "n", "url": url})
             self.assertIsInstance(got, Fail, url)
-        # what the machine does read as an address in any of its forms goes to its resolver, which needs no network
-        for host in ("127.0.0.1", "0177.0.0.1", "0x7f.0.0.1", "2130706433", "127.1", "localhost"):
+        # what the machine reads as an address goes to its resolver, which needs no network
+        for host, written in (("127.0.0.1", "127.0.0.1"), ("localhost", "localhost"), ("::1", "[::1]")):
             with mock.patch.object(menu, "_resolve", return_value=["127.0.0.1"]) as asked:
-                menu.CASE_READERS["fetch-pages"]({"id": "n", "url": f"https://{host}/"})
+                menu.CASE_READERS["fetch-pages"]({"id": "n", "url": f"https://{written}/"})
             asked.assert_called_once_with(host)
+        # a number written in a form readers do not agree on is refused before any lookup
+        for host in ("0177.0.0.1", "0x7f.0.0.1", "2130706433", "127.1"):
+            with never:
+                got = menu.CASE_READERS["fetch-pages"]({"id": "n", "url": f"https://{host}/"})
+            self.assertIsInstance(got, Fail, host)
+            self.assertIn("readers do not agree", " ".join(got.reasons), host)
 
     def test_counts_as_off_the_internet_what_either_its_own_rule_or_the_menu_s_does(self):
         # ranges the menu closes that Python may call global, an address with a zone, and what Python itself closes

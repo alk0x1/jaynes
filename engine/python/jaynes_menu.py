@@ -787,6 +787,14 @@ def _address(url: str) -> tuple[str, str]:
         raise Unread("its address carries a name or password")
     if port not in (None, 443):
         raise Unread(f"its address names the port {port}, and only the usual one is used")
+    # A host written as numbers is read only in the one form every reader reads alike, four decimal numbers of at
+    # most 255 with no zero in front: the system's resolver reads 0177 as decimal and a browser as octal, so 0177.0.0.1
+    # is a public address to one and this machine to the other, and the page downloaded would not be the one meant.
+    labels = parts.hostname.split(".")
+    if all(re.fullmatch(r"0x[0-9a-f]*|[0-9]+", label) for label in labels):
+        plain = len(labels) == 4 and all(re.fullmatch(r"0|[1-9][0-9]{0,2}", label) and int(label) <= 255 for label in labels)
+        if not plain:
+            raise Unread("its address writes a number in a form that readers do not agree on")
     target = quote(parts.path or "/", safe="/%:@!$&'()*+,;=~-._") + ("?" + quote(parts.query, safe="/%:@!$&'()*+,;=~-._?") if parts.query else "")
     return parts.hostname, target
 
