@@ -313,7 +313,320 @@ def _executable(path: str) -> bool:
     return os.access(path, os.X_OK)
 
 
-STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false}
+# --- pages -----------------------------------------------------------------------------------------------------
+#
+# What an agent says a page says is the agent's word. Here Jaynes downloads the page itself, keeps its text in the
+# step's output, which is in the record, and says by comparing text whether a quote is in it.
+#
+# The address comes from an agent, so it is held to rules before anything is sent: https only, the usual port, no
+# name or password, and every address the name resolves to on the public internet, checked again at each
+# redirect. The connection goes to the address that was checked. A page is read within a size and a time.
+
+PAGE_BYTES = 2_000_000      # a page larger than this is not read
+PAGE_SECONDS = 20.0         # nor one that takes longer, redirects included
+PAGE_REDIRECTS = 5
+PAGES_MAX = 12              # pages one step downloads
+QUOTE_CHARS = 20            # a quote shorter than this, as compared, proves nothing
+SCRIPTED_BELOW = 200        # an HTML page with less text than this was left for a script to fill
+PAGE_AGENT = "jaynes"
+
+_QUOTES = "\"“”„‟«»‘’‚‛`´"
+_DASHES = "‐‑‒–—―−"
+_UNSEEN = "­​‌‍⁠﻿"
+_HTML_TYPES = ("text/html", "application/xhtml+xml")
+_TEXT_TYPES = ("text/plain", "text/markdown")
+_SKIPPED = ("script", "style", "noscript", "template", "svg")
+_BLOCKS = ("address", "article", "aside", "blockquote", "br", "dd", "details", "div", "dl", "dt", "figcaption", "figure",
+           "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
+           "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr", "ul")
+
+
+class Unread(Exception):
+    """Why a page was not read. What is quoted from a page that was not read is not proved."""
+
+
+def same_words(text: str) -> str:
+    """The text as two texts are compared: Unicode compatibility forms folded (NFKC), characters that do not show
+    dropped, every kind of quotation mark made ', every kind of dash made -, and each run of spaces and line
+    breaks made one space. Letters, digits, their case and every other mark stay as written."""
+    import unicodedata
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join("'" if c in _QUOTES else "-" if c in _DASHES else "" if c in _UNSEEN else c for c in text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def held(text: str, quote: str) -> bool:
+    """Whether ``text`` has the words of ``quote``, by ``same_words``."""
+    words = same_words(quote)
+    return bool(words) and words in same_words(text)
+
+
+def _reader() -> Any:
+    from html.parser import HTMLParser
+
+    class Reader(HTMLParser):
+        """The text of an HTML page as a reader sees it: no scripts or styles, and blocks apart."""
+
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.parts: list[str] = []
+            self.skipping = 0
+
+        def handle_starttag(self, tag: str, attrs: Any) -> None:
+            if tag in _SKIPPED:
+                self.skipping += 1
+            elif tag in _BLOCKS:
+                self.parts.append("\n")
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in _SKIPPED:
+                self.skipping = max(0, self.skipping - 1)
+            elif tag in _BLOCKS:
+                self.parts.append("\n")
+
+        def handle_data(self, data: str) -> None:
+            if not self.skipping:
+                self.parts.append(data)
+
+    return Reader()
+
+
+def page_text(body: bytes, content_type: str) -> str:
+    """The text of a downloaded page, or ``Unread``: a format Jaynes does not read, bytes that are not text, or an
+    HTML page that leaves its text for a script to fill."""
+    kind = content_type.split(";")[0].strip().lower()
+    if kind not in _HTML_TYPES and kind not in _TEXT_TYPES:
+        raise Unread(f"its format ({kind or 'not said'}) is not one Jaynes reads")
+    if b"\x00" in body[:4096]:
+        raise Unread("it is not text")
+    named = re.search(r"charset=[\"']?([\w.:-]+)", content_type, re.I)
+    charset = named.group(1) if named else ""
+    if not charset and kind in _HTML_TYPES:
+        meta = re.search(rb"<meta[^>]+charset=[\"']?([\w.:-]+)", body[:4096], re.I)
+        charset = meta.group(1).decode("ascii", "replace") if meta else ""
+    try:
+        text = body.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        text = body.decode("utf-8", errors="replace")
+    if kind in _TEXT_TYPES:
+        return text
+    reader = _reader()
+    reader.feed(text)
+    reader.close()
+    seen = "".join(reader.parts)
+    if len(same_words(seen)) < SCRIPTED_BELOW:
+        raise Unread("it has almost no text of its own: a script puts the page together in the browser")
+    return seen
+
+
+def _public(ip: str) -> bool:
+    """Whether an address is on the public internet: not this machine, a private or link-local network, a shared
+    or reserved range, multicast, or an IPv6 form that carries an IPv4 address inside."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    if a.version == 6:
+        if a.ipv4_mapped is not None:
+            a = a.ipv4_mapped
+        elif a.sixtofour is not None or a.teredo is not None or a in ipaddress.ip_network("64:ff9b::/96"):
+            return False
+    return a.is_global and not a.is_multicast
+
+
+def _address(url: str) -> tuple[str, str]:
+    """The host and the request target of an address Jaynes may download, or ``Unread``."""
+    from urllib.parse import quote, urlsplit
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        raise Unread("only https addresses are downloaded, and this one does not read") from None
+    if parts.scheme.lower() != "https" or not parts.hostname:
+        raise Unread("only https addresses are downloaded")
+    if parts.username is not None or parts.password is not None:
+        raise Unread("its address carries a name or password")
+    if port not in (None, 443):
+        raise Unread(f"its address names the port {port}, and only the usual one is used")
+    target = quote(parts.path or "/", safe="/%:@!$&'()*+,;=~-._") + ("?" + quote(parts.query, safe="/%:@!$&'()*+,;=~-._?") if parts.query else "")
+    return parts.hostname, target
+
+
+def _resolve(host: str) -> list[str]:
+    """Every address a name resolves to."""
+    import socket
+    found = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    return sorted({str(sockaddr[0]) for _family, _type, _proto, _name, sockaddr in found})
+
+
+def _send(host: str, ip: str, target: str, timeout: float) -> tuple[int, dict[str, str], Callable[[int], bytes]]:
+    """One GET over TLS to ``ip``, the address that was checked, with the certificate held to ``host``."""
+    import http.client
+    import socket
+    import ssl
+
+    class Pinned(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            sock = socket.create_connection((ip, 443), self.timeout)
+            self.sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+
+    conn = Pinned(host, 443, timeout=timeout)
+    conn.request("GET", target, headers={"User-Agent": PAGE_AGENT, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
+                                         "Accept-Encoding": "identity", "Connection": "close"})
+    answer = conn.getresponse()
+    return answer.status, {k.lower(): v for k, v in answer.getheaders()}, answer.read
+
+
+def download(url: str, *, resolve: Callable[[str], list[str]] = _resolve, send: Callable[..., Any] = _send,
+             clock: Callable[[], float] | None = None) -> dict[str, Any]:
+    """Download one page under the rules above: ``{final_url, type, body}``, or ``Unread`` with the reason."""
+    import http.client
+    import time
+    from urllib.parse import urljoin
+    clock = clock or time.monotonic
+    slow = f"it took longer than {PAGE_SECONDS:.0f} s"
+    deadline = clock() + PAGE_SECONDS
+    for _hop in range(PAGE_REDIRECTS + 1):
+        host, target = _address(url)
+        try:
+            addresses = resolve(host)
+        except (OSError, UnicodeError):
+            raise Unread("its address was not found") from None
+        if not addresses or not all(_public(a) for a in addresses):
+            raise Unread("its address is not on the public internet")
+        left = deadline - clock()
+        if left <= 0:
+            raise Unread(slow)
+        try:
+            status, headers, read = send(host, addresses[0], target, left)
+            if status in (301, 302, 303, 307, 308) and headers.get("location"):
+                url = urljoin(url, headers["location"])
+                continue
+            if status != 200:
+                raise Unread(f"the server answered {status}")
+            body = b""
+            while len(body) <= PAGE_BYTES:
+                if clock() > deadline:
+                    raise Unread(slow)
+                piece = read(min(65536, PAGE_BYTES + 1 - len(body)))
+                if not piece:
+                    break
+                body += piece
+        except (OSError, http.client.HTTPException) as e:
+            raise Unread(f"the connection failed ({type(e).__name__})") from None
+        if len(body) > PAGE_BYTES:
+            raise Unread(f"it is larger than {PAGE_BYTES // 1_000_000} MB")
+        return {"final_url": url, "type": headers.get("content-type", ""), "body": body}
+    raise Unread(f"it redirected more than {PAGE_REDIRECTS} times")
+
+
+def _quotes_of(item: dict[str, Any]) -> list[str]:
+    """The quotes an item carries: ``quote``, one, and ``quotes``, a list."""
+    one = [item["quote"]] if isinstance(item.get("quote"), str) else []
+    more = [q for q in item["quotes"] if isinstance(q, str)] if isinstance(item.get("quotes"), list) else []
+    return one + more
+
+
+def _pages_asked(listed: Any) -> dict[str, list[str] | None] | None:
+    """The pages a list names, each with the quotes listed with it (None when the list is of addresses alone); None
+    when it is not a list of pages."""
+    if not isinstance(listed, list) or not listed:
+        return None
+    asked: dict[str, list[str] | None] = {}
+    for item in listed:
+        if isinstance(item, str) and item.strip():
+            asked.setdefault(item, None)
+        elif isinstance(item, dict) and isinstance(item.get("url"), str) and item["url"].strip():
+            asked[item["url"]] = (asked.get(item["url"]) or []) + _quotes_of(item)
+        else:
+            return None
+    return asked
+
+
+def _fingerprint(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[str, Any]] = download) -> Any:
+    """Download the pages an earlier step lists. The output says, for each, whether it was read and why not, with
+    the fingerprint of what came; keeps the text of each page read, in ``texts``; and, for the quotes listed with
+    a page, whether each is in its text. A page that could not be read is never an error of the step: it is a
+    page not read, and nothing quoted from it is found."""
+    from concurrent.futures import ThreadPoolExecutor
+    step, _, field = str(params["pages"]).partition(".")
+    asked = _pages_asked((_given(call).get(step) or {}).get(field))
+    if asked is None:
+        return Refused(f"{params['pages']} lists no pages: it is a list of https addresses, or of items that each have a url")
+    if len(asked) > PAGES_MAX:
+        return Refused(f"{params['pages']} lists {len(asked)} pages, and a step downloads at most {PAGES_MAX}")
+
+    def one(url: str) -> tuple[dict[str, Any], str]:
+        page: dict[str, Any] = {"url": url, "read": False, "why": "", "final_url": "", "type": "", "bytes": 0, "sha256": "",
+                                "text_sha256": "", "chars": 0}
+        text = ""
+        try:
+            got = download(url)
+            body = got["body"]
+            page.update(final_url=got["final_url"], type=got["type"].split(";")[0].strip().lower(), bytes=len(body), sha256=_fingerprint(body))
+            text = page_text(body, got["type"])
+            page.update(read=True, text_sha256=_fingerprint(text.encode()), chars=len(text))
+        except Unread as e:
+            page["why"] = str(e)
+        except Exception as e:  # whatever went wrong, the page was not read, and that is said
+            page["why"] = f"Jaynes could not read it ({type(e).__name__})"
+        quotes = asked[url]
+        if quotes is not None:
+            page["quotes"] = [{"quote": q, "found": page["read"] and held(text, q)} for q in quotes]
+        return page, text
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        done = list(pool.map(one, asked))
+    return {"pages": [page for page, _ in done], "texts": {page["url"]: text for page, text in done if page["read"]},
+            "any_read": any(page["read"] for page, _ in done)}
+
+
+def quotes_found(call: Call, params: Params) -> Any:
+    """Every quote the output lists, each with the url of its page, is in the text Jaynes downloaded from that page.
+    A quote from a page that was not read, or not downloaded at all, is not proved."""
+    field, step = str(params["field"]), str(params["pages"])
+    fetched = _given(call).get(step)
+    pages = fetched.get("pages") if isinstance(fetched, dict) else None
+    texts = fetched.get("texts") if isinstance(fetched, dict) else None
+    if not isinstance(pages, list) or not isinstance(texts, dict) or not all(isinstance(p, dict) for p in pages):
+        return Blocked(f"the check was not given the pages {step} downloaded")
+    by_url = {str(p.get("url")): p for p in pages}
+    for url, text in texts.items():
+        if not isinstance(text, str) or _fingerprint(text.encode()) != by_url.get(url, {}).get("text_sha256"):
+            return Blocked(f"the text kept from {url} is not the text that was downloaded")
+    output = call.get("output")
+    listed = output.get(field) if isinstance(output, dict) else None
+    if not isinstance(listed, list) or not all(isinstance(i, dict) for i in listed):
+        return Fail(f"{field} is a list of quotes, each with the url of its page and the quote")
+    reasons: list[str] = []
+    count = 0
+    for item in listed:
+        url = str(item.get("url") or "")
+        for quote in _quotes_of(item):
+            count += 1
+            short = quote if len(quote) <= 80 else quote[:77] + "..."
+            page = by_url.get(url)
+            if page is None:
+                reasons.append(f"\"{short}\": its page, {url or 'none named'}, was not downloaded by Jaynes in this run")
+            elif not page.get("read"):
+                reasons.append(f"\"{short}\": Jaynes could not read {url} ({page.get('why')}), so nothing quoted from it is proved")
+            elif len(same_words(quote)) < QUOTE_CHARS:
+                reasons.append(f"\"{short}\" is too short to prove anything: quote at least {QUOTE_CHARS} characters")
+            elif not held(texts.get(url, ""), quote):
+                reasons.append(f"\"{short}\": these words are not in the text Jaynes downloaded from {url}")
+    if count == 0:
+        return Fail(f"there is no quote to prove: {field} lists none")
+    return Fail(*reasons[:20]) if reasons else Pass()
+
+
+STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,
+                                                       "fetch-pages": fetch_pages}
 CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "suite-passes": suite_passes,
     "tests-fail-for-the-bug": tests_fail_for_the_bug,
@@ -324,6 +637,7 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "field-empty": field_empty,
     "field-max-length": field_max_length,
     "files-within": files_within,
+    "quotes-found": quotes_found,
     "script": script,
 }
 

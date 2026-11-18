@@ -244,6 +244,13 @@ const MENU_STEPS: &[MenuStep] = &[
         params: &[("field", Param::StepField, true), ("says", Param::Text, true)],
         fields: &[],
     },
+    MenuStep {
+        name: "fetch-pages",
+        about: "Jaynes downloads the pages an earlier step lists, keeps their text, and says which quotes are in it.",
+        reach: Reach::default,
+        params: &[("pages", Param::StepField, true)],
+        fields: &["pages", "any_read"],
+    },
 ];
 
 fn text(t: &toml::Table, k: &str) -> String {
@@ -324,6 +331,13 @@ const MENU_CHECKS: &[MenuCheck] = &[
             let f = text(t, "field");
             format!("every file in {} is one the step may write", if f.is_empty() { "files".to_string() } else { f })
         },
+    },
+    MenuCheck {
+        name: "quotes-found",
+        kind: CheckKind::Open,
+        params: &[("field", Param::Text, true), ("pages", Param::Step, true)],
+        auto: &[],
+        about: |t| format!("every quote in {} is, word for word, in the text Jaynes downloaded from its page in {}", text(t, "field"), text(t, "pages")),
     },
 ];
 
