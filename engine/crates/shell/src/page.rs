@@ -398,10 +398,23 @@ impl Page {
             let json_body = req.headers.get("content-type").is_some_and(|c| c.starts_with("application/json"));
             let origin_ok = req.headers.get("origin").is_none_or(|o| self.local(Some(o), true));
             if !json_body || !origin_ok {
+                // an answer or an action sent in the person's place from elsewhere leaves a trace on its run
+                if matches!(req.path.as_str(), "/api/answer" | "/api/act") {
+                    let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                    let from = req.headers.get("origin").map(|o| format!("a request from {o}")).unwrap_or_else(|| "a request that is not JSON".into());
+                    crate::refused::record(&self.home, &crate::refused::Refusal {
+                        at: crate::store::now(),
+                        run: body["run"].as_str().unwrap_or("").to_string(),
+                        what: req.path.trim_start_matches("/api/").to_string(),
+                        who: from,
+                        reason: "it did not come from this page".into(),
+                    });
+                }
                 return ("403 Forbidden", "text/plain", "only JSON from this page".into(), vec![]);
             }
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             let by = if self.person(req) { By::Person } else { By::Agent { who: "a client without the page's key".into() } };
+            let asked_by = by.clone();
             let out = match req.path.as_str() {
                 "/api/effects" => self.effects(&body, by),
                 "/api/answer" => self.answer(&body, by),
@@ -417,11 +430,30 @@ impl Page {
             };
             let reply = match out {
                 Ok(v) => v,
-                Err(e) => json!({"ok": false, "refused": e}),
+                Err(e) => {
+                    if matches!(req.path.as_str(), "/api/answer" | "/api/act") {
+                        crate::refused::record(&self.home, &self.refusal(&req.path, &body, &asked_by, &e));
+                    }
+                    json!({"ok": false, "refused": e})
+                }
             };
             return ("200 OK", "application/json", reply.to_string(), vec![]);
         }
         ("405 Method Not Allowed", "text/plain", String::new(), vec![])
+    }
+
+    /// The trace of an answer or an action the page refused: on which step's question or which action, by whom.
+    fn refusal(&self, path: &str, body: &Value, by: &By, reason: &str) -> crate::refused::Refusal {
+        let run = body["run"].as_str().unwrap_or("").to_string();
+        let what = if path == "/api/act" {
+            format!("act {}", body["action"].as_str().unwrap_or("?"))
+        } else {
+            let step = self.store().ok().and_then(|s| s.state(&run).ok().flatten()).and_then(|r| {
+                body["question"].as_str().and_then(|q| r.questions.get(q)).map(|q| q.question.step.clone())
+            });
+            step.map(|s| format!("answer to {s}")).unwrap_or_else(|| "answer".into())
+        };
+        crate::refused::Refusal { at: crate::store::now(), run, what, who: crate::refused::who(by), reason: reason.to_string() }
     }
 
     fn store(&self) -> Result<Store, String> {
@@ -714,7 +746,7 @@ impl Page {
         }
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
-                Some(r) => run_html(r, &changes_html(&self.home, r, None), &summary_html(&self.home, r)),
+                Some(r) => run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r))),
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
                     Ok(said) => format!("<div class=\"empty\">The run is not recorded yet. What starting it said:</div><pre class=\"said\">{}</pre>", esc(said.trim())),
@@ -873,6 +905,22 @@ fn phase_word(r: &Run) -> String {
         Phase::Blocked { .. } => "<span class=\"bad\">blocked</span>".into(),
         Phase::Finished { outcome } => format!("{outcome:?}").to_lowercase(),
     }
+}
+
+/// What the page refused on a run, newest last: a trace beside the record, shown so the person sees who tried.
+fn refused_html(home: &std::path::Path, r: &Run) -> String {
+    let all = crate::refused::of_run(home, &r.id);
+    if all.is_empty() {
+        return String::new();
+    }
+    let shown: String = all.iter().rev().take(10).rev().map(|t| format!("<li>{}</li>", esc(&t.line()))).collect();
+    let more = if all.len() > 10 { format!("<li>and {} earlier</li>", all.len() - 10) } else { String::new() };
+    format!(
+        "<div class=\"notice bad\">{} attempt{} on this run {} refused. Kept beside the record, outside its chain: a trace, not evidence.<ul>{shown}{more}</ul></div>",
+        all.len(),
+        if all.len() == 1 { "" } else { "s" },
+        if all.len() == 1 { "was" } else { "were" }
+    )
 }
 
 /// What a finished run did, as a text to copy into a merge request or a note. A run not finished has none.

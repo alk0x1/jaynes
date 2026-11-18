@@ -23,6 +23,8 @@ create table if not exists displays (item text primary key, body text not null);
 create table if not exists proofs (id integer primary key, run text not null, question text not null, key text not null, signature text not null, ts integer not null);
 -- a person's presence at a stop (presence.rs): a measure kept beside the record, outside its chain, proving nothing
 create table if not exists looks (id integer primary key, run text not null, question text not null, from_ts integer not null, to_ts integer not null);
+-- what the page refused on a run (refused.rs): a trace kept beside the record, outside its chain, proving nothing
+create table if not exists refusals (id integer primary key, ts integer not null, run text not null, what text not null, who text not null, reason text not null);
 ";
 
 /// Seconds since 1970, as the record keeps time.
@@ -270,6 +272,23 @@ impl Store {
     pub fn looks(&self, run: &str) -> Result<Vec<(String, u64, u64)>, String> {
         let mut q = self.db.prepare("select question, from_ts, to_ts from looks where run = ?1 order by id").map_err(|e| e.to_string())?;
         let rows = q.query_map([run], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64))).map_err(|e| e.to_string())?;
+        rows.map(|r| r.map_err(|e| e.to_string())).collect()
+    }
+
+    /// A refused attempt on a run, kept outside the chain: a trace, not evidence.
+    pub fn put_refusal(&self, at: u64, run: &str, what: &str, who: &str, reason: &str) -> Result<(), String> {
+        self.db
+            .execute("insert into refusals (ts, run, what, who, reason) values (?1, ?2, ?3, ?4, ?5)", params![at as i64, run, what, who, reason])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Every refused attempt on the run, oldest first: (when, what, who, why).
+    pub fn refusals(&self, run: &str) -> Result<Vec<(u64, String, String, String)>, String> {
+        let mut q = self.db.prepare("select ts, what, who, reason from refusals where run = ?1 order by id").map_err(|e| e.to_string())?;
+        let rows = q
+            .query_map([run], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))
+            .map_err(|e| e.to_string())?;
         rows.map(|r| r.map_err(|e| e.to_string())).collect()
     }
 

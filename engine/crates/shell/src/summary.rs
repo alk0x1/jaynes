@@ -98,6 +98,8 @@ pub struct Summary {
     pub floor: Vec<String>,
     /// What this run did not establish, a sentence each: what no check or no person looked at, what was not measured.
     pub unproved: Vec<String>,
+    /// What the page refused on the run, a line each (refused.rs): a trace, not evidence.
+    pub refused: Vec<String>,
     pub started: u64,
     pub ended: u64,
     pub steps: Vec<StepLine>,
@@ -262,6 +264,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         changed,
         floor,
         unproved,
+        refused: Vec::new(),
         started: events.first().map(|(ts, _)| *ts).unwrap_or(0),
         ended: events.last().map(|(ts, _)| *ts).unwrap_or(0),
         // the agents' own: an attempt of a step Jaynes does itself is not theirs
@@ -432,6 +435,12 @@ impl Summary {
         }
         if !self.unproved.is_empty() {
             out.push_str(&format!("\n### Not proved\n\n{}", self.unproved.iter().map(|u| format!("- {u}\n")).collect::<String>()));
+        }
+        if !self.refused.is_empty() {
+            out.push_str(&format!(
+                "\n### Refused\n\nWhat the page refused on this run, kept beside the record, outside its chain: a trace, not evidence.\n\n{}",
+                self.refused.iter().map(|r| format!("- {r}\n")).collect::<String>()
+            ));
         }
         match &self.promises {
             Promises::Told(all) if !all.is_empty() && all.iter().all(|p| p.proved) => {
@@ -626,7 +635,8 @@ pub fn read(home: &Path, run: &str, wait: bool) -> Result<Summary, String> {
     // was not proved depends on them
     let looks = crate::presence::looks(home, run)?;
     summarize(&events, &looks, Promises::Unread)?;
-    summarize(&events, &looks, promises(home, run, wait))
+    let told = summarize(&events, &looks, promises(home, run, wait))?;
+    Ok(Summary { refused: crate::refused::of_run(home, run).iter().map(crate::refused::Refusal::line).collect(), ..told })
 }
 
 #[cfg(test)]

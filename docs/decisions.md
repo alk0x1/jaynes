@@ -89,7 +89,10 @@ during runs, and a second page opened with another key replaced the person's.
 - A program that reads the key's file can still send both headers. The page
   keeps other sites and apps out; it does not prove the person.
 
-**Open.** A refused attempt to answer as the person leaves no trace yet.
+**Since 2026-11-18.** An answer or an action the page refuses leaves a trace
+beside the record, outside its chain (when, on what, by whom, why), shown on
+the run's screen and in its summary. Refusals through the MCP server leave none
+yet.
 
 ## 2026-11-11: A decision can be dropped for good or taken as the base
 

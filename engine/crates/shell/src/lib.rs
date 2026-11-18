@@ -16,6 +16,7 @@ pub mod presence;
 pub mod project;
 pub mod project_prefs;
 pub mod protocol;
+pub mod refused;
 pub mod role;
 pub mod stop;
 pub mod store;
