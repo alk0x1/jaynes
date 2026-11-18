@@ -242,7 +242,13 @@ impl Ctx {
     fn wait(&mut self, step: Option<String>, on: Vec<String>, why: String) {
         let same = matches!(&self.run.phase, Phase::Waiting { step: s, on: o, .. } if *s == step && *o == on);
         if !same {
-            self.emit(Event::Waiting { step, on, why });
+            // a new wait on the person's answers tells them, once; when to show it, at a pause of theirs, is the
+            // shell's to choose
+            let theirs = !on.is_empty() && on.iter().all(|id| self.run.questions.get(id).is_some_and(|q| q.open()));
+            self.emit(Event::Waiting { step, on, why: why.clone() });
+            if theirs {
+                self.command(Command::Notify { text: why });
+            }
         }
     }
 
