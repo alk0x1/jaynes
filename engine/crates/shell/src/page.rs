@@ -41,11 +41,21 @@ struct Request {
 /// A new key for the page, from the system's randomness. Without it there is no key: one that could be guessed would
 /// be kept for good.
 pub fn key() -> Result<String, String> {
+    key_from(std::path::Path::new("/dev/urandom"))
+}
+
+fn key_from(randomness: &std::path::Path) -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
+    std::fs::File::open(randomness)
         .and_then(|mut f| f.read_exact(&mut bytes))
         .map_err(|e| format!("cannot make the page's key, since the system's randomness does not read: {e}"))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// What the page answers to prove it holds `key` without saying it: a fingerprint of the key and a nonce the asker
+/// chose. Only the page can make it, and it tells another program nothing of the key.
+pub fn proof(key: &str, nonce: &str) -> String {
+    jaynes_core::Digest::of_bytes(format!("jaynes page proof\n{key}\n{nonce}").as_bytes()).0
 }
 
 /// The commit of Jaynes installed when the page started: what it runs.
@@ -54,34 +64,58 @@ static RUNNING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new()
 static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Connections the page serves at once, on both of its addresses.
 const MOST_AT_ONCE: usize = 64;
-static AT_ONCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A connection being served: when it came, whether it is still sending its request, and a handle to close it.
+struct Slot {
+    id: u64,
+    since: std::time::Instant,
+    reading: bool,
+    stream: TcpStream,
+}
+
+static SERVED: std::sync::Mutex<(u64, Vec<Slot>)> = std::sync::Mutex::new((0, Vec::new()));
 
 /// A connection's place among those served at once, given back when it ends, however it ends.
-struct Turn;
+struct Turn(u64);
 
 impl Turn {
-    fn take() -> Option<Turn> {
-        use std::sync::atomic::Ordering;
-        let mut n = AT_ONCE.load(Ordering::SeqCst);
-        loop {
-            if n >= MOST_AT_ONCE {
-                return None;
-            }
-            match AT_ONCE.compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
-                Ok(_) => return Some(Turn),
-                Err(now) => n = now,
-            }
+    /// A place for a new connection. When every place is taken, the oldest connection still sending its request
+    /// is closed to make way: one that only holds its place cannot keep the person out. When none is still
+    /// sending, the new one is refused.
+    fn take(stream: &TcpStream) -> Option<Turn> {
+        let handle = stream.try_clone().ok()?;
+        let mut served = SERVED.lock().ok()?;
+        if served.1.len() >= MOST_AT_ONCE {
+            let oldest = served.1.iter().enumerate().filter(|(_, s)| s.reading).min_by_key(|(_, s)| s.since).map(|(i, _)| i)?;
+            let gone = served.1.remove(oldest);
+            let _closed = gone.stream.shutdown(std::net::Shutdown::Both);
+        }
+        served.0 += 1;
+        let id = served.0;
+        served.1.push(Slot { id, since: std::time::Instant::now(), reading: true, stream: handle });
+        Some(Turn(id))
+    }
+
+    /// The request is read: the connection is being answered, and is no longer the first to make way.
+    fn read(&self) {
+        if let Ok(mut served) = SERVED.lock()
+            && let Some(s) = served.1.iter_mut().find(|s| s.id == self.0)
+        {
+            s.reading = false;
         }
     }
 }
 
 impl Drop for Turn {
     fn drop(&mut self) {
-        AT_ONCE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut served) = SERVED.lock() {
+            served.1.retain(|s| s.id != self.0);
+        }
     }
 }
 
-/// How long the page waits for a connection to send its request, or to take its reply.
+/// How long a connection has to send its whole request, from when it came, and to take its reply.
+const HEAD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
 const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 /// The most a request's head may hold, and its body: the page's own are far smaller.
 const MOST_HEAD: u64 = 64 * 1024;
@@ -133,26 +167,29 @@ impl Page {
         Ok(())
     }
 
-    /// Answer what comes to one address. Each connection on its own, with a deadline: one that says nothing, or never
-    /// ends its head, holds no other, and one whose request breaks its handler ends alone, never the page. Past
-    /// [`MOST_AT_ONCE`] in service, a new connection is closed at once.
+    /// Answer what comes to one address. Each connection on its own, with [`HEAD_DEADLINE`] from when it came to send
+    /// its whole request: one that says nothing, or speaks a byte at a time, holds no other, and one whose request
+    /// breaks its handler ends alone, never the page. Past [`MOST_AT_ONCE`] in service, the oldest still sending its
+    /// request is closed to make way.
     fn accept(&self, listener: &TcpListener) {
         for stream in listener.incoming().flatten() {
-            let Some(turn) = Turn::take() else {
+            let came = std::time::Instant::now();
+            let Some(turn) = Turn::take(&stream) else {
                 drop(stream);
                 continue;
             };
-            let _deadline = stream.set_read_timeout(Some(READ_DEADLINE)).and_then(|()| stream.set_write_timeout(Some(READ_DEADLINE)));
+            let _deadline = stream.set_write_timeout(Some(READ_DEADLINE));
             let page = self.clone();
             let _started = std::thread::Builder::new().name("page-connection".into()).spawn(move || {
-                let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream)));
+                let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream, &turn, came)));
                 drop(turn);
             });
         }
     }
 
-    fn handle(&self, mut stream: TcpStream) -> Result<(), String> {
-        let req = read(&stream)?;
+    fn handle(&self, mut stream: TcpStream, turn: &Turn, came: std::time::Instant) -> Result<(), String> {
+        let req = read(&stream, came + HEAD_DEADLINE)?;
+        turn.read();
         // reading the person's words takes a model's time: it is answered on a thread of its own, and the page goes on
         if req.method == "POST" && req.path == "/api/understand" && self.host(&req) != Host::Other {
             let json_body = req.headers.get("content-type").is_some_and(|c| c.starts_with("application/json"));
@@ -221,6 +258,9 @@ impl Page {
             Host::Name => {}
             // an old link or bookmark by number goes on to the page's name, path and query kept, and the browser takes
             // the fragment along; the cookie earlier versions kept for that name is cleared there
+            Host::Number if req.method == "GET" && !req.target.starts_with('/') => {
+                return ("400 Bad Request", "text/plain", "a request names a path".into(), vec![]);
+            }
             Host::Number if req.method == "GET" => {
                 let mut headers = vec![("Location".to_string(), format!("http://localhost:{}{}", self.port, req.target))];
                 if Self::old_cookie(req) {
@@ -240,6 +280,14 @@ impl Page {
                     let to = format!("/#key={}", self.key);
                     return ("303 See Other", "text/plain", String::new(), vec![("Set-Cookie".into(), CLEAR.into()), ("Location".into(), to)]);
                 }
+            if req.path == "/api/knows" {
+                // the nonce is the asker's: hex, short, so the answer says nothing but the proof
+                let nonce = req.query.get("nonce").filter(|n| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_hexdigit()));
+                return match nonce {
+                    Some(n) => ("200 OK", "application/json", json!({"proof": proof(&self.key, n)}).to_string(), vec![]),
+                    None => ("400 Bad Request", "text/plain", "a nonce, in hex".into(), vec![]),
+                };
+            }
             if req.path == "/key.js" {
                 return ("200 OK", "text/javascript; charset=utf-8", KEY_SCRIPT.to_string(), vec![]);
             }
@@ -1192,9 +1240,27 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-fn read(stream: &TcpStream) -> Result<Request, String> {
-    // never more than a head and a body may hold, however long the other side goes on
-    let mut r = BufReader::new(Read::take(stream, MOST_HEAD + MOST_BODY));
+/// A connection read against one deadline for all of what it sends, however it sends it: each read waits at most
+/// what is left.
+struct Deadlined<'a> {
+    stream: &'a TcpStream,
+    until: std::time::Instant,
+}
+
+impl Read for Deadlined<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the request took longer than it may"));
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+fn read(stream: &TcpStream, until: std::time::Instant) -> Result<Request, String> {
+    // never more than a head and a body may hold, nor longer than a request may take, however the other side goes on
+    let mut r = BufReader::new(Read::take(Deadlined { stream, until }, MOST_HEAD + MOST_BODY));
     let mut line = String::new();
     r.read_line(&mut line).map_err(|e| e.to_string())?;
     let mut parts = line.split_whitespace();
@@ -1236,7 +1302,7 @@ const theirs = key => sendFetch("/api/whoami", { method: "POST", headers: { "Con
   .then(r => r.json()).then(r => r.person === true, () => false);
 const fromLink = (/^#key=([0-9A-Za-z]+)$/.exec(location.hash) || [])[1] || "";
 // the address loses the key at once, before anything else reads it
-if (location.hash.startsWith("#key=")) history.replaceState(null, "", location.pathname + location.search);
+if (location.hash.startsWith("#key=")) history.replaceState(null, "", location.href.split("#")[0]);
 window.fetch = (url, opts = {}) => {
   if ((opts.method || "GET").toUpperCase() === "POST" && pageKey) opts = { ...opts, headers: { ...(opts.headers || {}), "X-Jaynes-Key": pageKey } };
   return sendFetch(url, opts);
@@ -1611,6 +1677,14 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_key_is_made_from_randomness_that_does_not_read() {
+        assert!(key_from(std::path::Path::new("/no/such/randomness")).is_err());
+        let made = key_from(std::path::Path::new("/dev/urandom")).expect("key");
+        assert_eq!(made.len(), 32);
+        assert_ne!(made, "0".repeat(32));
+    }
 
     #[test]
     fn a_name_from_outside_is_read_by_bytes_and_never_cut_inside_a_letter() {

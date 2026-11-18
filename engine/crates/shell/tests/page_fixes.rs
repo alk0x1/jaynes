@@ -19,11 +19,46 @@ impl Drop for Page {
     }
 }
 
-fn home(name: &str) -> PathBuf {
+/// A test's folder, taken away when the test ends, even when it panics.
+struct Base(PathBuf);
+
+impl std::ops::Deref for Base {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Base {
+    fn drop(&mut self) {
+        let _gone = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn home(name: &str) -> Base {
     let base = std::env::temp_dir().join(format!("jaynes-page-fixes-{name}-{}", std::process::id()));
     let _gone = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("home")).expect("dir");
-    base
+    Base(base)
+}
+
+/// How long a test waits on a page: past it, the test fails saying what answered, instead of holding the queue.
+const PAGE_WAIT: Duration = Duration::from_secs(10);
+
+/// Wait until Jaynes's page answers on `port`: its /api/version, with the record's sequence, and nothing else's.
+fn page_up(port: u16) {
+    let until = Instant::now() + PAGE_WAIT;
+    while Instant::now() < until {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            let said = get(port, "/api/version").unwrap_or_default();
+            if said.starts_with("HTTP/1.1 200") && said.contains("\"seq\"") {
+                return;
+            }
+            assert!(said.is_empty(), "something that is not Jaynes's page answers on port {port}: {}", said.chars().take(300).collect::<String>());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("Jaynes's page did not come up on port {port} within {} s", PAGE_WAIT.as_secs());
 }
 
 /// The page on `base`, with the key given or, without one, the key it keeps in its home; what it says goes to
@@ -40,10 +75,7 @@ fn page(base: &Path, port: u16, key: Option<&str>) -> Page {
         c.env("JAYNES_PAGE_KEY", k);
     }
     let child = c.spawn().map(Page).expect("page");
-    let until = Instant::now() + Duration::from_secs(5);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() && Instant::now() < until {
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    page_up(port);
     child
 }
 
@@ -100,7 +132,7 @@ fn a_connection_that_says_nothing_holds_no_other() {
     let body = r#"{"run":"no-such-run","action":"halt"}"#;
     let halt = ask(
         port,
-        format!("POST /api/act HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nCookie: jaynes_key=k3y\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes(),
+        format!("POST /api/act HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: k3y\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes(),
         Duration::from_secs(3),
     )
     .expect("halt");
@@ -183,20 +215,173 @@ fn a_page_that_cannot_hold_localhost_does_not_start() {
 }
 
 #[test]
-fn past_its_ceiling_of_connections_the_page_closes_new_ones_at_once_and_goes_on() {
+fn past_its_ceiling_the_page_closes_the_oldest_still_speaking_and_serves_the_new_one() {
     let base = home("ceiling");
     let port = port(4);
     let _page = page(&base, port, Some("k3y"));
-    // as many silent connections as the page serves at once
-    let silent: Vec<TcpStream> = (0..64).map(|_| TcpStream::connect(("127.0.0.1", port)).expect("connect")).collect();
+    // as many silent connections as the page serves at once, on both of its addresses
+    let mut silent: Vec<TcpStream> = (0..32).map(|_| TcpStream::connect(("127.0.0.1", port)).expect("connect")).collect();
+    silent.extend((0..32).filter_map(|_| TcpStream::connect(("::1", port)).ok()));
     std::thread::sleep(Duration::from_millis(300));
-    // one more is closed at once, not left waiting
+    // the person still halts at once: the oldest connection still speaking its head makes way
     let started = Instant::now();
-    let more = get(port, "/api/version").unwrap_or_default();
-    assert!(!more.starts_with("HTTP/1.1 200") && started.elapsed() < Duration::from_secs(2), "{more} after {:?}", started.elapsed());
-    // once they go, the page answers again
-    drop(silent);
-    std::thread::sleep(Duration::from_millis(300));
-    let version = get(port, "/api/version").expect("version");
-    assert!(version.starts_with("HTTP/1.1 200"), "{version}");
+    let body = r#"{"run":"no-such-run","action":"halt"}"#;
+    let halt = ask(
+        port,
+        format!("POST /api/act HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: k3y\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes(),
+        Duration::from_secs(3),
+    )
+    .expect("halt");
+    assert!(halt.starts_with("HTTP/1.1 200") && halt.contains("no such run"), "{halt}");
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    // and the first silent one was the one closed
+    let mut first = silent.remove(0);
+    first.set_read_timeout(Some(Duration::from_secs(1))).expect("timeout");
+    let mut b = [0u8; 1];
+    assert!(matches!(first.read(&mut b), Ok(0)), "the oldest is closed");
+}
+
+#[test]
+fn a_head_spoken_a_byte_at_a_time_is_cut_off_at_its_deadline() {
+    let base = home("slow");
+    let port = port(5);
+    let _page = page(&base, port, Some("k3y"));
+    let mut slow = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    slow.set_read_timeout(Some(Duration::from_millis(100))).expect("timeout");
+    let head = format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\nX-Pad: aaaaaaaaaaaaaaaaaaaa");
+    let started = Instant::now();
+    let mut closed = None;
+    // a byte every 400 ms: each read is quick, the whole head is not
+    for b in head.bytes() {
+        if slow.write_all(&[b]).is_err() {
+            closed = Some(started.elapsed());
+            break;
+        }
+        let mut out = [0u8; 64];
+        if let Ok(0) = slow.read(&mut out) {
+            closed = Some(started.elapsed());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    let closed = closed.expect("the page never closed a head that never ended");
+    assert!(closed < Duration::from_secs(5), "{closed:?}");
+}
+
+/// A program on the machine that answers anything on `address`, as another program could.
+fn impostor(address: &str, port: u16) -> Option<std::net::TcpListener> {
+    answering(address, port, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"seq\":123}")
+}
+
+/// A program that gives every request the same reply.
+fn answering(address: &str, port: u16, reply: &'static str) -> Option<std::net::TcpListener> {
+    let l = std::net::TcpListener::bind((address, port)).ok()?;
+    let mine = l.try_clone().expect("clone");
+    std::thread::spawn(move || {
+        for s in mine.incoming().flatten() {
+            let mut s = s;
+            let mut head = [0u8; 2048];
+            let _heard = s.read(&mut head);
+            let _said = s.write_all(reply.as_bytes());
+        }
+    });
+    Some(l)
+}
+
+fn stop_pages_on(port: u16) {
+    let _stopped = Command::new("pkill").args(["-f", &format!("page --port {port}")]).status();
+}
+
+#[test]
+fn the_page_is_opened_only_once_it_answers_as_itself_on_both_of_its_addresses() {
+    let base = home("ensured");
+    std::fs::write(base.join("home/page.key"), "0123456789abcdef0123456789abcdef").expect("key");
+    let exe = Path::new(BIN);
+    // nothing there: the page starts, proves itself on both addresses, and the link would open
+    let port = port(6);
+    let opened = jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false);
+    assert_eq!(opened, Ok(format!("http://localhost:{port}/")), "{opened:?}");
+    // and a second time it is found running, as itself
+    assert_eq!(jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false), Ok(format!("http://localhost:{port}/")));
+    stop_pages_on(port);
+    // another program on ::1, where the browser goes for localhost: the link, key and all, is never opened
+    let port = crate::port(7);
+    if let Some(_six) = impostor("::1", port) {
+        let refused = jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false);
+        let said = refused.expect_err("opened with another program on ::1");
+        assert!(said.contains(&format!("[::1]:{port}")) && said.contains("not opened"), "{said}");
+        stop_pages_on(port);
+    }
+    // another program on 127.0.0.1: the page is not taken for running, and the link is not opened
+    let port = crate::port(8);
+    let _four = impostor("127.0.0.1", port).expect("bind");
+    let refused = jaynes_shell::install::ensure_page_on(&base.join("home"), port, exe, false);
+    let said = refused.expect_err("opened with another program on 127.0.0.1");
+    assert!(said.contains(&format!("127.0.0.1:{port}")) && said.contains("not opened"), "{said}");
+    stop_pages_on(port);
+}
+
+#[test]
+fn an_older_page_still_on_one_address_with_another_program_on_the_other_is_never_given_the_link() {
+    let base = home("older");
+    std::fs::write(base.join("home/page.key"), "0123456789abcdef0123456789abcdef").expect("key");
+    // a page of an earlier version knows nothing of the proof: it answers any path with its home screen
+    let port = port(11);
+    let _old = answering("127.0.0.1", port, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 15\r\n\r\n<h1>Jaynes</h1>").expect("bind");
+    let other = impostor("::1", port);
+    let refused = jaynes_shell::install::ensure_page_on(&base.join("home"), port, Path::new(BIN), false);
+    let said = refused.expect_err("opened with an older page and another program");
+    assert!(said.contains("not opened"), "{said}");
+    if other.is_some() {
+        assert!(said.contains(&format!("[::1]:{port}")), "the program on ::1 is named: {said}");
+    }
+    stop_pages_on(port);
+    // and an older page alone is not taken for this one either, and says what it may be
+    let port = crate::port(12);
+    let _old = answering("127.0.0.1", port, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 15\r\n\r\n<h1>Jaynes</h1>").expect("bind");
+    let alone = jaynes_shell::install::ensure_page_on(&base.join("home"), port, Path::new(BIN), false).expect_err("opened an older page");
+    assert!(alone.contains(&format!("127.0.0.1:{port}")) && alone.contains("an older page"), "{alone}");
+    stop_pages_on(port);
+}
+
+#[test]
+fn only_the_page_s_own_name_and_numbers_reach_it_and_a_number_with_an_origin_is_refused() {
+    let base = home("names");
+    let port = port(9);
+    let _page = page(&base, port, Some("k3y"));
+    for host in [format!("localhost.evil.example:{port}"), format!("localhost:{port}.evil.example"), format!("localhost:{port}0"), format!("127.0.0.1:{port}0"), "localhost".to_string()] {
+        let reply = ask(port, format!("GET /api/version HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes(), Duration::from_secs(3)).expect("reply");
+        assert!(reply.starts_with("HTTP/1.1 403"), "{host}: {reply}");
+    }
+    // a program may speak by number, never a browser: a number with an origin is refused
+    let reply = ask(
+        port,
+        format!("POST /api/whoami HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: k3y\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes(),
+        Duration::from_secs(3),
+    )
+    .expect("reply");
+    assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+    // a target that is not a path is never sent on
+    let reply = ask(port, format!("GET http://evil.example/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(), Duration::from_secs(3)).expect("reply");
+    assert!(!reply.starts_with("HTTP/1.1 308") && !reply.contains("evil"), "{reply}");
+    // the reading of the person's words answers with nosniff like the rest
+    let reply = ask(
+        port,
+        format!("POST /api/understand HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes(),
+        Duration::from_secs(3),
+    )
+    .expect("reply");
+    assert!(reply.starts_with("HTTP/1.1 200") && reply.contains("X-Content-Type-Options: nosniff\r\n"), "{reply}");
+}
+
+#[test]
+fn the_page_proves_it_holds_the_key_without_saying_it() {
+    let base = home("proof");
+    let port = port(10);
+    let _page = page(&base, port, Some("k3y"));
+    let reply = get(port, "/api/knows?nonce=00ff").expect("reply");
+    let proof = reply.split("\"proof\":\"").nth(1).and_then(|p| p.split('"').next()).expect("a proof");
+    assert_eq!(proof, jaynes_shell::page::proof("k3y", "00ff"));
+    assert_ne!(proof, jaynes_shell::page::proof("k3y", "00fe"));
+    assert!(!reply.contains("k3y"), "{reply}");
 }

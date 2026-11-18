@@ -7,19 +7,46 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_jaynes");
 
-/// A page process that dies with its test, even when the test panics.
-struct Page(std::process::Child);
+/// How long a test waits on a page: past it, the test fails saying what answered, instead of holding the queue.
+const PAGE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A page process that dies with its test, even when the test panics, and takes its folder with it.
+struct Page(std::process::Child, std::path::PathBuf);
 
 impl Drop for Page {
     fn drop(&mut self) {
         let _killed = self.0.kill();
         let _reaped = self.0.wait();
+        let _gone = std::fs::remove_dir_all(&self.1);
     }
+}
+
+/// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+}
+
+/// Wait until Jaynes's page answers on `port`: its /api/version, with the record's sequence, and nothing else's.
+fn page_up(port: u16) {
+    let until = std::time::Instant::now() + PAGE_WAIT;
+    while std::time::Instant::now() < until {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            let said = http(port, &format!("GET /api/version HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
+            if said.starts_with("HTTP/1.1 200") && said.contains("\"seq\"") {
+                return;
+            }
+            assert!(said.is_empty(), "something that is not Jaynes's page answers on port {port}: {}", said.chars().take(300).collect::<String>());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("Jaynes's page did not come up on port {port} within {} s", PAGE_WAIT.as_secs());
 }
 
 fn http(port: u16, raw: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(PAGE_WAIT)).expect("timeout");
+    s.set_write_timeout(Some(PAGE_WAIT)).expect("timeout");
     s.write_all(raw.as_bytes()).expect("write");
     let mut out = String::new();
     let _read = s.read_to_string(&mut out);
@@ -66,7 +93,7 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
         .output()
         .expect("start");
     assert!(started.status.success(), "{}{}", String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
-    let port = 20750 + (std::process::id() % 1000) as u16 * 4 % 4000 + ["cookie", "origin", "script", "both"].iter().position(|n| *n == name).unwrap_or(0) as u16;
+    let port = free_port();
     let said = std::fs::File::create(base.join("said.txt")).expect("said");
     let child = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
@@ -74,8 +101,9 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
         .stderr(said)
         .spawn()
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    (Page(child), port, base)
+    let page = Page(child, base.clone());
+    page_up(port);
+    (page, port, base)
 }
 
 #[test]

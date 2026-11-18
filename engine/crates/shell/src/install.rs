@@ -284,17 +284,69 @@ fn owner_only(file: &Path) {
 
 pub const PORT: u16 = 8750;
 
-/// Start the page in a process of its own if nothing answers on its port, and open it in the browser with its
-/// key, which is never printed where an agent reads it. The page's address without the key.
+/// Start the page in a process of its own if it is not running, and open it in the browser with its key, which is
+/// never printed where an agent reads it. The page's address without the key; why the link was not opened, when it
+/// was not, goes to standard error.
 pub fn ensure_page(home: &Path) -> String {
     let address = format!("http://localhost:{PORT}/");
-    if std::env::var("JAYNES_NO_PAGE").is_ok() || std::net::TcpStream::connect(("127.0.0.1", PORT)).is_ok() {
+    if std::env::var("JAYNES_NO_PAGE").is_ok() {
         return address;
     }
     let Ok(exe) = std::env::current_exe() else { return address };
+    match ensure_page_on(home, PORT, &exe, std::env::var("JAYNES_NO_BROWSER").is_err()) {
+        Ok(a) => a,
+        Err(why) => {
+            eprintln!("{why}");
+            address
+        }
+    }
+}
+
+/// How the page's two addresses answer.
+enum Standing {
+    /// The page answers as itself on 127.0.0.1, and on ::1 or nothing does.
+    Ours,
+    /// Nothing answers.
+    Nothing,
+    /// Another program answers, on the address said.
+    Other(String),
+}
+
+/// Whether the page at `port` runs, proving it holds `key` on each of its addresses: localhost may reach either, so
+/// another program on one of them would be given the link.
+fn standing(port: u16, key: &str) -> Standing {
+    let ask = |address: &str| -> Option<bool> {
+        let at: std::net::SocketAddr = format!("{}:{port}", if address.contains(':') { format!("[{address}]") } else { address.to_string() }).parse().ok()?;
+        let mut s = std::net::TcpStream::connect_timeout(&at, std::time::Duration::from_millis(500)).ok()?;
+        let nonce = crate::page::key().unwrap_or_default();
+        let _deadline = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+        let said = std::io::Write::write_all(&mut s, format!("GET /api/knows?nonce={nonce} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n").as_bytes());
+        let mut reply = String::new();
+        let _read = said.ok().map(|()| std::io::Read::read_to_string(&mut s, &mut reply));
+        Some(!nonce.is_empty() && reply.contains(&format!("\"proof\":\"{}\"", crate::page::proof(key, &nonce))))
+    };
+    match (ask("127.0.0.1"), ask("::1")) {
+        (_, Some(false)) => Standing::Other(format!("another program answers on [::1]:{port}, where the browser may go for localhost")),
+        (Some(false), _) => Standing::Other(format!("something that does not prove it holds the page's key answers on 127.0.0.1:{port}: an older page still running, or another program. Stop it and start again")),
+        (Some(true), _) => Standing::Ours,
+        (None, _) => Standing::Nothing,
+    }
+}
+
+/// The page at `port`, started with `exe` when it is not running, and its link opened with `open` only once the
+/// page answers as itself on both of its addresses: the address, or why the link was not opened.
+pub fn ensure_page_on(home: &Path, port: u16, exe: &Path, open: bool) -> Result<String, String> {
+    let address = format!("http://localhost:{port}/");
+    let key = page_key(home)?;
+    let not_opened = |why: String| format!("{why}: the page's link was not opened");
+    match standing(port, &key) {
+        Standing::Ours => return Ok(address),
+        Standing::Other(why) => return Err(not_opened(why)),
+        Standing::Nothing => {}
+    }
     let log = std::fs::File::create(home.join("page.log")).ok();
     let mut c = Command::new(exe);
-    c.args(["page", "--port", &PORT.to_string()]).env("JAYNES_ENGINE_HOME", home).stdin(Stdio::null());
+    c.args(["page", "--port", &port.to_string()]).env("JAYNES_ENGINE_HOME", home).env_remove("JAYNES_PAGE_KEY").stdin(Stdio::null());
     match log {
         Some(l) => {
             let e = l.try_clone().ok();
@@ -307,16 +359,23 @@ pub fn ensure_page(home: &Path) -> String {
             c.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
-    if c.spawn().is_ok() {
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        if std::env::var("JAYNES_NO_BROWSER").is_err()
-            && let Ok(key) = page_key(home)
-        {
-            // the key in the fragment, which the browser keeps for the page and never sends to any server
-            let _opened = Command::new("open").arg(format!("{address}#key={key}")).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let mut child = c.spawn().map_err(|e| not_opened(format!("the page did not start: {e}")))?;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let ended = child.try_wait().ok().flatten();
+        match standing(port, &key) {
+            Standing::Ours if ended.is_none() => break,
+            Standing::Other(why) if ended.is_some() => return Err(not_opened(why)),
+            _ if ended.is_some() => return Err(not_opened(format!("the page did not start ({}): see {}", ended.map(|e| e.to_string()).unwrap_or_default(), home.join("page.log").display()))),
+            _ if std::time::Instant::now() > until => return Err(not_opened("the page did not answer as itself in time".into())),
+            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
-    address
+    if open {
+        // the key in the fragment, which the browser keeps for the page and never sends to any server
+        let _opened = Command::new("open").arg(format!("{address}#key={key}")).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    }
+    Ok(address)
 }
 
 /// What an agent reads to carry out a change through Jaynes.

@@ -21,7 +21,7 @@ fn page_up(port: u16) {
             use std::io::{Read, Write};
             let _timed = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
             let _timed = s.set_write_timeout(Some(std::time::Duration::from_secs(2)));
-            let _sent = s.write_all(format!("GET /api/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes());
+            let _sent = s.write_all(format!("GET /api/version HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes());
             said.clear();
             let _read = s.read_to_string(&mut said);
             if said.starts_with("HTTP/1.1 200") && said.contains("\"seq\"") {
