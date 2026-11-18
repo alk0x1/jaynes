@@ -35,6 +35,10 @@ pub struct Tabs {
     /// The Changes tab: how many files it stacks, while it shows in the middle over the agent it was opened from.
     pub changes: Option<usize>,
     story: Vec<(String, Vec<String>)>,
+    /// What a finished run did, in Markdown (`jaynes summary`): none while it runs, or when it cannot be read.
+    summary: Option<String>,
+    /// When the summary was last copied: its button says Copied for a moment.
+    copied_at: Option<std::time::Instant>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
     scroll: ScrollHandle,
     /// Where a click in the steps panel asked the story to go, until the story is read and the tab scrolls there.
@@ -62,16 +66,25 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
     async fn tell(this: WeakEntity<Self>, id: String, cx: &mut AsyncApp) -> Result<()> {
         let at = id.clone();
-        let told = cx.background_executor().spawn(async move { jaynes_shell::listing::story(&jaynes_shell::home(), &at) }).await;
+        // the summary is read with the story: it never waits for the role's promises to be proved, the reading after
+        // the proof brings them
+        let (told, summary) = cx
+            .background_executor()
+            .spawn(async move {
+                let home = jaynes_shell::home();
+                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()))
+            })
+            .await;
         this.update(cx, |t, cx| {
-            if t.open.as_deref() == Some(id.as_str()) && t.story != told {
+            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary) {
                 t.story = told;
+                t.summary = summary;
                 t.go_to_seek();
                 cx.notify();
             }
@@ -300,6 +313,9 @@ impl Tabs {
         if working {
             lines = lines.child(div().pt(px(6.)).flex().gap(px(8.)).items_center().child(look::spinner("story-spin", 11., look::BLUE)).child(div().text_color(rgb(look::FAINT)).child("working")));
         }
+        if let Some(summary) = &self.summary {
+            lines = lines.child(self.summary_section(summary));
+        }
         Some(
             div()
                 .size_full()
@@ -322,6 +338,75 @@ impl Tabs {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// How long the summary's button says Copied.
+const COPIED_FOR: Duration = Duration::from_millis(2500);
+
+impl Tabs {
+    /// A finished run's summary under its story, as the page shows it: what it did for someone who was not there, in
+    /// Markdown, with a button that copies it.
+    fn summary_section(&self, summary: &str) -> Stateful<Div> {
+        let copied = self.copied_at.is_some_and(|t| t.elapsed() < COPIED_FOR);
+        let button = div()
+            .id("copy-summary")
+            .flex_none()
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(7.))
+            .border_1()
+            .border_color(rgb(look::LINE_2))
+            .bg(rgb(look::PANEL_2))
+            .font_family(look::UI_FONT)
+            .text_size(px(12.))
+            .text_color(rgb(if copied { look::GREEN } else { look::TEXT }))
+            .cursor_pointer()
+            .hover(|d| d.border_color(rgb(look::DIM)))
+            .child(if copied { "Copied" } else { "Copy as Markdown" })
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::CopySummary), cx));
+        let mut text = div().mt(px(8.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(rgb(look::LINE)).bg(rgb(look::PANEL_2)).flex().flex_col();
+        for line in summary.lines() {
+            // an empty line keeps its height
+            text = text.child(div().min_h(px(21.)).child(line.to_owned()));
+        }
+        div()
+            .id("summary")
+            .mt(px(22.))
+            .pt(px(14.))
+            .border_t_1()
+            .border_color(rgb(look::LINE))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .font_family(look::UI_FONT)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::TEXT)).child("Summary"))
+                            .child(div().text_size(px(12.)).text_color(rgb(look::FAINT)).child("What this run did, for someone who was not here: paste it in a merge request or a note.")),
+                    )
+                    .child(button),
+            )
+            .child(text)
+    }
+
+    /// The summary on the clipboard, as its button copies it; the button says Copied for a moment.
+    pub fn copy_summary(&mut self, cx: &mut Context<Self>) {
+        let Some(summary) = self.summary.clone() else { return };
+        cx.write_to_clipboard(ClipboardItem::new_string(summary));
+        self.copied_at = Some(std::time::Instant::now());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_FOR).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 }
 

@@ -53,7 +53,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary
     ]
 );
 
@@ -207,6 +207,8 @@ impl Render for Root {
                 cx.notify();
             }))
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
+            // the button under a finished run's story
+            .on_action(cx.listener(|this, _: &CopySummary, _, cx| this.tabs.update(cx, |t, cx| t.copy_summary(cx))))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
                 this.changes_on = !this.changes_on;
                 cx.notify();
