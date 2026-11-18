@@ -309,7 +309,13 @@ fn unproved(r: &Run, steps: &[StepLine], person: &Person, promises: &Promises) -
         _ => {}
     }
     match promises {
-        Promises::Told(all) => out.extend(all.iter().filter(|p| !p.proved).map(|p| format!("The role's promise \"{}\": not proved.", p.says))),
+        Promises::Told(all) => {
+            out.extend(all.iter().filter(|p| !p.proved).map(|p| format!("The role's promise \"{}\": not proved.", p.says)));
+            // a proof stands for the rules of the engine that made it, and the run ran on others
+            if all.iter().any(|p| p.proved) && r.engine != jaynes_core::ENGINE {
+                out.push(format!("The engine this run ran on ({}) did not prove the role's promises: engine {} proved them again, afterwards.", r.engine, jaynes_core::ENGINE));
+            }
+        }
         Promises::Proving => out.push("The role's promises: being proved again now.".to_string()),
         Promises::Unread => out.push("The role's promises: not read again, since the run's copy of the role is gone.".to_string()),
     }
@@ -370,7 +376,10 @@ impl Summary {
                     out.push_str(" Jaynes measured no change.\n");
                 } else {
                     out.push_str(if self.repository { " The files Jaynes measured:\n\n" } else { " What Jaynes measured:\n\n" });
-                    for (what, size) in self.changed.iter().take(MOST_SHOWN) {
+                    // the largest first, ties by name: what a reader looks at first
+                    let mut largest: Vec<&(String, u64)> = self.changed.iter().collect();
+                    largest.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                    for (what, size) in largest.into_iter().take(MOST_SHOWN) {
                         out.push_str(&if self.repository {
                             format!("- `{what}`: {size} line{} changed\n", if *size == 1 { "" } else { "s" })
                         } else {
@@ -415,10 +424,6 @@ impl Summary {
             Promises::Told(_) => out.push_str("\n### Promises of the role\n\n- The role makes none.\n"),
             Promises::Proving => out.push_str("\n### Promises of the role\n\n- Being proved again now: open the summary again in a moment.\n"),
             Promises::Unread => out.push_str("\n### Promises of the role\n\n- Not read again: the run's copy of the role is gone.\n"),
-        }
-        // a proof stands for the rules of the engine that made it: say so when the run ran on others
-        if matches!(&self.promises, Promises::Told(all) if !all.is_empty()) && self.prover != self.engine {
-            out.push_str(&format!("- Proved again by engine {}, not by the engine this run ran on ({}): its rules may differ.\n", self.prover, self.engine));
         }
         out.push_str("\n### Steps\n\n");
         for (n, s) in self.steps.iter().enumerate() {
@@ -478,8 +483,8 @@ impl Summary {
     }
 }
 
-/// Things changed listed one by one; past it, how many more.
-const MOST_SHOWN: usize = 30;
+/// Things changed listed one by one, the largest first; past it, how many more.
+const MOST_SHOWN: usize = 10;
 
 /// The request as a title: one line of at most 72 characters.
 fn title(request: &str) -> String {
@@ -706,8 +711,8 @@ mod tests {
 
 jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 
-- `auth/redirect.go`: 12 lines changed
 - `auth/redirect_test.go`: 30 lines changed
+- `auth/redirect.go`: 12 lines changed
 
 ### Proved by
 
@@ -742,12 +747,19 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 - Started 2026-11-15 16:26 UTC, finished 11 h 14 min later
 ";
         assert_eq!(told, expected.replace("ENGINE", jaynes_core::ENGINE));
-        // proved by another engine than the run's: said under the promises; and an agent never recorded is said so
-        let mut s = summarize(&whole(), &[], Promises::Told(vec![Promised { says: "x".into(), proved: true }])).expect("summary");
-        s.engine = "0.1.0+older".into();
+        // proved by another engine than the run's: said under Not proved; and an agent never recorded is said so
+        let mut older = whole();
+        if let Event::RunStarted { engine, .. } = &mut older[0].1 {
+            *engine = "0.1.0+older".into();
+        }
+        let mut s = summarize(&older, &[], Promises::Told(vec![Promised { says: "x".into(), proved: true }])).expect("summary");
         s.agent = String::new();
         let told = s.markdown();
-        assert!(told.contains(&format!("- x\n- Proved again by engine {}, not by the engine this run ran on (0.1.0+older): its rules may differ.\n", jaynes_core::ENGINE)), "{told}");
+        // the promises stand for the engine that proved them: the run's own did not, and that is not proved
+        assert!(told.contains("### Promises proved of the role\n\n- x\n\n"), "{told}");
+        assert!(told.contains(&format!("- The engine this run ran on (0.1.0+older) did not prove the role's promises: engine {} proved them again, afterwards.\n", jaynes_core::ENGINE)), "{told}");
+        let not_proved = told.split("### Not proved").nth(1).and_then(|t| t.split("###").next()).expect("not proved");
+        assert!(not_proved.contains("did not prove the role's promises"), "{told}");
         assert!(told.contains("agent not recorded, low risk, engine 0.1.0+older\n"), "{told}");
     }
 
@@ -757,7 +769,8 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
         if let Event::RunStarted { request, .. } = &mut e[0].1 {
             *request = format!("{} and then much more", "Make the login redirect keep the page the person came from".repeat(2));
         }
-        let many: Vec<Changed> = (0..32).map(|n| Changed::file(format!("f{n:02}.go"), 1)).collect();
+        let mut many: Vec<Changed> = (0..32).rev().map(|n| Changed::file(format!("f{n:02}.go"), 1)).collect();
+        many.push(Changed::file("big.go".into(), 40));
         e.extend([
             (10, attempt("plan", 1)),
             (20, delivered("plan", 1, 10, 500)),
@@ -776,7 +789,10 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
         assert_eq!(title.chars().count(), 3 + 72, "{title}");
         assert!(title.starts_with("## Make the login redirect") && title.ends_with('…'), "{title}");
         assert!(told.contains("\njaynes/r1 at abc; merged as def, in a repository. A person then reverted the merge. The files Jaynes measured:\n"), "{told}");
-        assert!(told.contains("- `f29.go`: 1 line changed\n- and 2 more files\n"), "{told}");
+        // the ten largest, the largest first and ties by name, then how many more
+        assert!(told.contains("- `big.go`: 40 lines changed\n- `f00.go`: 1 line changed\n"), "{told}");
+        assert!(told.contains("- `f08.go`: 1 line changed\n- and 23 more files\n"), "{told}");
+        assert!(!told.contains("`f09.go`"), "{told}");
         assert!(told.contains("### Not proved\n\n- What plan made: no check ran on it. An agent, not a person, let it go on.\n- What change made: no check ran on it.\n"), "{told}");
         // the change's checks were never judged: nothing to put under Proved by
         assert!(!told.contains("### Proved by"), "{told}");
