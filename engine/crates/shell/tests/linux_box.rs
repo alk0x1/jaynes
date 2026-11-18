@@ -501,6 +501,79 @@ fn a_command_started_inside_what_the_box_holds_reaches_it_only_through_the_box()
     assert!(!said(&o).contains("k3y"), "started inside the hidden, the command read it: {}", said(&o));
 }
 
+// --- what a command leaves behind, and the person's terminal ---------------------------------------------------
+
+/// A command line that starts, in the background, a process in a session of its own that adds a line to `f` every
+/// 100 ms until something stops it: what a check's suite could leave running to change the copy after its checks.
+fn left_running(f: &Path) -> String {
+    format!("setsid sh -c 'while :; do echo . >> {f}; sleep 0.1; done' </dev/null >/dev/null 2>&1 &", f = f.display())
+}
+
+/// Whether anything still writes `f`: its size now and a while later.
+fn still_written(f: &Path) -> bool {
+    let size = || std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+    let before = size();
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    size() != before
+}
+
+/// Wait until `f` exists, saying so past 10 s.
+fn appears(f: &Path) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !f.exists() {
+        assert!(std::time::Instant::now() < until, "{} never appeared", f.display());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn nothing_a_command_starts_outlives_it_not_even_in_a_session_of_its_own() {
+    let p = place("left-running");
+    opens();
+    let f = p.work.join("written");
+    let o = boxed(&p, &format!("{} sleep 0.5", left_running(&f)), &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    appears(&f);
+    assert!(!still_written(&f), "a process the command started went on after the command ended");
+}
+
+#[test]
+fn nothing_a_command_starts_outlives_it_when_it_is_stopped_from_outside() {
+    // stopped at once, as a halt of the run stops it
+    let p = place("left-killed");
+    opens();
+    let f = p.work.join("written");
+    let mut c = Command::new(BIN);
+    c.arg("box").arg("--write").arg(&p.work).args(hide(&p)).arg("--").args(["sh", "-c", &format!("{} sleep 30", left_running(&f))]);
+    let mut running = c.current_dir(&p.work).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("box");
+    appears(&f);
+    let _killed = running.kill();
+    let _reaped = running.wait();
+    assert!(!still_written(&f), "a process the command started went on after the command was stopped");
+}
+
+#[test]
+fn a_command_cannot_put_keys_into_a_terminal_nor_use_the_console_s_control_call() {
+    // on a terminal of its own; the box's filter refuses both calls (EPERM), on any kernel, whatever its
+    // dev.tty.legacy_tiocsti says (a kernel that disables the first answers EIO by itself, which is not the box)
+    let p = place("terminal");
+    opens();
+    let script = r#"python3 -c '
+import errno, fcntl, os, termios
+_, term = os.openpty()
+for name, request, arg in (("TIOCSTI", termios.TIOCSTI, b"x"), ("TIOCLINUX", 0x541C, b"\x06")):
+    try:
+        fcntl.ioctl(term, request, arg)
+        print(name, "taken")
+    except OSError as e:
+        print(name, errno.errorcode.get(e.errno, str(e.errno)))
+'"#;
+    let o = boxed(&p, script, &[]);
+    let out = said(&o);
+    assert!(out.contains("TIOCSTI EPERM"), "the box let a command put keys into a terminal, or did not refuse it itself: {out}");
+    assert!(out.contains("TIOCLINUX EPERM"), "the box let a command use the console's control call: {out}");
+}
+
 // --- the relay of the ports of this machine a command may reach ----------------------------------------------------
 
 /// A service on this machine's loopback, outside the box, that says hello to whoever connects.
