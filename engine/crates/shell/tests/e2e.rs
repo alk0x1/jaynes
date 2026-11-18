@@ -2796,6 +2796,8 @@ cases = {{
     "with ~/.aws opened": adding(lambda box: f"(allow file-read* (subpath \"{{box.home / '.aws'}}\"))"),
     "with every local port opened": adding(lambda box: '(allow network-outbound (remote tcp "localhost:*"))'),
     "with any program allowed to run": adding(lambda box: "(allow process-exec)"),
+    "without stopping its own children": without("(allow signal (target same-sandbox))"),
+    "with any process signalled": adding(lambda box: "(allow signal)"),
 }}
 print(json.dumps({{name: b.program_selftest(Path(sys.executable), make=make) for name, make in cases.items()}}))
 "#, lib = root().join("python"));

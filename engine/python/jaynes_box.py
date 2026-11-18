@@ -35,16 +35,17 @@ any process needs (``system.sb``, Apple's, private, which may change with macOS:
 program and the escapes, and must keep passing), then only its interpreter and declared commands to run, by the
 declared and the real path; its folder, Jaynes's library, its interpreter's folders and the libraries they load
 (``program_needs`` works them out with otool, never by hand) and what it declares, to read; its call's temporary
-folder to write; the metadata of the paths it walks, link by link, and of nothing else, so it cannot even tell
+folder to write; its own children to signal, as when it stops one, and nothing outside its box; the metadata of
+the paths it walks, link by link, and of nothing else, so it cannot even tell
 whether ~/.ssh exists; one socket file, the broker that runs the project's commands for it (macOS opens no box inside
 a box), and the local TCP ports it declares. The person's home, the engine's folder and the page's port stay shut,
 and a declaration of them is refused before the program starts. A shim of /usr/bin is refused too: it finds its
 program through xcrun, which reads the whole disk.
 The box is proved on the person's machine before any program runs in it (``program-proof``, at install and when
-macOS changes): a sample program does its work and tries eleven escapes in it, and what only an opened app could
-try (lsopen, Apple events, the last denial of secrets) is read in the profile, and the macOS it held on is kept in the
-engine's home. On another macOS the proof is made again first; when it does not hold, no role's program runs, and
-the refusal says what got through.
+macOS changes): a sample program does its work and tries twelve escapes in it, and what only an opened app could
+try (lsopen, Apple events, the last denial of secrets) is read in the profile; the macOS, the box (this file's
+sha256) and the interpreter it held with are kept in the engine's home. With another of the three the proof is made
+again first; when it does not hold, no role's program runs, and the refusal says what got through.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
@@ -449,7 +450,8 @@ def program_profile(box: ProgramBox) -> str:
     project = [box.project] if box.project is not None else []
     writable = [box.tmp, *writes, *(project if box.project_write else [])]
     readable = [box.role_dir, box.library, *box.needs.read, *reads, *project]
-    lines = ["(version 1)", "(deny default)", '(import "system.sb")', "(allow process-fork)",
+    # it may stop its own children (a command run with a timeout), never a process outside its box
+    lines = ["(version 1)", "(deny default)", '(import "system.sb")', "(allow process-fork)", "(allow signal (target same-sandbox))",
              f"(allow process-exec {_literals(dict.fromkeys(str(p) for p in box.needs.run))})"]
     if box.needs.run_inside:
         lines.append(f"(allow process-exec {_subpaths(box.needs.run_inside)})")
@@ -488,6 +490,13 @@ try_("work: sqlite, ssl, a thread", lambda: (sqlite3.connect(":memory:").execute
 try_("work: a temporary file", lambda: tempfile.NamedTemporaryFile(dir=os.environ["TMPDIR"]).close())
 try_("work: its own folder", lambda: open(os.path.join(a["role_dir"], "role.toml")).read() and "ok")
 try_("work: a child of itself", lambda: "ok" if subprocess.run([sys.executable, "-c", "print(1)"], capture_output=True).returncode == 0 else "failed")
+def stop_a_child():
+    try:
+        subprocess.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1)
+        return "it was not stopped"
+    except subprocess.TimeoutExpired:
+        return "ok"
+try_("work: stop a child of itself (a timeout)", stop_a_child)
 s = socket.socket(socket.AF_UNIX)
 try_("work: the broker", lambda: s.connect(a["broker"]))
 home = a["real_home"]
@@ -506,6 +515,7 @@ try_("escape: UDP", lambda: u.sendto(b"", ("127.0.0.1", 9)) and "sent")
 b = socket.socket()
 try_("escape: bind", lambda: b.bind(("127.0.0.1", 0)) or "bound")
 try_("escape: a name on the network", lambda: socket.getaddrinfo("example.com", 80) and "resolved")
+try_("escape: signal a process outside its box", lambda: os.kill(a["outside"], 0) or "signalled")
 print(json.dumps(got))
 '''
 
@@ -567,7 +577,7 @@ def program_selftest(interpreter: Path, make=None) -> list[str]:
             box = ProgramBox(role_dir, role_dir, tmp, needs, broker=broker, home=role_dir)
             prof = make(box)
             args = json.dumps({"role_dir": str(role_dir), "broker": str(broker), "real_home": str(Path.home()),
-                               "engine": str(fake_engine), "port": undeclared.getsockname()[1]})
+                               "engine": str(fake_engine), "port": undeclared.getsockname()[1], "outside": os.getpid()})
             env = {"PATH": "/usr/bin:/bin", "TMPDIR": str(tmp), "HOME": str(tmp), "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
             ran = subprocess.run([str(SANDBOX_EXEC), "-p", prof, str(interpreter), str(role_dir / "sample.py"), args],
                                  capture_output=True, text=True, timeout=120, env=env, cwd=role_dir)
@@ -585,7 +595,7 @@ def program_selftest(interpreter: Path, make=None) -> list[str]:
         wrong = [f"{k}: {v}" for k, v in got.items()
                  if (k.startswith("work:") and v != "ok") or (k.startswith("escape:") and v not in ("PermissionError", "gaierror"))]
         wrong += _profile_lacks(prof, box)
-        return wrong or ([] if len(got) == 16 else [f"the sample program judged {len(got)} things, not 16"])
+        return wrong or ([] if len(got) == 18 else [f"the sample program judged {len(got)} things, not 18"])
 
 
 def program_proof(interpreter: Path, again: bool = False) -> dict:
