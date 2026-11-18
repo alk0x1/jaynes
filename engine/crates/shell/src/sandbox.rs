@@ -15,6 +15,12 @@
 //! | folders                                                   | by walking down to them (symbolic links not followed) |
 //! | reads its own folders even inside hidden ones             | Landlock: full rights beneath its folders             |
 //! | reads what it is shown inside the hidden (the run's copy) | Landlock: read rights beneath each, besides the rest  |
+//! | reads and does not write a folder inside its own (.git)   | a read-only mount of it on itself, in the box's own   |
+//! |                                                           | mount namespace                                       |
+//! | nothing of what it hides shows: names, sizes, times       | in the box's mount namespace each hidden folder is an |
+//! |                                                           | empty read-only one, each hidden file an empty one; what |
+//! |                                                           | it writes or is shown inside is mounted back. Without |
+//! |                                                           | a user namespace the box does not open                |
 //! | no network but local ports                                | where the machine allows, a network of the box's own: |
 //! |                                                           | a user and network namespace with only its loopback,  |
 //! |                                                           | any port there; elsewhere Landlock's port rules for   |
@@ -67,6 +73,9 @@ pub struct Spec {
     pub hidden: Vec<PathBuf>,
     /// Folders it may read even inside hidden ones, as the run's own copy inside the hidden runs.
     pub show: Vec<PathBuf>,
+    /// Folders inside its writable folders that it may read and not write, as the copy's .git, where Jaynes runs
+    /// git later outside any box: each is mounted read-only on itself in the box's mount namespace.
+    pub readonly: Vec<PathBuf>,
     /// Local ports it may bind and connect to.
     pub ports: Vec<u16>,
     /// It runs local servers, as a test suite does: it gets a network of its own where the machine allows one,
@@ -145,6 +154,20 @@ pub fn unix_sockets() -> &'static str {
 /// refusal, and why.
 pub fn local_network() -> String {
     imp::local_network()
+}
+
+/// The AppArmor profile that lets this program, and no other, make the user namespace its box needs, as Ubuntu
+/// 24.04 and later ask of a program that makes one: it changes nothing else of what the program may do. It names the
+/// program by where it is, so it holds for the program at that path, rebuilt or updated in place.
+pub fn apparmor_profile() -> Result<String, String> {
+    let exe = std::env::current_exe().and_then(std::fs::canonicalize).map_err(|e| format!("the program cannot find itself: {e}"))?;
+    let path = exe.to_str().filter(|p| !p.contains(['"', '\n', ' '])).ok_or_else(|| format!("{} has a character an AppArmor profile cannot name here", exe.display()))?;
+    Ok(format!(
+        "# Jaynes's box makes a user namespace of its own, to hide what it hides; this lets jaynes, and only it, make one.\n\
+         abi <abi/4.0>,\n\
+         include <tunables/global>\n\n\
+         profile jaynes {path} flags=(unconfined) {{\n  userns,\n\n  include if exists <local/jaynes>\n}}\n"
+    ))
 }
 
 /// Confine this process as `spec` says, then become `argv`. Returns only when it could not: the box never runs
@@ -338,21 +361,17 @@ mod imp {
 
     /// The network the box gives `spec`, or why it refuses: it never opens a port where this machine's network has
     /// a way out, since Landlock holds a port and not an address.
-    fn network(spec: &Spec) -> Result<Net, String> {
+    fn network(spec: &Spec, own_made: bool) -> Result<Net, String> {
         if !spec.local && !spec.any_port && spec.ports.is_empty() {
             return Ok(Net::Nothing);
         }
         if spec.any_port && !spec.local {
             return Err("any local port is for a command that runs local servers (--local)".into());
         }
-        let own = if spec.local {
-            match own_network() {
-                Ok(()) => return Ok(Net::Own),
-                Err(e) => Some(e),
-            }
-        } else {
-            None
-        };
+        if spec.local && own_made {
+            return Ok(Net::Own);
+        }
+        let own = spec.local.then_some("its network namespace could not be made");
         if let Some(out) = super::way_out() {
             let why = own.map(|e| format!(" A network of its own could not be made: {e}.")).unwrap_or_default();
             return Err(format!(
@@ -378,33 +397,214 @@ mod imp {
             .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Threads:").and_then(|n| n.trim().parse::<u32>().ok())))
     }
 
-    /// A network of the box's own: a new user namespace, which a process may make without privilege where the
-    /// machine allows it, holding a new network namespace whose only interface is its loopback, brought up here.
-    /// The box's user and group stay what they are, so the command does not see itself as root.
-    pub(super) fn own_network() -> Result<(), String> {
+    /// The box's namespaces: a user namespace, which a process may make without privilege where the machine allows
+    /// it, holding a mount namespace where the box hides and keeps read-only by mounting (mounts), and, for a command
+    /// that runs local servers, a network namespace whose only interface is its loopback, brought up here. The box's
+    /// user and group stay what they are, so the command does not see itself as root. Says whether the network one
+    /// was made. Without a user namespace the box does not open: Landlock alone hides what a file holds, not that it
+    /// is there, its size and its times.
+    pub(super) fn namespaces(spec: &Spec) -> Result<bool, String> {
         let threads = threads();
         if threads != Some(1) {
             let n = threads.map(|n| n.to_string()).unwrap_or_else(|| "an unknown number of".into());
-            return Err(format!("the box makes a network of its own only from a process with one thread, and this one has {n} threads"));
+            return Err(format!("the box makes its namespaces only from a process with one thread, and this one has {n} threads"));
         }
         let (uid, gid) = (rustix::process::getuid().as_raw(), rustix::process::getgid().as_raw());
-        new_user_and_network()?;
+        let net = match (spec.local, new_namespaces(spec.local)) {
+            (_, Ok(())) => spec.local,
+            (true, Err(_)) => {
+                new_namespaces(false).map_err(no_user_namespace)?;
+                false
+            }
+            (false, Err(e)) => return Err(no_user_namespace(e)),
+        };
         let write = |f: &str, t: String| std::fs::write(f, t).map_err(|e| format!("its user could not be kept ({f}): {e}"));
         write("/proc/self/setgroups", "deny".into())?;
         write("/proc/self/uid_map", format!("{uid} {uid} 1"))?;
         write("/proc/self/gid_map", format!("{gid} {gid} 1"))?;
-        loopback_up()
+        if net {
+            loopback_up()?;
+        }
+        mounts(spec)?;
+        Ok(net)
     }
 
-    /// unshare(CLONE_NEWUSER | CLONE_NEWNET), and nothing else. rustix marks its safe unshare deprecated because
-    /// with CLONE_FILES a thread may lose descriptors another one opened; new user and network namespaces share no
-    /// descriptors with anyone, the flags are fixed here so no caller passes FILES, and own_network calls it only
-    /// from a process of one thread.
+    /// Why the box does not open without a user namespace, and how the person allows one.
+    fn no_user_namespace(e: rustix::io::Errno) -> String {
+        format!(
+            "the box needs a user namespace of its own, to hide by mounting what Landlock hides only in part (that a \
+             file is there, its size, its times), and this machine does not let a process make one ({e}). On Ubuntu \
+             24.04 and later, AppArmor holds them back: give Jaynes alone its AppArmor profile (jaynes box --apparmor \
+             prints it and where it goes; the installer offers it), or, for every program on the machine, sudo sysctl \
+             -w kernel.apparmor_restrict_unprivileged_userns=0. In a container, run it with a seccomp profile that \
+             allows unshare"
+        )
+    }
+
+    /// unshare(CLONE_NEWUSER | CLONE_NEWNS), with CLONE_NEWNET when `net`, and nothing else. rustix marks its safe
+    /// unshare deprecated because with CLONE_FILES a thread may lose descriptors another one opened; these namespaces
+    /// share no descriptors with anyone, the flags are fixed here so no caller passes FILES, and namespaces calls it
+    /// only from a process of one thread.
     #[allow(deprecated)]
-    fn new_user_and_network() -> Result<(), String> {
+    fn new_namespaces(net: bool) -> Result<(), rustix::io::Errno> {
         use rustix::thread::UnshareFlags;
-        rustix::thread::unshare(UnshareFlags::NEWUSER | UnshareFlags::NEWNET)
-            .map_err(|e| format!("this machine does not let a process make a network of its own: {e}"))
+        let flags = UnshareFlags::NEWUSER | UnshareFlags::NEWNS | if net { UnshareFlags::NEWNET } else { UnshareFlags::empty() };
+        rustix::thread::unshare(flags)
+    }
+
+    /// In the box's mount namespace, so that nothing of what it hides shows, not even its names, sizes or times:
+    /// the folder holding a hidden file is seen without it (an empty read-only folder where what else it holds is
+    /// mounted back, or, for a folder the box writes, an empty read-only file in the hidden one's place); each hidden
+    /// folder becomes an empty read-only one where what the box writes or is shown inside it is mounted back; and
+    /// each folder it may only read is mounted read-only on itself. Nothing of it reaches the machine's own mounts.
+    fn mounts(spec: &Spec) -> Result<(), String> {
+        use rustix::mount::{mount, mount_bind, mount_bind_recursive, mount_change, mount_remount, move_mount, open_tree, MountFlags, MountPropagationFlags, MoveMountFlags, OpenTreeFlags};
+        use std::os::fd::AsRawFd;
+        use std::path::PathBuf;
+        let fail = |what: &str, p: &Path, e: rustix::io::Errno| format!("the box could not {what} {}: {e}", p.display());
+        let keep_fail = |k: &Path, e: std::io::Error| format!("the box could not keep {}: {e}", k.display());
+        // the folder it was started in is entered again once the mounts are made: held from before, it is the
+        // folder beneath them, and a path from it would pass by what they hide or keep read-only
+        let here = std::env::current_dir().map_err(|e| format!("the box cannot tell the folder it was started in: {e}"))?;
+        mount_change("/", MountPropagationFlags::PRIVATE | MountPropagationFlags::REC).map_err(|e| fail("keep its mounts from", Path::new("/"), e))?;
+        let kept: Vec<PathBuf> = spec.writable.iter().chain(&spec.show).filter_map(|p| std::fs::canonicalize(p).ok()).collect();
+        let hidden: Vec<PathBuf> = denied(spec).into_iter().filter(|h| !kept.contains(h)).collect();
+        let quiet = MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC;
+        let holds_kept = |p: &Path| kept.iter().any(|k| k.starts_with(p));
+        let hold = |p: &Path| rustix::fs::open(p, rustix::fs::OFlags::PATH | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC, rustix::fs::Mode::empty()).map_err(|e| fail("hold", p, e));
+        let back = |fd: &rustix::fd::OwnedFd, at: &Path, dir: bool| {
+            let from = format!("/proc/self/fd/{}", fd.as_raw_fd());
+            if dir { mount_bind_recursive(&from, at) } else { mount_bind(&from, at) }.map_err(|e| fail("keep", at, e))
+        };
+        // 1. the folders that hold hidden files, seen without them; outer first
+        let mut stand_in: Vec<PathBuf> = Vec::new();
+        let mut parents: Vec<PathBuf> = hidden.iter().filter(|h| !h.is_dir()).filter_map(|h| h.parent().map(Path::to_path_buf)).collect();
+        parents.sort();
+        parents.dedup();
+        for dir in &parents {
+            let in_hidden = hidden.iter().any(|h| h.is_dir() && dir.starts_with(h) && !holds_kept(dir));
+            if in_hidden || !dir.is_dir() {
+                continue;
+            }
+            if kept.contains(dir) {
+                // a folder the box writes keeps its own entries: an empty file stands in for the hidden one
+                stand_in.extend(hidden.iter().filter(|h| !h.is_dir() && h.parent() == Some(dir.as_path())).cloned());
+                continue;
+            }
+            enum Entry { Dir(rustix::fd::OwnedFd), File(rustix::fd::OwnedFd), Link(PathBuf) }
+            let mut entries: Vec<(PathBuf, Entry)> = Vec::new();
+            for e in std::fs::read_dir(dir).map_err(|e| keep_fail(dir, e))?.flatten() {
+                let path = e.path();
+                // a hidden file goes; a hidden folder goes too unless something the box keeps lies inside it
+                if hidden.contains(&path) && !(path.is_dir() && holds_kept(&path)) {
+                    continue;
+                }
+                let kind = e.file_type().map_err(|e| keep_fail(&path, e))?;
+                let entry = if kind.is_symlink() {
+                    Entry::Link(std::fs::read_link(&path).map_err(|e| keep_fail(&path, e))?)
+                } else if kind.is_dir() {
+                    Entry::Dir(hold(&path)?)
+                } else {
+                    Entry::File(hold(&path)?)
+                };
+                entries.push((path, entry));
+            }
+            mount("tmpfs", dir, "tmpfs", quiet, c"mode=0755,size=256k").map_err(|e| fail("hide in", dir, e))?;
+            for (path, entry) in &entries {
+                match entry {
+                    Entry::Link(to) => std::os::unix::fs::symlink(to, path).map_err(|e| keep_fail(path, e))?,
+                    Entry::Dir(fd) => {
+                        std::fs::create_dir(path).map_err(|e| keep_fail(path, e))?;
+                        back(fd, path, true)?;
+                    }
+                    Entry::File(fd) => {
+                        std::fs::write(path, b"").map_err(|e| keep_fail(path, e))?;
+                        back(fd, path, false)?;
+                    }
+                }
+            }
+            mount_remount(dir, quiet | MountFlags::RDONLY, c"").map_err(|e| fail("close", dir, e))?;
+        }
+        // 2. the hidden folders, outer first: one inside a folder already hidden is hidden with it, unless it lies in
+        // what was mounted back; one no longer there was left out of its folder's view
+        let mut done: Vec<PathBuf> = Vec::new();
+        for h in hidden.iter().filter(|h| h.is_dir()) {
+            let under = done.iter().filter(|d| h.starts_with(d)).max_by_key(|d| d.as_os_str().len());
+            if under.is_some_and(|d| !kept.iter().any(|k| k.starts_with(d) && h.starts_with(k))) {
+                continue;
+            }
+            // what lies inside is held open before the folder is covered, with whether it is a folder, then mounted
+            // back from that
+            let inside: Vec<(PathBuf, bool, rustix::fd::OwnedFd)> = kept
+                .iter()
+                .filter(|k| k.starts_with(h) && *k != h)
+                .map(|k| hold(k).map(|fd| (k.clone(), k.is_dir(), fd)))
+                .collect::<Result<_, _>>()?;
+            mount("tmpfs", h, "tmpfs", quiet, c"mode=0755,size=64k").map_err(|e| fail("hide", h, e))?;
+            for (k, dir, fd) in &inside {
+                if *dir {
+                    std::fs::create_dir_all(k).map_err(|e| keep_fail(k, e))?;
+                } else {
+                    if let Some(parent) = k.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| keep_fail(k, e))?;
+                    }
+                    std::fs::write(k, b"").map_err(|e| keep_fail(k, e))?;
+                }
+                back(fd, k, *dir)?;
+            }
+            mount_remount(h, quiet | MountFlags::RDONLY, c"").map_err(|e| fail("close", h, e))?;
+            done.push(h.clone());
+        }
+        // a hidden file in a folder the box writes: an empty file of a tmpfs mounted nowhere stands in, so of no
+        // folder Landlock grants (/dev/null would be read and written, as its rules let)
+        if !stand_in.is_empty() {
+            let empty = empty_tmpfs().map_err(|e| fail("hide", &stand_in[0], e))?;
+            for h in &stand_in {
+                let tree = open_tree(&empty, "empty", OpenTreeFlags::OPEN_TREE_CLONE | OpenTreeFlags::OPEN_TREE_CLOEXEC).map_err(|e| fail("hide", h, e))?;
+                move_mount(&tree, "", rustix::fs::CWD, h, MoveMountFlags::MOVE_MOUNT_F_EMPTY_PATH).map_err(|e| fail("hide", h, e))?;
+                mount_remount(h, MountFlags::BIND | MountFlags::RDONLY | quiet, c"").map_err(|e| fail("close", h, e))?;
+            }
+        }
+        // 3. the folders it may only read
+        for r in &spec.readonly {
+            if let Ok(r) = std::fs::canonicalize(r) {
+                mount_bind(&r, &r).map_err(|e| fail("hold", &r, e))?;
+                read_only(&r, &r)?;
+            } else {
+                // one not there yet is not made inside the box: an empty read-only folder stands in its place, which
+                // the one who started the box removes once it ends
+                std::fs::create_dir(r).map_err(|e| format!("the box could not hold {} read-only: {e}", r.display()))?;
+                mount("tmpfs", r, "tmpfs", quiet | MountFlags::RDONLY, c"mode=0755,size=4k").map_err(|e| fail("hold", r, e))?;
+            }
+        }
+        // started inside what it hides, it stands in the empty folder that took its place
+        std::env::set_current_dir(&here).or_else(|_| std::env::set_current_dir("/")).map_err(|e| format!("the box could not enter {}: {e}", here.display()))
+    }
+
+    /// A tmpfs mounted nowhere holding one empty file, "empty", whose clone stands in for each hidden file.
+    fn empty_tmpfs() -> Result<rustix::fd::OwnedFd, rustix::io::Errno> {
+        use rustix::mount::{fsconfig_create, fsmount, fsopen, FsMountFlags, FsOpenFlags, MountAttrFlags};
+        let fs = fsopen("tmpfs", FsOpenFlags::FSOPEN_CLOEXEC)?;
+        fsconfig_create(&fs)?;
+        let mnt = fsmount(&fs, FsMountFlags::FSMOUNT_CLOEXEC, MountAttrFlags::MOUNT_ATTR_NOSUID | MountAttrFlags::MOUNT_ATTR_NODEV | MountAttrFlags::MOUNT_ATTR_NOEXEC)?;
+        let file = rustix::fs::openat(&mnt, "empty", rustix::fs::OFlags::CREATE | rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC, rustix::fs::Mode::from_raw_mode(0o400))?;
+        drop(file);
+        Ok(mnt)
+    }
+
+    /// Remount the bind mount at `at` read-only, keeping the flags the mount it came from (`from`) holds: a user
+    /// namespace may not drop them.
+    fn read_only(from: &Path, at: &Path) -> Result<(), String> {
+        use rustix::fs::StatVfsMountFlags as St;
+        use rustix::mount::{mount_remount, MountFlags as Ms};
+        let held = rustix::fs::statvfs(from).map_err(|e| format!("the box could not read the mount of {}: {e}", from.display()))?.f_flag;
+        let mut flags = Ms::BIND | Ms::RDONLY;
+        for (st, ms) in [(St::NOSUID, Ms::NOSUID), (St::NODEV, Ms::NODEV), (St::NOEXEC, Ms::NOEXEC), (St::NOATIME, Ms::NOATIME), (St::NODIRATIME, Ms::NODIRATIME), (St::RELATIME, Ms::RELATIME)] {
+            if held.contains(st) {
+                flags |= ms;
+            }
+        }
+        mount_remount(at, flags, c"").map_err(|e| format!("the box could not make {} read-only: {e}", at.display()))
     }
 
     /// Bring up the loopback of the new network namespace, by a netlink message to the kernel: RTM_NEWLINK on
@@ -443,8 +643,9 @@ mod imp {
     }
 
     fn confine(spec: &Spec) -> Result<Net, String> {
-        // the network first: a network of its own must be made before Landlock and the filter close the calls
-        let net = network(spec)?;
+        // the namespaces first, the mounts in them, then the network: all before Landlock and the filter close the calls
+        let own = namespaces(spec)?;
+        let net = network(spec, own)?;
         let fail = |e: &dyn std::fmt::Display| format!("the box could not be made: {e}");
         // Landlock ABI 9 checks a Unix socket's path; ABI 6 is the least the box opens with, since it keeps signals
         // and abstract sockets in the box (Linux 6.12)
@@ -577,9 +778,9 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_network_of_its_own_is_made_only_from_a_process_of_one_thread() {
+    fn the_box_s_namespaces_are_made_only_from_a_process_of_one_thread() {
         // the test harness runs more than one thread: the box says so in its own words, and makes nothing
-        let said = imp::own_network().expect_err("refused");
+        let said = imp::namespaces(&Spec { local: true, ..Default::default() }).expect_err("refused");
         assert!(said.contains("only from a process with one thread"), "{said}");
     }
 
