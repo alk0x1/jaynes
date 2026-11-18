@@ -21,7 +21,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
         [--task ID] [--arm NAME]   in an evaluation: the task's id in your own list and the arm, letters, digits and hyphens
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
-  box [--write DIR]... [--hide PATH]... [--port N]... [--local] [--any-port] [--never-port N]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
+  box [--write DIR]... [--hide PATH]... [--show PATH]... [--port N]... [--local] [--any-port] [--never-port N]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
@@ -431,6 +431,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let spec = jaynes_shell::sandbox::Spec {
                 writable: all("--write").into_iter().map(PathBuf::from).collect(),
                 hidden: all("--hide").into_iter().map(PathBuf::from).collect(),
+                show: all("--show").into_iter().map(PathBuf::from).collect(),
                 ports,
                 local: opts.iter().any(|a| a == "--local"),
                 any_port: opts.iter().any(|a| a == "--any-port"),

@@ -257,7 +257,6 @@ fn types(e: &[Value]) -> Vec<String> {
 const OUTPUT: &str = r#"printf '{"summary":"hello becomes hi","files":["greeting.txt"]}' > .jaynes/output.json"#;
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
     let s = scratch("small");
     let prompt = s.home.parent().expect("base").join("prompt.txt");
@@ -285,7 +284,6 @@ fn a_small_change_is_delivered_as_a_branch_with_no_stop() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
     let s = scratch("fix");
     // first the agent writes "hey" (the suite wants "hi"); asked to fix, in its session, it writes "hi"
@@ -304,7 +302,6 @@ fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
     let s = scratch("risky");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
@@ -328,7 +325,6 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s() {
     let s = scratch("release");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
@@ -343,7 +339,6 @@ fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s()
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_program_that_does_not_start_spends_no_attempt() {
     let s = scratch("fault");
     let out = start(&s, "fault", "echo 'no such program' >&2; exit 3");
@@ -369,7 +364,6 @@ fn the_small_change_role_conforms() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     let s = scratch("inbox");
     let role = root().join("crates/shell/tests/roles/small-change");
@@ -384,7 +378,11 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("start");
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // the run is in the record before it is halted: a fixed wait was too short on a slower machine
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !engine(&s, &["log", "inbox"]).1.contains("AttemptStarted") && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     let (ok, out) = engine(&s, &["halt", "inbox"]);
     assert!(ok && out.contains("recorded for the process that drives the run"), "{out}");
     let done = child.wait_with_output().expect("wait");
@@ -428,7 +426,7 @@ summary = { type = "string", about = "what changed" }
 "#).expect("write");
     let pid = base.join("agent.pid");
     let agent = format!("echo $$ > {}; sleep 60", pid.display());
-    let child = Command::new(BIN)
+    let child = jaynes()
         .args(["start", "--run", "no-kill", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "wait", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -452,7 +450,7 @@ summary = { type = "string", about = "what changed" }
     std::thread::sleep(std::time::Duration::from_millis(200));
     let agent_pid = std::fs::read_to_string(&pid).expect("pid").trim().to_string();
     let asked = std::time::Instant::now();
-    let halted = Command::new(BIN).args(["halt", "no-kill"])
+    let halted = jaynes().args(["halt", "no-kill"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("PATH", &bin)
         .output().expect("halt");
     assert!(halted.status.success(), "{}{}", String::from_utf8_lossy(&halted.stdout), String::from_utf8_lossy(&halted.stderr));
@@ -471,6 +469,11 @@ summary = { type = "string", about = "what changed" }
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
+    // where the box opens (the Linux box does, with Landlock), this machine is not one without a box
+    if Command::new(BIN).args(["box", "--check"]).output().is_ok_and(|o| o.status.success()) {
+        eprintln!("skipped: the box opens on this machine");
+        return;
+    }
     let s = scratch("no-box");
     let ran = s.home.parent().expect("base").join("agent-ran");
     let role = root().join("crates/shell/tests/roles/small-change");
@@ -500,7 +503,6 @@ fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
     let s = scratch("halt-now");
     let role = root().join("crates/shell/tests/roles/small-change");
@@ -563,7 +565,6 @@ fn bug_project(name: &str) -> Scratch {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     let s = bug_project("fixbug");
     let prompts = s.home.join("prompts");
@@ -627,7 +628,6 @@ fn post(port: u16, path: &str, body: &str, me: &str) -> Value {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_answers_as_the_person_only_with_its_key() {
     let s = scratch("page");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
@@ -683,7 +683,6 @@ fn the_page_answers_as_the_person_only_with_its_key() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let s = bug_project("redo");
     let prompts = s.home.join("prompts");
@@ -725,7 +724,6 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_attempt() {
     let s = scratch("crash");
     let mark = s.home.join("mark");
@@ -795,7 +793,6 @@ fn no_run_goes_on_over_a_record_that_was_changed() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_halts_resumes_and_records_a_correction() {
     let s = scratch("acts");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
@@ -865,7 +862,6 @@ impl Mcp {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     let s = scratch("leave");
     let mark = s.home.join("mark");
@@ -954,7 +950,6 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_reverts_it() {
     let s = bug_project("merge");
     let said = fix_bug_run(&s, "merge");
@@ -976,7 +971,6 @@ fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_revert
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_merge_waits_for_a_clean_checkout_and_says_why() {
     let s = bug_project("dirty");
     std::fs::write(s.project.join("greet.sh"), "echo \"hello there $1\"\n").expect("write");
@@ -1013,7 +1007,6 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_is_installed_by_name_and_only_when_it_conforms() {
     let s = scratch("roles");
     let (ok, out) = engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]);
@@ -1036,7 +1029,6 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     let s = scratch("mcp");
     assert!(engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]).0);
@@ -1074,7 +1066,6 @@ fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_machine_that_cannot_run_the_tests_stops_the_run_before_any_agent_works() {
     if Command::new("python3").args(["-c", "import pytest"]).status().is_ok_and(|s| s.success()) {
         eprintln!("skipped: this machine's python3 has pytest");
@@ -1095,7 +1086,6 @@ fn a_machine_that_cannot_run_the_tests_stops_the_run_before_any_agent_works() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn abandoning_a_run_stops_its_agent_at_once() {
     let s = scratch("abandon");
     let mark = s.home.join("mark");
@@ -1136,7 +1126,6 @@ impl Drop for Page {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_person_starts_a_run_from_the_page() {
     let s = scratch("new");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
@@ -1211,7 +1200,6 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_their_words() {
     let s = scratch("impossible");
     let prompts = s.home.parent().expect("base").join("prompts");
@@ -1252,7 +1240,6 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
 /// The engine killed at many moments of a run that merges: each time the next process recovers, the run delivers,
 /// the fix lands exactly once, nothing is left running and the record holds.
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_run_killed_at_any_moment_recovers_and_lands_once() {
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let role = root().join("crates/shell/tests/roles/fix-bug");
@@ -1312,7 +1299,6 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_finished_run_leaves_no_toolchain_cache_behind() {
     let s = scratch("caches");
     // what Go leaves: a build cache, and modules it makes read-only
@@ -1328,7 +1314,6 @@ fn a_finished_run_leaves_no_toolchain_cache_behind() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     let s = scratch("sweep");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
@@ -1356,7 +1341,6 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_s_own_check_is_a_script_run_in_the_box_judging_by_its_exit() {
     let s = scratch("script");
     let role = s.home.parent().expect("base").join("odd");
@@ -1427,7 +1411,6 @@ fn a_role_whose_promise_does_not_hold_is_refused_with_the_path_that_breaks_it() 
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_committing_it() {
     let s = scratch("diedone");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
@@ -1447,7 +1430,6 @@ fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_commi
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     let s = bug_project("diemerge");
     let prompts = s.home.join("prompts");
@@ -1616,7 +1598,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs a test browser in the Linux box, which is the box's next part")]
 fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     if skipped_without_a_test_browser() {
         return;
@@ -1670,7 +1652,7 @@ fn question_of(s: &Scratch, run: &str, n: usize) -> Value {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs a test browser in the Linux box, which is the box's next part")]
 fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
     if skipped_without_a_test_browser() {
         return;
@@ -1696,7 +1678,7 @@ fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs a test browser in the Linux box, which is the box's next part")]
 fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() {
     if skipped_without_a_test_browser() {
         return;
@@ -1723,7 +1705,7 @@ fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() 
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs a test browser in the Linux box, which is the box's next part")]
 fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
     if skipped_without_a_test_browser() {
         return;
@@ -2051,7 +2033,6 @@ fn planting_agent(marks: &Path) -> String {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn nothing_an_agent_writes_in_the_copy_s_git_runs_outside_its_box() {
     let s = scratch("git-hooks");
     let marks = s.home.parent().expect("base").join("marks");
@@ -2071,7 +2052,6 @@ fn nothing_an_agent_writes_in_the_copy_s_git_runs_outside_its_box() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn what_an_agent_writes_in_the_copy_s_git_is_not_what_is_delivered() {
     let s = scratch("git-refs");
     // the agent commits a file of its own in the copy's .git and moves every branch there to it
@@ -2090,7 +2070,6 @@ fn what_an_agent_writes_in_the_copy_s_git_is_not_what_is_delivered() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_output_that_is_a_link_out_of_the_copy_is_not_read() {
     let s = scratch("output-link");
     // what the agent points at: a file of this account outside the copy, which Jaynes must never take in
@@ -2120,7 +2099,6 @@ fn ran(marks: &Path) -> Vec<String> {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_repository_an_agent_nests_in_the_copy_is_refused_and_nothing_of_it_runs() {
     let s = scratch("git-nested");
     let marks = s.home.parent().expect("base").join("marks");
@@ -2141,7 +2119,6 @@ fn a_repository_an_agent_nests_in_the_copy_is_refused_and_nothing_of_it_runs() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_engine_s_git_reads_none_of_the_person_s_own_configuration_on_the_copy() {
     let s = scratch("git-global");
     let marks = s.home.parent().expect("base").join("marks");
@@ -2152,7 +2129,7 @@ fn the_engine_s_git_reads_none_of_the_person_s_own_configuration_on_the_copy() {
     std::fs::write(home.join(".gitconfig"), format!("[filter \"x\"]\n\tclean = {}\n\tsmudge = {}\n", clean.display(), clean.display())).expect("config");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf '* filter=x\\n' > .gitattributes && {OUTPUT}");
     let role = root().join("crates/shell/tests/roles/small-change");
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", "global", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
@@ -2165,7 +2142,6 @@ fn the_engine_s_git_reads_none_of_the_person_s_own_configuration_on_the_copy() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_git_file_pointing_elsewhere_and_a_bare_repository_in_the_tree_change_nothing_the_engine_does() {
     let s = scratch("git-pointer");
     let marks = s.home.parent().expect("base").join("marks");
@@ -2189,7 +2165,6 @@ fn a_git_file_pointing_elsewhere_and_a_bare_repository_in_the_tree_change_nothin
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_start_says_when_the_copy_lacks_git_lfs_content_or_submodules() {
     let s = scratch("git-notes");
     std::fs::write(s.project.join(".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n").expect("write");
@@ -2201,7 +2176,6 @@ fn the_start_says_when_the_copy_lacks_git_lfs_content_or_submodules() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_agent_s_git_reads_none_of_the_person_s_configuration_and_its_commits_are_not_the_delivery() {
     let s = scratch("agent-git");
     let said = s.home.parent().expect("base").join("said.txt");
