@@ -2219,11 +2219,58 @@ fn the_agent_s_git_reads_none_of_the_person_s_configuration_and_its_commits_are_
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands is macOS's sandbox-exec here")]
+fn a_project_s_command_in_the_box_hands_no_job_to_launchd() {
+    // launchctl submit and bootstrap work outside any box (measured on 18/11): a job they hand to launchd runs
+    // outside the box, with the person's rights, and outlives the run. In the box both must be refused; a later
+    // macOS that lets either through shows here. The jobs are taken away by the labels this test made, and only those.
+    let base = std::env::temp_dir().join(format!("jaynes-box-launchd-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&base);
+    let (project, out) = (base.join("project"), base.join("out"));
+    for d in [&project, &out] {
+        std::fs::create_dir_all(d).expect("dir");
+    }
+    std::fs::write(project.join("README"), "a project\n").expect("write");
+    let nonce = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("time").as_nanos());
+    let (submitted, booted) = (format!("dev.jaynes.test.{nonce}-submit"), format!("dev.jaynes.test.{nonce}-boot"));
+    let uid = String::from_utf8_lossy(&Command::new("id").arg("-u").output().expect("id").stdout).trim().to_string();
+    let plist = out.join("job.plist");
+    std::fs::write(&plist, format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>{booted}</string><key>RunAtLoad</key><true/>
+<key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>echo ran &gt; {o}/booted</string></array></dict></plist>
+"#, o = out.display())).expect("plist");
+    let command = format!("launchctl submit -l {submitted} -- /bin/sh -c 'echo ran > {o}/submitted'; echo submit=$?\nlaunchctl bootstrap gui/{uid} {plist}; echo bootstrap=$?",
+                          o = out.display(), plist = plist.display());
+    let script = format!(r#"
+import sys
+sys.path.insert(0, {lib:?})
+import jaynes_box as b
+from pathlib import Path
+print(b.run(Path({project:?}), {command:?}, timeout=60).printed)
+"#, lib = root().join("python"), project = project);
+    let ran = Command::new(python()).args(["-c", &script]).output().expect("python");
+    let said = String::from_utf8_lossy(&ran.stdout).to_string();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let ran_outside = [out.join("submitted").exists(), out.join("booted").exists()];
+    let known = [
+        Command::new("launchctl").args(["list", &submitted]).output().is_ok_and(|o| o.status.success()),
+        Command::new("launchctl").args(["print", &format!("gui/{uid}/{booted}")]).output().is_ok_and(|o| o.status.success()),
+    ];
+    // what this test may have handed to launchd goes, by its own labels, before anything is asserted
+    let _removed = Command::new("launchctl").args(["remove", &submitted]).output();
+    let _out = Command::new("launchctl").args(["bootout", &format!("gui/{uid}/{booted}")]).output();
+    let _gone = std::fs::remove_dir_all(&base);
+    assert!(said.contains("submit=") && said.contains("bootstrap="), "the command did not run in the box: {said}{}", String::from_utf8_lossy(&ran.stderr));
+    assert_eq!(ran_outside, [false, false], "a job handed to launchd from the box ran outside it (submit, bootstrap): {said}");
+    assert_eq!(known, [false, false], "launchd took a job from the box (submit, bootstrap): {said}");
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which is macOS's sandbox-exec here")]
 fn in_a_real_run_the_project_s_suite_neither_reads_nor_writes_the_pasteboard_nor_reaches_the_keychain() {
     // the path a real run takes: small-change runs the project's suite in the box on the run's copy under runs/. The
     // suite is a probe: it fails when it reads what was copied, writes the pasteboard, or searches the keychain.
-    let s = scratch("mach");
     let pb = |args: &[&str], input: Option<&[u8]>| -> Option<Vec<u8>> {
         let mut c = Command::new(args[0]);
         c.args(&args[1..]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
@@ -2238,30 +2285,47 @@ fn in_a_real_run_the_project_s_suite_neither_reads_nor_writes_the_pasteboard_nor
     };
     // the find pasteboard, not the one the person copies with; what it held is put back at the end
     let saved = pb(&["/usr/bin/pbpaste", "-pboard", "find"], None);
-    let token = format!("jaynes-mach-{}", std::process::id());
-    let pasteboard = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(token.as_bytes())).is_some()
-        && pb(&["/usr/bin/pbpaste", "-pboard", "find"], None).as_deref() == Some(token.as_bytes());
     // the keychain's service answers outside the box: it lists the keychains (main's box let it answer, too)
     let keychain = Command::new("/usr/bin/security").arg("list-keychains").output().is_ok_and(|o| o.status.success());
-    std::fs::write(s.project.join("probe.sh"), format!(r#"
+    const WRITTEN: &str = "written-from-the-box";
+    // one real run with the probe; what the find pasteboard held after it, and whether it answered at all
+    let attempt = |name: &str| -> (bool, Option<Vec<u8>>, String) {
+        let s = scratch(name);
+        let token = format!("jaynes-mach-{name}-{}", std::process::id());
+        let pasteboard = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(token.as_bytes())).is_some()
+            && pb(&["/usr/bin/pbpaste", "-pboard", "find"], None).as_deref() == Some(token.as_bytes());
+        std::fs::write(s.project.join("probe.sh"), format!(r#"
 if [ "$(/usr/bin/pbpaste -pboard find 2>/dev/null)" = "{token}" ]; then echo "read the pasteboard"; exit 1; fi
-printf written-from-the-box | /usr/bin/pbcopy -pboard find 2>/dev/null
+printf {WRITTEN} | /usr/bin/pbcopy -pboard find 2>/dev/null
 if /usr/bin/security list-keychains >/dev/null 2>&1; then echo "reached the keychain"; exit 1; fi
 grep -q hi greeting.txt
 "#)).expect("write");
-    std::fs::write(s.project.join("Makefile"), "test:\n\tsh probe.sh\n").expect("write");
-    for args in [&["add", "-A"][..], &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "probe"][..]] {
-        assert!(Command::new("git").arg("-C").arg(&s.project).args(args).status().expect("git").success());
+        std::fs::write(s.project.join("Makefile"), "test:\n\tsh probe.sh\n").expect("write");
+        for args in [&["add", "-A"][..], &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "probe"][..]] {
+            assert!(Command::new("git").arg("-C").arg(&s.project).args(args).status().expect("git").success());
+        }
+        let out = start(&s, name, &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
+        let after = pb(&["/usr/bin/pbpaste", "-pboard", "find"], None);
+        let e = events(&s, name);
+        // the suite reading the token fails it, and so the run: what the box let through, never another app
+        assert!(types(&e).iter().any(|t| t == "Delivered"), "the suite failed in the box:\n{out}\n{:?}", types(&e));
+        let kept = pasteboard.then(|| after.clone().unwrap_or_default());
+        (pasteboard, kept.map(|k| if k == token.as_bytes() { b"token".to_vec() } else { k }), out)
+    };
+    // the find pasteboard is the whole system's: another app's search may change it while the run goes on, and then
+    // what it holds after says nothing of the box; once more, and said
+    let (mut pasteboard, mut after, _) = attempt("mach");
+    let other = |a: &Option<Vec<u8>>| a.as_deref().is_some_and(|v| v != b"token" && v != WRITTEN.as_bytes());
+    if pasteboard && other(&after) {
+        eprintln!("the find pasteboard changed to something else during the run (another app's search, not the box): once more");
+        (pasteboard, after, _) = attempt("mach-again");
     }
-    let out = start(&s, "mach", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
-    let after = pb(&["/usr/bin/pbpaste", "-pboard", "find"], None);
     if let Some(v) = &saved {
         let _back = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(v));
     }
-    let e = events(&s, "mach");
-    assert!(types(&e).iter().any(|t| t == "Delivered"), "the suite failed in the box:\n{out}\n{:?}", types(&e));
     if pasteboard {
-        assert_eq!(after.as_deref(), Some(token.as_bytes()), "the suite wrote the pasteboard");
+        assert_ne!(after.as_deref(), Some(WRITTEN.as_bytes()), "the suite wrote the pasteboard");
+        assert!(!other(&after), "the find pasteboard changed under both runs (another app's searches): this proves nothing of the box");
     }
     assert!(pasteboard || keychain, "neither the pasteboard nor the keychain answers here, so this test proves nothing");
 }
