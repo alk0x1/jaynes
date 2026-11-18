@@ -17,7 +17,7 @@ use store::Store;
 
 const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
-  start --role NAME --request TEXT [--project DIR] [--agent claude|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
+  start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you
@@ -343,6 +343,7 @@ fn start(args: &[String]) -> Result<(), String> {
     let request = flag(args, "--request").ok_or("--request TEXT is needed")?;
     let project = flag(args, "--project").map(|p| std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))).transpose()?;
     let agent = flag(args, "--agent").or_else(|| std::env::var("JAYNES_AGENT").ok()).unwrap_or_else(|| "claude".into());
+    drive::known_agent(&agent)?;
     // the model is fixed for the run here, so every process that carries the run on uses the same one
     let agent = if agent == "claude" { format!("claude:{}", agent::Claude::default().model) } else { agent };
     let raise = match flag(args, "--risk").as_deref() {

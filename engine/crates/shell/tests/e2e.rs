@@ -2094,3 +2094,32 @@ fn a_page_test_that_reaches_another_program_fails_within_its_wait() {
     assert!(said.contains("not Jaynes's page") && said.contains("not jaynes"), "{said}");
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }
+
+#[test]
+fn an_agent_jaynes_does_not_know_is_refused_before_anything_starts_and_never_becomes_claude_code() {
+    // No model is reached however this goes: a home and a path of the test's, where the only `claude` is a stand-in
+    // that fails and leaves a mark. Today an unknown agent fell back to Claude Code and spent the person's quota.
+    let s = scratch("unknown-agent");
+    let guard = s.base.join("guard");
+    std::fs::create_dir_all(&guard).expect("dir");
+    std::fs::create_dir_all(s.base.join("person")).expect("dir");
+    let mark = s.base.join("claude-was-called");
+    std::fs::write(guard.join("claude"), format!("#!/bin/sh\ntouch '{}'\nexit 3\n", mark.display())).expect("write");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(guard.join("claude"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    for (run, agent) in [("codex", "codex:x"), ("gpt", "gpt:x"), ("typo", "clade:x")] {
+        let out = jaynes()
+            .args(["start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                   "--request", "say hi", "--agent", agent])
+            .env("HOME", s.base.join("person")).env("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", guard.display()))
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .env_remove("JAYNES_AGENT")
+            .output().expect("start");
+        let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(!mark.exists(), "{agent} became Claude Code: {said}");
+        assert!(!out.status.success(), "{agent} started: {said}");
+        assert!(said.contains(agent) && said.contains("claude:MODEL") && said.contains("command:CMD"), "{agent}: it does not say which agents there are: {said}");
+        assert!(!s.home.join("runs").join(run).exists(), "{agent}: a run was recorded");
+    }
+}

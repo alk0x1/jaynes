@@ -46,6 +46,15 @@ impl Setup {
     }
 }
 
+/// Whether `spec` names an agent program Jaynes knows: `claude`, `claude:MODEL` or `command:CMD`. Anything else is
+/// refused before a run starts, and never taken for Claude Code: a name mistyped would spend the person's quota.
+pub fn known_agent(spec: &str) -> Result<(), String> {
+    if spec == "claude" || spec.starts_with("claude:") || spec.strip_prefix("command:").is_some_and(|c| !c.trim().is_empty()) {
+        return Ok(());
+    }
+    Err(format!("{spec} is not an agent Jaynes knows: the agent is claude, claude:MODEL or command:CMD"))
+}
+
 /// The agent a run's setup names: `command:CMD`, or `claude:MODEL` with the model fixed when the run started.
 pub fn agent_named(spec: &str) -> Box<dyn Agent> {
     if let Some(cmd) = spec.strip_prefix("command:") {
@@ -1493,6 +1502,12 @@ mod tests {
     fn a_run_s_agent_keeps_the_model_it_started_with() {
         assert!(agent_named("claude:claude-sonnet-5-5").name().starts_with("claude claude-sonnet-5-5 "));
         assert!(agent_named("command:true").name().starts_with("command:"));
+        for known in ["claude", "claude:claude-opus-5-5", "command:true"] {
+            assert!(known_agent(known).is_ok(), "{known}");
+        }
+        for unknown in ["codex:x", "gpt:x", "clade:x", "Claude", "command:", "command: ", ""] {
+            assert!(known_agent(unknown).is_err_and(|e| e.contains("claude:MODEL") && e.contains("command:CMD")), "{unknown}");
+        }
     }
 
     #[test]
