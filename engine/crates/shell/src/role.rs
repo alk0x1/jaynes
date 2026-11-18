@@ -118,12 +118,17 @@ impl RoleProgram {
                 Ok(Some(_)) => break,
                 Ok(None) if started.elapsed() > self.timeout => {
                     // the whole group: a check's suite runs in the role's children
-                    let _killed = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status();
+                    let pgid = child.id();
+                    let stopped = crate::agent::stop_group_reaping(pgid, Duration::ZERO, || drop(child.try_wait()));
                     let _waited = child.wait();
                     if let Some(f) = &self.pidfile {
                         let _gone = std::fs::remove_file(f);
                     }
-                    return Err(format!("the role program did not answer in {} s", self.timeout.as_secs()));
+                    let mut said = format!("the role program did not answer in {} s", self.timeout.as_secs());
+                    if let Err(e) = stopped {
+                        said.push_str(&format!(", and it could not be stopped: {e}"));
+                    }
+                    return Err(said);
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                 Err(e) => return Err(format!("the role program could not be watched: {e}")),
@@ -133,12 +138,7 @@ impl RoleProgram {
             let _gone = std::fs::remove_file(f);
         }
         // what the call left running in its group ends with it; then read for a moment more, at most
-        let group = |sig: &str| Command::new("kill").args([sig, "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
-        if group("-0") {
-            let _term = group("-TERM");
-            std::thread::sleep(Duration::from_millis(300));
-            let _kill = group("-KILL");
-        }
+        crate::agent::stop_group(child.id(), Duration::from_millis(300)).map_err(|e| format!("what the role program left running could not be stopped: {e}"))?;
         let until = Instant::now() + Duration::from_secs(3);
         while !(reader.is_finished() && errors.is_finished()) && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(20));

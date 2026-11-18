@@ -128,26 +128,82 @@ fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>
     result
 }
 
-/// Stop what an agent program left running when the process that started it died: its whole process group, gently
-/// then for good. True when there was something to stop.
-pub fn stop_left(pidfile: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(pidfile) else { return false };
-    let _gone = std::fs::remove_file(pidfile);
-    let Ok(pgid) = text.trim().parse::<u32>() else { return false };
-    let group = format!("-{pgid}");
-    let alive = |sig: &str| Command::new("kill").args([sig, "--", &group]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
-    if !alive("-0") {
-        return false;
-    }
-    let _term = alive("-TERM");
-    for _ in 0..30 {
-        std::thread::sleep(Duration::from_millis(100));
-        if !alive("-0") {
-            return true;
+/// What Jaynes does to a process group: ask whether any of it is left, ask it to stop, or stop it for good.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sig {
+    Probe,
+    Term,
+    Kill,
+}
+
+/// Signal the process group `pgid` straight from this program, so no kill program is needed on the machine: true
+/// when some process of it took the signal, false when none is left. What the system refuses is an error, never
+/// silence. The group of process 1, and Jaynes's own group, are never signalled: that would reach every process.
+pub fn signal_group(pgid: u32, sig: Sig) -> Result<bool, String> {
+    use rustix::process::{getpgrp, kill_process_group, test_kill_process_group, Pid, Signal};
+    let pid = i32::try_from(pgid).ok().and_then(Pid::from_raw).filter(|p| p.as_raw_nonzero().get() > 1 && *p != getpgrp());
+    let Some(pid) = pid else { return Err(format!("Jaynes refused to signal the process group {pgid}")) };
+    let send = || match sig {
+        Sig::Probe => test_kill_process_group(pid),
+        Sig::Term => kill_process_group(pid, Signal::TERM),
+        Sig::Kill => kill_process_group(pid, Signal::KILL),
+    };
+    // macOS refuses a signal to a group whose processes have all ended but are not yet collected by their parent,
+    // which does so within moments; a refusal that lasts is the system's, and is said
+    let mut refused = 0;
+    loop {
+        match send() {
+            Ok(()) => return Ok(true),
+            Err(rustix::io::Errno::SRCH) => return Ok(false),
+            Err(rustix::io::Errno::PERM) if refused < 20 => {
+                refused += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("the system refused to signal the process group {pgid} ({sig:?}): {e}")),
         }
     }
-    let _kill = alive("-KILL");
-    true
+}
+
+/// Stop the process group `pgid`, gently then for good: true when there was something to stop. An error when the
+/// system refused a signal, or something of the group is still there after the last one.
+pub fn stop_group(pgid: u32, patience: Duration) -> Result<bool, String> {
+    stop_group_reaping(pgid, patience, || {})
+}
+
+/// `stop_group` for a group whose leader is Jaynes's own child: `reap` collects it once it ends, since until then
+/// the system still counts it in the group.
+pub fn stop_group_reaping(pgid: u32, patience: Duration, mut reap: impl FnMut()) -> Result<bool, String> {
+    reap();
+    if !signal_group(pgid, Sig::Probe)? {
+        return Ok(false);
+    }
+    signal_group(pgid, Sig::Term)?;
+    let until = Instant::now() + patience;
+    while Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+        reap();
+        if !signal_group(pgid, Sig::Probe)? {
+            return Ok(true);
+        }
+    }
+    signal_group(pgid, Sig::Kill)?;
+    for _ in 0..40 {
+        reap();
+        if !signal_group(pgid, Sig::Probe)? {
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("the process group {pgid} is still running after Jaynes stopped it for good"))
+}
+
+/// Stop what an agent program left running when the process that started it died: its whole process group, gently
+/// then for good. True when there was something to stop; an error when it could not be stopped.
+pub fn stop_left(pidfile: &Path) -> Result<bool, String> {
+    let Ok(text) = std::fs::read_to_string(pidfile) else { return Ok(false) };
+    let _gone = std::fs::remove_file(pidfile);
+    let Ok(pgid) = text.trim().parse::<u32>() else { return Ok(false) };
+    stop_group(pgid, Duration::from_secs(3))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,7 +260,6 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             }
         }
     });
-    let group = |sig: &str| Command::new("kill").args([sig, "--", &format!("-{pid}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     let mut timed_out = false;
     let mut stalled = false;
     let mut waited = Duration::ZERO;
@@ -219,9 +274,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             Ok(Some(status)) => break status.code(),
             Ok(None) if started.elapsed().saturating_sub(waited) > deadline => {
                 timed_out = true;
-                let _term = group("-TERM");
-                std::thread::sleep(Duration::from_secs(3));
-                let _kill = group("-KILL");
+                stop_group_reaping(pid, Duration::from_secs(3), || drop(child.try_wait()))?;
                 let _waited = child.wait();
                 break None;
             }
@@ -231,9 +284,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             }) =>
             {
                 stalled = true;
-                let _term = group("-TERM");
-                std::thread::sleep(Duration::from_secs(2));
-                let _kill = group("-KILL");
+                stop_group_reaping(pid, Duration::from_secs(2), || drop(child.try_wait()))?;
                 let _waited = child.wait();
                 break None;
             }
@@ -243,16 +294,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     };
     let took = started.elapsed().saturating_sub(waited);
     // what the turn left running in its group ends with it
-    if group("-0") {
-        let _term = group("-TERM");
-        for _ in 0..20 {
-            if !group("-0") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        let _kill = group("-KILL");
-    }
+    stop_group(pid, Duration::from_secs(2)).map_err(|e| format!("what the agent left running could not be stopped: {e}"))?;
     // a process that left the group may still hold the pipes: read for a moment more, then take what came
     let until = Instant::now() + Duration::from_secs(3);
     while !(out.is_finished() && err.is_finished()) && Instant::now() < until {
@@ -703,6 +745,23 @@ mod tests {
         assert_eq!((w.code, w.timed_out), (Some(0), false));
         assert!(w.out.contains("hi"), "{}", w.out);
         assert!(started.elapsed() < Duration::from_secs(15), "the turn waited {:?} for what it left running", started.elapsed());
+    }
+
+    #[test]
+    fn a_group_is_signalled_from_the_program_and_never_the_whole_machine() {
+        use std::os::unix::process::CommandExt;
+        // process 1's group and Jaynes's own are refused, not signalled: either would reach far more than an agent
+        assert!(signal_group(1, Sig::Probe).is_err());
+        assert!(signal_group(0, Sig::Probe).is_err());
+        let own = u32::try_from(rustix::process::getpgrp().as_raw_nonzero().get()).expect("pgid");
+        assert!(signal_group(own, Sig::Term).is_err(), "Jaynes never signals its own group");
+        // a group with a process left in it, and the same group once it is stopped
+        let mut child = Command::new("sh").arg("-c").arg("sleep 30 & sleep 30").process_group(0).spawn().expect("spawn");
+        let pgid = child.id();
+        assert_eq!(signal_group(pgid, Sig::Probe), Ok(true));
+        assert_eq!(stop_group_reaping(pgid, Duration::from_secs(2), || drop(child.try_wait())), Ok(true));
+        assert_eq!(signal_group(pgid, Sig::Probe), Ok(false), "nothing of the group is left");
+        assert_eq!(stop_group(pgid, Duration::from_secs(1)), Ok(false), "nothing to stop is not an error");
     }
 
     #[test]
