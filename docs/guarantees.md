@@ -1,6 +1,6 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -76,6 +76,7 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 
 ## What this page does not promise
 
+- That Jaynes holds against a program that runs as you, outside any box, and rewrites Jaynes's own files.
 - That a step is confined. Jaynes sets the agent program's own guards for each step and
   records the settings it applied; those guards are partial (in Claude Code the sandbox covers
   shell commands only), and Jaynes does not claim more than them.
