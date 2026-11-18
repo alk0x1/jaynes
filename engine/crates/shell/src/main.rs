@@ -20,7 +20,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
-  box [--check | --apparmor] [--write DIR]... [--hide PATH]... [--show PATH]... [--readonly PATH]... [--port N]... [--local] [--any-port] [--never-port N]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
+  box [--check | --apparmor] [--write DIR]... [--hide PATH]... [--show PATH]... [--readonly PATH]... [--port N]... [--reach N]... [--local] [--any-port] [--never-port N]... -- CMD...   run CMD in the Linux box; box --check says whether it opens here
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   raise RUN high|--seconds N|--tokens N
@@ -427,6 +427,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 show: all("--show").into_iter().map(PathBuf::from).collect(),
                 readonly: all("--readonly").into_iter().map(PathBuf::from).collect(),
                 ports,
+                reach: all("--reach").iter().map(|p| p.parse::<u16>().map_err(|_| format!("{p} is not a port"))).collect::<Result<Vec<_>, _>>()?,
                 local: opts.iter().any(|a| a == "--local"),
                 any_port: opts.iter().any(|a| a == "--any-port"),
                 never: all("--never-port").iter().map(|p| p.parse::<u16>().map_err(|_| format!("{p} is not a port"))).collect::<Result<Vec<_>, _>>()?,
