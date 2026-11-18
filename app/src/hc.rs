@@ -223,6 +223,18 @@ impl std::fmt::Display for RpcError {
 }
 impl std::error::Error for RpcError {}
 
+/// Whether herdr-core refused because it cannot save its terminals (its registry writer stopped, as after a full
+/// disk): it may still run what it was asked, but answers nothing else until it is restarted.
+pub fn cannot_save(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<RpcError>().is_some_and(|e| {
+        let m = e.0.get("message").and_then(Value::as_str).unwrap_or("");
+        m.contains("registry writer stopped") || m.contains("cannot save terminals")
+    })
+}
+
+/// What the app says while herdr-core cannot save its terminals.
+pub const CANNOT_SAVE: &str = "herdr-core cannot save its terminals: restart it (hc server restart) when your sessions can stop";
+
 pub fn error_kind(error: &anyhow::Error) -> Option<&str> {
     error.downcast_ref::<RpcError>().and_then(RpcError::kind)
 }
@@ -765,6 +777,33 @@ mod tests {
                 .send(Ok(json!({"address": "t1"}))).unwrap();
         });
         assert_eq!(core.run(vec![], None, json!({}), None, Some((80, 24)), display).unwrap(), "t1");
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn a_core_that_cannot_save_its_terminals_is_told_apart() {
+        let (writer, frames) = mpsc::channel();
+        let (_lost_tx, lost) = async_channel::bounded(1);
+        let child = std::process::Command::new(std::env::current_exe().unwrap()).arg("--help").stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let core = Core {
+            hello: Value::Null, writer, routes: Arc::new(Mutex::new(Routes::default())),
+            next_id: AtomicU64::new(1), child: Mutex::new(child), lost,
+        };
+        let routes = core.routes.clone();
+        // a core as herdr-core 0.1.21 answers once its registry writer stopped (a full disk): every call refused
+        let peer = std::thread::spawn(move || {
+            for message in ["cannot save terminals: registry writer stopped", "no terminal \"t9\""] {
+                let frame = frames.recv().unwrap();
+                let request: Value = serde_json::from_slice(&frame[HEADER..]).unwrap();
+                let kind = if message.starts_with("cannot") { "internal" } else { "not_found" };
+                routes.lock().unwrap().replies.remove(&request["id"].as_u64().unwrap()).unwrap()
+                    .send(Err(json!({"code": -32000, "message": message, "data": {"kind": kind, "hint": ""}}))).unwrap();
+            }
+        });
+        let e = core.call("terminal.list", json!({})).unwrap_err();
+        assert!(cannot_save(&e), "{e:#}");
+        let other = core.call("terminal.get", json!({"terminal": "t9"})).unwrap_err();
+        assert!(!cannot_save(&other), "{other:#}");
         peer.join().unwrap();
     }
 

@@ -82,12 +82,18 @@ const LABEL: (&str, &str) = ("jaynes.app", "main");
 
 /// The live terminal the app made earlier, if its program still runs.
 fn existing(core: &hc::Core) -> Option<String> {
-    let listed = core.call("terminal.list", json!({"labels": {LABEL.0: LABEL.1}})).ok()?;
+    existing_or_why(core).ok().flatten()
+}
+
+/// The app's own terminal, if it lives; why herdr-core could not say.
+fn existing_or_why(core: &hc::Core) -> anyhow::Result<Option<String>> {
+    let listed = core.call("terminal.list", json!({"labels": {LABEL.0: LABEL.1}}))?;
     let terminals = listed.get("terminals").and_then(Value::as_array).cloned().unwrap_or_default();
-    terminals
+    let terminals = terminals
         .iter()
         .find(|t| t.get("state").and_then(Value::as_str) == Some("live"))
-        .and_then(|t| t.get("address").and_then(Value::as_str).map(str::to_owned))
+        .and_then(|t| t.get("address").and_then(Value::as_str).map(str::to_owned));
+    Ok(terminals)
 }
 
 /// The folder Claude Code starts in: the one named on the command line, else the one the app was started from.
@@ -174,6 +180,7 @@ impl Render for Root {
             .min_w_0()
             .h_full()
             .child(self.tabs_bar(cx))
+            .children(self.core_cannot_save(cx))
             .child(
                 div()
                     .flex()
@@ -394,6 +401,23 @@ enum Shown {
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
+    /// The line under the tabs while herdr-core cannot save its terminals: what to do, said once.
+    fn core_cannot_save(&self, cx: &App) -> Option<Div> {
+        let trouble = self.agents.read(cx).trouble.clone()?;
+        (trouble.contains("registry writer stopped") || trouble.contains("cannot save terminals")).then(|| {
+            div()
+                .flex_none()
+                .px(px(14.))
+                .py(px(6.))
+                .border_b_1()
+                .border_color(rgb(look::line()))
+                .bg(rgb(look::panel_2()))
+                .text_size(px(12.5))
+                .text_color(rgb(look::amber()))
+                .child(hc::CANNOT_SAVE)
+        })
+    }
+
     /// Command-K: the palette over the window, its list read now.
     pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let here = self.agent_view.as_ref().and_then(|(a, _)| self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|x| x.address == *a)).map(|s| s.name.clone()));
@@ -1564,11 +1588,27 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             hide_main(window);
             false
         });
-        let address = existing(&core).unwrap_or_else(|| {
+        // herdr-core that cannot save its terminals still starts one when asked, unseen: none is asked then
+        let listed = existing_or_why(&core);
+        let address = if listed.as_ref().is_err_and(hc::cannot_save) {
+            tracing::warn!("{}", hc::CANNOT_SAVE);
+            "none".to_string()
+        } else {
+            listed.ok().flatten().unwrap_or_else(|| {
             let labels = json!({LABEL.0: LABEL.1});
             core.run(vec!["claude".into()], Some(folder()), labels, None, None, terminal::initial_display(window))
-                .unwrap_or_else(|e| trail::fail(&format!("cannot start claude in a terminal: {e:#}")))
-        });
+                .unwrap_or_else(|e| {
+                    // herdr-core that cannot save its terminals answers nothing: the window opens all the same, saying
+                    // so, with what needs no new terminal (the runs, Settings, a run's story and summary)
+                    if hc::cannot_save(&e) {
+                        tracing::warn!("{}: {e:#}", hc::CANNOT_SAVE);
+                        "none".into()
+                    } else {
+                        trail::fail(&format!("cannot start claude in a terminal: {e:#}"))
+                    }
+                })
+            })
+        };
         let view = cx.new(|cx| TerminalView::attach(core.clone(), address, (120, 40), cx));
         let focus = view.read(cx).focus_handle().clone();
         window.focus(&focus, cx);
