@@ -24,7 +24,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
   prove RUN               an input with the Jaynes app's proof, as JSON on stdin (signed, nonce, proof)
-  keys | pair             the device keys of yours this engine knows; pair takes a change of them as JSON on stdin
+  keys                    the device keys of yours this engine knows (the Jaynes app pairs them)
   raise RUN high|--seconds N|--tokens N
   halt RUN | resume RUN | abandon RUN
   undo RUN [--note TEXT]   revert what a run merged
@@ -268,12 +268,15 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "pair" => {
-            // a change of the person's keys, as the Jaynes app sends it: the first keys, new ones with a proof by
-            // a key paired now, or unpairing with such a proof
+            // only the Jaynes app pairs, on the engine's socket, which knows the program asking; --socket sends a
+            // change there as the app does, and the engine takes it only from the app's recorded build
+            if !rest.iter().any(|a| a == "--socket") {
+                return Err("only the Jaynes app pairs a device: open it and pair there".into());
+            }
             let mut body = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|e| e.to_string())?;
-            let change: jaynes_core::pairing::Change = serde_json::from_str(&body).map_err(|e| format!("not a change of keys: {e}"))?;
-            store()?.change_keys(&change)?;
+            let change: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?;
+            jaynes_shell::person_socket::send(&home(), &change)?;
             say("recorded");
             Ok(())
         }
@@ -382,6 +385,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 Err(_) => install::page_key(&home())?,
             };
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            // where the Jaynes app pairs the person's device keys
+            jaynes_shell::person_socket::serve(&home())?;
             page::Page { home: home(), port, key, exe }.serve()
         }
         "permit" => {

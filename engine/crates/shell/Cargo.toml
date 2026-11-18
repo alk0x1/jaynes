@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 jaynes-core = { path = "../core" }
+jaynes-peer = { path = "../peer" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,6 +23,10 @@ rusqlite.workspace = true
 schemars.workspace = true
 toml = { version = "0.9", features = ["preserve_order"] }
 ed25519-dalek = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+core-foundation = "0.10"
 
 [dev-dependencies]
 p256.workspace = true

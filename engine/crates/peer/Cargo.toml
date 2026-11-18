@@ -1,0 +1,15 @@
+[package]
+name = "jaynes-peer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Who is at the other end of a Unix socket: the one call of the system the engine makes outside safe Rust"
+publish = false
+
+[lints.rust]
+# the engine forbids unsafe code; this crate holds its one exception, one system call, and nothing else
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+let_underscore_must_use = "deny"

@@ -65,7 +65,7 @@ impl Store {
     pub fn decide(&mut self, run: &str, input: &jaynes_core::Input) -> Result<(Run, Vec<Event>, Vec<jaynes_core::Command>), String> {
         let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
         let events = Self::events_in(&tx, run)?;
-        let state = Run::fold(&events);
+        let state = Run::fold_paired(&events, &Self::keys_at_start(&tx, run)?);
         if let Some(r) = &state
             && r.engine != jaynes_core::ENGINE
         {
@@ -150,7 +150,7 @@ impl Store {
     }
 
     pub fn state(&self, run: &str) -> Result<Option<Run>, String> {
-        Ok(Run::fold(&self.events(run)?))
+        Ok(Run::fold_paired(&self.events(run)?, &Self::keys_at_start(&self.db, run)?))
     }
 
     /// The last entry of the record: what the page watches to know something happened.
@@ -322,11 +322,34 @@ impl Store {
     }
 
     fn keys_in(db: &Connection) -> Result<jaynes_core::pairing::Keys, String> {
-        let changes: Vec<jaynes_core::pairing::Change> = Self::events_in(db, jaynes_core::pairing::RECORD)?
-            .into_iter()
-            .filter_map(|e| if let Event::KeysChanged { change } = e { Some(change) } else { None })
-            .collect();
+        Self::keys_before(db, i64::MAX)
+    }
+
+    /// The keys the record's pairing held before entry `seq`.
+    fn keys_before(db: &Connection, seq: i64) -> Result<jaynes_core::pairing::Keys, String> {
+        let mut q = db.prepare("select body from events where run = ?1 and seq < ?2 order by seq").map_err(|e| e.to_string())?;
+        let rows = q.query_map(params![jaynes_core::pairing::RECORD, seq], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        let mut changes = Vec::new();
+        for body in rows {
+            let body = body.map_err(|e| e.to_string())?;
+            if let Ok(Event::KeysChanged { change }) = serde_json::from_str(&body) {
+                changes.push(change);
+            }
+        }
         Ok(jaynes_core::pairing::Keys::fold(&changes))
+    }
+
+    /// The keys the record's pairing held when `run` started: the only keys its proofs are checked by.
+    fn keys_at_start(db: &Connection, run: &str) -> Result<Vec<jaynes_core::proof::PersonKey>, String> {
+        let first: Option<i64> = db
+            .query_row("select min(seq) from events where run = ?1", [run], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+        match first {
+            Some(seq) => Ok(Self::keys_before(db, seq)?.keys),
+            None => Ok(Self::keys_in(db)?.keys),
+        }
     }
 
     /// Records a change of the person's keys, if it holds for the keys paired now: one transaction, so two changes

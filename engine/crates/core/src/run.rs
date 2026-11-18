@@ -48,6 +48,9 @@ pub struct Run {
     pub nonces: std::collections::BTreeSet<String>,
     /// The questions whose answer came with a proof that held, and the kind of key that signed it.
     pub proved_by: BTreeMap<String, crate::proof::KeyKind>,
+    /// The run's start recorded other keys than the record's pairing held: it is folded with the paired ones.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keys_differ: bool,
     /// What the answer that lets each open question go on must come with, where it is more than the person's word.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub requires: BTreeMap<String, crate::proof::Requires>,
@@ -225,6 +228,30 @@ impl Run {
     }
 
     /// The state a record gives, or none for a record that does not start with `RunStarted`.
+    /// Folds a run whose start must hold `paired`: the keys the record's pairing held just before the run started.
+    /// A start that recorded other keys (written by anything else than this engine) is folded with `paired` all the
+    /// same, so its proofs are checked against the keys the record paired, never against the ones it brought, and
+    /// it says so (`keys_differ`).
+    pub fn fold_paired<'a>(events: impl IntoIterator<Item = &'a Event>, paired: &[crate::proof::PersonKey]) -> Option<Run> {
+        let mut run: Option<Run> = None;
+        for e in events {
+            run = match run {
+                None => Run::started(e).map(|mut r| {
+                    if r.person_keys != paired {
+                        r.person_keys = paired.to_vec();
+                        r.keys_differ = true;
+                    }
+                    r
+                }),
+                Some(mut r) => {
+                    r.apply(e);
+                    Some(r)
+                }
+            };
+        }
+        run
+    }
+
     pub fn fold<'a>(events: impl IntoIterator<Item = &'a Event>) -> Option<Run> {
         let mut run: Option<Run> = None;
         for e in events {
@@ -273,6 +300,7 @@ impl Run {
             proved_by: Default::default(),
             last_proved: None,
             requires: BTreeMap::new(),
+            keys_differ: false,
             seq: 1,
             merges: BTreeMap::new(),
         })
@@ -498,16 +526,21 @@ impl Run {
             Event::Proved { nonce, key, input, proof } => {
                 // the proof is checked again: a record written by anything else than this core grants nothing
                 let message = crate::proof::input_message(&self.id, &self.started, nonce, input);
-                if !self.nonces.contains(nonce) && crate::proof::holds(&self.person_keys, &message, proof) == Ok(*key) {
+                if !nonce.is_empty() && !self.nonces.contains(nonce) && crate::proof::holds(&self.person_keys, &message, proof) == Ok(*key) {
                     self.nonces.insert(nonce.clone());
                     self.last_proved = Some(((**input).clone(), *key));
                 }
             }
             Event::AnswerRecorded { answer, effects } => {
-                if let Some((crate::io::Input::Answer { answer: proved }, key)) = self.last_proved.take()
-                    && proved == *answer {
+                // the proof stands for this answer only: a later answer without one leaves the question unproved
+                match self.last_proved.take() {
+                    Some((crate::io::Input::Answer { answer: proved }, key)) if proved == *answer => {
                         self.proved_by.insert(answer.question.clone(), key);
                     }
+                    _ => {
+                        self.proved_by.remove(&answer.question);
+                    }
+                }
                 self.unwait();
                 let Some(q) = self.questions.get_mut(&answer.question) else { return };
                 if q.question.kind == QuestionKind::Acted {

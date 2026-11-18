@@ -57,6 +57,9 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 return refuse(format!("the {what} is a label: 1 to 64 letters, digits and hyphens, the first a letter or a digit"));
             }
         }
+        if person.as_ref().is_some_and(|p| p.nonce.is_empty() || p.nonce.len() > 200) {
+            return refuse("a start's nonce is between 1 and 200 characters");
+        }
         if person.as_ref().is_some_and(|p| p.unboxed && p.keys.is_empty()) {
             return refuse("a run outside its box needs a proof only you can give, and none can be given here (no device of yours is paired with this engine): the run is refused and never runs outside its box");
         }
@@ -115,6 +118,9 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
         Input::Proved { signed, nonce, proof } => {
             if matches!(**signed, Input::Start { .. } | Input::Proved { .. }) {
                 return refuse("only an input to a run under way takes a proof");
+            }
+            if nonce.is_empty() || nonce.len() > 200 {
+                return refuse("a proof's nonce is between 1 and 200 characters");
             }
             if c.run.nonces.contains(nonce) {
                 return refuse("this proof was used already: a proof stands for one input, once");

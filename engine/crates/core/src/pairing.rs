@@ -1,7 +1,10 @@
 //! Which device keys of the person's this engine knows, as its record holds them: the first pairing takes the keys it
-//! is given; replacing them, or unpairing, takes a proof by a key paired now, over what changes. The keys are read from
-//! the record's chain and never from a file, so a program that deletes or rewrites a file of the engine's home lowers
-//! nothing: what asks for the person's proof keeps asking for it.
+//! is given; replacing them, or unpairing, takes a proof by a key paired now, over what changes. The keys are read only
+//! from the record's chain, each change checked again whenever it is read, so a change written into the record without
+//! a proof by a key paired then changes nothing, and no other file of the engine's home counts.
+//!
+//! What this does not hold against: the first pairing takes no proof, so whatever pairs first is paired; and a program
+//! that rewrites or replaces the whole record (it is a file of the engine's home) can write any history it likes.
 
 use crate::proof::{self, KeyKind, PersonKey, Proof};
 use serde::{Deserialize, Serialize};
@@ -20,9 +23,33 @@ pub enum Change {
         nonce: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proof: Option<Proof>,
+        #[serde(default, flatten)]
+        from: Origin,
     },
     /// No key from now on, with a proof by a key paired now.
-    Unpaired { nonce: String, proof: Proof },
+    Unpaired {
+        nonce: String,
+        proof: Proof,
+        #[serde(default, flatten)]
+        from: Origin,
+    },
+}
+
+/// Where a change came from, as the engine that took it saw it: its channel (the app) and the build that sent it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Origin {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caller: String,
+}
+
+impl Change {
+    /// Marks where the change came from, over whatever it said of itself.
+    pub fn came_from(&mut self, channel: &str, caller: &str) {
+        let (Change::Paired { from, .. } | Change::Unpaired { from, .. }) = self;
+        *from = Origin { channel: channel.to_string(), caller: caller.to_string() };
+    }
 }
 
 /// The keys paired, as the changes the record holds leave them.
@@ -53,9 +80,12 @@ impl Keys {
     /// Takes a change if it holds.
     pub fn take(&mut self, c: &Change) -> Result<(), String> {
         let (nonce, after, given) = match c {
-            Change::Paired { keys, nonce, proof } => (nonce, Some(keys.as_slice()), proof.as_ref()),
-            Change::Unpaired { nonce, proof } => (nonce, None, Some(proof)),
+            Change::Paired { keys, nonce, proof, .. } => (nonce, Some(keys.as_slice()), proof.as_ref()),
+            Change::Unpaired { nonce, proof, .. } => (nonce, None, Some(proof)),
         };
+        if nonce.is_empty() || nonce.len() > 200 {
+            return Err("a nonce is between 1 and 200 characters".into());
+        }
         if self.nonces.contains(nonce) {
             return Err("this proof was used already".into());
         }
@@ -86,8 +116,14 @@ pub fn check(keys: &[PersonKey]) -> Result<(), String> {
     if !kinds.contains(&KeyKind::Presence) {
         return Err("the device key (presence) is missing: every device has one".into());
     }
+    let mut seen = Vec::new();
     for k in keys {
-        proof::public(k)?;
+        let p = proof::public(k)?;
+        // the same key in two forms (compressed or not) is one key: it cannot be both kinds
+        if seen.contains(&p) {
+            return Err("the same key is paired twice".into());
+        }
+        seen.push(p);
     }
     Ok(())
 }
@@ -119,22 +155,22 @@ mod tests {
     fn the_first_pairing_takes_its_keys_and_only_a_proof_by_them_changes_them() {
         let first = vec![pk(KeyKind::Biometry, 1), pk(KeyKind::Presence, 2)];
         let mut k = Keys::default();
-        k.take(&Change::Paired { keys: first.clone(), nonce: "a".into(), proof: None }).expect("first");
+        k.take(&Change::Paired { keys: first.clone(), nonce: "a".into(), proof: None, from: Default::default() }).expect("first");
         assert_eq!(k.keys, first);
         // another program pairs its own key: refused without a proof by the keys paired now
         let theirs = vec![pk(KeyKind::Presence, 9)];
-        assert!(k.take(&Change::Paired { keys: theirs.clone(), nonce: "b".into(), proof: None }).is_err());
-        assert!(k.take(&Change::Paired { keys: theirs.clone(), nonce: "b".into(), proof: Some(sign(9, KeyKind::Presence, &message(&first, "b", Some(&theirs)))) }).is_err());
-        assert!(k.take(&Change::Unpaired { nonce: "c".into(), proof: sign(9, KeyKind::Presence, &message(&first, "c", None)) }).is_err());
+        assert!(k.take(&Change::Paired { keys: theirs.clone(), nonce: "b".into(), proof: None, from: Default::default() }).is_err());
+        assert!(k.take(&Change::Paired { keys: theirs.clone(), nonce: "b".into(), from: Default::default(), proof: Some(sign(9, KeyKind::Presence, &message(&first, "b", Some(&theirs)))) }).is_err());
+        assert!(k.take(&Change::Unpaired { from: Default::default(), nonce: "c".into(), proof: sign(9, KeyKind::Presence, &message(&first, "c", None)) }).is_err());
         // a proof over another change
         let again = vec![pk(KeyKind::Biometry, 3), pk(KeyKind::Presence, 2)];
-        assert!(k.take(&Change::Paired { keys: theirs.clone(), nonce: "d".into(), proof: Some(sign(2, KeyKind::Presence, &message(&first, "d", Some(&again)))) }).is_err());
+        assert!(k.take(&Change::Paired { keys: theirs.clone(), nonce: "d".into(), from: Default::default(), proof: Some(sign(2, KeyKind::Presence, &message(&first, "d", Some(&again)))) }).is_err());
         assert_eq!(k.keys, first, "nothing changed");
         // a finger changed: the device key proves the new fingerprint key
-        k.take(&Change::Paired { keys: again.clone(), nonce: "e".into(), proof: Some(sign(2, KeyKind::Presence, &message(&first, "e", Some(&again)))) }).expect("replaced");
+        k.take(&Change::Paired { keys: again.clone(), nonce: "e".into(), from: Default::default(), proof: Some(sign(2, KeyKind::Presence, &message(&first, "e", Some(&again)))) }).expect("replaced");
         assert_eq!(k.keys, again);
         // unpairing, by a key paired now; the same proof again changes nothing
-        let off = Change::Unpaired { nonce: "f".into(), proof: sign(3, KeyKind::Biometry, &message(&again, "f", None)) };
+        let off = Change::Unpaired { from: Default::default(), nonce: "f".into(), proof: sign(3, KeyKind::Biometry, &message(&again, "f", None)) };
         k.take(&off).expect("unpaired");
         assert!(k.keys.is_empty());
         assert!(k.take(&off).is_err());
@@ -143,9 +179,16 @@ mod tests {
     #[test]
     fn folding_the_record_checks_every_change_again() {
         let first = vec![pk(KeyKind::Presence, 2)];
-        let forged = Change::Unpaired { nonce: "x".into(), proof: sign(9, KeyKind::Presence, &message(&first, "x", None)) };
-        let k = Keys::fold(&[Change::Paired { keys: first.clone(), nonce: "a".into(), proof: None }, forged]);
+        let forged = Change::Unpaired { from: Default::default(), nonce: "x".into(), proof: sign(9, KeyKind::Presence, &message(&first, "x", None)) };
+        let k = Keys::fold(&[Change::Paired { keys: first.clone(), nonce: "a".into(), proof: None, from: Default::default() }, forged]);
         assert_eq!(k.keys, first, "a change written in without a proof that holds lowers nothing");
+    }
+
+    #[test]
+    fn a_nonce_is_never_empty() {
+        let mut k = Keys::default();
+        assert!(k.take(&Change::Paired { keys: vec![pk(KeyKind::Presence, 2)], nonce: String::new(), proof: None, from: Default::default() }).is_err());
+        assert!(k.keys.is_empty());
     }
 
     #[test]
@@ -155,5 +198,8 @@ mod tests {
         assert!(check(&[pk(KeyKind::Presence, 1), pk(KeyKind::Presence, 2)]).is_err());
         assert!(check(&[PersonKey { kind: KeyKind::Presence, public: "04ab".into() }]).is_err());
         assert!(check(&[pk(KeyKind::Presence, 1)]).is_ok());
+        let compressed = PersonKey { kind: KeyKind::Biometry, public: hex(key(1).verifying_key().to_encoded_point(true).as_bytes()) };
+        assert!(check(&[pk(KeyKind::Presence, 1), compressed]).is_err(), "one key paired as both kinds");
+        assert!(check(&[pk(KeyKind::Presence, 1), pk(KeyKind::Biometry, 1)]).is_err());
     }
 }

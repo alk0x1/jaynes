@@ -2866,10 +2866,16 @@ fn engine_in(s: &Scratch, args: &[&str], input: &str) -> (bool, String) {
     (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
+/// A change of the keys as the engine's socket takes it from the Jaynes app: here, through the engine's library, as
+/// the socket does once it knows the program asking is the app (person_socket.rs, and tests/pairing_socket.rs).
+fn change_keys(s: &Scratch, change: Value) -> Result<(), String> {
+    let change: jaynes_core::pairing::Change = serde_json::from_value(change).expect("change");
+    jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store").change_keys(&change)
+}
+
 /// Pairs the test's device keys with the engine of `s`, as the Jaynes app does once.
 fn pair(s: &Scratch) {
-    let (ok, out) = engine_in(s, &["pair"], &json!({"pairing": "paired", "keys": [public(5, "biometry"), public(6, "presence")], "nonce": "first"}).to_string());
-    assert!(ok, "{out}");
+    change_keys(s, json!({"pairing": "paired", "keys": [public(5, "biometry"), public(6, "presence")], "nonce": "first"})).expect("paired");
 }
 
 #[test]
@@ -2877,26 +2883,69 @@ fn the_keys_are_paired_in_the_record_and_only_a_proof_by_them_changes_them() {
     let s = scratch("pairing");
     let (ok, out) = engine(&s, &["keys"]);
     assert!(ok && out.trim() == "[]", "{out}");
+    // the terminal pairs nothing: only the app does, on the engine's socket
+    let first = json!({"pairing": "paired", "keys": [public(5, "biometry"), public(6, "presence")], "nonce": "first"}).to_string();
+    let (ok, out) = engine_in(&s, &["pair"], &first);
+    assert!(!ok && out.contains("only the Jaynes app pairs"), "{out}");
     pair(&s);
     // another program pairs its own key: refused, the keys stay
-    let theirs = json!([public(9, "presence")]);
-    let (ok, out) = engine_in(&s, &["pair"], &json!({"pairing": "paired", "keys": theirs, "nonce": "x"}).to_string());
-    assert!(!ok && out.contains("takes a proof"), "{out}");
-    let (ok, out) = engine_in(&s, &["pair"], &json!({"pairing": "unpaired", "nonce": "y", "proof": sign(9, "presence", b"anything")}).to_string());
-    assert!(!ok, "{out}");
+    assert!(change_keys(&s, json!({"pairing": "paired", "keys": [public(9, "presence")], "nonce": "x"})).is_err_and(|e| e.contains("takes a proof")));
+    assert!(change_keys(&s, json!({"pairing": "unpaired", "nonce": "y", "proof": sign(9, "presence", b"anything")})).is_err());
     let (_, out) = engine(&s, &["keys"]);
     assert!(out.contains(public(6, "presence")["public"].as_str().expect("hex")), "{out}");
+    // a change written into the record with no proof, its chain right, changes nothing when the record is read
+    forge_change(&s, json!({"pairing": "unpaired", "nonce": "w", "proof": sign(9, "presence", b"anything")}));
+    let (_, out) = engine(&s, &["keys"]);
+    assert!(out.contains(public(6, "presence")["public"].as_str().expect("hex")), "the forged change unpaired: {out}");
+    let (ok, out) = engine(&s, &["verify"]);
+    assert!(ok, "the chain itself holds: {out}");
     // unpairing with a proof by the device key paired now
     let now: Vec<jaynes_core::proof::PersonKey> = serde_json::from_value(json!([public(5, "biometry"), public(6, "presence")])).expect("keys");
     let m = jaynes_core::pairing::message(&now, "z", None);
-    let (ok, out) = engine_in(&s, &["pair"], &json!({"pairing": "unpaired", "nonce": "z", "proof": sign(6, "presence", &m)}).to_string());
-    assert!(ok, "{out}");
+    change_keys(&s, json!({"pairing": "unpaired", "nonce": "z", "proof": sign(6, "presence", &m)})).expect("unpaired");
     let (_, out) = engine(&s, &["keys"]);
     assert_eq!(out.trim(), "[]");
-    let (ok, out) = engine(&s, &["verify"]);
-    assert!(ok, "{out}");
 }
 
+/// Writes a change of the keys straight into the record, its chain right, as a program that is not the engine could.
+fn forge_change(s: &Scratch, change: Value) {
+    let db = rusqlite::Connection::open(s.home.join("record.sqlite3")).expect("db");
+    let last: String = db.query_row("select hash from events order by seq desc limit 1", [], |r| r.get(0)).expect("last");
+    let body = json!({"type": "KeysChanged", "change": change}).to_string();
+    let ts = 1u64;
+    let hash = jaynes_core::chain::link(&jaynes_core::Digest(last), &format!("{ts}\n{body}"));
+    db.execute("insert into events(run, type, ts, body, hash) values (?1, 'KeysChanged', ?2, ?3, ?4)", rusqlite::params![jaynes_core::pairing::RECORD, ts as i64, body, hash.0]).expect("insert");
+}
+
+#[test]
+fn pairing_from_a_program_that_is_not_the_recorded_app_is_refused_on_the_socket() {
+    let s = scratch("pairing-socket");
+    std::fs::create_dir_all(&s.home).expect("home");
+    let mut page = jaynes()
+        .args(["page", "--port", "0"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k")
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("page");
+    for _ in 0..100 {
+        if s.home.join("person.sock").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let first = json!({"pairing": "paired", "keys": [public(6, "presence")], "nonce": "first"}).to_string();
+    // this engine's own program asks, and no app is recorded: refused
+    let (ok, out) = engine_in(&s, &["pair", "--socket"], &first);
+    assert!(!ok && out.contains("refused"), "{out}");
+    // an app recorded, and the program asking is not it
+    std::fs::write(s.home.join("app.cdhash"), format!("{}\n", "ab".repeat(20))).expect("pin");
+    let (ok, out) = engine_in(&s, &["pair", "--socket"], &first);
+    assert!(!ok && out.contains("refused"), "{out}");
+    let _killed = page.kill();
+    let _waited = page.wait();
+    let (_, out) = engine(&s, &["keys"]);
+    assert_eq!(out.trim(), "[]", "nothing was paired");
+}
 /// A role whose one step's check writes `escaped`, outside every box.
 fn escaping_role(base: &Path, escaped: &Path) -> PathBuf {
     let role = base.join("outside");
