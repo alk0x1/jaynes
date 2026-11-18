@@ -601,10 +601,31 @@ impl Copy {
         (self.dir.with_file_name(format!(".{name}-{tag}")), self.git.join(format!("jaynes-{tag}-index")))
     }
 
+    /// What a process that died while it laid out a state or measured the copy left beside it. One process drives a
+    /// run at a time, so whatever of this kind is there when it lays out is a leftover.
+    fn sweep_aside(&self) {
+        let name = self.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into());
+        let folders = format!(".{name}-judged-");
+        if let Some(parent) = self.dir.parent() {
+            for e in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+                if e.file_name().to_string_lossy().starts_with(&folders) {
+                    let _gone = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        for e in std::fs::read_dir(&self.git).into_iter().flatten().flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if (n.starts_with("jaynes-judged-") || n.starts_with("jaynes-drift-")) && n.ends_with("-index") {
+                let _gone = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
     /// The files of `id` in a fresh folder beside the copy, read from the engine's repository with an index of its
     /// own: no .git, so no hook, configuration or file monitor of the copy's comes with it. The copy's installed
     /// dependencies are linked in at the same places, as the box links them.
     pub fn lay_out(&self, id: &str) -> Result<LaidOut, String> {
+        self.sweep_aside();
         let (dir, index) = self.aside("judged");
         let _gone = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| format!("Jaynes cannot lay out the project for its checks: {e}"))?;
@@ -971,5 +992,52 @@ mod toolchain_tests {
         let real = std::fs::canonicalize(&home).expect("home");
         let found = toolchains(&path, &real);
         assert_eq!(found, vec![real.join(".local/share/mise/installs/go/1.27.1")]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repository(base: &Path) -> PathBuf {
+        let source = base.join("source");
+        std::fs::create_dir_all(&source).expect("dir");
+        std::fs::write(source.join("greeting.txt"), "hello\n").expect("write");
+        std::fs::write(source.join(".gitignore"), ".env\n").expect("write");
+        for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "start"]] {
+            assert!(Command::new("git").arg("-C").arg(&source).args(&args).status().expect("git").success(), "git {args:?}");
+        }
+        source
+    }
+
+    #[test]
+    fn a_state_is_laid_out_apart_with_no_repository_and_what_a_dead_process_left_goes() {
+        let base = std::env::temp_dir().join(format!("jaynes-laid-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repository(&base);
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/t").expect("copy");
+        std::fs::write(copy.dir.join("greeting.txt"), "hi\n").expect("write");
+        std::fs::write(copy.dir.join(".env"), "KEY=1\n").expect("write");
+        let (_, tree) = copy.stage(&["**".to_string()]).expect("measured");
+        // what a process that died left: a laid-out folder and an index of its own
+        let stale = base.join("run/.project-judged-1-0");
+        std::fs::create_dir_all(&stale).expect("dir");
+        std::fs::write(copy.git.join("jaynes-judged-1-0-index"), "").expect("write");
+        // the copy changes after it was measured: the laid-out state does not
+        std::fs::write(copy.dir.join("greeting.txt"), "hello again\n").expect("write");
+        let laid = copy.lay_out(&tree).expect("laid out");
+        assert!(!stale.exists(), "a dead process's folder stays");
+        assert!(!copy.git.join("jaynes-judged-1-0-index").exists(), "a dead process's index stays");
+        assert_eq!(std::fs::read_to_string(laid.dir.join("greeting.txt")).expect("read"), "hi\n");
+        assert!(!laid.dir.join(".git").exists() && !laid.dir.join(".env").exists(), "no repository, nothing git ignores");
+        assert_eq!(copy.left_out(), vec![".env".to_string()]);
+        assert_eq!(copy.drifted().expect("drift"), vec!["greeting.txt".to_string()]);
+        copy.put_back().expect("back");
+        assert_eq!(std::fs::read_to_string(copy.dir.join("greeting.txt")).expect("read"), "hi\n");
+        assert!(copy.drifted().expect("drift").is_empty());
+        let dir = laid.dir.clone();
+        drop(laid);
+        assert!(!dir.exists(), "the folder goes with the checks");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 }
