@@ -1117,6 +1117,49 @@ fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     assert!(c.iter().any(|c| matches!(c, Command::RunRole { key: Some(_), .. })), "push runs once answered, with a key");
 }
 
+/// A run whose plan the person kept, and whose push (which cannot be undone) is done on it; with the plan's question.
+fn pushed() -> (Run, Question) {
+    let mut plan = step("plan", Executor::Agent);
+    plan.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
+    let mut push = step("push", Executor::Role);
+    push.needs = vec!["plan".to_string()];
+    push.effect = Effect::Irreversible { idempotent: false };
+    // the person looks at what was pushed afterwards: the run is still open while they do
+    let mut look = step("look", Executor::Person);
+    look.needs = vec!["push".to_string()];
+    look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
+    let (mut run, cmds) = start(vec![plan, push, look]);
+    probe_ok(&mut run, cmds);
+    let asked = deliver(&mut run, "plan", 1, "p", vec![item("a", "a1")]);
+    let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
+    let keep = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Person, context: String::new() };
+    let c = feed(&mut run, Input::Answer { answer: keep });
+    let c = probe_ok(&mut run, c);
+    assert!(c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "push runs: {c:?}");
+    deliver(&mut run, "push", 1, "pushed", Vec::new());
+    let push = run.manifest.index("push").expect("push");
+    assert_eq!(run.steps[push].status, Status::Done, "push is done");
+    (run, q)
+}
+
+#[test]
+#[ignore = "red until the step that cannot be undone is never invalidated (the reinforced G14 waits for the owner)"]
+fn g14_a_step_that_cannot_be_undone_acts_at_most_once_in_a_run() {
+    let (mut run, q) = pushed();
+    let starts = |r: &Run| r.steps[r.manifest.index("push").expect("push")].attempt;
+    let before = starts(&run);
+    // sending the plan back would make push act again on a new plan: refused, and it says why
+    let redo = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: [("a".to_string(), Verdict::Redo { note: "another plan".to_string() })].into_iter().collect(), by: By::Person, context: String::new() };
+    let refused = decide(Some(&run), &Input::Answer { answer: redo }).err().map(|r| r.to_string());
+    assert!(refused.as_deref().is_some_and(|r| r.contains("push") && r.contains("cannot be undone")), "taken, or refused for another reason: {refused:?}");
+    // and whatever comes, push is never started again
+    for _ in 0..3 {
+        let c = feed(&mut run, Input::Tick);
+        assert!(!c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "push acted twice: {c:?}");
+    }
+    assert_eq!(starts(&run), before);
+}
+
 #[test]
 fn g4_a_box_that_refuses_spends_no_attempt() {
     let (mut run, cmds) = start(vec![step("build", Executor::Agent)]);
@@ -2001,3 +2044,4 @@ fn the_lean_model_decides_as_the_core_does() {
     eprintln!("{} states: {}", cases.len(), said.lines().find(|l| l.contains("agreed")).unwrap_or(""));
     assert!(out.status.success(), "{said}");
 }
+
