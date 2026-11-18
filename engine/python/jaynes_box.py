@@ -53,11 +53,13 @@ with a proof only they can give, by starting the run unboxed (G18); never a vari
 from __future__ import annotations
 
 import ctypes
+import errno
 import functools
 import hashlib
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -66,6 +68,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -911,11 +915,104 @@ class Ran:
 
 
 def _kill(proc: "subprocess.Popen[bytes]") -> None:
-    """Stop a command that ran out of time, with everything it started. One that ended just now has no group left."""
+    """Stop a command in the box with everything it started in its group. One that ended with nothing left has no
+    group left, or (on macOS, while it is not reaped) a group of its own exit alone, which refuses the signal."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
+
+
+# Where the engine has a command in the box note its process group while it runs (a file named by the number), so a
+# halt stops it: the command runs in a session of its own, which the engine's stop of the role's group never reaches.
+GROUPS = "JAYNES_BOX_GROUPS"
+
+
+def _note_group(pid: int) -> Path | None:
+    """Note a command's group where the engine looks on a halt; None when the engine names no place."""
+    named = os.environ.get(GROUPS)
+    if not named:
+        return None
+    folder = Path(named)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        note = folder / str(pid)
+        tmp = folder / f".{pid}.tmp"
+        tmp.write_text(str(pid))
+        tmp.replace(note)
+        return note
+    except OSError:
+        return None
+
+
+def _exits(pid: int, timeout: float) -> bool:
+    """Wait until ``pid`` exits, without reaping it: True when it did within ``timeout``. macOS's Python has no
+    waitid, so there a kqueue says when the process ends."""
+    if hasattr(select, "kqueue"):
+        kq = select.kqueue()
+        try:
+            ev = select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                               fflags=select.KQ_NOTE_EXIT)
+            try:
+                got = kq.control([ev], 1, timeout)
+            except ProcessLookupError:
+                return True  # it had ended before it could be watched
+            if got and got[0].flags & select.KQ_EV_ERROR:
+                return got[0].data == errno.ESRCH
+            return bool(got)
+        finally:
+            kq.close()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _wait_in_box(argv: list[str], *, cwd: Path | None, env: dict[str, str], stdin: str | None, timeout: float,
+                 stderr_apart: bool = False) -> tuple[int, bytes, bytes, bool]:
+    """Run ``argv`` (a command in the box) as a group of its own and wait for it: its code, what it printed (stdout,
+    and stderr when apart), and whether it ran out of time. While it runs its group is noted for a halt; when it
+    ends, whatever it left running in its group is stopped, as when it runs out of time. It is waited for without
+    being reaped, so its number cannot name another group when the group is stopped; what it left holding its
+    output in a session of its own no longer keeps the call waiting."""
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE if stderr_apart else subprocess.STDOUT,
+                            start_new_session=True)
+    note = _note_group(proc.pid)
+    chunks: dict[str, list[bytes]] = {"out": [], "err": []}
+
+    def pump(pipe, into):
+        for block in iter(lambda: pipe.read(65536), b""):
+            into.append(block)
+
+    readers = [threading.Thread(target=pump, args=(proc.stdout, chunks["out"]), daemon=True)]
+    if stderr_apart:
+        readers.append(threading.Thread(target=pump, args=(proc.stderr, chunks["err"]), daemon=True))
+    for r in readers:
+        r.start()
+    if stdin is not None:
+        def feed():
+            try:
+                proc.stdin.write(stdin.encode())
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        readers.append(threading.Thread(target=feed, daemon=True))
+        readers[-1].start()
+    try:
+        # exited, not reaped: its pid, and so its group's number, stays its own until wait()
+        timed_out = not _exits(proc.pid, timeout)
+    finally:
+        _kill(proc)  # the whole group: what it left running ends with it
+        proc.wait()
+        if note is not None:
+            note.unlink(missing_ok=True)
+    for r in readers:
+        r.join(timeout=2)  # what holds the pipe in a session of its own keeps nobody waiting
+    code = 124 if timed_out else proc.returncode
+    return code, b"".join(chunks["out"]), b"".join(chunks["err"]), timed_out
 
 
 def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
@@ -982,17 +1079,10 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
                   any_port=anyone)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
-        proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {}), **given},
-                                stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            out, _ = proc.communicate(None if stdin is None else stdin.encode(), timeout=timeout)
-            code = proc.returncode
-        except subprocess.TimeoutExpired:
-            _kill(proc)
-            out, _ = proc.communicate()
+        code, out, _, late = _wait_in_box(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {}), **given},
+                                          stdin=stdin, timeout=timeout)
+        if late:
             out += f"\n(stopped after {timeout:.0f} s)".encode()
-            code = 124
         text = out.decode(errors="replace")
         return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone)
 
@@ -1072,16 +1162,9 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
         reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
         argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads))
         env = {**os.environ, **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
-        proc = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-        try:
-            said, _ = proc.communicate(None if stdin is None else stdin.encode(), timeout=timeout)
-            code = proc.returncode
-        except subprocess.TimeoutExpired:
-            _kill(proc)
-            said, _ = proc.communicate()
+        code, said, _, late = _wait_in_box(argv, cwd=work, env=env, stdin=stdin, timeout=timeout)
+        if late:
             said += f"\n(stopped after {timeout:.0f} s)".encode()
-            code = 124
         text = said.decode(errors="replace")
         output, unread = _output(out / "output.json")
         return Stepped(Ran(code, text[-TAIL:], text), output, unread)
@@ -1185,15 +1268,14 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
             # Chrome keeps its default folders under the home macOS reports; the box lets it write none there, so
             # it is given one of its own, inside the temporary folder
             env = {**os.environ, "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
-            done = subprocess.run(argv, capture_output=True, text=True, timeout=90, env=env,
-                                  start_new_session=True)
+            code, _, errors, late = _wait_in_box(argv, cwd=None, env=env, stdin=None, timeout=90, stderr_apart=True)
         except Unavailable as e:
             return str(e)
-        except subprocess.TimeoutExpired:
+        if late:
             return f"Chrome did not photograph {target} within 90 seconds"
-        if done.returncode != 0 or not shot.is_file():
-            said = [line for line in done.stderr.splitlines() if "crashpad" not in line and line.strip()]
-            return f"Chrome could not photograph {target} (exit {done.returncode}): " + " ".join(said[-3:])
+        if code != 0 or not shot.is_file():
+            said = [line for line in errors.decode(errors="replace").splitlines() if "crashpad" not in line and line.strip()]
+            return f"Chrome could not photograph {target} (exit {code}): " + " ".join(said[-3:])
         shutil.copyfile(shot, out)
     return None
 

@@ -432,6 +432,114 @@ fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
     assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "the project is as it was");
 }
 
+/// The processes whose command line holds `mark`, as ps lists them: only listed, never signalled.
+fn running_with(mark: &str) -> Vec<String> {
+    let out = Command::new("ps").args(["-axo", "pid=,command="]).output().expect("ps");
+    String::from_utf8_lossy(&out.stdout).lines().filter(|l| l.contains(mark) && !l.contains("ps -axo")).map(str::to_string).collect()
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands is macOS's sandbox-exec here")]
+fn what_a_project_s_command_leaves_running_in_the_box_ends_with_it() {
+    // the command runs in a session of its own, so nothing else stops what it leaves behind: its call does, and while
+    // it runs its group is noted where the engine looks on a halt
+    let base = std::env::temp_dir().join(format!("jaynes-box-left-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&base);
+    let (project, groups) = (base.join("project"), base.join("groups"));
+    std::fs::create_dir_all(&project).expect("dir");
+    std::fs::write(project.join("README"), "a project\n").expect("write");
+    let mark = format!("LEFT-{}", std::process::id());
+    let script = format!(r#"
+import json, os, sys, threading, time
+sys.path.insert(0, {lib:?})
+import jaynes_box as b
+from pathlib import Path
+groups = Path({groups:?})
+os.environ["JAYNES_BOX_GROUPS"] = str(groups)
+seen, done = set(), threading.Event()
+def watch():
+    while not done.is_set():
+        if groups.is_dir():
+            seen.update(os.listdir(groups))
+        time.sleep(0.05)
+w = threading.Thread(target=watch)
+w.start()
+r = b.run(Path({project:?}), "perl -e 'sleep 30' {mark} </dev/null >/dev/null 2>&1 &\nsleep 1\necho started", timeout=60)
+done.set()
+w.join()
+print(json.dumps({{"code": r.code, "printed": r.printed.strip(), "seen": sorted(seen), "left": sorted(os.listdir(groups)) if groups.is_dir() else []}}))
+"#, lib = root().join("python"), groups = groups, project = project);
+    let out = Command::new(python()).args(["-c", &script]).output().expect("python");
+    let got: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stderr)));
+    assert_eq!((got["code"].as_i64(), got["printed"].as_str()), (Some(0), Some("started")), "{got}");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(running_with(&mark), Vec::<String>::new(), "what the command left running outlived its call");
+    assert_eq!(got["seen"].as_array().map(Vec::len), Some(1), "the command's group was not noted while it ran: {got}");
+    assert_eq!(got["left"], serde_json::json!([]), "the note outlived the command: {got}");
+    let _gone = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_halt_stops_a_check_s_command_in_the_box_and_the_check_runs_again_on_resume() {
+    let s = scratch("halt-box");
+    // the suite passes once the change is made, after 20 s: what a halt stops, if it reaches the box
+    let mark = format!("MARK-halt-box-{}", std::process::id());
+    std::fs::write(s.project.join("Makefile"), format!("test:\n\tgrep -q hi greeting.txt\n\tperl -e 'sleep 20' {mark}\n")).expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a slow suite"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let mut child = jaynes()
+        .args(["start", "--run", "halt-box", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "say hi", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start");
+    let waiting = std::time::Instant::now();
+    while running_with(&mark).is_empty() {
+        if let Ok(Some(_)) = child.try_wait() {
+            let done = child.wait_with_output().expect("wait");
+            panic!("the run ended before its check's suite ran:\n{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        }
+        assert!(waiting.elapsed() < std::time::Duration::from_secs(90), "the check's suite never ran");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let asked = std::time::Instant::now();
+    let (ok, out) = engine(&s, &["halt", "halt-box"]);
+    assert!(ok, "{out}");
+    while !running_with(&mark).is_empty() && asked.elapsed() < std::time::Duration::from_secs(12) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let stopped = asked.elapsed();
+    let done = child.wait_with_output().expect("wait");
+    let said = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    assert!(stopped < std::time::Duration::from_secs(10), "the check's command went on after the halt: {stopped:?}\n{said}");
+    assert!(said.contains("(halted)"), "{said}");
+    let e = events(&s, "halt-box");
+    let failed = |e: &[Value]| e.iter().any(|x| x["type"] == "ChecksJudged"
+        && x["checks"].as_array().is_some_and(|c| c.iter().any(|c| c["check"] == "suite-passes" && c["passed"] == false)));
+    assert!(types(&e).contains(&"Halted".to_string()), "{:?}", types(&e));
+    assert!(!failed(&e) && !types(&e).contains(&"AttemptFailed".to_string()), "a halt counted as a failed check: {:?}", types(&e));
+    // the person resumes, and the check that the halt stopped runs again
+    let out = tty()
+        .args([BIN, "resume", "halt-box"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .output()
+        .expect("resume");
+    let out = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.contains("finished: delivered"), "{out}");
+    let e = events(&s, "halt-box");
+    assert!(types(&e).contains(&"Resumed".to_string()) && !failed(&e), "{:?}", types(&e));
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {

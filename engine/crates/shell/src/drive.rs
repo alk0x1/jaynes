@@ -184,12 +184,23 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
 /// then interrupted, not an attempt that failed.
 const HALTED_AGENT: &str = "agent-halted";
 
+/// What the run's process finds when a halt stopped a project's command in the box that a call to the role was
+/// running (a check's suite): the call it gets back is then interrupted, and runs again when the person resumes.
+const HALTED_BOX: &str = "box-halted";
+
+/// Where a call to the role has each command it runs in the box note its process group while it runs
+/// (`JAYNES_BOX_GROUPS`, a file named by the number): such a command runs in a session of its own, which stopping
+/// the role's group never reaches.
+pub const BOX_GROUPS: &str = "box-groups";
+
 /// Stop the agent of a run left an abandon or a halt, once that input is in its inbox, so its process starts
-/// no other turn: nothing the agent would do from here is wanted, and it costs tokens.
+/// no other turn: nothing the agent would do from here is wanted, and it costs tokens. A halt or an abandon stops
+/// too the commands in the box that a call to the role is running.
 pub fn stop_agent_for(dir: &Path, input: &Input) {
     match input {
         Input::Abandon { .. } => {
             agent::stop_left(&dir.join("agent.pid"));
+            stop_box_groups(dir);
         }
         Input::Halt { .. } => {
             // the mark goes first: the process may get the turn back as soon as the agent is gone
@@ -197,9 +208,56 @@ pub fn stop_agent_for(dir: &Path, input: &Input) {
             if !agent::stop_left(&dir.join("agent.pid")) {
                 let _gone = std::fs::remove_file(dir.join(HALTED_AGENT));
             }
+            let _marked = std::fs::write(dir.join(HALTED_BOX), "");
+            if !stop_box_groups(dir) {
+                let _gone = std::fs::remove_file(dir.join(HALTED_BOX));
+            }
         }
         _ => {}
     }
+}
+
+/// Stop, gently then for good, each group a call to the role noted in the run's folder, but only one Jaynes
+/// started: its leader is alive, leads its group, and descends from the role program the run noted in `role.pid`.
+/// A note that is not such a group is left alone, whatever wrote it. True when something was stopped.
+pub fn stop_box_groups(dir: &Path) -> bool {
+    let Some(role) = std::fs::read_to_string(dir.join("role.pid")).ok().and_then(|t| t.trim().parse::<u32>().ok()) else { return false };
+    let Ok(notes) = std::fs::read_dir(dir.join(BOX_GROUPS)) else { return false };
+    let ps = |field: &str, pid: u32| -> Option<u32> {
+        let out = std::process::Command::new("ps").args(["-o", &format!("{field}="), "-p", &pid.to_string()]).stderr(std::process::Stdio::null()).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    };
+    let descends = |pid: u32| {
+        let mut at = pid;
+        for _ in 0..16 {
+            match ps("ppid", at) {
+                Some(p) if p == role => return true,
+                Some(p) if p > 1 => at = p,
+                _ => return false,
+            }
+        }
+        false
+    };
+    let mut stopped = false;
+    for note in notes.flatten() {
+        let Some(pgid) = note.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        if pgid <= 1 || ps("pgid", pgid) != Some(pgid) || !descends(pgid) {
+            continue;
+        }
+        let group = format!("-{pgid}");
+        let signal = |sig: &str| std::process::Command::new("kill").args([sig, "--", &group]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        let _term = signal("-TERM");
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(100));
+            if !signal("-0") {
+                break;
+            }
+        }
+        let _kill = signal("-KILL");
+        let _gone = std::fs::remove_file(note.path());
+        stopped = true;
+    }
+    stopped
 }
 
 // --- each run on its own engine ----------------------------------------------------------------------------------
@@ -580,6 +638,10 @@ impl<'a> Driver<'a> {
         if agent::stop_left(&setup.dir.join("agent.pid")) {
             say("stopped an agent program that a process which died had left running");
         }
+        // the box's commands first, while they still descend from the role program that ran them
+        if stop_box_groups(&setup.dir) {
+            say("stopped a project's command in the box that a call to the role had left running");
+        }
         if agent::stop_left(&setup.dir.join("role.pid")) {
             say("stopped a call to the role that a process which died had left running");
         }
@@ -622,7 +684,17 @@ impl<'a> Driver<'a> {
             if matches!(input, Input::AttemptEnded { .. }) && std::fs::remove_file(self.setup.dir.join(HALTED_AGENT)).is_ok() {
                 input = Input::Recovered;
             }
+            // So is a call to the role whose command in the box a halt stopped: its checks are not failed, and the mark
+            // stays until the person resumes, when what was under way runs again.
+            if matches!(input, Input::ChecksEnded { .. } | Input::AttemptEnded { .. }) && self.setup.dir.join(HALTED_BOX).exists() {
+                input = Input::Recovered;
+            }
+            let resuming = matches!(input, Input::Resume { .. });
             let (state, events, commands) = match decide_and_record(self.store, &self.setup.run, &input) {
+                Ok(x) if resuming && std::fs::remove_file(self.setup.dir.join(HALTED_BOX)).is_ok() => {
+                    queue.push_front(Input::Recovered);
+                    x
+                }
                 Ok(x) => x,
                 Err(why) => {
                     if !matches!(input, Input::Tick) {
@@ -656,7 +728,7 @@ impl<'a> Driver<'a> {
             for c in commands {
                 // What came from outside goes first before an agent's or a role's turn starts: a run abandoned or
                 // halted meanwhile starts no turn, and the turn it had begun counts as interrupted.
-                if matches!(c, Command::RunAgent(_) | Command::RunRole { .. }) {
+                if matches!(c, Command::RunAgent(_) | Command::RunRole { .. } | Command::RunChecks { .. }) {
                     let mut came = Vec::new();
                     while let Some(input) = self.store.inbox_take(&self.setup.run)? {
                         came.push(input);
@@ -1498,6 +1570,40 @@ mod tests {
     use jaynes_core::manifest::{Executor, Manifest, Reach, SessionKind, StepDecl};
     use jaynes_core::question::By;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_halt_stops_only_the_groups_that_descend_from_the_role_program() {
+        use std::io::BufRead;
+        use std::os::unix::process::CommandExt;
+        let dir = std::env::temp_dir().join(format!("jaynes-box-groups-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(BOX_GROUPS)).expect("dir");
+        // the role program: it starts a command in a group of its own, as the box does, and says its number
+        let mut role = std::process::Command::new("sh")
+            .args(["-c", "perl -e 'use POSIX; POSIX::setpgid(0, 0); sleep 30' </dev/null >/dev/null 2>&1 & echo $!; wait"])
+            .stdout(std::process::Stdio::piped()).process_group(0).spawn().expect("role");
+        let mut line = String::new();
+        std::io::BufReader::new(role.stdout.take().expect("out")).read_line(&mut line).expect("read");
+        let boxed: u32 = line.trim().parse().expect("pid");
+        std::fs::write(dir.join("role.pid"), role.id().to_string()).expect("write");
+        // a group that does not descend from it, started apart, and notes that name no group of the run's
+        let mut stranger = std::process::Command::new("sleep").arg("30").process_group(0).spawn().expect("stranger");
+        std::thread::sleep(Duration::from_millis(300));
+        for note in [boxed.to_string(), stranger.id().to_string(), "1".into(), "not-a-number".into()] {
+            std::fs::write(dir.join(BOX_GROUPS).join(note), "").expect("note");
+        }
+        assert!(stop_box_groups(&dir), "the role's command in the box was not stopped");
+        let alive = |pid: u32| std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        assert!(!alive(boxed) || std::process::Command::new("ps").args(["-o", "stat=", "-p", &boxed.to_string()]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains('Z')), "the role's command still runs");
+        assert_eq!(stranger.try_wait().expect("wait"), None, "a group that does not descend from the role program was stopped");
+        assert!(dir.join(BOX_GROUPS).join(stranger.id().to_string()).exists(), "the stranger's note was taken as the run's");
+        // what the test started, it stops by its own handles
+        let _k = stranger.kill();
+        let _w = stranger.wait();
+        let _k = role.kill();
+        let _w = role.wait();
+        let _gone = std::fs::remove_dir_all(&dir);
+    }
 
     /// A record holding one run that an older engine started.
     fn old_run(home: &Path) -> Run {

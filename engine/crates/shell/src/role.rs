@@ -84,6 +84,10 @@ impl RoleProgram {
             _ => self.library.display().to_string(),
         };
         c.current_dir(&self.dir).env("PYTHONPATH", path).env("PYTHONDONTWRITEBYTECODE", "1");
+        // where its commands in the box note their groups, beside the call's own note, so a halt stops them too
+        if let Some(f) = &self.pidfile {
+            c.env("JAYNES_BOX_GROUPS", f.with_file_name(crate::drive::BOX_GROUPS));
+        }
         Ok(c)
     }
 
