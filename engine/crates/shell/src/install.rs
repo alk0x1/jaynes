@@ -57,10 +57,12 @@ pub fn add(home: &Path, source: &str) -> Result<String, String> {
         // from the index: its entry was checked and its promises proved again on the way
         let (entry, folder, commit, _gone) = crate::index::find(&name)?;
         // its license is said before anything is installed
-        println!("{} {}, license: {}", entry.name, entry.version, entry.license);
+        crate::drive::say(&format!("{} {}, license: {}", entry.name, entry.version, entry.license));
         return install(home, &format!("index:{}", entry.name), &folder, commit, true);
     }
     let (folder, commit, _tmp) = fetch(source)?;
+    // a role of one's own, from a folder or from git, names no license to Jaynes: it is installed all the same
+    crate::drive::say(&format!("{source}: no license named (a role from the index says its license)"));
     install(home, source, &folder, commit, false)
 }
 

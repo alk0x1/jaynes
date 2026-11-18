@@ -1490,6 +1490,19 @@ fn add_says_a_role_s_license_before_installing_it_and_a_role_without_one_is_refu
 }
 
 #[test]
+fn a_role_from_a_folder_of_this_machine_installs_without_a_license_and_add_says_none_is_named() {
+    // the index's rule is the index's: a role of one's own, from a folder, is installed as before
+    let s = scratch("ownrole");
+    let own = s.home.parent().expect("base").join("own-role");
+    let ok = Command::new("cp").arg("-R").arg(root().join("crates/shell/tests/roles/small-change")).arg(&own).status().expect("cp").success();
+    assert!(ok);
+    let (ok, out) = engine(&s, &["add", own.to_str().expect("path")]);
+    assert!(ok && out.contains("role small-change installed"), "{out}");
+    let said = out.find("no license named").unwrap_or_else(|| panic!("add does not say no license is named: {out}"));
+    assert!(said < out.find("role small-change installed").expect("installed"), "{out}");
+}
+
+#[test]
 fn a_field_of_the_index_this_jaynes_does_not_know_breaks_nothing_and_is_kept() {
     // so a field added to the index later does not break the engines already installed
     let s = scratch("newfield");
