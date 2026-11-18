@@ -34,6 +34,7 @@ mod prefs;
 mod settings_window;
 mod testing;
 mod looking_at;
+mod run_actions;
 mod trail;
 mod presence;
 mod rail;
@@ -142,6 +143,9 @@ pub(crate) struct Root {
     was_inbox: bool,
     /// The window is hidden and its terminals let go, to be taken up again when it shows.
     let_go: bool,
+    /// A control of the open run pressed once that asks to be pressed again (Abandon), and what the last one said.
+    armed: Option<(String, run_actions::Act)>,
+    act_said: Option<String>,
     _branch: Task<()>,
 }
 
@@ -190,6 +194,8 @@ impl Render for Root {
                                 (None, Some(story)) => story,
                                 (None, None) => self.terminal.clone().into_any_element(),
                             }))
+                            // a run's own controls, under its story: Resume, Continue, Raise, Abandon
+                            .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox && self.tabs.read(cx).changes.is_none(), |d| d.children(self.run_controls(cx)))
                             // a run's question, over Claude Code's terminal and the runs' tabs, not over an agent or the Inbox
                             .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox && self.tabs.read(cx).changes.is_none(), |d| d.child(self.island.clone())),
                     )
@@ -383,6 +389,62 @@ enum Shown {
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
+    /// The open run's controls, as the page shows them: each only when it can do something.
+    fn run_controls(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let run = self.tabs.read(cx).open.clone()?;
+        let acts = run_actions::acts(&self.tabs.read(cx).facts?);
+        if acts.is_empty() {
+            return None;
+        }
+        let mut bar = div().flex().items_center().gap(px(8.)).mx(px(14.)).mb(px(8.)).flex_wrap();
+        for act in acts {
+            let armed = self.armed.as_ref() == Some(&(run.clone(), act));
+            let label = if armed { format!("{}: press again", act.label()) } else { act.label().to_string() };
+            let danger = act.asks_twice();
+            let run = run.clone();
+            bar = bar.child(
+                div()
+                    .id(SharedString::from(format!("act-{}", act.word())))
+                    .px(px(10.))
+                    .py(px(5.))
+                    .rounded(px(7.))
+                    .border_1()
+                    .border_color(rgb(if danger { look::red() } else { look::line_2() }))
+                    .bg(rgb(look::panel_2()))
+                    .text_size(px(12.5))
+                    .text_color(rgb(if danger { look::red() } else { look::text() }))
+                    .cursor_pointer()
+                    .hover(|d| d.border_color(rgb(look::dim())))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| this.press(run.clone(), act, cx))),
+            );
+        }
+        Some(bar.when_some(self.act_said.clone(), |d, said| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(said))))
+    }
+
+    /// A press on a run's control: one that asks twice is armed first; then it is sent as the person's.
+    pub(crate) fn press(&mut self, run: String, act: run_actions::Act, cx: &mut Context<Self>) {
+        self.act_said = None;
+        if act.asks_twice() && self.armed.as_ref() != Some(&(run.clone(), act)) {
+            self.armed = Some((run, act));
+            cx.notify();
+            return;
+        }
+        self.armed = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let sent = cx.background_executor().spawn(async move { run_actions::send(&run, act) }).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Err(e) = sent {
+                    tracing::warn!("{} was not sent: {e}", act.word());
+                    this.act_said = Some(e);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// The stop on the screen, for the person's presence: the compare mode's, else the island's while the middle
     /// shows it (an agent, the Inbox or the Changes tab over it hide it).
     fn stop_on_screen(&self, cx: &App) -> Option<(String, String)> {
@@ -1554,7 +1616,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, _branch: branch }
         })
     })
     .map(|handle| {
@@ -1572,6 +1634,25 @@ pub(crate) fn seen_now(window: &mut Window, cx: &App) -> looking_at::Seen {
     let front = window.is_window_active() && ns_window_visible(window);
     let stop = window.root::<Root>().flatten().and_then(|r| r.read(cx).stop_on_screen(cx));
     looking_at::Seen { front, last_input_ms: looking_at::last_input(), stop }
+}
+
+/// A press on the open run's control named `word`, as a click on it: for a test.
+#[cfg(feature = "test-driver")]
+pub(crate) fn press_act(word: String, cx: &mut App) {
+    use run_actions::Act;
+    let Some(act) = [Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon].into_iter().find(|a| a.word() == word) else { return };
+    let Some(main) = MAIN.with(|m| m.get()) else { return };
+    let _ = main.update(cx, |_, window, cx| {
+        if let Some(Some(root)) = window.root::<Root>() {
+            root.update(cx, |r, cx| {
+                let shown = r.tabs.read(cx).facts.map(|f| run_actions::acts(&f)).unwrap_or_default();
+                tracing::info!("controls shown: {:?}", shown.iter().map(|a| a.word()).collect::<Vec<_>>());
+                if let Some(run) = r.tabs.read(cx).open.clone() {
+                    r.press(run, act, cx);
+                }
+            });
+        }
+    });
 }
 
 /// What the next presence tick would tell, said in the log and sent nowhere: for a test.

@@ -37,6 +37,8 @@ pub struct Tabs {
     story: Vec<(String, Vec<String>)>,
     /// What a finished run did, in Markdown (`jaynes summary`): none while it runs, or when it cannot be read.
     summary: Option<String>,
+    /// What the open run's controls are decided from, read with its story.
+    pub facts: Option<crate::run_actions::Facts>,
     /// When the summary was last copied: its button says Copied for a moment.
     copied_at: Option<std::time::Instant>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
@@ -66,7 +68,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -74,17 +76,20 @@ impl Tabs {
         let at = id.clone();
         // the summary is read with the story: it never waits for the role's promises to be proved, the reading after
         // the proof brings them
-        let (told, summary) = cx
+        let told = cx
             .background_executor()
             .spawn(async move {
                 let home = jaynes_shell::home();
-                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()))
+                let facts = crate::run_actions::read(&at).map(|r| crate::run_actions::Facts::of(&r));
+                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()), facts)
             })
             .await;
+        let (told, summary, facts) = (told.0, told.1, told.2);
         this.update(cx, |t, cx| {
-            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary) {
+            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary || t.facts != facts) {
                 t.story = told;
                 t.summary = summary;
+                t.facts = facts;
                 t.go_to_seek();
                 cx.notify();
             }
@@ -159,6 +164,7 @@ impl Tabs {
             // the run before's summary must not show under this one's story, nor be what its button copies
             self.summary = None;
             self.copied_at = None;
+            self.facts = None;
             self.seek = None;
             self.lit = None;
             self.scroll.set_offset(point(px(0.), px(0.)));
