@@ -49,8 +49,9 @@ pub struct Tabs {
     pub lit: Option<String>,
     /// The tabs in the person's order, Claude Code's as None: new ones come last, gone ones leave.
     order: Vec<Option<String>>,
-    /// The runs whose tab the person closed, with how each stood then: closed until it moves on.
-    closed: HashMap<String, (Mark, String)>,
+    /// The runs whose tab the person closed, with how each stood then (its mark and its line's fingerprint): closed
+    /// until it moves on.
+    closed: HashMap<String, (Mark, u64)>,
     _poll: Task<()>,
 }
 
@@ -181,6 +182,32 @@ impl Tabs {
         cx.notify();
     }
 
+    /// The closed tabs still closed, as the app keeps them for the next time it opens: one whose run moved on, or is
+    /// gone, is not kept.
+    pub fn closed_kept(&self, cx: &App) -> Vec<crate::app_state::Closed> {
+        let listing = &self.runs.read(cx).snap.listing;
+        let mut kept: Vec<crate::app_state::Closed> = listing
+            .needs
+            .iter()
+            .chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter()))
+            .filter(|r| self.closed.get(&r.id).is_some_and(|(mark, line)| *mark == r.mark && *line == crate::app_state::fingerprint(&r.line)))
+            .map(|r| crate::app_state::Closed { run: r.id.clone(), mark: crate::app_state::mark_word(r.mark).into(), line: crate::app_state::fingerprint(&r.line) })
+            .collect();
+        kept.sort_by(|a, b| a.run.cmp(&b.run));
+        kept.dedup_by(|a, b| a.run == b.run);
+        kept
+    }
+
+    /// The tabs closed when the app last stood, closed again; a mark this app does not know is skipped.
+    pub fn close_kept(&mut self, kept: &[crate::app_state::Closed], cx: &mut Context<Self>) {
+        for c in kept {
+            if let Some(mark) = crate::app_state::mark_of(&c.mark) {
+                self.closed.insert(c.run.clone(), (mark, c.line));
+            }
+        }
+        cx.notify();
+    }
+
     fn tabbed(&self, cx: &App) -> Vec<(String, String, Mark)> {
         tabbed(&self.runs.read(cx).snap.listing, &self.closed, self.open.as_deref())
     }
@@ -200,7 +227,7 @@ impl Tabs {
         let next = if at > 0 { keys.get(at - 1) } else { keys.get(at + 1) }.cloned().flatten();
         let listing = &self.runs.read(cx).snap.listing;
         if let Some(r) = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).find(|r| r.id == id) {
-            self.closed.insert(id, (r.mark, r.line.clone()));
+            self.closed.insert(id, (r.mark, crate::app_state::fingerprint(&r.line)));
         }
         self.show(next, cx);
         true
@@ -653,8 +680,8 @@ fn at(n: usize, len: usize) -> Option<usize> {
 
 /// The runs that get a tab: what waits, then what works, unless the person closed it and it stands as it stood
 /// then; and the one open, whatever it is.
-fn tabbed(listing: &Listing, closed: &HashMap<String, (Mark, String)>, open: Option<&str>) -> Vec<(String, String, Mark)> {
-    let still_closed = |r: &Row| closed.get(&r.id).is_some_and(|(mark, line)| *mark == r.mark && *line == r.line);
+fn tabbed(listing: &Listing, closed: &HashMap<String, (Mark, u64)>, open: Option<&str>) -> Vec<(String, String, Mark)> {
+    let still_closed = |r: &Row| closed.get(&r.id).is_some_and(|(mark, line)| *mark == r.mark && *line == crate::app_state::fingerprint(&r.line));
     let mut out: Vec<(String, String, Mark)> = listing
         .needs
         .iter()
@@ -704,14 +731,14 @@ mod tests {
             needs: vec![row("w", Mark::Needs, line)],
             projects: vec![("p".into(), vec![row("k", Mark::Working, "step 1 of 2"), row("d", Mark::Delivered, "delivered")])],
         };
-        let ids = |l: &Listing, closed: &HashMap<String, (Mark, String)>, open: Option<&str>| -> Vec<String> {
+        let ids = |l: &Listing, closed: &HashMap<String, (Mark, u64)>, open: Option<&str>| -> Vec<String> {
             tabbed(l, closed, open).into_iter().map(|(id, _, _)| id).collect()
         };
         let none = HashMap::new();
         assert_eq!(ids(&listing("Pick one"), &none, None), ["w", "k"]);
         assert_eq!(ids(&listing("Pick one"), &none, Some("d")), ["w", "k", "d"]);
 
-        let closed = HashMap::from([("w".to_string(), (Mark::Needs, "Pick one".to_string()))]);
+        let closed = HashMap::from([("w".to_string(), (Mark::Needs, crate::app_state::fingerprint("Pick one")))]);
         assert_eq!(ids(&listing("Pick one"), &closed, None), ["k"]);
         // a new question at that run is news: its tab comes back
         assert_eq!(ids(&listing("Pick another"), &closed, None), ["w", "k"]);

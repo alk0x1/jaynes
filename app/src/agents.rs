@@ -17,6 +17,8 @@ pub struct Agents {
     pub open: Option<String>,
     /// What the open agent asks, while it waits for the person.
     pub ask: Option<Ask>,
+    /// herdr-core has answered once, with the spaces or why not.
+    pub read_once: bool,
     core: Arc<hc::Core>,
     _watch: Task<()>,
 }
@@ -42,6 +44,7 @@ impl Agents {
                             }
                             Err(e) => this.trouble = Some(e),
                         }
+                        this.read_once = true;
                         this.mark_seen();
                         this.read_ask(cx);
                         cx.notify();
@@ -52,7 +55,7 @@ impl Agents {
                 }
             }
         });
-        Agents { spaces: Vec::new(), trouble: None, open: None, ask: None, core, _watch: watch }
+        Agents { spaces: Vec::new(), trouble: None, open: None, ask: None, read_once: false, core, _watch: watch }
     }
 
     /// Opens an agent in the middle (None: none), marking at once what it finished as seen.

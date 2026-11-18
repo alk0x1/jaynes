@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 mod agents;
+mod app_state;
 mod ask;
 mod inbox;
 mod answer;
@@ -158,6 +159,11 @@ pub(crate) struct Root {
     palette: Option<(Entity<palette::PaletteView>, Subscription)>,
     /// The runs' questions put off with Later on the line over an agent ("run/question").
     later: std::collections::HashSet<String>,
+    /// What the window showed when the app last stood, to show again once the agents and the runs are read.
+    restore: Option<app_state::State>,
+    /// What was kept last (app_state.rs); none until what stood is shown again, so the first frames keep nothing.
+    kept: Option<app_state::State>,
+    _bounds: Option<Subscription>,
     _branch: Task<()>,
 }
 
@@ -172,8 +178,9 @@ fn halt(runs: &[String]) {
 }
 
 impl Render for Root {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         terminal::next_frame();
+        self.remember(window, cx);
         let terminal = self.terminal.clone();
         let shown = self.shown_terminal();
         let middle = div()
@@ -610,6 +617,70 @@ impl Root {
         }
         let tabs = self.tabs.read(cx);
         (self.agent_view.is_none() && !tabs.inbox && tabs.changes.is_none()).then(|| self.island.read(cx).stop_shown(cx)).flatten()
+    }
+
+    /// Once the agents and the runs are read, shows again what the window showed when the app last stood: the agent,
+    /// the run or the Inbox, if still there (else Claude Code, the log saying why), and the tabs closed then. It only
+    /// shows: nothing is started, sent or answered. What the person opened meanwhile stays.
+    fn show_what_stood(&mut self, cx: &mut Context<Self>) {
+        let runs = self.runs.read(cx);
+        if self.restore.is_none() || !self.agents.read(cx).read_once || !(runs.read_once || runs.trouble.is_some()) {
+            return;
+        }
+        let Some(state) = self.restore.take() else { return };
+        let listing = &runs.snap.listing;
+        let run_there = |id: &str| listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).any(|r| r.id == id);
+        let spaces = &self.agents.read(cx).spaces;
+        let agent_title = |address: &str| spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == address).map(|a| a.title.clone());
+        let (open, why) = app_state::open_on(&state.open, |a| agent_title(a).is_some(), run_there);
+        if let Some(why) = why {
+            tracing::warn!("{why}");
+        }
+        let title = match &open {
+            app_state::Open::Agent { address } => agent_title(address),
+            _ => None,
+        };
+        let t = self.tabs.read(cx);
+        let untouched = t.open.is_none() && t.agent.is_none() && !t.inbox && t.changes.is_none();
+        self.tabs.update(cx, |t, cx| {
+            t.close_kept(&state.closed, cx);
+            if untouched {
+                match open {
+                    app_state::Open::Main => {}
+                    app_state::Open::Agent { address } => t.show_agent(address.clone(), title.unwrap_or(address), cx),
+                    app_state::Open::Run { id } => t.show(Some(id), cx),
+                    app_state::Open::Inbox => t.show_inbox(cx),
+                }
+            }
+        });
+        // kept from here on, as the person changes it
+        self.kept = Some(state);
+    }
+
+    /// What the window shows now, as app_state keeps it.
+    fn what_stands(&self, window: &Window, cx: &App) -> app_state::State {
+        let t = self.tabs.read(cx);
+        let open = match (&t.agent, t.inbox, &t.open) {
+            (Some((address, _)), _, _) => app_state::Open::Agent { address: address.clone() },
+            (None, true, _) => app_state::Open::Inbox,
+            (None, false, Some(id)) => app_state::Open::Run { id: id.clone() },
+            (None, false, None) => app_state::Open::Main,
+        };
+        let frame = Some(app_state::frame_of(window.window_bounds().get_bounds(), window.display(cx).map(|d| d.id().into())));
+        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame }
+    }
+
+    /// Keeps what the window shows when it changed, once what stood was shown again.
+    fn remember(&mut self, window: &Window, cx: &App) {
+        let Some(kept) = &self.kept else { return };
+        let now = self.what_stands(window, cx);
+        if now == *kept {
+            return;
+        }
+        if let Err(e) = app_state::save(&app_state::path(), &now) {
+            tracing::warn!("what the window shows was not kept: {e}");
+        }
+        self.kept = Some(now);
     }
 
     /// Lets go of every terminal the window shows, as it hides: a hidden app holds no terminal's size, and the
@@ -1645,9 +1716,26 @@ fn main() {
 }
 
 fn open(core: Arc<hc::Core>, cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(1440.), px(880.)), cx);
+    let (state, why) = app_state::load(&app_state::path());
+    if let Some(why) = why {
+        tracing::warn!("{why}");
+    }
+    let screens: Vec<app_state::Screen> = cx.displays().iter().map(|d| app_state::Screen { id: d.id().into(), width: d.bounds().size.width.into(), height: d.bounds().size.height.into() }).collect();
+    let main = cx.primary_display().map(|d| u64::from(d.id()));
+    let kept = app_state::frame_on(state.frame, &screens, main);
+    let display_id = kept.and_then(|f| f.screen).map(DisplayId::from);
+    let bounds = match kept {
+        Some(f) => Bounds::new(point(px(f.x), px(f.y)), size(px(f.width), px(f.height))),
+        None => {
+            if let Some(f) = state.frame {
+                tracing::warn!("the window stood at {f:?}, off the screens there are now ({} known) or too small: it opens at its own place", screens.len());
+            }
+            Bounds::centered(None, size(px(1440.), px(880.)), cx)
+        }
+    };
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id,
         // the window draws its own top bar, the macOS buttons inside it
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         app_id: Some("jaynes-app".into()),
@@ -1712,9 +1800,14 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         island.update(cx, |i, _| i.changes = Some(changes.clone()));
         let terminal_focus = focus.clone();
         cx.new(|cx| {
-            cx.observe(&runs, |_, _, cx| cx.notify()).detach();
+            cx.observe(&runs, |this: &mut Root, _, cx| {
+                this.show_what_stood(cx);
+                cx.notify();
+            })
+            .detach();
             // a tab split or a pane gone, here or in Herdr: the panes shown follow
             cx.observe(&agents, |this: &mut Root, _, cx| {
+                this.show_what_stood(cx);
                 let open = this.agent_view.as_ref().map(|(a, _)| a.clone());
                 let before: Vec<String> = this.panes.iter().map(|(a, _)| a.clone()).collect();
                 this.sync_panes(open.as_deref(), cx);
@@ -1792,7 +1885,10 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
             });
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on: crate::testing::var("JAYNES_APP_CHANGES").is_some(), stack, was_changes: false, editing: None, island, compare, lightbox, steps: true, sidebar: crate::testing::var("JAYNES_APP_NOSIDE").is_none(), branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, later: Default::default(), _branch: branch }
+            // the window moved or resized is kept as it stands
+            let bounds = cx.observe_window_bounds(window, |this: &mut Root, window, cx| this.remember(window, cx));
+            let (changes_on, steps, sidebar) = (state.changes || crate::testing::var("JAYNES_APP_CHANGES").is_some(), state.steps, state.column && crate::testing::var("JAYNES_APP_NOSIDE").is_none());
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {

@@ -13,6 +13,7 @@ pub const VARIABLES: &[&str] = &[
     "JAYNES_APP_TEST_KEY",
     "JAYNES_APP_CHANGES",
     "JAYNES_APP_NOSIDE",
+    "JAYNES_APP_STATE",
 ];
 
 /// Whether this build is one for tests.

@@ -39,7 +39,7 @@ pub struct Runs {
     /// Why the record could not be read, shown instead of the list.
     pub trouble: Option<String>,
     /// Whether the record was read once: what changes after that is news.
-    read_once: bool,
+    pub(crate) read_once: bool,
     _watch: Task<()>,
     _clicks: Task<()>,
 }
