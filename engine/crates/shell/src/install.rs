@@ -672,6 +672,79 @@ mod tests {
         assert!(ok, "git {args:?}");
     }
 
+    /// Runs the installer's part that checks where the download was built (between its markers in site/install.sh)
+    /// on `file` of `version`, with only `bin` on the PATH: whether it went on, and what it said.
+    fn provenance(bin: &Path, file: &Path, version: &str) -> (bool, String) {
+        let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../site/install.sh")).expect("install.sh");
+        let part = script.split("# --- provenance: begin").nth(1).and_then(|s| s.split("# --- provenance: end").next()).expect("the provenance's part");
+        assert!(
+            script.contains("[ \"$(sha256 \"$tmp/jaynes.tar.gz\")\" = \"$want\" ] || fail \"the download is damaged (checksum mismatch); try again\"\nprovenance \"$tmp/jaynes.tar.gz\" \"$version\"\n"),
+            "the installer checks the provenance of what it downloaded, right after its checksum"
+        );
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("set -eu\nsay() {{ printf '%s\\n' \"$*\"; }}\nfail() {{ say \"jaynes: $*\" >&2; exit 1; }}\n{part}\nprovenance \"$1\" \"$2\""))
+            .arg("sh")
+            .arg(file)
+            .arg(version)
+            .env("PATH", bin)
+            .env_remove("JAYNES_REPO")
+            .output()
+            .expect("sh");
+        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    }
+
+    #[test]
+    fn the_installer_checks_where_the_download_was_built_with_gh_and_says_when_it_could_not() {
+        let base = std::env::temp_dir().join(format!("jaynes-provenance-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let file = base.join("jaynes.tar.gz");
+        std::fs::create_dir_all(&base).expect("dir");
+        std::fs::write(&file, "the release").expect("write");
+        // a stand-in for GitHub's gh: whether it is logged in, what attestation verify says, and the arguments it got
+        let gh = |name: &str, logged_in: bool, verified: bool| -> PathBuf {
+            let bin = base.join(name);
+            std::fs::create_dir_all(&bin).expect("dir");
+            let script = format!(
+                "#!/bin/sh\ncase \"$1 $2\" in\n  \"auth status\") exit {};;\n  \"attestation verify\") printf '%s\\n' \"$*\" > {}/args; {};;\nesac\nexit 2\n",
+                if logged_in { 0 } else { 1 },
+                bin.display(),
+                if verified { "exit 0" } else { "echo 'X Verification failed'; echo 'no attestation matched the policy' >&2; exit 1" },
+            );
+            std::fs::write(bin.join("gh"), script).expect("write");
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            bin
+        };
+        // no gh: the checksum is all that was checked, and the installer says so and goes on
+        let none = base.join("none");
+        std::fs::create_dir_all(&none).expect("dir");
+        let (ok, said) = provenance(&none, &file, "1.2.3");
+        assert!(ok && said.contains("provenance was not checked") && said.contains("gh is not installed"), "{said}");
+        // gh without a login: the same, saying how to log in
+        let (ok, said) = provenance(&gh("out", false, true), &file, "1.2.3");
+        assert!(ok && said.contains("provenance was not checked") && said.contains("gh auth login"), "{said}");
+        // gh logged in, the attestation holds: said, after checking the repository, its release workflow, the tag of the
+        // version and GitHub's own runners
+        let bin = gh("holds", true, true);
+        let (ok, said) = provenance(&bin, &file, "1.2.3");
+        assert!(ok && said.contains("provenance was checked") && said.contains("v1.2.3"), "{said}");
+        let args = std::fs::read_to_string(bin.join("args")).expect("verify was asked");
+        for want in [
+            format!("attestation verify {}", file.display()),
+            "--repo alk0x1/jaynes".to_string(),
+            "--signer-workflow alk0x1/jaynes/.github/workflows/release.yml".to_string(),
+            "--source-ref refs/tags/v1.2.3".to_string(),
+            "--deny-self-hosted-runners".to_string(),
+        ] {
+            assert!(args.contains(&want), "{want} not in {args}");
+        }
+        // gh logged in, the attestation does not hold: the install stops, saying why in gh's words
+        let (ok, said) = provenance(&gh("fails", true, false), &file, "1.2.3");
+        assert!(!ok && said.contains("provenance does not hold") && said.contains("no attestation matched the policy"), "{said}");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn the_guide_starts_a_run_with_the_plugin_s_tool_before_the_command() {
         // the tool runs Jaynes outside the agent's own sandbox, where its box opens; the command, from a sandboxed
