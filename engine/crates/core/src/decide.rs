@@ -244,9 +244,12 @@ impl Ctx {
         if !same {
             // a new wait on the person's answers tells them, once; when to show it, at a pause of theirs, is the
             // shell's to choose
-            let theirs = !on.is_empty() && on.iter().all(|id| self.run.questions.get(id).is_some_and(|q| q.open()));
+            // waiting on the person: every question it waits on is theirs to answer, open or let go on only by an
+            // agent; and they are told of each question once, so only one not told of yet tells them
+            let theirs = !on.is_empty() && on.iter().all(|id| self.run.questions.get(id).is_some_and(|q| !q.superseded && q.answer.as_ref().is_none_or(|a| !a.by.person())));
+            let new = on.iter().any(|id| !self.run.told.contains(id));
             self.emit(Event::Waiting { step, on, why: why.clone() });
-            if theirs {
+            if theirs && new {
                 self.command(Command::Notify { text: why });
             }
         }

@@ -37,6 +37,9 @@ pub struct Run {
     pub context: Vec<(String, String)>,
     /// Each stop's count as it stood at the start.
     pub attention: std::collections::BTreeMap<String, crate::attention::Count>,
+    /// The questions the person was told of, by a wait on them: each is told of once.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub told: std::collections::BTreeSet<String>,
     /// Events folded into this state.
     pub seq: u64,
 }
@@ -231,6 +234,7 @@ impl Run {
             attention: attention.clone(),
             context: Vec::new(),
             undone: false,
+            told: Default::default(),
             seq: 1,
         })
     }
@@ -524,6 +528,7 @@ impl Run {
                 }
             }
             Event::Waiting { step, on, why } => {
+                self.told.extend(on.iter().cloned());
                 self.phase = Phase::Waiting { step: step.clone(), on: on.clone(), why: why.clone() };
             }
             Event::Blocked { step, fault, reason } => {

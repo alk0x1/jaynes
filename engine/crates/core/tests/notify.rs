@@ -21,7 +21,7 @@ fn step(name: &str, executor: Executor, needs: &[&str]) -> StepDecl {
         from_risk: Risk::Low,
         attempts: 3,
         fixes: 2,
-        hidden: false,
+        hidden: false, idempotent: false,
         about: String::new(),
     }
 }
@@ -101,7 +101,7 @@ fn a_wait_for_the_person_tells_them_once() {
 }
 
 #[test]
-fn each_new_wait_for_the_person_tells_them_and_the_one_after_it_too() {
+fn a_new_wait_tells_the_person_of_the_questions_not_told_of_before_and_only_of_them() {
     let (mut run, _) = run();
     let attempt = run.steps[0].attempt;
     feed(&mut run, Input::AttemptEnded {
@@ -113,7 +113,9 @@ fn each_new_wait_for_the_person_tells_them_and_the_one_after_it_too() {
     // the person answers make's stop; the run now waits on another answer of theirs, look's, and says so again
     let q = run.questions.values().find(|q| q.question.step == "make" && q.open()).expect("make asks").question.clone();
     let answer = jaynes_core::question::Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: Default::default(), by: jaynes_core::question::By::Person, context: String::new() };
+    let told_before = run.told.clone();
     let (events, cmds) = feed(&mut run, Input::Answer { answer });
-    let waits = events.iter().filter(|e| matches!(e, Event::Waiting { .. })).count();
-    assert_eq!(notices(&cmds).len(), waits, "one notice for each new wait: {events:?} {cmds:?}");
+    // a notice for each new wait on a question not told of before, and none for one already told
+    let new = events.iter().filter(|e| matches!(e, Event::Waiting { on, .. } if on.iter().any(|id| !told_before.contains(id)))).count();
+    assert_eq!(notices(&cmds).len(), new, "{events:?} {cmds:?}");
 }

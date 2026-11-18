@@ -377,6 +377,72 @@ fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::io::Write::write_all(&mut f, bytes).map_err(|e| e.to_string())
 }
 
+/// How long a question the person was told of may stay unanswered before they are reminded of it, and between two
+/// reminders. A first value, to come from use.
+pub const REMIND_EVERY: u64 = 24 * 3600;
+
+/// A question the person was told of, still unanswered, whose reminder is due.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reminder {
+    pub run: String,
+    pub question: String,
+    pub step: String,
+    pub about: String,
+    /// When the person was last told of it, by its notice or by a reminder.
+    pub since: u64,
+}
+
+/// The reminders due at `now`: every question a run waits on the person for, that they were told of, and that nobody
+/// answered since `REMIND_EVERY`. It decides nothing of when to show them: the app and the page do that, at a pause
+/// of the person's, and say they did with `mark_reminded`.
+pub fn reminders_due(home: &Path, store: &Store, now: u64) -> Result<Vec<Reminder>, String> {
+    let mut told_at: std::collections::BTreeMap<(String, String), u64> = Default::default();
+    for (at, run, e) in store.history()? {
+        if let Event::Waiting { on, .. } = e {
+            for q in on {
+                told_at.entry((run.clone(), q)).or_insert(at);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let runs: std::collections::BTreeSet<String> = told_at.keys().map(|(r, _)| r.clone()).collect();
+    for id in runs {
+        let Some(run) = store.state(&id)? else { continue };
+        if run.finished() {
+            continue;
+        }
+        let reminded = reminded(home, &id);
+        for q in run.questions.values() {
+            let qid = &q.question.id;
+            let theirs = !q.superseded && q.answer.as_ref().is_none_or(|a| !a.by.person());
+            let Some(&told) = told_at.get(&(id.clone(), qid.clone())) else { continue };
+            if !theirs || !run.told.contains(qid) {
+                continue;
+            }
+            let since = reminded.get(qid).copied().unwrap_or(told).max(told);
+            if now.saturating_sub(since) >= REMIND_EVERY {
+                out.push(Reminder { run: id.clone(), question: qid.clone(), step: q.question.step.clone(), about: q.question.about.clone(), since });
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn reminded(home: &Path, run: &str) -> std::collections::BTreeMap<String, u64> {
+    std::fs::read_to_string(home.join("runs").join(run).join("reminded.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// The person was reminded of `question` of `run` at `now`: the next reminder is due `REMIND_EVERY` later.
+pub fn mark_reminded(home: &Path, run: &str, question: &str, now: u64) -> Result<(), String> {
+    let mut r = reminded(home, run);
+    r.insert(question.to_string(), now);
+    let dir = home.join("runs").join(run);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let tmp = dir.join(".reminded.json");
+    std::fs::write(&tmp, serde_json::to_string(&r).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join("reminded.json")).map_err(|e| e.to_string())
+}
+
 /// What step `step` of a run changed in the project, as git shows it: from the run's copy while it is kept, or from
 /// what was saved of it when the copy was cleared. None when the step changed nothing.
 pub fn step_diff(home: &Path, run: &str, step: &str) -> Option<String> {
@@ -1507,6 +1573,50 @@ mod tests {
         write_inside(&root, &root.join(".jaynes/pictures/new/d.png"), b"d").expect("written");
         assert!(root.join(".jaynes/pictures/new/d.png").is_file());
         let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_question_left_unanswered_is_reminded_once_a_day() {
+        let home = std::env::temp_dir().join(format!("jaynes-remind-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        // a run of one person's step, which waits on them at once
+        let step = StepDecl {
+            name: "look".into(), needs: vec![], executor: Executor::Person, session: SessionKind::Fresh, reach: Reach::default(),
+            effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
+        };
+        let mut look = step.clone();
+        look.name = "look".into();
+        let mut first = step;
+        first.name = "make".into();
+        first.executor = Executor::Role;
+        look.needs = vec!["make".into()];
+        look.stop = Some(jaynes_core::manifest::StopDecl {
+            verdicts: vec![jaynes_core::question::VerdictKind::Keep], holds: true, from_risk: Default::default(), release: false, budget: None,
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Look?".into(), choose: false, redo: None, rounds: None,
+        });
+        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![first, look], target: Default::default(), delivery: Default::default() };
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default() };
+        store.decide("w", &start).expect("start");
+        let run = store.state("w").expect("state").expect("run");
+        let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };
+        store.decide("w", &probe).expect("probe");
+        let attempt = store.state("w").expect("state").expect("run").steps[0].attempt;
+        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None } };
+        store.decide("w", &done).expect("done");
+        let _ = run;
+        let waiting = store.state("w").expect("state").expect("run");
+        assert!(!waiting.told.is_empty(), "the run waits on the person: {:?}", waiting.phase);
+        let now = crate::store::now();
+        assert!(reminders_due(&home, &store, now).expect("due").is_empty(), "nothing is due as soon as it is told");
+        let due = reminders_due(&home, &store, now + REMIND_EVERY + 1).expect("due");
+        assert_eq!(due.len(), 1, "{due:?}");
+        assert_eq!((due[0].run.as_str(), due[0].step.as_str()), ("w", "look"));
+        mark_reminded(&home, "w", &due[0].question, now + REMIND_EVERY + 1).expect("marked");
+        assert!(reminders_due(&home, &store, now + REMIND_EVERY + 2).expect("due").is_empty(), "reminded once, not again at once");
+        assert_eq!(reminders_due(&home, &store, now + 2 * REMIND_EVERY + 2).expect("due").len(), 1, "and again a day later");
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     #[test]
