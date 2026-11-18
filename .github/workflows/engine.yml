@@ -59,3 +59,9 @@ jobs:
         run: |
           JAYNES_MODEL_RECORD=$(ls -d "${TMPDIR:-/tmp}"/jaynes-e2e-*/home/record.sqlite3 | tr '\n' ':') \
             cargo test --locked -p jaynes-core --test guarantees the_lean_model -- --nocapture
+      # a test build, where the model's host of an agent program is sent to a server of the test's: Codex reaches its
+      # model through Jaynes's proxy and nothing else (a build for people refuses that variable, in the step above)
+      - name: The model's proxy, in a test build
+        run: |
+          cargo clippy --all-targets --locked --features test-model-host -- -D warnings
+          cargo test --locked -p jaynes-shell --features test-model-host --test codex
