@@ -39,8 +39,6 @@ pub struct Frame {
     pub story: u32,
     /// The ring of an agent that is idle.
     pub idle_ring: u32,
-    /// Claude Code's own mark.
-    pub claude: u32,
 }
 
 /// The dark the window has always had.
@@ -67,7 +65,6 @@ pub const DARK: Frame = Frame {
     scrim_2: 0x0000_0099,
     story: 0xc9ced8,
     idle_ring: 0x4a505c,
-    claude: 0xe8875f,
 };
 
 /// The light: Linen, a warm off-white.
@@ -94,7 +91,6 @@ pub const LINEN: Frame = Frame {
     scrim_2: 0x24221e4d,
     story: 0x3a3730,
     idle_ring: 0xb9b2a5,
-    claude: 0xd9774f,
 };
 
 /// The window's colours for the light or the dark.
@@ -138,7 +134,6 @@ pub fn scrim() -> u32 { frame().scrim }
 pub fn scrim_2() -> u32 { frame().scrim_2 }
 pub fn story() -> u32 { frame().story }
 pub fn idle_ring() -> u32 { frame().idle_ring }
-pub fn claude() -> u32 { frame().claude }
 
 pub const UI_FONT: &str = "Instrument Sans";
 pub const MONO_FONT: &str = "IBM Plex Mono";
@@ -308,10 +303,12 @@ pub enum Icon {
     /// Opens a file elsewhere: an arrow out of a box.
     Open,
     Close,
+    /// A terminal: a window with a prompt. Settings' Terminal section, and the tab of the person's own Claude Code.
+    Terminal,
 }
 
 impl Icon {
-    fn svg(self) -> &'static str {
+    pub fn svg(self) -> &'static str {
         match self {
             Icon::Sidebar => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.7" y="2.7" width="12.6" height="10.6" rx="2"/><path d="M6 2.7v10.6"/></svg>"##,
             Icon::Panel => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.7" y="2.7" width="12.6" height="10.6" rx="2"/><path d="M10 2.7v10.6"/></svg>"##,
@@ -322,6 +319,7 @@ impl Icon {
             Icon::Minus => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"><path d="M3 8h10"/></svg>"##,
             Icon::Open => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>"##,
             Icon::Close => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>"##,
+            Icon::Terminal => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>"##,
             Icon::Stop => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.5" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.6"/></svg>"##,
         }
     }
@@ -347,8 +345,7 @@ pub fn icon_button(id: &'static str, which: Icon, on: bool) -> Stateful<Div> {
         .child(icon(which, 16., if on { text() } else { dim() }))
 }
 
-/// Claude Code's critter, small, for the tab of the person's own Claude Code.
-pub fn claude_icon() -> Svg {
-    const CRITTER: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 12"><path fill="#000" fill-rule="evenodd" d="M3 0h10v3h3v3h-3v6h-1V9h-1v3h-1V9H6v3H5V9H4v3H3V6H0V3h3zM5 3v2h1V3zm5 0v2h1V3z"/></svg>"##;
-    svg().data(CRITTER.as_bytes()).w(px(14.)).h(px(10.5)).flex_none().text_color(rgb(claude()))
+/// The tab of the person's own Claude Code: a terminal, bright on the tab that is open.
+pub fn main_tab_icon(on: bool) -> Svg {
+    icon(Icon::Terminal, 14., if on { text() } else { dim() })
 }

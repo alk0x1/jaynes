@@ -508,7 +508,7 @@ impl Tabs {
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.show(None, cx)))
-                .child(look::claude_icon()),
+                .child(look::main_tab_icon(false)),
         );
         row = row.child(div().w(px(1.)).h(px(16.)).mx(px(4.)).flex_none().bg(rgb(look::line_2())));
         for (n, a) in space.iter().enumerate() {
@@ -586,7 +586,7 @@ impl Render for Tabs {
                 .drag_over::<Dragged>(|style, _, _, _| style.bg(rgb(look::selected())))
                 .on_drop(cx.listener(move |this, d: &Dragged, _, cx| this.move_tab(&d.key, at, cx)));
             row = row.child(match &key {
-                None => t.child(look::claude_icon()).child("Claude Code"),
+                None => t.child(look::main_tab_icon(on)).child("Claude Code"),
                 Some(id) => t
                     .child(if mark == Mark::Working {
                         look::spinner(SharedString::from(format!("tab-spin-{id}")), 10., look::blue()).into_any_element()
