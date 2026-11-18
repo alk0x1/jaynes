@@ -281,6 +281,7 @@ mod tests {
         assert_eq!(recorded, pinned.fingerprint().expect("fp"));
         assert_eq!(recorded, same, "the run runs the role as it was copied");
         assert_ne!(recorded, given.fingerprint().expect("fp"));
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]
