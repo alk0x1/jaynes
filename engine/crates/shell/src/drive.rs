@@ -692,7 +692,13 @@ impl<'a> Driver<'a> {
             let resuming = matches!(input, Input::Resume { .. });
             let (state, events, commands) = match decide_and_record(self.store, &self.setup.run, &input) {
                 Ok(x) if resuming && std::fs::remove_file(self.setup.dir.join(HALTED_BOX)).is_ok() => {
-                    queue.push_front(Input::Recovered);
+                    // only what a halt interrupted runs again: a delivery under way is the resume's own to send again
+                    let interrupted = x.0.steps.iter().any(|s| {
+                        matches!(s.status, jaynes_core::run::Status::Checking { .. } | jaynes_core::run::Status::Running { .. })
+                    });
+                    if interrupted {
+                        queue.push_front(Input::Recovered);
+                    }
                     x
                 }
                 Ok(x) => x,
