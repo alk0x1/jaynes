@@ -984,7 +984,6 @@ fn killed_after_it_acts_a_step_safe_to_repeat_starts_again_by_itself_with_the_sa
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "its check reaches a local server it does not declare: Linux's box gives a check no local port it does not name, macOS's any, until a check declares local_ports as a step does (box-allow-ports)")]
 fn killed_while_its_check_runs_or_once_it_is_done_an_act_is_not_done_again() {
     // while its check runs: the act is recorded, and only the check runs again
     let world = World::open();
@@ -1016,7 +1015,6 @@ fn killed_while_its_check_runs_or_once_it_is_done_an_act_is_not_done_again() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_check_reaches_only_the_local_ports_it_names_never_its_step_s_in_a_real_run() {
     // the step names the registry's port, its check names none: the check is refused it, and the run is not delivered
     for (name, ports) in [("check-no-port", String::new()), ("check-own-port", "local_ports = [PORT]".to_string())] {

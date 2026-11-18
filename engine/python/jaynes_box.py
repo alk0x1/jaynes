@@ -192,6 +192,14 @@ def linux_argv(exe: str, script: str, box: Box) -> list[str]:
         argv += ["--port", str(int(p))]
     if box.local:
         argv.append("--local")
+        # its own servers bind the ports the run reserved: in a network of its own any port binds, elsewhere these
+        for p in sorted(set(box.reserved) - {PAGE_PORT}):
+            argv += ["--port", str(int(p))]
+        # the services of this machine its step or its check names, carried into its network by the relay
+        for p in sorted(set(box.local_ports) - {PAGE_PORT}):
+            argv += ["--reach", str(int(p))]
+        if box.any_port:
+            argv.append("--any-port")
     argv += ["--never-port", str(PAGE_PORT)]
     return argv + ["--", "/bin/sh", "-c", script]
 

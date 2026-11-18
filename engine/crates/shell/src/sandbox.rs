@@ -1,7 +1,8 @@
 //! The box on Linux: `jaynes box` runs a command confined by the kernel, as `sandbox-exec` confines it on macOS
 //! (engine/python/jaynes_box.py, `profile`). The program confines itself, then becomes the command: Landlock limits
 //! what it may read, write, connect to and signal, and a seccomp filter refuses the kinds of sockets and calls
-//! Landlock does not see. Neither needs root or a user namespace, so the box opens inside a container too.
+//! Landlock does not see. Neither needs root: the box makes a user namespace of its own, where the machine lets a
+//! process make one, so it opens inside a container too.
 //!
 //! What the macOS box promises, and what holds it on Linux. Where Linux cannot hold a promise the same way, the box
 //! refuses to open; it never opens a looser box. Each line has its test in tests/linux_box.rs.
@@ -23,6 +24,8 @@
 //! |                                                           | a user namespace the box does not open                |
 //! | of this machine's ports, only those listed, on its        | in the box's own network, a relay carries each listed |
 //! | loopback                                                  | port to 127.0.0.1 here; nothing else is there (relay) |
+//! |                                                           | A command that runs local servers names them apart    |
+//! |                                                           | (--reach): its own servers cannot take those ports    |
 //! | no network but local ports                                | where the machine allows, a network of the box's own: |
 //! |                                                           | a user and network namespace with only its loopback,  |
 //! |                                                           | any port there; elsewhere Landlock's port rules for   |
@@ -53,9 +56,9 @@
 //! the machine are closed to writing, as on macOS: a command that makes temporary files needs TMPDIR inside one of
 //! its folders, which the caller sets (jaynes_box.environment does).
 //!
-//! Where there is no network of the box's own and the person opened any local port for the project, the loopback
-//! the command reaches is the one of the whole machine or container it runs in: every service listening on it there,
-//! but the Jaynes page's port, is within reach of the command.
+//! Where the person opened any local port for the project, the command gets no network of its own: the loopback it
+//! reaches is the one of the whole machine or container it runs in, and every service listening on it there, but the
+//! Jaynes page's port, is within reach of the command. Where that network has a way out, the box refuses.
 //!
 //! What the box does not hold, on Linux as on macOS: the machine's resources (a command may fill the disk of its
 //! folders, take the memory or start processes until the system says no; the caller's deadline stops it), the time
@@ -78,13 +81,17 @@ pub struct Spec {
     /// Folders inside its writable folders that it may read and not write, as the copy's .git, where Jaynes runs
     /// git later outside any box: each is mounted read-only on itself in the box's mount namespace.
     pub readonly: Vec<PathBuf>,
-    /// Local ports it may bind and connect to.
+    /// Local ports it may bind and connect to. For a command that runs no servers of its own they are this
+    /// machine's, carried into a network of the box's own by a relay.
     pub ports: Vec<u16>,
+    /// Ports of this machine a command that runs local servers reaches, as a database its step names: carried into
+    /// its network of its own by the relay, so its own servers cannot take them; elsewhere opened as `ports` are.
+    pub reach: Vec<u16>,
     /// It runs local servers, as a test suite does: it gets a network of its own where the machine allows one,
     /// with any local port; elsewhere only `ports`, and only where this machine's network has no way out.
     pub local: bool,
-    /// The person opened any local port for this project: where there is no network of the box's own, every
-    /// port but `never`.
+    /// The person opened any local port for this project: the command runs in this machine's network, with every
+    /// port but `never`, and only where that network has no way out.
     pub any_port: bool,
     /// Ports never opened, as the Jaynes page's.
     pub never: Vec<u16>,
@@ -364,7 +371,7 @@ mod imp {
     /// The network the box gives `spec`, or why it refuses: it never opens a port where this machine's network has
     /// a way out, since Landlock holds a port and not an address.
     fn network(spec: &Spec, own_made: bool) -> Result<Net, String> {
-        if !spec.local && !spec.any_port && spec.ports.is_empty() {
+        if !spec.local && !spec.any_port && spec.ports.is_empty() && spec.reach.is_empty() {
             return Ok(Net::Nothing);
         }
         if spec.any_port && !spec.local {
@@ -387,7 +394,7 @@ mod imp {
         if spec.any_port {
             return Ok(Net::AllBut(never));
         }
-        let mut ports: Vec<u16> = spec.ports.iter().copied().filter(|p| !never.contains(p)).collect();
+        let mut ports: Vec<u16> = spec.ports.iter().chain(&spec.reach).copied().filter(|p| !never.contains(p)).collect();
         ports.sort_unstable();
         ports.dedup();
         Ok(Net::Ports(ports))
@@ -685,12 +692,16 @@ mod imp {
         // The ports of this machine it may reach are carried into a network of its own: the helper that connects to
         // them starts before the namespaces, so it stays in this machine's network
         let never = &spec.never;
-        let mut ports: Vec<u16> = spec.ports.iter().copied().filter(|p| !never.contains(p)).collect();
+        // what it reaches of this machine: the ports it names to reach, and, for a command that runs no servers of
+        // its own, its listed ports (one that does serves on those in its network). With every port opened by the
+        // person nothing is carried: the command runs in this machine's network
+        let mut ports: Vec<u16> = spec.reach.iter().chain(spec.ports.iter().filter(|_| !spec.local)).copied()
+            .filter(|p| !never.contains(p) && !spec.any_port)
+            .collect();
         ports.sort_unstable();
         ports.dedup();
-        // only for a command that runs no servers of its own: one that does serves on its own ports in its network
-        let channel = if ports.is_empty() || spec.local { None } else { Some(relay_out(&ports)?) };
-        let own = namespaces(spec, spec.local || channel.is_some())?;
+        let channel = if ports.is_empty() { None } else { Some(relay_out(&ports)?) };
+        let own = namespaces(spec, (spec.local && !spec.any_port) || channel.is_some())?;
         if let (true, Some(channel)) = (own, channel) {
             relay_in(&ports, channel)?;
         }
