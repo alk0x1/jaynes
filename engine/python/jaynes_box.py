@@ -474,11 +474,18 @@ def _output(path: Path) -> tuple[str | None, str]:
         return None, ""
     except OSError:
         return None, "what is at JAYNES_OUTPUT is a link or cannot be opened, and the output is a plain file"
-    with os.fdopen(fd, "rb") as f:
-        found = os.fstat(f.fileno())
+    try:  # what it is, is asked of the open file itself: a folder or a pipe opens too
+        found = os.fstat(fd)
         if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
             return None, "what is at JAYNES_OUTPUT is not a plain file of its own"
-        data = f.read(OUTPUT_MOST + 1)
+        data = b""
+        while len(data) <= OUTPUT_MOST:
+            more = os.read(fd, OUTPUT_MOST + 1 - len(data))
+            if not more:
+                break
+            data += more
+    finally:
+        os.close(fd)
     if len(data) > OUTPUT_MOST:
         return None, f"the output is larger than {OUTPUT_MOST} bytes"
     return data.decode(errors="replace"), ""
