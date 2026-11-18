@@ -383,8 +383,8 @@ impl Tabs {
 const COPIED_FOR: Duration = Duration::from_millis(2500);
 
 impl Tabs {
-    /// A finished run's summary under its story, as the page shows it: what it did for someone who was not there, in
-    /// Markdown, with a button that copies it.
+    /// A finished run's summary under its story: what it did for someone who was not there, drawn from its Markdown,
+    /// with a button that copies the Markdown.
     fn summary_section(&self, summary: &str) -> Stateful<Div> {
         let copied = self.copied_at.is_some_and(|t| t.elapsed() < COPIED_FOR);
         let button = div()
@@ -403,11 +403,8 @@ impl Tabs {
             .hover(|d| d.border_color(rgb(look::dim())))
             .child(if copied { "Copied" } else { "Copy as Markdown" })
             .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::CopySummary), cx));
-        let mut text = div().mt(px(8.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(rgb(look::line())).bg(rgb(look::panel_2())).flex().flex_col();
-        for line in summary.lines() {
-            // an empty line keeps its height
-            text = text.child(div().min_h(px(21.)).child(line.to_owned()));
-        }
+        // drawn as its parts (titles, lists, bold, code), not as raw Markdown: the button copies the Markdown
+        let text = div().mt(px(8.)).px(px(14.)).py(px(12.)).rounded(px(8.)).border_1().border_color(rgb(look::line())).bg(rgb(look::panel_2())).child(crate::summary_md::draw(summary));
         div()
             .id("summary")
             .mt(px(22.))

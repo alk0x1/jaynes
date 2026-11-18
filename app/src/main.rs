@@ -45,6 +45,7 @@ mod rail;
 mod settings;
 mod side;
 mod spawn;
+mod summary_md;
 mod tabs;
 mod sprites;
 mod terminal;
