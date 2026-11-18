@@ -564,7 +564,8 @@ def _fingerprint(data: bytes) -> str:
 
 def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[str, Any]] = download) -> Any:
     """Download the pages an earlier step lists. The output says, for each, whether it was read and why not, with
-    the fingerprint of what came; keeps the text of each page read, in ``texts``; and, for the quotes listed with
+    the fingerprint of what came, and in ``unread`` a line for each page not read, with why, for a sentence to the
+    person; keeps the text of each page read, in ``texts``; and, for the quotes listed with
     a page, whether each is in its text. A page that could not be read is never an error of the step: it is a
     page not read, and nothing quoted from it is found."""
     from concurrent.futures import ThreadPoolExecutor
@@ -597,7 +598,8 @@ def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[st
     with ThreadPoolExecutor(max_workers=4) as pool:
         done = list(pool.map(one, asked))
     return {"pages": [page for page, _ in done], "texts": {page["url"]: text for page, text in done if page["read"]},
-            "any_read": any(page["read"] for page, _ in done)}
+            "any_read": any(page["read"] for page, _ in done),
+            "unread": [f"{page['url']}: {page['why']}" for page, _ in done if not page["read"]]}
 
 
 def quotes_found(call: Call, params: Params) -> Any:

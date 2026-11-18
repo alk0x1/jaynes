@@ -249,7 +249,7 @@ const MENU_STEPS: &[MenuStep] = &[
         about: "Jaynes downloads the pages an earlier step lists, keeps their text, and says which quotes are in it.",
         reach: Reach::default,
         params: &[("pages", Param::StepField, true)],
-        fields: &["pages", "any_read"],
+        fields: &["pages", "any_read", "unread"],
     },
 ];
 

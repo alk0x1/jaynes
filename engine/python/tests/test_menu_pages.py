@@ -287,6 +287,10 @@ class FetchPages(unittest.TestCase):
         self.assertEqual((second["read"], second["why"]), (False, "the server answered 404"))
         self.assertTrue(out["any_read"])
 
+    def test_the_pages_not_read_are_said_in_one_line_each(self):
+        self.assertEqual(step({"read": READ})["unread"], ["https://example.org/gone: the server answered 404"])
+        self.assertEqual(step({"read": READ}, pages=PAGES | {"https://example.org/gone": HTML})["unread"], [])
+
     def test_the_text_that_was_downloaded_is_kept_with_its_fingerprint(self):
         import hashlib
         out = step({"read": READ})
