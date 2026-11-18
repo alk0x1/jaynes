@@ -275,6 +275,11 @@ impl Island {
         (judged == stop.items.len() || !self.bring.is_empty()) && !self.sending && self.reckoned.refused.is_none()
     }
 
+    /// The stop the island shows open (not folded away): its run and question.
+    pub fn stop_shown(&self, cx: &App) -> Option<(String, String)> {
+        self.stop(cx).filter(|s| !self.shrunk.contains(&s.question)).map(|s| (s.run, s.question))
+    }
+
     /// Command-Return: sends the answer, when the question shows open and the answer may go.
     pub fn send_if_ready(&mut self, cx: &mut Context<Self>) {
         let Some(stop) = self.stop(cx) else { return };
@@ -395,7 +400,7 @@ impl Island {
 
 #[cfg(feature = "test-driver")]
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -502,6 +507,8 @@ impl Island {
                 tracing::info!("the main window is {}", if shown { "on the screen" } else { "hidden" });
             }
             "panic" => panic!("a test asked the app to panic"),
+            // what the next presence tick would tell, told in the log and sent nowhere
+            "presence?" => cx.defer(crate::presence_probe),
             // the Copy as Markdown button under a finished run's story
             "copy-summary" => window.dispatch_action(Box::new(crate::CopySummary), cx),
             "settings-close" => {

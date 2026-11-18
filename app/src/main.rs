@@ -33,6 +33,7 @@ mod notify;
 mod prefs;
 mod settings_window;
 mod testing;
+mod looking_at;
 mod trail;
 mod presence;
 mod rail;
@@ -204,6 +205,21 @@ impl Render for Root {
             .font_family(look::UI_FONT)
             .track_focus(&self.focus)
             .key_context("Jaynes")
+            // a hand on the window, for the person's presence at a stop: before any pane takes it
+            .capture_key_down(|_, _, _| looking_at::touched())
+            .capture_any_mouse_down(|_, _, _| looking_at::touched())
+            .child(canvas(|_, _, _| {}, |_, _, window, _| {
+                window.on_mouse_event(|_: &MouseMoveEvent, phase, _, _| {
+                    if phase == DispatchPhase::Capture {
+                        looking_at::touched();
+                    }
+                });
+                window.on_mouse_event(|_: &ScrollWheelEvent, phase, _, _| {
+                    if phase == DispatchPhase::Capture {
+                        looking_at::touched();
+                    }
+                });
+            }).absolute().size_0())
             .on_action(copy_into(&shown))
             .on_action(paste_into(&shown))
             .on_action(cx.listener(|this, _: &ToggleSteps, _, cx| {
@@ -367,6 +383,16 @@ enum Shown {
 const COVER_AT_MOST: std::time::Duration = std::time::Duration::from_millis(700);
 
 impl Root {
+    /// The stop on the screen, for the person's presence: the compare mode's, else the island's while the middle
+    /// shows it (an agent, the Inbox or the Changes tab over it hide it).
+    fn stop_on_screen(&self, cx: &App) -> Option<(String, String)> {
+        if let Some(s) = self.compare.read(cx).stop_shown() {
+            return Some(s);
+        }
+        let tabs = self.tabs.read(cx);
+        (self.agent_view.is_none() && !tabs.inbox && tabs.changes.is_none()).then(|| self.island.read(cx).stop_shown(cx)).flatten()
+    }
+
     /// Lets go of every terminal the window shows, as it hides: a hidden app holds no terminal's size, and the
     /// person's other viewers (Herdr) size them as they use them.
     pub(crate) fn let_go(&mut self, cx: &App) {
@@ -1533,11 +1559,43 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
     })
     .map(|handle| {
         MAIN.with(|m| m.set(Some(handle.into())));
+        presence_ticks(handle.into(), cx);
         if let Some(path) = crate::testing::var("JAYNES_APP_SHOT") {
             shots(handle.into(), path.into(), cx);
         }
     })
     .expect("cannot open the Jaynes window");
+}
+
+/// How the person stands to the main window now, for their presence at a stop.
+pub(crate) fn seen_now(window: &mut Window, cx: &App) -> looking_at::Seen {
+    let front = window.is_window_active() && ns_window_visible(window);
+    let stop = window.root::<Root>().flatten().and_then(|r| r.read(cx).stop_on_screen(cx));
+    looking_at::Seen { front, last_input_ms: looking_at::last_input(), stop }
+}
+
+/// What the next presence tick would tell, said in the log and sent nowhere: for a test.
+#[cfg(feature = "test-driver")]
+pub(crate) fn presence_probe(cx: &mut App) {
+    let Some(main) = MAIN.with(|m| m.get()) else { return };
+    if let Ok(seen) = main.update(cx, |_, window, cx| seen_now(window, cx)) {
+        let counts = looking_at::counts(&seen, jaynes_shell::store::now());
+        tracing::info!("presence: stop on the screen {:?}, window in front {}, touched {}, would tell {:?}", seen.stop, seen.front, seen.last_input_ms.is_some(), counts);
+    }
+}
+
+/// Every presence::EVERY seconds, the person's presence at the stop on the screen, when it counts (looking_at.rs):
+/// the window in front with the keyboard, a hand on it in the last minute.
+fn presence_ticks(main: AnyWindowHandle, cx: &mut App) {
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(std::time::Duration::from_secs(jaynes_shell::presence::EVERY)).await;
+        let seen = main.update(cx, |_, window, cx| seen_now(window, cx));
+        let Ok(seen) = seen else { break };
+        if let Some(stop) = looking_at::counts(&seen, jaynes_shell::store::now()) {
+            looking_at::tell(stop);
+        }
+    })
+    .detach();
 }
 
 thread_local! {

@@ -77,6 +77,11 @@ impl Compare {
         }
     }
 
+    /// The stop the compare mode shows, while it is open: its run and question.
+    pub fn stop_shown(&self) -> Option<(String, String)> {
+        self.stop.as_ref().filter(|_| self.is_open()).map(|s| (s.run.clone(), s.question.clone()))
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
     }
