@@ -1,5 +1,6 @@
 //! The summary of a run end to end, as someone who never installed Jaynes reads it: the real binary, the real
-//! small-change role, a real git project, an agent that is a shell command, and the page.
+//! small-change role, a real git project, an agent that is a shell command, and the page. The agents' commands are
+//! plain POSIX shell, with no tool that differs between macOS and Linux (such as sed -i).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -57,10 +58,14 @@ fn get(port: u16, path: &str) -> String {
 }
 
 fn post(port: u16, path: &str, body: &str) -> serde_json::Value {
+    post_as(port, path, body, "jaynes_key=k3y")
+}
+
+fn post_as(port: u16, path: &str, body: &str, cookie: &str) -> serde_json::Value {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
     let raw = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: jaynes_key=k3y\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
     s.write_all(raw.as_bytes()).expect("write");
@@ -73,12 +78,12 @@ fn post(port: u16, path: &str, body: &str) -> serde_json::Value {
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
     let s = scratch("cli");
-    start(&s, "small", &format!("sed -i '' 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'"));
+    start(&s, "small", &format!("printf 'hi\\n' > greeting.txt && {OUTPUT} && echo '{{\"tokens\":1234,\"session\":\"s1\"}}'"));
     let (ok, told) = engine(&s, &["summary", "small"]);
     assert!(ok, "{told}");
     assert!(told.starts_with("## Jaynes run summary\n\n**Request:** say hi instead of hello\n\n- Run `small`: role small-change 3.0.0 (fingerprint "), "{told}");
     // the agent here is a line of shell with this machine's paths: the summary keeps it out
-    assert!(told.contains("), agent a shell command, low risk\n- Outcome: delivered as jaynes/small at "), "{told}");
+    assert!(told.contains(&format!("), agent a shell command, low risk, engine {}\n- Outcome: delivered as jaynes/small at ", jaynes_core::ENGINE)), "{told}");
     assert!(told.contains("1. **runner** (Jaynes): done.\n2. **change** (agent): done, 1 attempt. Checks passed: field-required, field-max-length, suite-passes.\n"), "{told}");
     // the role's promise, proved again from the run's own copy of the role
     assert!(told.contains("### Promises proved of the role\n\n- Nothing is delivered before the project's suite passed on the change\n"), "{told}");
@@ -99,7 +104,7 @@ fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
 fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let s = scratch("page");
     // a change to the Makefile runs later outside any box: the risk goes up and the person is asked
-    start(&s, "asked", &format!("sed -i '' 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}"));
+    start(&s, "asked", &format!("printf 'hi\\n' > greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}"));
     let (ok, early) = engine(&s, &["summary", "asked"]);
     assert!(!ok && early.contains("run asked is not finished: a summary tells what a finished run did"), "{early}");
     let port = 19750 + (std::process::id() % 1000) as u16;
@@ -117,7 +122,16 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let (_, log) = engine(&s, &["log", "asked"]);
     let opened: serde_json::Value = log.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).find(|e| e["type"] == "QuestionOpened").expect("asked");
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(opened["question"].clone()).expect("question")).0;
-    let keep = format!(r#"{{"run":"asked","question":"{}","shown":"{shown}","verdicts":{{}}}}"#, opened["question"]["id"].as_str().expect("id"));
+    let id = opened["question"]["id"].as_str().expect("id");
+    // the person is on the stop's screen: the page says so; without the page's key it does not count
+    let look = format!(r#"{{"run":"asked","question":"{id}"}}"#);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let r = post_as(port, "/api/look", &look, "");
+    assert!(r["ok"] == false && r["refused"] == "only the person's presence counts", "{r}");
+    let r = post(port, "/api/look", &look);
+    assert!(r["ok"] == true && r["recorded"] == true, "{r}");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let keep = format!(r#"{{"run":"asked","question":"{id}","shown":"{shown}","verdicts":{{}}}}"#);
     assert_eq!(post(port, "/api/answer", &keep)["ok"], true);
     let mut told = String::new();
     for _ in 0..100 {
@@ -129,17 +143,21 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
         }
     }
     assert!(told.contains("<button class=\"copy\" id=\"copysum\">Copy as Markdown</button>"), "{told}");
+    // once the answer is in the record, a late signal is dropped (and the summary cuts any span at the answer)
+    let r = post(port, "/api/look", &look);
+    assert!(r["ok"] == true && r["recorded"] == false, "{r}");
     let text = told.split("<pre class=\"said\" id=\"sumtext\">").nth(1).and_then(|t| t.split("</pre>").next()).expect("the summary on the page");
     assert!(text.starts_with("## Jaynes run summary\n\n**Request:** say hi instead of hello\n"), "{text}");
-    assert!(text.contains(", high risk\n- Outcome: delivered as jaynes/asked at "), "{text}");
+    assert!(text.contains(&format!(", high risk, engine {}\n- Outcome: delivered as jaynes/asked at ", jaynes_core::ENGINE)), "{text}");
     assert!(text.contains("2. **change** (agent): done, 1 attempt. Checks passed: field-required, field-max-length, suite-passes. A person answered 1 question.\n"), "{text}");
     assert!(text.contains("### Promises proved of the role\n\n- Nothing is delivered before the project&#39;s suite passed on the change\n") || text.contains("### Promises proved of the role\n\n- Nothing is delivered before the project's suite passed on the change\n"), "{text}");
-    // the person answered one stop: their time is not measured, and is not said as zero
+    // the person answered one stop, and their time on its screen was measured: seconds, never the wait
     assert!(text.contains("- People: 1 stop answered by a person, 0 sent back. Their time on Jaynes"), "{text}");
-    assert!(text.trim_end().ends_with("screens: not measured."), "{text}");
+    let time = text.split("screens: ").nth(1).and_then(|t| t.split(".\n").next()).expect("their time");
+    assert!(time.ends_with(" s") && time.trim_end_matches(" s").parse::<u64>().is_ok_and(|s| (1..=15).contains(&s)), "{time}");
     // this role's stop does not hold the run, which went on and delivered: it stood at no stop
     assert!(!text.contains("The run stood"), "{text}");
     // the command says the same as the page
     let (ok, cli) = engine(&s, &["summary", "asked"]);
-    assert!(ok && cli.contains("- People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.\n"), "{cli}");
+    assert!(ok && cli.contains(&format!("- People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: {time}.\n")), "{cli}");
 }

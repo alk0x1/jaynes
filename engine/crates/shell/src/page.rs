@@ -192,6 +192,9 @@ impl Page {
                 "/api/act" => self.act(&body, by),
                 "/api/start" => self.start(&body, by),
                 "/api/setup" => self.setup(&body, by),
+                // the person is on a stop's screen: what the people's minutes of the run's summary are measured from
+                "/api/look" => crate::presence::look(&self.home, body["run"].as_str().unwrap_or(""), body["question"].as_str().unwrap_or(""), &by, crate::store::now())
+                    .map(|recorded| json!({"ok": true, "recorded": recorded})),
                 _ => Err("no such action".to_string()),
             };
             let reply = match out {
@@ -1408,6 +1411,16 @@ if (copysum) copysum.addEventListener("click", async () => {
   catch { getSelection().selectAllChildren(pre); copysum.textContent = "Selected: copy it with Command-C"; }
   setTimeout(() => copysum.textContent = "Copy as Markdown", 2500);
 });
+// While the person is on a stop's screen (in front, focused, and touched in the last minute), it says so every 15 s:
+// the people's minutes of the run's summary are measured from that, and nothing else.
+if (base) {
+  let touched = Date.now();
+  for (const t of ["keydown", "pointerdown", "pointermove", "wheel", "scroll", "touchstart"]) addEventListener(t, () => { touched = Date.now(); }, { passive: true, capture: true });
+  setInterval(() => {
+    if (document.visibilityState !== "visible" || !document.hasFocus() || Date.now() - touched > 60000) return;
+    fetch("/api/look", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: base.run, question: base.question }) }).catch(() => {});
+  }, 15000);
+}
 // The page follows the record, but never reloads under the person's hands.
 document.querySelectorAll("[data-setup]").forEach(b => b.addEventListener("click", async () => {
   const act = b.dataset.setup;

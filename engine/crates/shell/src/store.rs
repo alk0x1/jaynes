@@ -21,6 +21,8 @@ create table if not exists runs (run text primary key, setup text not null);
 create table if not exists inbox (id integer primary key, run text not null, input text not null);
 create table if not exists displays (item text primary key, body text not null);
 create table if not exists proofs (id integer primary key, run text not null, question text not null, key text not null, signature text not null, ts integer not null);
+-- a person's presence at a stop (presence.rs): a measure kept beside the record, outside its chain, proving nothing
+create table if not exists looks (id integer primary key, run text not null, question text not null, from_ts integer not null, to_ts integer not null);
 ";
 
 /// Seconds since 1970, as the record keeps time.
@@ -242,6 +244,33 @@ impl Store {
             .execute("insert into proofs (run, question, key, signature, ts) values (?1, ?2, ?3, ?4, ?5)", rusqlite::params![run, question, key, signature, now() as i64])
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    /// A person's presence at an open stop at `at`: it lengthens the stop's last span when that ended at most `gap`
+    /// seconds before, else it starts one `every` seconds long. Kept outside the chain: a measure, not evidence.
+    pub fn put_look(&mut self, run: &str, question: &str, at: u64, every: u64, gap: u64) -> Result<(), String> {
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        let last: Option<(i64, i64)> = tx
+            .query_row("select id, to_ts from looks where run = ?1 and question = ?2 order by id desc limit 1", params![run, question], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match last {
+            Some((id, to)) if to as u64 + gap >= at => {
+                tx.execute("update looks set to_ts = max(to_ts, ?1) where id = ?2", params![at as i64, id]).map_err(|e| e.to_string())?;
+            }
+            _ => {
+                tx.execute("insert into looks (run, question, from_ts, to_ts) values (?1, ?2, ?3, ?4)", params![run, question, at.saturating_sub(every) as i64, at as i64])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Every span of a person's presence recorded for the run's stops, oldest first: (question, from, to).
+    pub fn looks(&self, run: &str) -> Result<Vec<(String, u64, u64)>, String> {
+        let mut q = self.db.prepare("select question, from_ts, to_ts from looks where run = ?1 order by id").map_err(|e| e.to_string())?;
+        let rows = q.query_map([run], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64))).map_err(|e| e.to_string())?;
+        rows.map(|r| r.map_err(|e| e.to_string())).collect()
     }
 
     pub fn inbox_put(&self, run: &str, input: &jaynes_core::Input) -> Result<(), String> {

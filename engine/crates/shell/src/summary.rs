@@ -5,7 +5,8 @@
 //! [`summarize`] is a pure function of the run's entries in the record, each with the time it was recorded. Two
 //! things are never mixed in it: how long the run waited at its stops (the person may have been asleep) and how
 //! long a person gave it. The record holds no time a person spent, only when a question opened and when it was
-//! answered, so the person's time is said as "not measured", never as zero and never as the wait.
+//! answered. A person's time is measured only from their presence on a stop's screen ([`crate::presence`]), while
+//! the stop was open; a stop answered with none recorded is said as "not measured", never as zero, never as the wait.
 
 use crate::store::Store;
 use jaynes_core::event::{Event, Outcome};
@@ -60,8 +61,11 @@ pub struct Person {
     pub sent_back: u32,
     /// What else a person did to the run: halt, resume, continue, raise, correct, undo.
     pub acts: u32,
-    /// Seconds a person spent on the run. None: the record did not measure it.
+    /// Seconds a person was on the screens of the run's stops while they were open, a second counted once. None: no
+    /// presence was recorded.
     pub seconds: Option<u64>,
+    /// Stops a person answered with no presence recorded at them: their time is not in `seconds`.
+    pub unmeasured: u32,
     /// Seconds the run stood at a stop that holds it, until someone answered. Waiting, not attention.
     pub waited: u64,
 }
@@ -75,6 +79,9 @@ pub struct Summary {
     /// The start of the fingerprint of the role's content.
     pub fingerprint: String,
     pub agent: String,
+    /// The engine the run ran on, and the one that proved its role's promises again: this one.
+    pub engine: String,
+    pub prover: String,
     pub risk: &'static str,
     /// How it ended and what it delivered, in a sentence.
     pub outcome: String,
@@ -91,8 +98,8 @@ pub struct Summary {
     pub person: Person,
 }
 
-/// What the run took of people, from its entries with their times.
-pub fn person(events: &[(u64, Event)]) -> Person {
+/// What the run took of people, from its entries with their times and the spans of a person's presence at its stops.
+pub fn person(events: &[(u64, Event)], looks: &[crate::presence::Look]) -> Person {
     let mut p = Person::default();
     // each question: whether it holds the run, whether it is a decision about a step's output (and not a choice
     // among options, where dropping the others sends nothing back), and when it opened
@@ -101,6 +108,7 @@ pub fn person(events: &[(u64, Event)]) -> Person {
     let mut theirs: BTreeSet<&str> = BTreeSet::new();
     let mut back: BTreeSet<&str> = BTreeSet::new();
     let mut stood: Vec<(u64, u64)> = Vec::new();
+    let mut closed: BTreeMap<&str, u64> = BTreeMap::new();
     let end = events.last().map(|(ts, _)| *ts).unwrap_or(0);
     for (ts, e) in events {
         match e {
@@ -113,8 +121,11 @@ pub fn person(events: &[(u64, Event)]) -> Person {
             }
             Event::AnswerRecorded { answer, .. } => {
                 let Some(&(holds, decides, opened)) = asked.get(answer.question.as_str()) else { continue };
-                if answered.insert(&answer.question) && holds {
-                    stood.push((opened, *ts));
+                if answered.insert(&answer.question) {
+                    closed.insert(&answer.question, *ts);
+                    if holds {
+                        stood.push((opened, *ts));
+                    }
                 }
                 if answer.by.person() {
                     theirs.insert(&answer.question);
@@ -130,6 +141,18 @@ pub fn person(events: &[(u64, Event)]) -> Person {
     }
     // a stop nobody answered held the run until its last entry
     stood.extend(asked.iter().filter(|(id, (holds, ..))| *holds && !answered.contains(*id)).map(|(_, &(_, _, opened))| (opened, end)));
+    // presence counts only while its stop was open: from when it opened until it was answered or the run's last entry
+    let seen: Vec<(&str, u64, u64)> = looks
+        .iter()
+        .filter_map(|l| {
+            let &(_, _, opened) = asked.get(l.question.as_str())?;
+            let until = closed.get(l.question.as_str()).copied().unwrap_or(end);
+            let (from, to) = (l.from.max(opened), l.to.min(until));
+            (to > from).then_some((l.question.as_str(), from, to))
+        })
+        .collect();
+    p.unmeasured = theirs.iter().filter(|q| !seen.iter().any(|(s, ..)| s == *q)).count() as u32;
+    p.seconds = (!seen.is_empty()).then(|| union(seen.iter().map(|&(_, from, to)| (from, to)).collect()));
     p.stops = theirs.len() as u32;
     p.sent_back = back.len() as u32;
     p.waited = union(stood);
@@ -152,7 +175,7 @@ fn union(mut spans: Vec<(u64, u64)>) -> u64 {
 
 /// The summary of a finished run, from its entries with their times and the promises proved of its role. A run not
 /// yet finished has none.
-pub fn summarize(events: &[(u64, Event)], promises: Promises) -> Result<Summary, String> {
+pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promises: Promises) -> Result<Summary, String> {
     let r = Run::fold(events.iter().map(|(_, e)| e)).ok_or("the run has no entry in the record")?;
     let Phase::Finished { outcome } = &r.phase else {
         return Err(format!("run {} is not finished: a summary tells what a finished run did", r.id));
@@ -206,6 +229,8 @@ pub fn summarize(events: &[(u64, Event)], promises: Promises) -> Result<Summary,
         version: r.manifest.version.clone(),
         fingerprint: r.role_fingerprint.short().to_string(),
         agent: r.agent.clone(),
+        engine: r.engine.clone(),
+        prover: jaynes_core::ENGINE.to_string(),
         risk: r.risk.word(),
         outcome: delivery_line(*outcome, reference, r.undone),
         started: events.first().map(|(ts, _)| *ts).unwrap_or(0),
@@ -218,7 +243,7 @@ pub fn summarize(events: &[(u64, Event)], promises: Promises) -> Result<Summary,
         tokens: r.spent.tokens,
         spent: r.counts.spent,
         fixes: r.counts.fixes,
-        person: person(events),
+        person: person(events, looks),
     })
 }
 
@@ -271,15 +296,20 @@ impl Summary {
     pub fn markdown(&self) -> String {
         let plural = |n: u32, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
         // a command agent is a line of shell, with the paths of the machine it ran on
-        let agent = if self.agent.starts_with("command:") { "a shell command".to_string() } else { format!("`{}`", self.agent) };
+        let agent = match self.agent.as_str() {
+            "" => "not recorded".to_string(),
+            a if a.starts_with("command:") => "a shell command".to_string(),
+            a => format!("`{a}`"),
+        };
         let mut out = format!(
-            "## Jaynes run summary\n\n**Request:** {}\n\n- Run `{}`: role {} {} (fingerprint {}), agent {agent}, {} risk\n- Outcome: {}\n- Started {}, finished {} later\n\n### Steps\n\n",
+            "## Jaynes run summary\n\n**Request:** {}\n\n- Run `{}`: role {} {} (fingerprint {}), agent {agent}, {} risk, engine {}\n- Outcome: {}\n- Started {}, finished {} later\n\n### Steps\n\n",
             one_line(&self.request),
             self.run,
             self.role,
             self.version,
             self.fingerprint,
             self.risk,
+            self.engine,
             self.outcome,
             utc(self.started),
             span(self.ended.saturating_sub(self.started)),
@@ -319,13 +349,18 @@ impl Summary {
             Promises::Proving => out.push_str("\n### Promises of the role\n\n- Being proved again now: open the summary again in a moment.\n"),
             Promises::Unread => out.push_str("\n### Promises of the role\n\n- Not read again: the run's copy of the role is gone.\n"),
         }
+        // a proof stands for the rules of the engine that made it: say so when the run ran on others
+        if matches!(&self.promises, Promises::Told(all) if !all.is_empty()) && self.prover != self.engine {
+            out.push_str(&format!("- Proved again by engine {}, not by the engine this run ran on ({}): its rules may differ.\n", self.prover, self.engine));
+        }
         let p = &self.person;
         let mut people = if p.stops == 0 {
             "no stop answered by a person.".to_string()
         } else {
-            let time = match p.seconds {
-                Some(s) => span(s),
-                None => "not measured".to_string(),
+            let time = match (p.seconds, p.unmeasured) {
+                (None, _) => "not measured".to_string(),
+                (Some(s), 0) => span(s),
+                (Some(s), n) => format!("{} at least ({} answered with no time measured)", span(s), plural(n, "stop")),
             };
             format!("{} answered by a person, {} sent back. Their time on Jaynes's screens: {time}.", plural(p.stops, "stop"), p.sent_back)
         };
@@ -456,7 +491,8 @@ pub fn read(home: &Path, run: &str, wait: bool) -> Result<Summary, String> {
         return Err(format!("there is no run {run}"));
     }
     // told first, so a run not finished is refused before its role's promises are proved
-    let told = summarize(&events, Promises::Unread)?;
+    let looks = crate::presence::looks(home, run)?;
+    let told = summarize(&events, &looks, Promises::Unread)?;
     Ok(Summary { promises: promises(home, run, wait), ..told })
 }
 
@@ -551,13 +587,13 @@ mod tests {
     #[test]
     fn a_finished_run_reads_as_its_role_its_steps_with_their_checks_its_delivery_and_its_cost() {
         let promises = vec![Promised { says: "Nothing is delivered before the hidden cases pass".into(), proved: true }];
-        let told = summarize(&whole(), Promises::Told(promises)).expect("summary").markdown();
+        let told = summarize(&whole(), &[], Promises::Told(promises)).expect("summary").markdown();
         let expected = "\
 ## Jaynes run summary
 
 **Request:** Make the login redirect keep the page the person came from
 
-- Run `r1`: role fix-bug 3 (fingerprint 6ab163606a8e), agent `claude:some-model`, low risk
+- Run `r1`: role fix-bug 3 (fingerprint 6ab163606a8e), agent `claude:some-model`, low risk, engine ENGINE
 - Outcome: delivered as jaynes/r1 at 87b9b5dc3549
 - Started 2026-11-15 16:26 UTC, finished 11 h 14 min later
 
@@ -577,14 +613,21 @@ mod tests {
 - People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.
 - The run stood 11 h 0 min at its stops, waiting for an answer. That is waiting, not anyone's attention.
 ";
-        assert_eq!(told, expected);
+        assert_eq!(told, expected.replace("ENGINE", jaynes_core::ENGINE));
+        // proved by another engine than the run's: said under the promises; and an agent never recorded is said so
+        let mut s = summarize(&whole(), &[], Promises::Told(vec![Promised { says: "x".into(), proved: true }])).expect("summary");
+        s.engine = "0.1.0+older".into();
+        s.agent = String::new();
+        let told = s.markdown();
+        assert!(told.contains(&format!("- x\n- Proved again by engine {}, not by the engine this run ran on (0.1.0+older): its rules may differ.\n", jaynes_core::ENGINE)), "{told}");
+        assert!(told.contains("agent not recorded, low risk, engine 0.1.0+older\n"), "{told}");
     }
 
     #[test]
     fn the_wait_at_a_stop_is_never_the_person_s_time_and_what_was_not_measured_is_not_zero() {
-        let p = person(&whole());
-        assert_eq!(p, Person { stops: 1, sent_back: 0, acts: 0, seconds: None, waited: 39_600 });
-        let told = summarize(&whole(), Promises::Unread).expect("summary").markdown();
+        let p = person(&whole(), &[]);
+        assert_eq!(p, Person { stops: 1, sent_back: 0, acts: 0, seconds: None, unmeasured: 1, waited: 39_600 });
+        let told = summarize(&whole(), &[], Promises::Unread).expect("summary").markdown();
         let people = told.lines().find(|l| l.starts_with("- People:")).expect("the people's line");
         assert!(people.contains("not measured") && !people.contains("min") && !people.contains(" h "), "{people}");
     }
@@ -606,15 +649,45 @@ mod tests {
             // the last one is never answered: the run stood there until it ended
             (400, finished(Outcome::Abandoned)),
         ]);
-        assert_eq!(person(&e), Person { stops: 1, sent_back: 1, acts: 1, seconds: None, waited: 300 });
+        assert_eq!(person(&e, &[]), Person { stops: 1, sent_back: 1, acts: 1, seconds: None, unmeasured: 1, waited: 300 });
+    }
+
+    fn seen(question: &str, from: u64, to: u64) -> crate::presence::Look {
+        crate::presence::Look { run: "r1".into(), question: question.into(), from, to }
+    }
+
+    #[test]
+    fn the_person_s_time_is_their_presence_at_open_stops_counted_once_and_a_stop_without_it_is_not_measured() {
+        let mut e = started(0);
+        e.extend([
+            (100, Event::QuestionOpened { question: question("q1", "plan", true) }),
+            (100, Event::QuestionOpened { question: question("q2", "plan", true) }),
+            (1_000, answer("q1", By::Person, Verdict::Keep)),
+            (2_000, answer("q2", By::Person, Verdict::Keep)),
+            (2_100, finished(Outcome::Delivered)),
+        ]);
+        // q1: two spans, one starting before the stop opened and one going on after it was answered, both cut to
+        // the time it was open; q2: a span that overlaps q1's, and the person counted once for the overlap
+        let looks = vec![seen("q1", 90, 160), seen("q1", 950, 1_020), seen("q2", 130, 200)];
+        let p = person(&e, &looks);
+        assert_eq!((p.stops, p.seconds, p.unmeasured), (2, Some(150), 0));
+        // no span for q2: its time is not measured, and the total says it is at least that
+        let p = person(&e, &looks[..2]);
+        assert_eq!((p.seconds, p.unmeasured), (Some(110), 1));
+        let told = summarize(&e, &looks[..2], Promises::Told(vec![])).expect("summary").markdown();
+        assert!(told.contains("- People: 2 stops answered by a person, 0 sent back. Their time on Jaynes's screens: 1 min at least (1 stop answered with no time measured).\n"), "{told}");
+        let told = summarize(&e, &looks, Promises::Told(vec![])).expect("summary").markdown();
+        assert!(told.contains("Their time on Jaynes's screens: 2 min.\n"), "{told}");
+        // waiting and attention are never added together
+        assert!(told.contains("- The run stood 31 min at its stops, waiting for an answer."), "{told}");
     }
 
     #[test]
     fn a_run_that_is_not_finished_has_no_summary() {
         let mut e = whole();
         e.pop();
-        assert_eq!(summarize(&e, Promises::Unread), Err("run r1 is not finished: a summary tells what a finished run did".to_string()));
-        assert_eq!(summarize(&[], Promises::Unread), Err("the run has no entry in the record".to_string()));
+        assert_eq!(summarize(&e, &[], Promises::Unread), Err("run r1 is not finished: a summary tells what a finished run did".to_string()));
+        assert_eq!(summarize(&[], &[], Promises::Unread), Err("the run has no entry in the record".to_string()));
     }
 
     #[test]
@@ -627,17 +700,17 @@ mod tests {
             (20, Event::QuestionOpened { question: question("q1-plan", "plan", true) }),
             (80, finished(Outcome::Abandoned)),
         ]);
-        let told = summarize(&e, Promises::Unread).expect("summary").markdown();
+        let told = summarize(&e, &[], Promises::Unread).expect("summary").markdown();
         assert!(told.contains("- Outcome: abandoned, nothing delivered\n"), "{told}");
         assert!(told.contains("1. **plan** (agent): done, 1 attempt. 1 question left unanswered.\n2. **change** (agent): not done.\n"), "{told}");
         assert!(told.contains("### Promises of the role\n\n- Not read again: the run's copy of the role is gone.\n"), "{told}");
         assert!(told.contains("- People: no stop answered by a person.\n"), "{told}");
-        let none = summarize(&e, Promises::Told(vec![])).expect("summary").markdown();
+        let none = summarize(&e, &[], Promises::Told(vec![])).expect("summary").markdown();
         assert!(none.contains("### Promises of the role\n\n- The role makes none.\n"), "{none}");
-        let proving = summarize(&e, Promises::Proving).expect("summary").markdown();
+        let proving = summarize(&e, &[], Promises::Proving).expect("summary").markdown();
         assert!(proving.contains("### Promises of the role\n\n- Being proved again now: open the summary again in a moment.\n"), "{proving}");
         let broken = vec![Promised { says: "Nothing is merged before the tests pass".into(), proved: false }];
-        let unproved = summarize(&e, Promises::Told(broken)).expect("summary").markdown();
+        let unproved = summarize(&e, &[], Promises::Told(broken)).expect("summary").markdown();
         assert!(unproved.contains("### Promises of the role\n\n- Nothing is merged before the tests pass: NOT proved\n"), "{unproved}");
     }
 }
