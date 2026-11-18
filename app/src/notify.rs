@@ -6,6 +6,10 @@ use crate::news::News;
 
 /// Posts each piece of news, unless the person is looking at the app.
 pub fn post(news: &[News], looking: bool) {
+    // turned off in Settings
+    if !crate::prefs::get().notifications {
+        return;
+    }
     if let Some(file) = std::env::var_os("JAYNES_APP_TEST_NOTES") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {

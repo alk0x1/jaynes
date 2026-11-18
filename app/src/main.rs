@@ -30,6 +30,7 @@ mod model;
 mod menubar;
 mod news;
 mod notify;
+mod prefs;
 mod presence;
 mod rail;
 mod settings;
@@ -675,7 +676,7 @@ impl Root {
         let back = self.tabs.read(cx).agent.clone();
         let space = back.as_ref().and_then(|(open, _)| self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|a| a.address == *open)).cloned());
         let kept = self.changes.read(cx).shown.clone();
-        let argv = editor_argv(&path, line);
+        let argv = editor_argv(&path, line, &prefs::get().editor);
         let title = path.rsplit('/').next().unwrap_or(&path).to_owned();
         let (core, display) = (self.core.clone(), terminal::initial_display(window));
         cx.spawn(async move |this, cx| {
@@ -1180,10 +1181,13 @@ enum Answer {
 
 /// The command that opens the person's editor on a file at a line: their login shell reads their settings, picks
 /// $VISUAL, else $EDITOR, else vi, and the editor replaces it (helix takes the line as file:line, the others as +line).
-fn editor_argv(path: &str, line: u32) -> Vec<String> {
+fn editor_argv(path: &str, line: u32, editor: &str) -> Vec<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let file = format!("'{}'", path.replace('\'', "'\\''"));
-    let script = format!("e=\"${{VISUAL:-${{EDITOR:-vi}}}}\"; case \"${{e%% *}}\" in *hx|*helix) exec $e {file}:{line} ;; *) exec $e +{line} {file} ;; esac");
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let file = quote(path);
+    // the one picked in Settings, else the one the person set for their shell
+    let e = if editor.trim().is_empty() { "\"${VISUAL:-${EDITOR:-vi}}\"".to_owned() } else { quote(editor.trim()) };
+    let script = format!("e={e}; case \"${{e%% *}}\" in *hx|*helix) exec $e {file}:{line} ;; *) exec $e +{line} {file} ;; esac");
     vec![shell, "-lic".into(), script]
 }
 
@@ -1338,6 +1342,7 @@ fn main() {
         })
         .detach();
         notify::listen();
+        prefs::start();
         open(core.clone(), cx);
         // A test that draws the window into a picture leaves the person's keyboard where it is.
         if std::env::var_os("JAYNES_APP_SHOT").is_none() {
@@ -1519,12 +1524,16 @@ mod tests {
 
     #[test]
     fn the_editor_opens_at_the_line_through_the_login_shell() {
-        let argv = editor_argv("app/src/it's.rs", 218);
+        let argv = editor_argv("app/src/it's.rs", 218, "");
         assert_eq!(argv[1], "-lic");
         let out = std::process::Command::new("sh").arg("-c").arg(argv[2].replace("exec $e", "echo $e")).env("VISUAL", "nvim").output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "nvim +218 app/src/it's.rs");
         let out = std::process::Command::new("sh").arg("-c").arg(argv[2].replace("exec $e", "echo $e")).env("VISUAL", "hx").output().unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hx app/src/it's.rs:218");
+        // the editor picked in Settings comes before the shell's
+        let argv = editor_argv("a.rs", 3, "hx");
+        let out = std::process::Command::new("sh").arg("-c").arg(argv[2].replace("exec $e", "echo $e")).env("VISUAL", "nvim").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hx a.rs:3");
     }
 
     #[test]

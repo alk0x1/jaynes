@@ -190,11 +190,11 @@ pub fn new_agent_folder(space: &Space, open: &str) -> Option<String> {
     cwd.into_iter().chain([space.folder.clone()]).find(|f| !f.is_empty() && std::path::Path::new(f).is_dir())
 }
 
-/// Starts Claude Code in a folder, in a tab of its own at the end of the space, so Herdr shows it too; its address.
+/// Starts the new agent (Claude Code, unless Settings name another) in a folder, in a tab of its own at the end of the space, so Herdr shows it too; its address.
 /// The document is written only if no one wrote it since it was read, else read again: Herdr writes it too. Without
 /// the tab, the agent still shows in the space here, by its labels.
 pub fn start_in(core: &hc::Core, space: &Space, folder: Option<String>, display: Value) -> Result<String, String> {
-    run_in(core, space, vec!["claude".into()], folder, display).map_err(|e| format!("cannot start Claude Code: {e}"))
+    run_in(core, space, crate::prefs::new_agent_argv(&crate::prefs::get().new_agent), folder, display).map_err(|e| format!("cannot start the new agent: {e}"))
 }
 
 /// Runs a program in a new tab of a space, in a folder: labelled with the space and the tab, and the tab added to
