@@ -393,6 +393,7 @@ fn a_script_that_fails_is_the_role_s_fault_spends_nothing_and_is_not_tried_again
         // the output is read as data: a plain file of the script's own, never a link to another, and not without end
         ("linked", "ln -s /etc/hosts \"$JAYNES_OUTPUT\"\n".to_string(), "blocked (Role)", "is a link"),
         ("endless", "head -c 1100000 /dev/zero > \"$JAYNES_OUTPUT\"\n".to_string(), "blocked (Role)", "larger than 1000000 bytes"),
+        ("twinned", "printf '{}' > \"$TMPDIR/twin\" && ln \"$TMPDIR/twin\" \"$JAYNES_OUTPUT\"\n".to_string(), "blocked (Role)", "not a plain file of its own"),
         // it could not run, and says so: the machine's to fix, as a check that cannot judge is
         ("cannot-run", "echo 'python3 is not installed'\nexit 3\n".to_string(), "blocked (Jaynes)", "python3 is not installed"),
     ] {
@@ -463,6 +464,10 @@ fn a_script_that_cannot_be_undone_and_fails_says_whether_it_may_have_acted() {
         assert!(out.contains("blocked (Role)") && out.contains("cannot be undone") && out.contains("may have acted"), "{name}: {out}");
         assert_eq!(started(&events(&s, name)), ["act"], "{name}: what may have acted is not run again by itself");
     }
+    // its script ran to the end, and only then Jaynes found it wrote what it may not: it may have acted all the same
+    let strayed = one_script(&s, "strayed", &format!("reach = {{ project = \"write\", write = [\"notes/**\"] }}\n{keys}"), &format!("echo b > README.md\n{DONE}\n"));
+    let out = start(&s, "strayed", &strayed, "act");
+    assert!(out.contains("blocked (Role)") && out.contains("README.md") && out.contains("may have acted"), "{out}");
 }
 
 #[test]

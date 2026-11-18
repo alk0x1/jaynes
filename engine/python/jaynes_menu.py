@@ -15,7 +15,8 @@ standard output, 3 when it cannot judge.
 A step the menu lacks is a script of the role too (``use: "script"``, kind ``step``): it runs in the box with the
 reach its step declares, reads ``{"request", "given", "project", "round", "attempt", "key"}`` on standard input,
 writes its output as JSON to the file named in ``JAYNES_OUTPUT``, and exits 0 when done, 1 when the step cannot be
-done (with why, on standard output), 3 when it could not run.
+done (with why, on standard output), 3 when it could not run. What it prints is read to tell when the box refused
+what it tried, so a script says what happened in its own words and does not print what the project holds.
 """
 
 from __future__ import annotations

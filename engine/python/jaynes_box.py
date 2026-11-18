@@ -400,6 +400,14 @@ class Ran:
     printed: str = ""  # all of it
 
 
+def _kill(proc: "subprocess.Popen[bytes]") -> None:
+    """Stop a command that ran out of time, with everything it started. One that ended just now has no group left."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
     """What a project's own commands run with in ``work``: caches in ``scratch``, package managers offline, and
     the copy's code and virtualenv first."""
@@ -436,7 +444,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
             out, _ = proc.communicate(None if stdin is None else stdin.encode(), timeout=timeout)
             code = proc.returncode
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            _kill(proc)
             out, _ = proc.communicate()
             out += f"\n(stopped after {timeout:.0f} s)".encode()
             code = 124
@@ -457,8 +465,9 @@ class Stepped:
 
 
 def _output(path: Path) -> tuple[str | None, str]:
-    """What a script left at ``path``, read as data: a plain file and never a link, of at most ``OUTPUT_MOST``
-    bytes. The text, or None and why it was not read (empty when there is nothing there)."""
+    """What a script left at ``path``, read as data: a plain file of its own, never a link to another (by name or
+    by a second name for the same file), of at most ``OUTPUT_MOST`` bytes. The text, or None and why it was not
+    read (empty when there is nothing there)."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -466,8 +475,9 @@ def _output(path: Path) -> tuple[str | None, str]:
     except OSError:
         return None, "what is at JAYNES_OUTPUT is a link or cannot be opened, and the output is a plain file"
     with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            return None, "what is at JAYNES_OUTPUT is not a plain file"
+        found = os.fstat(f.fileno())
+        if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
+            return None, "what is at JAYNES_OUTPUT is not a plain file of its own"
         data = f.read(OUTPUT_MOST + 1)
     if len(data) > OUTPUT_MOST:
         return None, f"the output is larger than {OUTPUT_MOST} bytes"
@@ -511,7 +521,7 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
             said, _ = proc.communicate(None if stdin is None else stdin.encode(), timeout=timeout)
             code = proc.returncode
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            _kill(proc)
             said, _ = proc.communicate()
             said += f"\n(stopped after {timeout:.0f} s)".encode()
             code = 124

@@ -42,6 +42,8 @@
 //! declares, and exits 0 when done, 1 when the step cannot be done (with why, printed), 3 when it could not run. A
 //! script that fails is the role's fault, never an agent's: no attempt is spent and nothing is tried again by
 //! itself; the run stops and calls the person, who continues it. Exit 3 and a box that refuses are the machine's.
+//! What a script prints is read to tell when the box refused what it tried, so it says what happened in its own
+//! words and does not print what the project holds.
 //!
 //! # What a step does to the world
 //!
