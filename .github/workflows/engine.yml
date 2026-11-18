@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   test:
-    # the engine runs on macOS first: its tests use the macOS sandbox, sed -i '' and script
+    # the engine on macOS, with the proved model in Lean
     runs-on: macos-latest
     defaults:
       run:
@@ -59,3 +59,36 @@ jobs:
         run: |
           JAYNES_MODEL_RECORD=$(ls -d "${TMPDIR:-/tmp}"/jaynes-e2e-*/home/record.sqlite3 | tr '\n' ':') \
             cargo test --locked -p jaynes-core --test guarantees the_lean_model -- --nocapture
+
+  linux:
+    # the engine on Linux, where the box is the kernel's Landlock and a seccomp filter; the hosted runner is the
+    # one Linux these tests run on, so its kernel, and which way the box holds Unix sockets on it, are printed
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: engine-linux-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
+      - name: The machine
+        run: |
+          uname -srm
+          echo "unprivileged user namespaces restricted by AppArmor: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo unknown)"
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo build --locked -p jaynes-shell
+      - name: The box on this kernel
+        run: target/debug/jaynes box --check
+      - run: cargo test --locked
+      # a process 1 that collects nobody, as in a container run without --init: an agent that ended and waits to be
+      # collected must not count as running
+      - name: The shell's own tests in a container without init
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src/engine -e CARGO_TARGET_DIR=/tmp/target rust:1-bookworm cargo test --locked -p jaynes-shell --lib
