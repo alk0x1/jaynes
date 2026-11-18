@@ -337,6 +337,11 @@ fn standing(port: u16, key: &str) -> Standing {
     }
 }
 
+/// Whether the page at `port` is this engine's: it proves on its addresses that it holds `key`.
+pub fn page_is_ours(port: u16, key: &str) -> bool {
+    matches!(standing(port, key), Standing::Ours)
+}
+
 /// The page at `port`, started with `exe` when it is not running, and its link opened with `open` only once the
 /// page answers as itself on both of its addresses: the address, or why the link was not opened.
 pub fn ensure_page_on(home: &Path, port: u16, exe: &Path, open: bool) -> Result<String, String> {

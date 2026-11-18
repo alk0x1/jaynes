@@ -58,6 +58,14 @@ fn git_on(git_dir: &Path, work: &Path, args: &[&str]) -> Result<String, String> 
     run(c, args)
 }
 
+/// What runs left in the person's repository: its `jaynes/*` branches and `refs/jaynes/*`, as full ref names. Read
+/// only, for `jaynes uninstall` to say what stays.
+pub fn left_by_runs(source: &Path) -> Vec<String> {
+    git(source, &["for-each-ref", "--format=%(refname)", "refs/heads/jaynes/", "refs/jaynes/"])
+        .map(|out| out.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// What a step changed between two of the copy's states, as git shows it, through the engine's repository.
 pub fn diff(copy: &Path, from: &str, to: &str) -> Option<String> {
     git_on(&git_dir(copy), copy, &["diff", "--no-color", "--no-ext-diff", "--no-textconv", from, to]).ok().map(|d| d + "\n")

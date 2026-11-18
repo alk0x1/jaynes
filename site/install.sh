@@ -36,6 +36,21 @@ fi
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
+# --- installed note: begin
+# What this installer put there that may be someone else's too: herdr-core, with the fingerprint it had, so that
+# `jaynes uninstall` removes it only while it is the one Jaynes installed (Herdr may update it, or the person may
+# install their own). One note a file, in the engine's folder beside the record: installed/herdr-core.json.
+note_herdr() {
+  case "$1" in *"
+"*) say "herdr-core's path has a line break; no note is kept, so jaynes uninstall will leave it"; return 0 ;; esac
+  notes=${JAYNES_ENGINE_HOME:-$HOME/.jaynes/engine}/installed
+  mkdir -p "$notes"
+  path=$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  printf '{"path": "%s", "sha256": "%s"}\n' "$path" "$(sha256 "$1")" > "$notes/herdr-core.json.new"
+  mv -f "$notes/herdr-core.json.new" "$notes/herdr-core.json"
+}
+# --- installed note: end
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -67,8 +82,11 @@ mv "$tmp/Jaynes.app" "$apps/Jaynes.app"
 
 # herdr-core: installed only when there is none; one already there (yours, or Herdr's) is left alone
 if [ ! -e "$bin/herdr-core" ] && ! command -v herdr-core >/dev/null 2>&1; then
-  curl -fsSL https://releases.herdr.dev/core/install.sh | HC_INSTALL_DIR="$bin" sh ||
+  if curl -fsSL https://releases.herdr.dev/core/install.sh | HC_INSTALL_DIR="$bin" sh && [ -f "$bin/herdr-core" ]; then
+    note_herdr "$bin/herdr-core"
+  else
     say "herdr-core did not install; install it from https://github.com/herdrdev/herdr-core before opening the app."
+  fi
 fi
 
 # the plugin, through Claude Code's own commands

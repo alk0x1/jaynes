@@ -20,6 +20,7 @@ pub mod store;
 pub mod summary;
 pub mod toml_role;
 pub mod understand;
+pub mod uninstall;
 
 /// Where the engine keeps its record, roles and runs: JAYNES_ENGINE_HOME, else ~/.jaynes/engine.
 pub fn home() -> std::path::PathBuf {

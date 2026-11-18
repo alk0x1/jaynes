@@ -33,6 +33,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   index check DIR [--write]   check an index: every role's content and promises, proved again
   guide                   how an agent carries out a change through Jaynes
   update                  install the newest Jaynes and update roles installed from git
+  uninstall [--yes] [--keep-data|--delete-data]   remove what the installer put here, after showing it; says what stays in your repositories
   mcp                     the server agents in Claude Code use (the plugin starts it)
   conformance DIR         check a role against the protocol
   new NAME [DIR]          write a starting role.toml, with the menu in its comments
@@ -55,6 +56,49 @@ fn library() -> PathBuf {
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// `jaynes uninstall [--yes] [--keep-data | --delete-data]`: show what goes and what stays, then remove it on a yes.
+fn uninstall(rest: &[String]) -> Result<(), String> {
+    let at = jaynes_shell::uninstall::Places::from_env()?;
+    let plan = jaynes_shell::uninstall::plan(&at);
+    for line in jaynes_shell::uninstall::describe(&plan) {
+        println!("{line}");
+    }
+    if !plan.blockers.is_empty() {
+        for b in &plan.blockers {
+            println!("{b}");
+        }
+        return Err("Nothing was removed.".into());
+    }
+    let has = |f: &str| rest.iter().any(|a| a == f);
+    let tty = std::io::stdin().is_terminal();
+    let ask = |question: &str| -> bool {
+        print!("{question} [y/N] ");
+        let _shown = std::io::Write::flush(&mut std::io::stdout());
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+    };
+    if !has("--yes") && !(tty && ask("Remove all of this?")) {
+        return Err(if tty { "Nothing was removed.".into() } else { "Nothing was removed: run jaynes uninstall --yes to remove it, or answer at a terminal.".into() });
+    }
+    let delete_data = if has("--delete-data") {
+        true
+    } else if has("--keep-data") || plan.data.is_empty() || !tty || has("--yes") {
+        false
+    } else {
+        ask("Also delete the data folder, with the record of every run?")
+    };
+    for line in jaynes_shell::uninstall::apply(&plan, delete_data) {
+        println!("{line}");
+    }
+    if !delete_data && !plan.data.is_empty() {
+        println!("The data folder was kept; jaynes uninstall --yes --delete-data, or deleting it yourself, removes it.");
+    }
+    for line in jaynes_shell::uninstall::after(&plan) {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 fn store() -> Result<Store, String> {
@@ -339,6 +383,7 @@ fn run(args: &[String]) -> Result<(), String> {
             print!("{}", install::GUIDE);
             Ok(())
         }
+        "uninstall" => uninstall(rest),
         "update" => {
             for line in install::update(&home())? {
                 say(&line);
