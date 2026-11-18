@@ -359,8 +359,10 @@ const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 
 /// Everything in `runs` but the way down to `cwd`: the other runs, and in the step's own run every folder and file
 /// that does not hold `cwd`. Claude Code's box lets a hidden folder win over a readable one inside it, so the runs
-/// cannot be hidden whole; they are hidden one by one as they are when the step starts, and a run that begins later
-/// is not among them. Nothing when `cwd` is not under `runs`: then all of `runs` is hidden.
+/// cannot be hidden whole; they are hidden one by one as they are when the step starts. A run that begins later is
+/// not among them: with the engine's home under the person's, as it is by default, `~/` hides it anyway (measured
+/// with a real run); with JAYNES_ENGINE_HOME elsewhere, it stays readable to this step. When `cwd` is not under `runs`,
+/// all of `runs` is hidden.
 fn beside(runs: &Path, cwd: &Path) -> Vec<PathBuf> {
     let (Ok(runs), Ok(cwd)) = (std::fs::canonicalize(runs), std::fs::canonicalize(cwd)) else {
         return vec![runs.to_path_buf()];
