@@ -593,14 +593,41 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
         }
         return Ended::Fault { reason: format!("the Claude Code turn did not complete ({subtype}): {}", said.chars().take(300).collect::<String>()) };
     }
-    let answered = result["modelUsage"]
-        .as_object()
-        .and_then(|m| m.iter().max_by_key(|(_, v)| v["outputTokens"].as_u64().unwrap_or(0)).map(|(k, _)| k.clone()))
-        .unwrap_or_else(|| model.to_string());
-    if !answered.contains(model) {
-        return Ended::Fault { reason: format!("asked for {model} and {answered} answered; this turn does not count") };
+    match answered_by(model, out, &result) {
+        Ok(answered) => Ended::Ran { usage, session, model: answered },
+        Err(other) => Ended::Fault { reason: format!("asked for {model} and {other} answered; this turn does not count") },
     }
-    Ended::Ran { usage, session, model: answered }
+}
+
+/// The model that answered a turn asked of `model`, or the other model that answered some of it.
+///
+/// What counts is the conversation itself: every message of the assistant that is not from inside a tool names its
+/// model, and each must be the one asked for. A tool's own model does not count, such as the small one Claude Code's
+/// web tool reads a page with, however much it wrote. Only when no message names a model does the turn's total per
+/// model decide, and then the model asked for must have written something.
+fn answered_by(model: &str, out: &str, result: &Value) -> Result<String, String> {
+    let mut answered: Option<String> = None;
+    for line in out.lines() {
+        let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
+        if e["type"] != "assistant" || !e["parent_tool_use_id"].is_null() {
+            continue;
+        }
+        // a message Claude Code writes itself, such as an error's text, is no model's
+        let Some(name) = e["message"]["model"].as_str().filter(|n| !n.is_empty() && *n != "<synthetic>") else { continue };
+        if !name.contains(model) {
+            return Err(name.to_string());
+        }
+        answered = Some(name.to_string());
+    }
+    if let Some(name) = answered {
+        return Ok(name);
+    }
+    let Some(used) = result["modelUsage"].as_object() else { return Ok(model.to_string()) };
+    let wrote = |v: &Value| v["outputTokens"].as_u64().unwrap_or(0);
+    match used.iter().find(|(k, v)| k.contains(model) && wrote(v) > 0) {
+        Some((name, _)) => Ok(name.clone()),
+        None => Err(used.iter().max_by_key(|(_, v)| wrote(v)).map(|(k, _)| k.clone()).unwrap_or_else(|| "no model".to_string())),
+    }
 }
 
 #[cfg(test)]
@@ -727,5 +754,70 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// A turn's output: the main conversation's messages, each by the model named, then the result with what
+    /// each model wrote in all.
+    fn turn_of(messages: &[(&str, Option<&str>)], usage: &[(&str, u64)]) -> String {
+        let mut out = String::from("{\"type\":\"system\",\"session_id\":\"abc\"}\n");
+        for (model, inside) in messages {
+            let parent = inside.map(|t| format!("\"{t}\"")).unwrap_or_else(|| "null".to_string());
+            out.push_str(&format!("{{\"type\":\"assistant\",\"message\":{{\"model\":\"{model}\",\"content\":[]}},\"parent_tool_use_id\":{parent}}}\n"));
+        }
+        let used: Vec<String> = usage.iter().map(|(m, n)| format!("\"{m}\":{{\"outputTokens\":{n}}}")).collect();
+        out.push_str(&format!("{{\"type\":\"result\",\"is_error\":false,\"result\":\"done\",\"usage\":{{\"output_tokens\":7}},\"modelUsage\":{{{}}}}}", used.join(",")));
+        out
+    }
+
+    fn ended(out: &str) -> Ended {
+        claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false)
+    }
+
+    #[test]
+    fn a_tool_s_own_model_that_wrote_more_than_the_model_asked_for_does_not_stop_the_turn() {
+        // a step that reads the web: Claude Code's web tool reads each page with a small model of its own, which
+        // wrote more than the model asked for (the numbers of a real turn with seven pages read)
+        let out = turn_of(&[("claude-opus-5-5", None), ("claude-opus-5-5", None)], &[("claude-opus-5-5", 6366), ("claude-haiku-5-5", 10510)]);
+        match ended(&out) {
+            Ended::Ran { model, .. } => assert_eq!(model, "claude-opus-5-5"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_message_from_inside_a_tool_is_not_the_conversation() {
+        let out = turn_of(&[("claude-opus-5-5", None), ("claude-haiku-5-5", Some("toolu_1")), ("claude-opus-5-5", None)], &[("claude-opus-5-5", 10), ("claude-haiku-5-5", 900)]);
+        assert!(matches!(ended(&out), Ended::Ran { .. }), "{:?}", ended(&out));
+    }
+
+    #[test]
+    fn a_conversation_that_changes_model_midway_does_not_count() {
+        // the model asked for wrote the most, and still part of the conversation was another model's
+        let out = turn_of(&[("claude-opus-5-5", None), ("claude-sonnet-5-5", None)], &[("claude-opus-5-5", 5000), ("claude-sonnet-5-5", 40)]);
+        match ended(&out) {
+            Ended::Fault { reason } => assert!(reason.contains("asked for claude-opus-5-5 and claude-sonnet-5-5 answered"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_turn_the_model_asked_for_never_answered_does_not_count() {
+        // the conversation's messages name no model here, so what each model wrote in all decides
+        let out = turn_of(&[], &[("claude-haiku-5-5", 300)]);
+        match ended(&out) {
+            Ended::Fault { reason } => assert!(reason.contains("asked for claude-opus-5-5 and claude-haiku-5-5 answered"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+        let silent = turn_of(&[], &[("claude-opus-5-5", 0), ("claude-haiku-5-5", 300)]);
+        assert!(matches!(ended(&silent), Ended::Fault { .. }), "{:?}", ended(&silent));
+        // and with no message naming a model, the model asked for having written something is enough
+        let helped = turn_of(&[], &[("claude-opus-5-5", 20), ("claude-haiku-5-5", 300)]);
+        assert!(matches!(ended(&helped), Ended::Ran { .. }), "{:?}", ended(&helped));
+    }
+
+    #[test]
+    fn a_message_claude_code_wrote_itself_names_no_model() {
+        let out = turn_of(&[("claude-opus-5-5", None), ("<synthetic>", None)], &[("claude-opus-5-5", 10)]);
+        assert!(matches!(ended(&out), Ended::Ran { .. }), "{:?}", ended(&out));
     }
 }
