@@ -156,7 +156,7 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         // An input that starts work is left to the process carried on here, which recovers first and then takes it:
         // decided here, the attempt it begins would be taken by that process for one Jaynes stopped. The rest is
         // recorded at once.
-        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::Resume { .. }) {
+        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::Resume { .. } | Input::Proved { .. }) {
             store.inbox_put(&run.id, &input)?;
         } else {
             store.decide(&run.id, &input)?;
@@ -1253,6 +1253,7 @@ impl<'a> Driver<'a> {
             project,
             source,
             any_port: self.setup.any_port,
+            unboxed: run.unboxed(),
         });
         let outcome = match reply {
             Err(e) => AttemptOutcome::Fault { reason: e },
@@ -1336,6 +1337,7 @@ impl<'a> Driver<'a> {
                     project: project.clone(),
                     source: source.clone(),
                     any_port: self.setup.any_port,
+                    unboxed: run.unboxed(),
                 }) {
                     Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict },
                     Ok(other) => blocked(name, format!("the role answered a check with {other:?}")),

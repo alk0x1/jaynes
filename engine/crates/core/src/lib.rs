@@ -15,6 +15,7 @@ pub mod event;
 pub mod glob;
 pub mod io;
 pub mod manifest;
+pub mod pairing;
 pub mod promise;
 pub mod proof;
 pub mod question;

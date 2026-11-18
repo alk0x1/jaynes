@@ -1,7 +1,7 @@
 //! The engine end to end, as a person runs it: the real binary, the real small-change role over the protocol, a
 //! real git project, and an agent that is a shell command, so no tokens are spent.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -411,7 +411,8 @@ fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
-        .env_remove("JAYNES_UNBOXED")
+        // the variable that once opened the box opens nothing
+        .env("JAYNES_UNBOXED", "1")
         .output()
         .expect("start");
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
@@ -2809,4 +2810,187 @@ print(json.dumps({{name: b.program_selftest(Path(sys.executable), make=make) for
             assert!(wrong.as_array().is_some_and(|w| !w.is_empty()), "the proof did not notice the profile {case}: {got}");
         }
     }
+}
+
+#[test]
+fn only_the_engine_s_word_lets_a_command_out_of_the_box() {
+    // where no box opens (made so here, on any system), the variable that once opened it opens nothing, and the
+    // engine's word, which it gives only from the person's proof in the record, does
+    let script = r#"
+import os, jaynes_box as b
+from pathlib import Path
+b.available = lambda: False
+b.inside = lambda: False
+os.environ["JAYNES_UNBOXED"] = "1"
+box = b.Box((Path("/tmp"),))
+try:
+    b.command_in_box("true", box)
+    print("opened by the variable")
+except b.Unavailable as e:
+    print("refused:", e)
+print("with the engine's word:", b.command_in_box("true", box, unboxed=True))
+"#;
+    let out = Command::new(python()).args(["-c", script]).env("PYTHONPATH", root().join("python")).output().expect("python");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(said.contains("refused:") && !said.contains("opened by the variable"), "{said}");
+    assert!(said.contains("--unboxed") && said.contains("Jaynes app") && !said.contains("JAYNES_UNBOXED"), "it says how a run leaves its box: {said}");
+    assert!(said.contains("with the engine's word: ['/bin/sh', '-c', 'true']"), "{said}");
+}
+
+/// The person's two device keys, as the Jaynes app's secure chip holds them; here, software keys of a test.
+fn device(seed: u8) -> p256::ecdsa::SigningKey {
+    p256::ecdsa::SigningKey::from_bytes(&[seed; 32].into()).expect("key")
+}
+
+fn public(seed: u8, kind: &str) -> Value {
+    json!({"kind": kind, "public": jaynes_shell::person::hex(device(seed).verifying_key().to_encoded_point(false).as_bytes())})
+}
+
+fn sign(seed: u8, kind: &str, message: &[u8]) -> Value {
+    use p256::ecdsa::signature::Signer;
+    let s: p256::ecdsa::Signature = device(seed).sign(message);
+    json!({"kind": "device", "key": kind, "signature": jaynes_shell::person::hex(s.to_der().as_bytes())})
+}
+
+/// The engine, given `input` on stdin.
+fn engine_in(s: &Scratch, args: &[&str], input: &str) -> (bool, String) {
+    use std::io::Write;
+    let mut child = jaynes()
+        .args(args)
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("engine");
+    child.stdin.take().expect("stdin").write_all(input.as_bytes()).expect("write");
+    let out = child.wait_with_output().expect("engine");
+    (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+/// Pairs the test's device keys with the engine of `s`, as the Jaynes app does once.
+fn pair(s: &Scratch) {
+    let (ok, out) = engine_in(s, &["pair"], &json!({"pairing": "paired", "keys": [public(5, "biometry"), public(6, "presence")], "nonce": "first"}).to_string());
+    assert!(ok, "{out}");
+}
+
+#[test]
+fn the_keys_are_paired_in_the_record_and_only_a_proof_by_them_changes_them() {
+    let s = scratch("pairing");
+    let (ok, out) = engine(&s, &["keys"]);
+    assert!(ok && out.trim() == "[]", "{out}");
+    pair(&s);
+    // another program pairs its own key: refused, the keys stay
+    let theirs = json!([public(9, "presence")]);
+    let (ok, out) = engine_in(&s, &["pair"], &json!({"pairing": "paired", "keys": theirs, "nonce": "x"}).to_string());
+    assert!(!ok && out.contains("takes a proof"), "{out}");
+    let (ok, out) = engine_in(&s, &["pair"], &json!({"pairing": "unpaired", "nonce": "y", "proof": sign(9, "presence", b"anything")}).to_string());
+    assert!(!ok, "{out}");
+    let (_, out) = engine(&s, &["keys"]);
+    assert!(out.contains(public(6, "presence")["public"].as_str().expect("hex")), "{out}");
+    // unpairing with a proof by the device key paired now
+    let now: Vec<jaynes_core::proof::PersonKey> = serde_json::from_value(json!([public(5, "biometry"), public(6, "presence")])).expect("keys");
+    let m = jaynes_core::pairing::message(&now, "z", None);
+    let (ok, out) = engine_in(&s, &["pair"], &json!({"pairing": "unpaired", "nonce": "z", "proof": sign(6, "presence", &m)}).to_string());
+    assert!(ok, "{out}");
+    let (_, out) = engine(&s, &["keys"]);
+    assert_eq!(out.trim(), "[]");
+    let (ok, out) = engine(&s, &["verify"]);
+    assert!(ok, "{out}");
+}
+
+/// A role whose one step's check writes `escaped`, outside every box.
+fn escaping_role(base: &Path, escaped: &Path) -> PathBuf {
+    let role = base.join("outside");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "outside"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Do {{request}}."
+checks = [{ script = "checks/out.sh", about = "it writes outside the box" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+"#).expect("write");
+    std::fs::write(role.join("checks/out.sh"), format!("touch {} || true\nexit 0\n", escaped.display())).expect("write");
+    role
+}
+
+fn wait_finished(s: &Scratch, run: &str) -> Vec<String> {
+    for _ in 0..300 {
+        let t = types(&events(s, run));
+        if t.iter().any(|t| t == "RunFinished") {
+            return t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    types(&events(s, run))
+}
+
+/// G18 on macOS: a run that did not ask to leave its box runs its commands in it, a device paired or not. The role's
+/// check tries to write outside every box and cannot.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet")]
+fn an_ordinary_run_stays_in_its_box_with_a_device_paired_or_not() {
+    let s = scratch("boxed");
+    let escaped = s.base.join("escaped");
+    let role = escaping_role(&s.base, &escaped);
+    let agent = r#"printf '{"summary":"nothing"}' > .jaynes/output.json"#;
+    for (paired, run) in [(false, "plain"), (true, "paired")] {
+        if paired {
+            pair(&s);
+        }
+        let (ok, out) = engine(&s, &["start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                     "--request", "nothing", "--agent", &format!("command:{agent}")]);
+        assert!(ok, "{out}");
+        let t = wait_finished(&s, run);
+        assert!(t.contains(&"RunFinished".to_string()) && t.contains(&"ChecksJudged".to_string()), "the check ran: {t:?}");
+        assert!(!escaped.exists(), "a command of an ordinary run wrote outside its box");
+        let first = &events(&s, run)[0];
+        assert!(first.get("unboxed").is_none(), "{first}");
+        assert_eq!(first.get("person_keys").is_some(), paired, "{first}");
+    }
+}
+
+/// G18 to its end: approved with the app's proof, the run's commands leave the box. A role's own check, a script
+/// that writes outside every box, writes there; the person's word from the terminal does not open it.
+#[test]
+fn a_run_the_person_approved_with_their_proof_runs_its_commands_outside_the_box() {
+    let s = scratch("unboxed-approved");
+    let escaped = s.base.join("escaped");
+    let role = escaping_role(&s.base, &escaped);
+    let agent = r#"printf '{"summary":"nothing"}' > .jaynes/output.json"#;
+    // with no device paired, a run outside its box is refused
+    let (ok, out) = engine(&s, &["start", "--run", "nokey", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "nothing", "--agent", &format!("command:{agent}"), "--unboxed"]);
+    assert!(!ok && out.contains("never runs outside its box"), "{out}");
+    pair(&s);
+    let (ok, out) = engine(&s, &["start", "--run", "out", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "nothing", "--agent", &format!("command:{agent}"), "--unboxed"]);
+    assert!(ok, "{out}");
+    assert!(!escaped.exists(), "nothing ran before the person answered");
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("out").expect("state").expect("run");
+    assert_eq!(run.requires.get("unbox"), Some(&jaynes_core::proof::Requires::Presence));
+    // the person's word from the terminal does not open it
+    let (ok, out) = engine(&s, &["answer", "out", "unbox", "box=keep", "--send"]);
+    assert!(!ok && out.contains("Jaynes app"), "{out}");
+    // the person approves in the app: their answer, signed by the device key over this run and a nonce
+    let q = &run.questions["unbox"].question;
+    let answer = jaynes_core::question::Answer {
+        back: Default::default(), question: "unbox".into(), shown: q.shown(), by: jaynes_core::question::By::Person, context: String::new(),
+        verdicts: [("box".to_string(), jaynes_core::question::Verdict::Keep)].into_iter().collect(),
+    };
+    let input = jaynes_core::Input::Answer { answer };
+    let m = jaynes_core::proof::input_message("out", &run.started, "n1", &input);
+    let (ok, out) = engine_in(&s, &["prove", "out"], &json!({"signed": input, "nonce": "n1", "proof": sign(6, "presence", &m)}).to_string());
+    assert!(ok, "{out}");
+    let t = wait_finished(&s, "out");
+    assert!(t.contains(&"RunFinished".to_string()), "the run went on to its end: {t:?}");
+    assert!(t.contains(&"Proved".to_string()), "{t:?}");
+    assert!(escaped.exists(), "the role's check ran outside the box: {t:?}");
+    let (ok, out) = engine(&s, &["verify"]);
+    assert!(ok, "{out}");
 }

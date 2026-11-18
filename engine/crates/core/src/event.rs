@@ -251,6 +251,11 @@ pub enum Event {
     QuestionSuperseded {
         question: String,
     },
+    /// The person's device keys this engine knows changed (`pairing`): recorded apart from every run, under
+    /// `pairing::RECORD`, and checked again whenever the record is read.
+    KeysChanged {
+        change: crate::pairing::Change,
+    },
     /// The input that follows came with a proof only the person can give, and it held for one of the run's keys. The
     /// input and the proof are kept whole, so reading the record again checks the proof again.
     Proved {
@@ -341,6 +346,7 @@ impl Event {
             Event::QuestionOpened { .. } => "QuestionOpened",
             Event::QuestionSuperseded { .. } => "QuestionSuperseded",
             Event::Proved { .. } => "Proved",
+            Event::KeysChanged { .. } => "KeysChanged",
             Event::AnswerRecorded { .. } => "AnswerRecorded",
             Event::Waiting { .. } => "Waiting",
             Event::Blocked { .. } => "Blocked",

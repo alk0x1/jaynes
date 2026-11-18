@@ -60,11 +60,13 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
     try:
         if call.get("project"):
             ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable,
-                         local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True)
+                         local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
+                         unboxed=call.get("unboxed") is True)
         else:
             with tempfile.TemporaryDirectory(prefix="jaynes-empty-") as empty:
                 ran = box.run(Path(empty), command, timeout=timeout, stdin=stdin, readable=readable,
-                         local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True)
+                         local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
+                         unboxed=call.get("unboxed") is True)
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
@@ -105,7 +107,7 @@ def find_suite(call: Call, params: Params) -> Any:
             return Refused(NO_RUNNER)
         return {"kind": "", "suite": "", "each": "", "found": ""}
     try:
-        why = box.missing(Path(project), found, source=_source(call))
+        why = box.missing(Path(project), found, source=_source(call), unboxed=call.get("unboxed") is True)
     except box.Unavailable as e:
         return Blocked(str(e))
     if why:

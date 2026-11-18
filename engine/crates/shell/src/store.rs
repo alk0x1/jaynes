@@ -316,6 +316,28 @@ impl Store {
         serde_json::from_str(&body).map(Some).map_err(|e| e.to_string())
     }
 
+    /// The person's device keys this engine knows, from the record's chain, every change checked again.
+    pub fn keys(&self) -> Result<jaynes_core::pairing::Keys, String> {
+        Self::keys_in(&self.db)
+    }
+
+    fn keys_in(db: &Connection) -> Result<jaynes_core::pairing::Keys, String> {
+        let changes: Vec<jaynes_core::pairing::Change> = Self::events_in(db, jaynes_core::pairing::RECORD)?
+            .into_iter()
+            .filter_map(|e| if let Event::KeysChanged { change } = e { Some(change) } else { None })
+            .collect();
+        Ok(jaynes_core::pairing::Keys::fold(&changes))
+    }
+
+    /// Records a change of the person's keys, if it holds for the keys paired now: one transaction, so two changes
+    /// cannot both be checked against the same keys.
+    pub fn change_keys(&mut self, change: &jaynes_core::pairing::Change) -> Result<(), String> {
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        Self::keys_in(&tx)?.take(change)?;
+        Self::append_in(&tx, jaynes_core::pairing::RECORD, &[Event::KeysChanged { change: change.clone() }])?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
     #[cfg(test)]
     pub fn tamper(&self, seq: u64, body: &str) {
         let _changed = self.db.execute("update events set body = ?1 where seq = ?2", params![body, seq as i64]);

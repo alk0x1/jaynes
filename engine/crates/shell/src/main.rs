@@ -1,6 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-use jaynes_shell::{home, agent, conformance, drive, export, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
+use jaynes_shell::{home, agent, conformance, drive, export, index, install, mcp, page, permit, person, project, project_prefs, protocol, role, store, summary, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -17,12 +17,14 @@ use store::Store;
 
 const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
-  start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
+  start --role NAME --request TEXT [--unboxed] [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
         [--task ID] [--arm NAME]   in an evaluation: the task's id in your own list and the arm, letters, digits and hyphens
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
+  prove RUN               an input with the Jaynes app's proof, as JSON on stdin (signed, nonce, proof)
+  keys | pair             the device keys of yours this engine knows; pair takes a change of them as JSON on stdin
   raise RUN high|--seconds N|--tokens N
   halt RUN | resume RUN | abandon RUN
   undo RUN [--note TEXT]   revert what a run merged
@@ -130,7 +132,7 @@ fn run(args: &[String]) -> Result<(), String> {
     };
     let rest = &args[1..];
     // A command on a run of another engine is that engine's: this process becomes it.
-    if matches!(cmd, "continue" | "answer" | "raise" | "halt" | "resume" | "abandon" | "undo" | "correct")
+    if matches!(cmd, "continue" | "answer" | "prove" | "raise" | "halt" | "resume" | "abandon" | "undo" | "correct")
         && let Some(id) = rest.first()
         && let Ok(Some(state)) = store().and_then(|s| s.state(id))
         && state.engine != jaynes_core::ENGINE
@@ -249,6 +251,32 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "project" => project_cmd(rest),
         "answer" => answer(rest),
+        "prove" => {
+            // an input with a proof only the person can give, as the Jaynes app sends it: {"signed", "nonce", "proof"}
+            let id = rest.first().ok_or("which run?")?;
+            let mut body = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|e| e.to_string())?;
+            let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?;
+            let input: Input = serde_json::from_value(serde_json::json!({"input": "proved", "signed": v["signed"], "nonce": v["nonce"], "proof": v["proof"]}))
+                .map_err(|e| format!("not a proved input: {e}"))?;
+            send(store()?, id, input)
+        }
+        "keys" => {
+            // the person's device keys this engine knows, from the record
+            let keys = store()?.keys()?.keys;
+            println!("{}", serde_json::to_string_pretty(&keys).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        "pair" => {
+            // a change of the person's keys, as the Jaynes app sends it: the first keys, new ones with a proof by
+            // a key paired now, or unpairing with such a proof
+            let mut body = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|e| e.to_string())?;
+            let change: jaynes_core::pairing::Change = serde_json::from_str(&body).map_err(|e| format!("not a change of keys: {e}"))?;
+            store()?.change_keys(&change)?;
+            say("recorded");
+            Ok(())
+        }
         "raise" | "halt" | "resume" | "abandon" => {
             let id = rest.first().ok_or("which run?")?;
             let s = store()?;
@@ -440,6 +468,8 @@ fn start(args: &[String]) -> Result<(), String> {
     let role_given = flag(args, "--role").ok_or("--role NAME (or a role's folder) is needed")?;
     let role_dir = install::find_role(&home(), &role_given)?.display().to_string();
     let request = flag(args, "--request").ok_or("--request TEXT is needed")?;
+    // G18: run outside the box, only with the person's proof at the start of the run
+    let unboxed = args.iter().any(|a| a == "--unboxed");
     let project = flag(args, "--project").map(|p| std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))).transpose()?;
     // a role that does not fit the project says why before anything of a run exists
     if let Some(p) = &project {
@@ -530,10 +560,11 @@ fn start(args: &[String]) -> Result<(), String> {
     }
     drive::sweep_engines(&home(), &s)?;
     drive::sweep_copies(&home(), &s)?;
+    let person = person::at_start(&s, unboxed)?;
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
-    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm, person: None })?;
+    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm, person })?;
     print_state(&end);
     Ok(())
 }

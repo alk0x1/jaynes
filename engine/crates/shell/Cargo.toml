@@ -23,5 +23,8 @@ schemars.workspace = true
 toml = { version = "0.9", features = ["preserve_order"] }
 ed25519-dalek = "2"
 
+[dev-dependencies]
+p256.workspace = true
+
 [lints]
 workspace = true

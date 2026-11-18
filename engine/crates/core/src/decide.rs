@@ -61,8 +61,9 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             return refuse("a run outside its box needs a proof only you can give, and none can be given here (no device of yours is paired with this engine): the run is refused and never runs outside its box");
         }
         if let Some(p) = person
-            && let Some(k) = p.keys.iter().find(|k| crate::proof::strict_hex(&k.public).is_none()) {
-                return refuse(format!("a paired key of yours is not hex: {}", k.public));
+            && !p.keys.is_empty()
+            && let Err(e) = crate::pairing::check(&p.keys) {
+                return refuse(format!("the keys paired are refused: {e}"));
             }
         if let Err(errors) = manifest.validate() {
             return refuse(format!("the role is refused: {}", errors.join("; ")));
@@ -1764,6 +1765,8 @@ pub fn requires(run: &Run, id: &str, lets_go: bool) -> crate::proof::Requires {
         // G14: acting again, a second act or the same intent repeated; a run with no device of the person's paired
         // keeps taking their word, as before
         QuestionKind::Acted if !lets_go && !run.person_keys.is_empty() => Requires::Presence,
+        // G19, when it is in: merging what runs later outside any box takes the device's proof where one is paired
+        // (QuestionKind::Merge if lets_go && !run.person_keys.is_empty() => Requires::Presence)
         _ => Requires::Word,
     }
 }

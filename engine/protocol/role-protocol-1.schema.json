@@ -808,6 +808,10 @@
             },
             "step": {
               "type": "string"
+            },
+            "unboxed": {
+              "description": "The person approved, with a proof only they can give, that this run's commands leave the box (G18),\nas the record says: the role's box then runs them as they are. Left out when not.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -858,6 +862,10 @@
             },
             "step": {
               "type": "string"
+            },
+            "unboxed": {
+              "description": "The person approved, with a proof only they can give, that this run's commands leave the box (G18),\nas the record says: the role's box then runs them as they are. Left out when not.",
+              "type": "boolean"
             }
           },
           "required": [

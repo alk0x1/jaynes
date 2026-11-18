@@ -74,6 +74,10 @@ pub enum Call {
         /// out when not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         any_port: bool,
+        /// The person approved, with a proof only they can give, that this run's commands leave the box (G18),
+        /// as the record says: the role's box then runs them as they are. Left out when not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unboxed: bool,
     },
     Check {
         step: String,
@@ -88,6 +92,10 @@ pub enum Call {
         /// out when not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         any_port: bool,
+        /// The person approved, with a proof only they can give, that this run's commands leave the box (G18),
+        /// as the record says: the role's box then runs them as they are. Left out when not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unboxed: bool,
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },

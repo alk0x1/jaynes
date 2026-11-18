@@ -46,7 +46,9 @@ macOS changes): a sample program does its work and tries twelve escapes in it, a
 try (lsopen, Apple events, the last denial of secrets) is read in the profile; the macOS, the box (this file's
 sha256) and the interpreter it held with are kept in the engine's home. With another of the three the proof is made
 again first; when it does not hold, no role's program runs, and the refusal says what got through.
-Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
+Elsewhere there is no box yet, and commands refuse to run. A command runs outside the box only in a run the person
+asked to leave its box at the start (``jaynes start --unboxed``) and approved with a proof only they can give (G18):
+the engine says so in the call (``unboxed``), from the record, and no variable, setting, program or agent opens it.
 """
 
 from __future__ import annotations
@@ -629,16 +631,18 @@ def program_box_holds(interpreter: Path) -> None:
                       "program runs: " + "; ".join(proof.get("wrong") or ["no proof"]))
 
 
-def command_in_box(script: str, box: Box) -> list[str]:
-    """The argv that runs the shell ``script`` inside ``box``. Inside another program's sandbox it refuses."""
+def command_in_box(script: str, box: Box, *, unboxed: bool = False) -> list[str]:
+    """The argv that runs the shell ``script`` inside ``box``. ``unboxed``: the engine says the person approved,
+    with their proof, that this run's commands leave the box (G18); nothing else lets a command out. Inside another
+    program's sandbox it refuses."""
+    if unboxed:
+        return ["/bin/sh", "-c", script]
     if inside():
         raise Unavailable(INSIDE)
     if available():
         return [str(SANDBOX_EXEC), "-p", profile(box), "/bin/sh", "-c", script]
-    if os.environ.get("JAYNES_UNBOXED") == "1":
-        return ["/bin/sh", "-c", script]
-    raise Unavailable("Jaynes has no box for project commands on this system yet; set JAYNES_UNBOXED=1 to run "
-                      "them unboxed, with the agent's changes, on your machine")
+    raise Unavailable("Jaynes has no box for project commands on this system yet; a run leaves its box only when "
+                      "you start it with --unboxed and approve that in the Jaynes app")
 
 
 def programs_of(program: Path) -> tuple[Path, ...]:
@@ -865,7 +869,8 @@ def reserve(n: int = RESERVED) -> tuple[int, ...]:
 
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
-        readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False) -> Ran:
+        readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False,
+        unboxed: bool = False) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
     ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
     inside the hidden ones, such as the run's own copy of the role a check's script is in. Its servers bind the ports
@@ -883,7 +888,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         anyone = any_port is True
         box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *readable), reserved=ports, local_ports=declared,
                   any_port=anyone)
-        argv = command_in_box(command, box)
+        argv = command_in_box(command, box, unboxed=unboxed)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
         proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {}), **given},
                                 stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
@@ -995,7 +1000,7 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
 HARMLESS = ("xcrun_db",)
 
 
-def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str | None:
+def missing(project: Path, runner: Runner, *, source: Path | None = None, unboxed: bool = False) -> str | None:
     """Why the project's tests cannot run here at all, before any agent works on them, or None. A machine without
     the test runner is not the agent's to fix: the role refuses at once, with what to install. Raises
     ``Unavailable`` where there is no box: that is the machine's to fix, not the role's."""
@@ -1005,7 +1010,7 @@ def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str
     probe = f"command -v {shlex.quote(program)} >/dev/null || {{ echo 'not found: {program}'; exit 127; }}"
     if runner.kind == "pytest":
         probe += f" && {shlex.quote(program)} -c 'import pytest'"
-    ran = run(project, probe, source=source, timeout=120)
+    ran = run(project, probe, source=source, timeout=120, unboxed=unboxed)
     if ran.code == 0:
         return None
     said = ran.output.strip().splitlines()[-1] if ran.output.strip() else f"exit {ran.code}"

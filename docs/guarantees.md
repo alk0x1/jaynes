@@ -1,10 +1,10 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. G19 added by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. G19 added by the owner on 2026-11-18. G18 approved by the owner on 2026-11-17. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
-G1, G2, G3, G4, G5, G9, G10, G11, G12, G13, G14 (its order, and that the core never does an act again) and G19 (a delivery that holds a merge goes out only with the person's answer about it), and the rule of G17 (when a stop may skip asking), are also
+G1, G2, G3, G4, G5, G9, G10, G11, G12, G13, G14 (its order, and that the core never does an act again) G18 and G19 (a delivery that holds a merge goes out only with the person's answer about it), and the rule of G17 (when a stop may skip asking), are also
 proved, in Lean, for a model of the core's rules that a test compares with the core on every state of 800 random
 runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,000 streams checks it.
 
@@ -83,6 +83,15 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 ## What lands on your branch
 
 - **G19.** A delivery that lands on your branch never brings in, without your answer, a file that other programs run or obey later outside any box: agents' and editors' settings and instructions, git hooks and attributes, CI, new packages or packages from a new source, environment and package scripts, as the engine lists them. The run waits before the merge, names each such file and shows what changes in it; you merge it, or take the change as a branch only. No agent and no rule answers it, and an answer counts only for the files and the changes it was shown.
+
+## Leaving the box
+
+- **G18.** A run leaves its box only when you asked for it when it started and then approved it
+  with a proof only you can give (today, the Jaynes app's signature on your answer). No setting,
+  program, agent or rule opens it, and no earlier answer stands for it. The run waits for that
+  answer before its first command on the project; the answer is in the record as yours, with its
+  signature; where no such proof can be given (no app paired, as on Linux today), the run is
+  refused and never runs outside its box.
 
 ## What this page does not promise
 

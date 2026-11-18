@@ -78,14 +78,18 @@ pub fn input_message(run: &str, started: &Digest, nonce: &str, input: &Input) ->
 pub fn holds(keys: &[PersonKey], message: &[u8], proof: &Proof) -> Result<KeyKind, String> {
     let Proof::Device { key, signature } = proof;
     let paired = keys.iter().find(|k| k.kind == *key).ok_or_else(|| format!("no {} key of yours is paired with this run", word(*key)))?;
-    let public = VerifyingKey::from_sec1_bytes(&strict_hex(&paired.public).ok_or("the paired key is not hex")?)
-        .map_err(|_| "the paired key is not a P-256 key".to_string())?;
+    let public = public(paired)?;
     let der = strict_hex(signature).ok_or("the signature is not hex")?;
     let signature = Signature::from_der(&der).map_err(|_| "the signature is not a DER ECDSA signature".to_string())?;
     // a signature and its mirror (r, n - s) are both valid; the device may give either
     let signature = signature.normalize_s().unwrap_or(signature);
     public.verify(message, &signature).map_err(|_| "the signature does not hold for this input".to_string())?;
     Ok(*key)
+}
+
+/// The P-256 public key a paired key holds.
+pub fn public(k: &PersonKey) -> Result<VerifyingKey, String> {
+    VerifyingKey::from_sec1_bytes(&strict_hex(&k.public).ok_or("the paired key is not hex")?).map_err(|_| "the paired key is not a P-256 key".to_string())
 }
 
 /// The key's kind in words.

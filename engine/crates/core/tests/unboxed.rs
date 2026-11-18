@@ -100,6 +100,7 @@ fn proved(run: &Run, input: Input, nonce: &str, kind: KeyKind, with: &SigningKey
 fn a_run_with_no_device_paired_goes_on_as_before_and_is_written_as_before() {
     let (run, cmds) = start(vec![step("change", Executor::Agent)], None).expect("start");
     assert!(!run.unboxed() && !run.questions.contains_key(UNBOX));
+    assert!(run.requires.is_empty() && serde_json::to_value(&run).expect("json").get("requires").is_none());
     assert!(cmds.iter().any(runs_on_project), "{cmds:?}");
     let out = decide(None, &Input::Start {
         run: "r".into(), request: "x".into(), manifest: manifest(vec![step("change", Executor::Agent)]), role_fingerprint: Digest("f".into()),

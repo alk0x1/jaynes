@@ -94,6 +94,24 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A nonce of 16 bytes from the system's randomness, in hex: what makes a run's start, or a proof, its own.
+pub fn nonce() -> Result<String, String> {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).map_err(|e| format!("no randomness: {e}"))?;
+    Ok(hex(&b))
+}
+
+/// What a start knows of the person: the device keys the record holds, and whether they asked the run to leave its
+/// box. None for a start with no key paired that stays in its box, so such a run is written as before.
+pub fn at_start(store: &Store, unboxed: bool) -> Result<Option<jaynes_core::io::StartPerson>, String> {
+    let keys = store.keys()?.keys;
+    if keys.is_empty() && !unboxed {
+        return Ok(None);
+    }
+    Ok(Some(jaynes_core::io::StartPerson { keys, nonce: nonce()?, unboxed }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

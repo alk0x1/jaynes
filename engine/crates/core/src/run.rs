@@ -48,6 +48,9 @@ pub struct Run {
     pub nonces: std::collections::BTreeSet<String>,
     /// The questions whose answer came with a proof that held, and the kind of key that signed it.
     pub proved_by: BTreeMap<String, crate::proof::KeyKind>,
+    /// What the answer that lets each open question go on must come with, where it is more than the person's word.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub requires: BTreeMap<String, crate::proof::Requires>,
     /// A proof just folded, for the input that comes right after it in the record.
     #[serde(skip)]
     #[schemars(skip)]
@@ -269,6 +272,7 @@ impl Run {
             nonces: Default::default(),
             proved_by: Default::default(),
             last_proved: None,
+            requires: BTreeMap::new(),
             seq: 1,
             merges: BTreeMap::new(),
         })
@@ -286,6 +290,15 @@ impl Run {
     }
 
     pub fn apply(&mut self, e: &Event) {
+        self.fold_one(e);
+        // what each open question's answer must come with, for the page and the app to show (`decide::requires`)
+        self.requires = if self.person_keys.is_empty() { BTreeMap::new() } else {
+            self.open_questions().iter().map(|q| (q.question.id.clone(), crate::decide::requires_to_release(self, &q.question.id)))
+                .filter(|(_, r)| *r != crate::proof::Requires::Word).collect()
+        };
+    }
+
+    fn fold_one(&mut self, e: &Event) {
         self.seq += 1;
         // a proof stands only for the input recorded right after it
         if !matches!(e, Event::Proved { .. } | Event::AnswerRecorded { .. }) {
@@ -480,6 +493,8 @@ impl Run {
                         d.reads = reads.clone();
                     }
             }
+            // the engine's pairing, never a run's
+            Event::KeysChanged { .. } => {}
             Event::Proved { nonce, key, input, proof } => {
                 // the proof is checked again: a record written by anything else than this core grants nothing
                 let message = crate::proof::input_message(&self.id, &self.started, nonce, input);
