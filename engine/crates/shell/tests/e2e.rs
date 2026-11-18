@@ -2433,9 +2433,9 @@ fn a_role_s_program_in_its_box_closed_by_default_does_its_work_and_none_of_the_e
     // the real interpreter, as a role declares it: /usr/bin/python3 is a shim the box refuses
     let real = Command::new(python()).args(["-c", "import sys; print(sys.executable)"]).output().expect("python");
     let interpreter = String::from_utf8_lossy(&real.stdout).trim().to_string();
-    let profile_of = |given: Value| -> (bool, String) {
+    let library_run = |what: &str, given: Value| -> (bool, String) {
         let mut make = Command::new(&interpreter)
-            .args([root().join("python/jaynes_box.py").to_str().expect("path"), "program-profile"])
+            .args([root().join("python/jaynes_box.py").to_str().expect("path"), what])
             .env("JAYNES_ENGINE_HOME", &engine)
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().expect("profile");
         {
@@ -2445,20 +2445,44 @@ fn a_role_s_program_in_its_box_closed_by_default_does_its_work_and_none_of_the_e
         let out = make.wait_with_output().expect("out");
         (out.status.success(), String::from_utf8_lossy(&out.stdout).to_string())
     };
-    let given = serde_json::json!({"interpreter": interpreter, "role_dir": role_dir, "library": library, "tmp": tmp, "broker": broker,
+    // what the program needs, worked out once (at pinning), then each call's box from it; it declares pbpaste and
+    // security as commands, to try the pasteboard and the keychain the system's own rules might leave open
+    let commands = ["/usr/bin/pbpaste", "/usr/bin/security"];
+    let (ok, needs) = library_run("program-needs", serde_json::json!({"interpreter": interpreter, "commands": commands}));
+    assert!(ok, "{needs}");
+    let needs: Value = serde_json::from_str(&needs).expect("needs");
+    let given = serde_json::json!({"needs": needs, "role_dir": role_dir, "library": library, "tmp": tmp, "broker": broker,
         "reads": [declared], "local_ports": [port, 8750], "project": project, "project_write": false});
-    let (ok, profile) = profile_of(given.clone());
+    let (ok, profile) = library_run("program-profile", given.clone());
     assert!(ok && profile.contains("(deny default)"), "{profile}");
+    let (ok, said) = library_run("program-profile", serde_json::json!({"role_dir": role_dir, "library": library, "tmp": tmp}));
+    assert!(!ok && said.contains("program-needs"), "a call's box never works the needs out itself: {said}");
     // what it never opens is refused before the program starts, never opened with less
-    for bad in [serde_json::json!({"interpreter": "/usr/bin/python3"}), serde_json::json!({"reads": [std::env::var("HOME").expect("home")]}),
-        serde_json::json!({"reads": [engine.clone()]})] {
+    let (ok, said) = library_run("program-needs", serde_json::json!({"interpreter": "/usr/bin/python3"}));
+    assert!(!ok && said.contains("xcrun"), "{said}");
+    for bad in [serde_json::json!({"reads": [std::env::var("HOME").expect("home")]}), serde_json::json!({"reads": [engine.clone()]})] {
         let mut g = given.clone();
         for (k, v) in bad.as_object().expect("obj") {
             g[k] = v.clone();
         }
-        let (ok, said) = profile_of(g);
+        let (ok, said) = library_run("program-profile", g);
         assert!(!ok && !said.contains("(version 1)"), "{bad}: {said}");
     }
+    // a value on the find pasteboard, put back as it was at the end; never printed
+    let pb = |args: &[&str], input: Option<&[u8]>| -> Option<Vec<u8>> {
+        let mut child = Command::new(args[0]).args(&args[1..]).stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+        if let Some(i) = input {
+            use std::io::Write;
+            child.stdin.take()?.write_all(i).ok()?;
+        }
+        drop(child.stdin.take());
+        let out = child.wait_with_output().ok()?;
+        out.status.success().then_some(out.stdout)
+    };
+    let saved = pb(&["/usr/bin/pbpaste", "-pboard", "find"], None);
+    let token = format!("jaynes-program-{}", std::process::id());
+    let _set = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(token.as_bytes()));
     std::fs::write(role_dir.join("prog.py"), r#"
 import hashlib, json, os, socket, sqlite3, ssl, subprocess, sys, tempfile, threading
 a = json.loads(sys.argv[1])
@@ -2499,16 +2523,30 @@ try_("escape: UDP", lambda: u.sendto(b"", ("127.0.0.1", 9)) and "sent")
 b = socket.socket()
 try_("escape: bind", lambda: b.bind(("127.0.0.1", 0)) or "bound")
 try_("escape: a name on the network", lambda: socket.getaddrinfo("example.com", 80) and "resolved")
+def pasteboard():
+    r = subprocess.run(["/usr/bin/pbpaste", "-pboard", "find"], capture_output=True)
+    if r.stdout.decode(errors="replace") == a["token"]:
+        return "read"
+    raise PermissionError("not read")
+try_("escape: read the pasteboard", pasteboard)
+def keychain():
+    if subprocess.run(["/usr/bin/security", "list-keychains"], capture_output=True).returncode == 0:
+        return "listed"
+    raise PermissionError("not listed")
+try_("escape: the keychain", keychain)
 print(json.dumps(got))
 "#).expect("write");
     let home = std::env::var("HOME").expect("home");
     let args = serde_json::json!({"role_dir": role_dir, "library": library, "declared": declared, "project": project, "engine": engine,
-        "broker": broker, "other_sock": other_sock, "port": port, "other_port": other_port, "real_home": home});
+        "broker": broker, "other_sock": other_sock, "port": port, "other_port": other_port, "real_home": home, "token": token});
     let out = Command::new("/usr/bin/sandbox-exec")
         .args(["-p", &profile, &interpreter, role_dir.join("prog.py").to_str().expect("path"), &args.to_string()])
         .current_dir(&role_dir).env_clear().env("PATH", "/usr/bin:/bin").env("TMPDIR", &tmp).env("HOME", &tmp)
         .env("PYTHONDONTWRITEBYTECODE", "1").env("LANG", "en_US.UTF-8")
         .output().expect("sandbox-exec");
+    if let Some(v) = &saved {
+        let _back = pb(&["/usr/bin/pbcopy", "-pboard", "find"], Some(v));
+    }
     let got: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
     for (k, v) in got.as_object().expect("got") {
         let v = v.as_str().unwrap_or("");
@@ -2518,7 +2556,7 @@ print(json.dumps(got))
             assert!(v == "PermissionError" || v == "does not know" || v == "gaierror", "{k} got through: {v}: {got}");
         }
     }
-    assert_eq!(got.as_object().expect("got").len(), 23, "{got}");
+    assert_eq!(got.as_object().expect("got").len(), 25, "{got}");
     drop((service, undeclared));
     let _gone = std::fs::remove_dir_all(&base);
 }

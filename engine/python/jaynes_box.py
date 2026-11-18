@@ -910,10 +910,24 @@ if __name__ == "__main__":
     # jaynes_box.py program-profile < BOX.json: the profile of a role's program's box, for the engine that starts it,
     # with what its interpreter and commands need worked out here; a refusal is its sentence and exit 3
     args = sys.argv[1:]
-    if args == ["program-profile"]:
+    if args == ["program-needs"]:
+        # worked out once per role and interpreter, at pinning, and kept: it walks the interpreter's whole folder
         given = json.load(sys.stdin)
         try:
-            needs = program_needs(Path(given["interpreter"]), [Path(c) for c in given.get("commands", [])])
+            n = program_needs(Path(given["interpreter"]), [Path(c) for c in given.get("commands", [])])
+            print(json.dumps({k: [str(p) for p in getattr(n, k)] for k in ("run", "run_inside", "read")}))
+        except Refused as e:
+            print(e)
+            sys.exit(3)
+        sys.exit(0)
+    if args == ["program-profile"]:
+        # one call's box, from the needs worked out at pinning; it never walks the interpreter again
+        given = json.load(sys.stdin)
+        try:
+            n = given.get("needs")
+            if not isinstance(n, dict) or not n.get("run"):
+                raise Refused("the program's needs were not worked out: run program-needs once, at pinning, and pass them")
+            needs = Needs(*(tuple(Path(p) for p in n.get(k, [])) for k in ("run", "run_inside", "read")))
             paths = {k: Path(v) for k, v in given.items() if k in ("role_dir", "library", "tmp", "broker", "project", "home") and v}
             lists = {k: tuple(Path(v) for v in given.get(k, [])) for k in ("reads", "writes")}
             print(program_profile(ProgramBox(**paths, **lists, needs=needs, project_write=given.get("project_write") is True,
