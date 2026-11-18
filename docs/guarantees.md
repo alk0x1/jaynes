@@ -1,6 +1,6 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -54,7 +54,9 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   runs once its record proves, by a test that holds however often it is checked, that its error
   rate is below the budget; if the true rate is at or above it, the chance of that ever happening
   is at most 5%. What counts is what happened after delivery: an accept counts as right only
-  after its delivery held 7 days, and a send-back or a correction counts as an error at once. Two
+  after its delivery held 7 days, and a send-back or a correction counts as an error at once.
+  What an agent lets go on in your name goes on, and earns nothing until you confirm it. An
+  answer that does not judge ("I don't know") counts as neither. Two
   errors among its last ten outcomes make it ask on every run and hold the run, and then only
   you answer it. A new model of the agent starts with the stop's errors and none of its rights.
 

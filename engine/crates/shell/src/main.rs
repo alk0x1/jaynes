@@ -391,7 +391,8 @@ fn start(args: &[String]) -> Result<(), String> {
     for (i, step) in manifest.steps.iter().enumerate() {
         let Some(stop) = &step.stop else { continue };
         let key = jaynes_core::attention::stop_key(&manifest, &fingerprint, i);
-        let c = jaynes_core::attention::count(&history, &key, &agent, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
+        let lineage = jaynes_core::attention::lineage(&manifest, i);
+        let c = jaynes_core::attention::count(&history, &key, &lineage, &agent, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
         attention.insert(step.name.clone(), c);
     }
     s.put_setup(&id, &json!({

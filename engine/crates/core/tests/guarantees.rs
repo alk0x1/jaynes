@@ -1517,36 +1517,149 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
     change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
     let key = stop_key(&manifest, &Digest("f".to_string()), 0);
+    let lin = jaynes_core::attention::lineage(&manifest, 0);
     let day = 24 * 3600;
     let mut h = Vec::new();
     for n in 0..25 {
         h.extend(history_run(&format!("r{n}"), 1000, None, By::Person, &manifest));
     }
     // an accept counts as right only once its delivery held seven days
-    assert_eq!(count(&h, &key, "claude:m1", 1000 + day, Some(0.2), 0.05).n, 0);
-    assert_eq!(count(&h, &key, "claude:m1", 1000 + day, Some(0.2), 0.05).pending, 25);
-    let c = count(&h, &key, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!(count(&h, &key, &lin, "claude:m1", 1000 + day, Some(0.2), 0.05).n, 0);
+    assert_eq!(count(&h, &key, &lin, "claude:m1", 1000 + day, Some(0.2), 0.05).pending, 25);
+    let c = count(&h, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
     assert_eq!((c.n, c.k, c.braked), (25, 0, false));
     assert!(jaynes_core::attention::certified(c.n, c.k, 0.2, 0.05));
     // what an agent let through never earns a right
     let mut agent = h.clone();
     agent.extend(history_run("ra", 1000, None, By::Agent { who: "claude".to_string() }, &manifest));
-    assert_eq!(count(&agent, &key, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05).n, 25);
+    assert_eq!(count(&agent, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05).n, 25);
     // a correction after delivery turns a right into an error, and two errors among the last ten brake the stop
     let mut corrected = h.clone();
     for run in ["r23", "r24"] {
         corrected.push((2000, run.to_string(), Event::DeliveryCorrected { note: "wrong".to_string(), by: By::Person, step: Some("change".to_string()) }));
     }
-    let c = count(&corrected, &key, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    let c = count(&corrected, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
     assert_eq!((c.n, c.k, c.braked), (25, 2, true));
     // another model starts with the stop's errors and none of its rights
-    assert_eq!(count(&h, &key, "claude:m2", 1000 + 8 * day, Some(0.2), 0.05).n, 0, "rights earned by m1 are not m2's");
-    let c = count(&corrected, &key, "claude:m2", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!(count(&h, &key, &lin, "claude:m2", 1000 + 8 * day, Some(0.2), 0.05).n, 0, "rights earned by m1 are not m2's");
+    let c = count(&corrected, &key, &lin, "claude:m2", 1000 + 8 * day, Some(0.2), 0.05);
     assert_eq!((c.n, c.k, c.braked), (2, 2, true), "errors made with m1 count for m2 too");
     // a send-back counts at once
     let mut back = h.clone();
     back.extend(history_run("rb", 1000, Some(Verdict::Redo { note: "no".to_string() }), By::Person, &manifest));
-    assert_eq!(count(&back, &key, "claude:m1", 1000 + day, Some(0.2), 0.05).k, 1);
+    assert_eq!(count(&back, &key, &lin, "claude:m1", 1000 + day, Some(0.2), 0.05).k, 1);
+}
+
+#[test]
+fn g17_i_do_not_know_counts_for_nothing() {
+    use jaynes_core::attention::count;
+    let mut change = step("change", Executor::Agent);
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
+    let key = stop_key(&manifest, &Digest("f".to_string()), 0);
+    let lin = jaynes_core::attention::lineage(&manifest, 0);
+    let day = 24 * 3600;
+    // the person said "I don't know" on 25 runs: no accept, so nothing is right, nothing pending, nothing certified
+    let mut skipped = Vec::new();
+    for n in 0..25 {
+        skipped.extend(history_run(&format!("s{n}"), 1000, Some(Verdict::Skip), By::Person, &manifest));
+    }
+    let c = count(&skipped, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.pending), (0, 0, 0), "I don't know counted");
+    assert!(!jaynes_core::attention::certified(c.n, c.k, 0.2, 0.05));
+    // among accepts and a send-back, they change neither how many outcomes are known nor the errors among them
+    let mut mixed = Vec::new();
+    for n in 0..10 {
+        mixed.extend(history_run(&format!("k{n}"), 1000, None, By::Person, &manifest));
+    }
+    mixed.extend(history_run("b", 1000, Some(Verdict::Redo { note: "no".to_string() }), By::Person, &manifest));
+    let without = count(&mixed, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    let mut with = mixed.clone();
+    for n in 0..10 {
+        with.extend(history_run(&format!("s{n}"), 1000, Some(Verdict::Skip), By::Person, &manifest));
+    }
+    let c = count(&with, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.pending), (without.n, without.k, without.pending), "I don't know changed the count");
+    assert_eq!((c.n, c.k), (11, 1));
+    // an answer that kept one item and did not know the other left one unjudged: it is no accept either
+    let mut partly = mixed.clone();
+    for n in 0..10 {
+        let mut run = history_run(&format!("p{n}"), 1000, None, By::Person, &manifest);
+        for (_, _, e) in run.iter_mut() {
+            match e {
+                Event::QuestionOpened { question } => question.items.push(item("other", "o")),
+                Event::AnswerRecorded { answer, .. } => {
+                    answer.verdicts = [("change".to_string(), Verdict::Keep), ("other".to_string(), Verdict::Skip)].into_iter().collect();
+                }
+                _ => {}
+            }
+        }
+        partly.extend(run);
+    }
+    let c = count(&partly, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.pending), (without.n, without.k, without.pending), "an answer with an item unjudged counted");
+}
+
+fn released_stop() -> Manifest {
+    let mut change = step("change", Executor::Agent);
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None });
+    Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() }
+}
+
+#[test]
+fn g17_a_stop_s_errors_cross_a_change_of_its_role_and_its_rights_do_not() {
+    use jaynes_core::attention::{count, lineage};
+    let manifest = released_stop();
+    let (key, lin) = (stop_key(&manifest, &Digest("f".to_string()), 0), lineage(&manifest, 0));
+    let day = 24 * 3600;
+    let mut h = Vec::new();
+    for n in 0..10 {
+        h.extend(history_run(&format!("r{n}"), 1000, None, By::Person, &manifest));
+    }
+    for run in ["r8", "r9"] {
+        h.push((2000, run.to_string(), Event::DeliveryCorrected { note: "wrong".to_string(), by: By::Person, step: Some("change".to_string()) }));
+    }
+    let c = count(&h, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (10, 2, true));
+    // the role changes (its content, its library): the braked stop stays braked, with its errors and none of its rights
+    let changed = stop_key(&manifest, &Digest("f2".to_string()), 0);
+    let c = count(&h, &changed, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (2, 2, true), "a change of the role set a braked stop free");
+    // the step changed as declared, same role and name: the same
+    let mut stricter = manifest.clone();
+    stricter.steps[0].attempts = 1;
+    let c = count(&h, &stop_key(&stricter, &Digest("f".to_string()), 0), &lineage(&stricter, 0), "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (2, 2, true));
+    // another role with a step of the same name inherits nothing
+    let mut other = manifest.clone();
+    other.role = "another".to_string();
+    let c = count(&h, &stop_key(&other, &Digest("f".to_string()), 0), &lineage(&other, 0), "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.braked), (0, 0, false));
+}
+
+#[test]
+fn g17_what_an_agent_lets_go_on_in_your_name_earns_nothing_until_you_confirm_it() {
+    use jaynes_core::attention::{count, lineage};
+    let manifest = released_stop();
+    let (key, lin) = (stop_key(&manifest, &Digest("f".to_string()), 0), lineage(&manifest, 0));
+    let day = 24 * 3600;
+    let mut released = Vec::new();
+    for n in 0..25 {
+        released.extend(history_run(&format!("a{n}"), 1000, None, By::Agent { who: "an agent through the Jaynes plugin".to_string() }, &manifest));
+    }
+    let c = count(&released, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k, c.pending), (0, 0, 0), "what an agent let go on earned");
+    // the person confirms it later, on the same question: then it counts
+    let mut confirmed = Vec::new();
+    for mut run in released.chunks(4).map(|c| c.to_vec()) {
+        let Some((_, id, Event::AnswerRecorded { answer, .. })) = run.get(2).cloned() else { panic!("an answer") };
+        let mut mine = answer.clone();
+        mine.by = By::Person;
+        run.insert(3, (1000, id, Event::AnswerRecorded { answer: mine, effects: Default::default() }));
+        confirmed.extend(run);
+    }
+    let c = count(&confirmed, &key, &lin, "claude:m1", 1000 + 8 * day, Some(0.2), 0.05);
+    assert_eq!((c.n, c.k), (25, 0));
 }
 
 #[test]

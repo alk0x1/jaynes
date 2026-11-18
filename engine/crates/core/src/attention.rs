@@ -133,6 +133,12 @@ pub fn stop_key(manifest: &Manifest, role_fingerprint: &Digest, step: usize) -> 
     Digest::of_json(&(&manifest.role, &manifest.steps[step], role_fingerprint))
 }
 
+/// Which stop an error belongs to across versions: the role and the step by their names. An error found under one
+/// version of the role still counts when the role, its step or its library changes; a right does not cross.
+pub fn lineage(manifest: &Manifest, step: usize) -> Digest {
+    Digest::of_json(&("lineage", &manifest.role, &manifest.steps[step].name))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -166,6 +172,7 @@ enum State {
 #[derive(Clone, Debug)]
 struct Item {
     key: Digest,
+    lineage: Digest,
     /// The agent of the run the outcome comes from.
     agent: String,
     at: u64,
@@ -179,13 +186,13 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
     let mut runs: BTreeMap<String, (Manifest, Digest)> = BTreeMap::new();
     let mut agents: BTreeMap<String, String> = BTreeMap::new();
     let mut last: BTreeMap<(String, String), usize> = BTreeMap::new();
-    let mut questions: BTreeMap<(String, String), (String, QuestionKind)> = BTreeMap::new();
+    let mut questions: BTreeMap<(String, String), (String, QuestionKind, Vec<String>)> = BTreeMap::new();
     let mut finished: BTreeMap<String, (u64, Outcome)> = BTreeMap::new();
     let mut corrected: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
     let mut undone: std::collections::BTreeSet<String> = Default::default();
     for (at, run, e) in history {
         let key_of = |step: &str, runs: &BTreeMap<String, (Manifest, Digest)>| {
-            runs.get(run).and_then(|(m, f)| m.index(step).map(|i| (stop_key(m, f, i), m.steps[i].executor)))
+            runs.get(run).and_then(|(m, f)| m.index(step).map(|i| (stop_key(m, f, i), m.steps[i].executor, lineage(m, i))))
         };
         match e {
             Event::RunStarted { manifest, role_fingerprint, agent, .. } => {
@@ -194,19 +201,26 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
             }
             // A choice among options is a matter of taste, never a verdict on whether the step went well.
             Event::QuestionOpened { question } if !question.choose => {
-                questions.insert((run.clone(), question.id.clone()), (question.step.clone(), question.kind));
+                let items = question.items.iter().map(|x| x.id.clone()).collect();
+                questions.insert((run.clone(), question.id.clone()), (question.step.clone(), question.kind, items));
             }
             Event::StopSkipped { step, .. } => {
-                if let Some((key, _)) = key_of(step, &runs) {
-                    release(&mut out, &mut last, run, step, Item { key, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Pending, earns: true });
+                if let Some((key, _, lineage)) = key_of(step, &runs) {
+                    release(&mut out, &mut last, run, step, Item { key, lineage, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Pending, earns: true });
                 }
             }
             Event::AnswerRecorded { answer, .. } => {
-                let Some((step, kind)) = questions.get(&(run.clone(), answer.question.clone())).cloned() else { continue };
+                let Some((step, kind, items)) = questions.get(&(run.clone(), answer.question.clone())).cloned() else { continue };
                 if kind != QuestionKind::Decision {
                     continue;
                 }
-                let Some((key, executor)) = key_of(&step, &runs) else { continue };
+                // "I don't know" is no verdict: an answer that left any item unjudged is no accept, and counts for
+                // nothing, neither right nor error, leaving what the stop's record held before it as it was. A send-back
+                // is still an error, whatever else it skipped.
+                if !answer.sends_back() && items.iter().any(|id| answer.verdict(id) == crate::question::Verdict::Skip) {
+                    continue;
+                }
+                let Some((key, executor, lineage)) = key_of(&step, &runs) else { continue };
                 if executor == Executor::Person {
                     continue;
                 }
@@ -222,9 +236,9 @@ fn items(history: &[(u64, String, Event)], now: u64) -> Vec<Item> {
                             last.remove(&(run.clone(), step.clone()));
                             continue;
                         }
-                    out.push(Item { key, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Error, earns: false });
+                    out.push(Item { key, lineage, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Error, earns: false });
                 } else {
-                    release(&mut out, &mut last, run, &step, Item { key, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Pending, earns: person });
+                    release(&mut out, &mut last, run, &step, Item { key, lineage, agent: agents.get(run).cloned().unwrap_or_default(), at: *at, state: State::Pending, earns: person });
                 }
             }
             Event::StepInvalidated { step, .. } => {
@@ -290,10 +304,14 @@ fn release(out: &mut Vec<Item>, last: &mut BTreeMap<(String, String), usize>, ru
 }
 
 /// The count of the stop `key` for runs whose agent is `agent`, from the record, at time `now`. With its budget and
-/// δ, whether it is braked. An error counts whatever agent made it, and is never forgotten; going well counts only
-/// for the agent that did it, so a new model starts with the stop's errors and none of its rights.
-pub fn count(history: &[(u64, String, Event)], key: &Digest, agent: &str, now: u64, budget: Option<f64>, delta: f64) -> Count {
-    let mut mine: Vec<Item> = items(history, now).into_iter().filter(|i| &i.key == key && (i.agent == agent || i.state == State::Error)).collect();
+/// δ, whether it is braked. An error counts whatever agent made it, under any version of the role (found by the
+/// stop's `lineage`), and is never forgotten; going well counts only for the agent that did it and the version it was
+/// done on, so a new model or a changed role starts with the stop's errors and none of its rights.
+pub fn count(history: &[(u64, String, Event)], key: &Digest, lineage: &Digest, agent: &str, now: u64, budget: Option<f64>, delta: f64) -> Count {
+    let mut mine: Vec<Item> = items(history, now)
+        .into_iter()
+        .filter(|i| if i.state == State::Error { &i.lineage == lineage } else { &i.key == key && i.agent == agent })
+        .collect();
     mine.sort_by_key(|i| i.at);
     let known: Vec<&Item> = mine.iter().filter(|i| i.state == State::Right || i.state == State::Error).collect();
     let pending = mine.iter().filter(|i| i.state == State::Pending && i.earns).count() as u64;
