@@ -452,7 +452,7 @@ impl Page {
         }
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
-                Some(r) => run_html(r, &changes_html(&self.home, r, None)),
+                Some(r) => run_html(r, &changes_html(&self.home, r, None), &summary_html(&self.home, r)),
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
                     Ok(said) => format!("<div class=\"empty\">The run is not recorded yet. What starting it said:</div><pre class=\"said\">{}</pre>", esc(said.trim())),
@@ -613,8 +613,23 @@ fn phase_word(r: &Run) -> String {
     }
 }
 
-/// A run: where it is, what it cost, its steps, and what the person may do to it.
-fn run_html(r: &Run, changes: &str) -> String {
+/// What a finished run did, as a text to copy into a merge request or a note. A run not finished has none.
+fn summary_html(home: &std::path::Path, r: &Run) -> String {
+    if !r.finished() {
+        return String::new();
+    }
+    match crate::listing::summary(home, &r.id) {
+        Ok(told) => format!(
+            "<section class=\"summary\"><div class=\"sumhead\"><h2>Summary</h2><button class=\"copy\" id=\"copysum\">Copy as Markdown</button></div>\
+             <p class=\"sub\">What this run did, for someone who was not here: paste it in a merge request or a note.</p><pre class=\"said\" id=\"sumtext\">{}</pre></section>",
+            esc(&told.markdown())
+        ),
+        Err(e) => format!("<div class=\"notice bad\">The summary could not be written: {}</div>", esc(&e)),
+    }
+}
+
+/// A run: where it is, what it cost, its steps, what the person may do to it, and, once finished, its summary.
+fn run_html(r: &Run, changes: &str, summary: &str) -> String {
     let path = r.path();
     let steps = stage_list(r);
     let phase = match &r.phase {
@@ -671,7 +686,7 @@ fn run_html(r: &Run, changes: &str) -> String {
         "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}{answers}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
          {steps}\
-         <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
+         <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
         version = esc(&r.manifest.version),
         id = esc(&r.id),
@@ -1171,6 +1186,9 @@ details.fold { margin-top:12px; } details.fold summary { cursor:pointer; color:v
 .form input:focus, .form textarea:focus { outline:none; border-color:var(--blue); } .form .send { align-self:flex-start; }
 ul.roles { margin:-8px 0 0; padding-left:18px; font-size:13px; color:var(--dim); } ul.roles b { font-family:var(--mono); font-weight:500; font-size:12px; color:var(--ink); margin-right:6px; }
 pre.said { font-family:var(--mono); font-size:12px; color:var(--dim); white-space:pre-wrap; margin:12px 0; }
+section.summary { margin-top:22px; border-top:1px solid var(--line); padding-top:14px; } .sumhead { display:flex; align-items:center; justify-content:space-between; gap:12px; } .sumhead h2 { margin:0; font-size:15px; font-weight:600; }
+button.copy { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; } button.copy:hover { border-color:var(--blue); }
+section.summary pre.said { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; color:inherit; }
 table.kv { border-collapse:collapse; margin-top:6px; } table.kv td { padding:8px 14px 8px 0; vertical-align:top; border-top:1px solid var(--line); font-size:13.5px; }
 table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(--dim); width:120px; }
 .owner { display:inline-flex; align-items:center; gap:8px; margin:0 12px 6px 0; } .owner input { background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px 9px; font:inherit; font-size:13px; }
@@ -1354,6 +1372,13 @@ document.addEventListener("click", async e => {
   const extra = b.dataset.act === "correct" ? { note: document.getElementById("cnote").value, step: document.getElementById("cstep").value } : {};
   const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run, action: b.dataset.act, ...extra }) })).json();
   if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
+});
+const copysum = document.getElementById("copysum");
+if (copysum) copysum.addEventListener("click", async () => {
+  const pre = document.getElementById("sumtext");
+  try { await navigator.clipboard.writeText(pre.textContent); copysum.textContent = "Copied"; }
+  catch { getSelection().selectAllChildren(pre); copysum.textContent = "Selected: copy it with Command-C"; }
+  setTimeout(() => copysum.textContent = "Copy as Markdown", 2500);
 });
 // The page follows the record, but never reloads under the person's hands.
 document.querySelectorAll("[data-setup]").forEach(b => b.addEventListener("click", async () => {

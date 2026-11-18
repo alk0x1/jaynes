@@ -1,6 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-use jaynes_shell::{home, agent, conformance, drive, index, install, mcp, page, permit, project, protocol, role, store, toml_role};
+use jaynes_shell::{home, agent, conformance, drive, index, install, mcp, page, permit, project, protocol, role, store, summary, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -26,6 +26,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   undo RUN [--note TEXT]   revert what a run merged
   correct RUN --note TEXT [--step STEP]  record that a delivery was wrong, so the rework it caused is counted
   runs | cost | verify | log RUN
+  summary RUN             what a finished run did, in Markdown, to paste in a merge request or a note
   page [--port N]         the page where you answer, on 127.0.0.1 (default port 8750)
   add NAME|SOURCE | remove NAME | roles   install a role (by name from the index, a folder, or URL#path), remove one, list them
   index check DIR [--write]   check an index: every role's content and promises, proved again
@@ -208,6 +209,12 @@ fn run(args: &[String]) -> Result<(), String> {
                     println!("{id}  {}  {}  {}", r.manifest.role, phase(&r.phase), r.request.chars().take(60).collect::<String>());
                 }
             }
+            Ok(())
+        }
+        "summary" => {
+            let id = rest.first().ok_or("which run?")?;
+            // the role's promises are proved again before it answers: once per role, and minutes for a large one
+            print!("{}", summary::read(&home(), id, true)?.markdown());
             Ok(())
         }
         "cost" => cost(),

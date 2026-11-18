@@ -16,6 +16,7 @@ pub mod protocol;
 pub mod role;
 pub mod stop;
 pub mod store;
+pub mod summary;
 pub mod toml_role;
 pub mod understand;
 

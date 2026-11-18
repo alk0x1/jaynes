@@ -200,6 +200,12 @@ pub fn stages(r: &Run) -> Vec<Stage> {
         .collect()
 }
 
+/// What a finished run did, as the page and the app show it to copy: [`crate::summary::Summary::markdown`] is the
+/// text. Neither waits for the role's promises to be proved: they are proved beside, and told once they are.
+pub fn summary(home: &Path, run: &str) -> Result<crate::summary::Summary, String> {
+    crate::summary::read(home, run, false)
+}
+
 /// What the agent did last in a turn's transcript (Claude Code's stream): the tool it called with what it called it
 /// on, else what it said, else that it thinks. Paths inside `project` are shown from there.
 pub fn last_action(transcript: &str, project: &Path) -> Option<String> {
