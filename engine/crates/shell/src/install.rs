@@ -79,8 +79,10 @@ fn by_name(source: &str) -> Option<String> {
     (plain && !Path::new(source).exists()).then(|| source.to_string())
 }
 
-/// What a role's steps may reach, one line each, to tell whether a new version asks for more.
-fn reach_of(m: &jaynes_core::Manifest) -> std::collections::BTreeSet<String> {
+/// What a role's steps may reach, one line each, to tell whether a new version asks for more: what its manifest
+/// declares, and, for a role in TOML in `dir`, the local ports its checks name, which a check keeps apart from its
+/// step.
+fn reach_of(m: &jaynes_core::Manifest, dir: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     for s in &m.steps {
         let r = &s.reach;
@@ -92,8 +94,20 @@ fn reach_of(m: &jaynes_core::Manifest) -> std::collections::BTreeSet<String> {
         if r.commands {
             out.insert(format!("{}: running commands", s.name));
         }
+        for p in &r.local_ports {
+            out.insert(format!("{}: the local port {p}", s.name));
+        }
     }
     out.retain(|l| !l.ends_with(", none"));
+    if let Ok(role) = crate::toml_role::TomlRole::load(dir) {
+        for (step, x) in &role.extras {
+            for (check, ports) in &x.check_ports {
+                for p in ports {
+                    out.insert(format!("{step}: its check {check}, the local port {p}"));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -119,7 +133,7 @@ fn manifest_of(role: &RoleProgram) -> Result<jaynes_core::Manifest, String> {
 }
 
 /// Update the roles installed from git. One whose new version reaches more than the installed one (the project,
-/// writing, the network, commands) is not updated: the person reads what it asks and installs it with `jaynes add`.
+/// writing, the network, commands, a local port) is not updated: the person reads what it asks and installs it with `jaynes add`.
 pub fn update_roles(home: &Path) -> Vec<String> {
     let mut said = Vec::new();
     for (name, _, _, origin) in list(home) {
@@ -140,7 +154,8 @@ pub fn update_roles(home: &Path) -> Vec<String> {
             };
             let new = manifest_of(&RoleProgram::new(&folder, &library(home)))?;
             let old = manifest_of(&RoleProgram::new(&roles_dir(home).join(&name), &library(home)))?;
-            let more: Vec<String> = reach_of(&new).difference(&reach_of(&old)).cloned().collect();
+            let installed = roles_dir(home).join(&name);
+            let more: Vec<String> = reach_of(&new, &folder).difference(&reach_of(&old, &installed)).cloned().collect();
             let lost = lost_promises(&roles_dir(home).join(&name), &folder);
             if !lost.is_empty() {
                 return Ok(format!(
@@ -668,6 +683,35 @@ mod tests {
         let text = std::fs::read_to_string(new.join("role.toml")).expect("read");
         std::fs::write(new.join("role.toml"), text.replace("never = \"deliver\"\nunless = \"check suite-passes of change passed\"", "never = \"deliver\"\nunless = \"step runner done\"")).expect("write");
         assert_eq!(lost_promises(&old, &new), ["\"Nothing is delivered before the project's suite passed on the change\""]);
+    }
+
+    #[test]
+    fn an_update_whose_step_or_check_reaches_a_new_local_port_asks_for_more() {
+        let base = std::env::temp_dir().join(format!("jaynes-ports-more-{}", std::process::id()));
+        let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change");
+        let (old, new) = (base.join("old"), base.join("new"));
+        let _gone = std::fs::remove_dir_all(&base);
+        copy_dir(&here, &old).expect("copy");
+        copy_dir(&here, &new).expect("copy");
+        let reach = |dir: &Path| {
+            let role = crate::toml_role::TomlRole::load(dir).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+            reach_of(&role.manifest, dir)
+        };
+        assert!(reach(&new).difference(&reach(&old)).next().is_none());
+        // a check of the new version names a local port
+        let text = std::fs::read_to_string(new.join("role.toml")).expect("read");
+        assert!(text.contains("\"suite-passes\""), "{text}");
+        std::fs::write(new.join("role.toml"), text.replacen("\"suite-passes\"", "{ use = \"suite-passes\", local_ports = [5432] }", 1)).expect("write");
+        let more: Vec<String> = reach(&new).difference(&reach(&old)).cloned().collect();
+        assert_eq!(more, ["change: its check suite-passes, the local port 5432"]);
+        // a step of the new version names one
+        std::fs::create_dir_all(new.join("steps")).expect("dir");
+        std::fs::write(new.join("steps/ping.sh"), "").expect("write");
+        let text = std::fs::read_to_string(new.join("role.toml")).expect("read");
+        std::fs::write(new.join("role.toml"), format!("{text}\n[[step]]\nname = \"ping\"\nby = \"role\"\nscript = \"steps/ping.sh\"\nneeds = [\"change\"]\nreach = {{ local_ports = [8125] }}\neffect = \"none\"\n")).expect("write");
+        let more: Vec<String> = reach(&new).difference(&reach(&old)).cloned().collect();
+        assert!(more.contains(&"ping: the local port 8125".to_string()), "{more:?}");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]

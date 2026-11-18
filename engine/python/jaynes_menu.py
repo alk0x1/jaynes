@@ -73,8 +73,8 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
             if ports else ""
         given = ", ".join(map(str, ran.reserved))
         ways = (" The person's open ports did not help here." if ran.any_port else
-                f" A project's commands bind and reach only the ports in JAYNES_PORTS ({given}) and the ones its step"
-                " declares in its reach as local_ports. Two ways out, the first the better: (1) the suite takes its"
+                f" A check's commands bind and reach only the ports in JAYNES_PORTS ({given}) and the ones the check"
+                " names in its local_ports, never its step's. Two ways out, the first the better: (1) the suite takes its"
                 " test servers' ports from JAYNES_PORTS, and the box stays closed; (2) the person opens this project"
                 f" with `jaynes project open-ports {_source(call) or call['project']}`, and its checks then reach every"
                 " service listening on this machine, the Jaynes page among them.")

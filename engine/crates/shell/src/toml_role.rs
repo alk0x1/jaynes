@@ -58,6 +58,12 @@
 //! `"none"` when all it does there is read, which is then its author's word that nothing checks and every run's
 //! summary says so, or `"irreversible"`.
 //!
+//! A check is a box of its own and reaches none of its step's ports: one that runs commands in the box (a script of
+//! the role's, or `suite-passes`, `tests-pass`, `tests-fail-for-the-bug` and `hidden-cases-pass` of the menu) names
+//! its own, `{ script = "checks/x.py", local_ports = [5432] }`, none unless named. A check judges and does not act,
+//! so it declares no effect: that it changes nothing at its ports is its author's word, which every run's summary
+//! says.
+//!
 //! Whether a repeat is harmless is another question, with its own key: `idempotent = true` says the same act sent
 //! twice with the run's `key` counts once. It is never assumed.
 //!
@@ -407,6 +413,8 @@ struct MenuCheck {
     params: &'static [(&'static str, Param, bool)],
     auto: &'static [Auto],
     about: fn(&toml::Table) -> String,
+    /// Whether it runs commands in the box, and so may name the local ports they reach.
+    runs: bool,
 }
 
 fn read_project() -> Reach {
@@ -463,6 +471,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[],
         auto: &[Auto::Suite],
         about: |_| "the project's whole suite passes, run by Jaynes without internet".into(),
+        runs: true,
     },
     MenuCheck {
         name: "tests-fail-for-the-bug",
@@ -474,6 +483,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
              line quoted in failure"
                 .into()
         },
+        runs: true,
     },
     MenuCheck {
         name: "tests-pass",
@@ -481,6 +491,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[("tests_from", Param::Step, true)],
         auto: &[Auto::Suite],
         about: |t| format!("the tests {} named pass, and then the whole suite", text(t, "tests_from")),
+        runs: true,
     },
     MenuCheck {
         name: "hidden-cases-pass",
@@ -488,6 +499,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[],
         auto: &[Auto::Cases],
         about: |_| "the cases written from the request alone hold on the changed project".into(),
+        runs: true,
     },
     MenuCheck {
         name: "output-follows-schema",
@@ -495,6 +507,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[],
         auto: &[Auto::Schema],
         about: |_| "the output has every field the schema requires, none blank, each of its type and within its limits".into(),
+        runs: false,
     },
     MenuCheck {
         name: "field-required",
@@ -502,6 +515,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[("field", Param::Text, true)],
         auto: &[],
         about: |t| format!("the output has {}, not empty", text(t, "field")),
+        runs: false,
     },
     MenuCheck {
         name: "field-empty",
@@ -509,6 +523,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[("field", Param::Text, true), ("says", Param::Text, true)],
         auto: &[],
         about: |t| format!("{} is empty; when it is not, the person decides", text(t, "field")),
+        runs: false,
     },
     MenuCheck {
         name: "field-max-length",
@@ -516,6 +531,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[("field", Param::Text, true), ("max", Param::Number, true)],
         auto: &[],
         about: |t| format!("{} has at most {} characters", text(t, "field"), text(t, "max")),
+        runs: false,
     },
     MenuCheck {
         name: "files-within",
@@ -526,6 +542,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
             let f = text(t, "field");
             format!("every file in {} is one the step may write", if f.is_empty() { "files".to_string() } else { f })
         },
+        runs: false,
     },
     MenuCheck {
         name: "quotes-found",
@@ -533,6 +550,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         params: &[("field", Param::Text, true), ("pages", Param::Step, true)],
         auto: &[],
         about: |t| format!("every quote in {} is, word for word, in the text Jaynes downloaded from its page in {}", text(t, "field"), text(t, "pages")),
+        runs: false,
     },
 ];
 
@@ -701,6 +719,9 @@ pub struct StepExtra {
     /// The script that does the step, by its path in the role's folder, when the step is the role's own.
     pub script: Option<String>,
     pub checks: BTreeMap<String, CheckImpl>,
+    /// The local ports each check names for the commands it runs in the box: none unless named, and never its
+    /// step's, since a check is a box of its own.
+    pub check_ports: BTreeMap<String, Vec<u16>>,
     pub show: Option<ShowFile>,
 }
 
@@ -796,8 +817,26 @@ fn network_of(reach: &Reach) -> Option<String> {
 
 /// The local ports a step names, in words.
 fn local_ports_of(reach: &Reach) -> String {
-    let ports: Vec<String> = reach.local_ports.iter().map(u16::to_string).collect();
+    ports_in_words(&reach.local_ports)
+}
+
+/// Local ports, in words.
+fn ports_in_words(ports: &[u16]) -> String {
+    let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
     format!("local port{} {}", if ports.len() == 1 { "" } else { "s" }, ports.join(", "))
+}
+
+/// The local ports a check names, read strictly: a list of ports from 1 to 65535, each once; none when it names none.
+fn ports_of_check(table: &toml::Table, name: &str, errs: &mut Vec<String>) -> Vec<u16> {
+    let Some(v) = table.get("local_ports") else { return Vec::new() };
+    let read: Option<Vec<u16>> = v.as_array().and_then(|a| a.iter().map(|p| p.as_integer().and_then(|i| u16::try_from(i).ok()).filter(|&p| p != 0)).collect());
+    match read {
+        Some(ports) if ports.iter().collect::<std::collections::BTreeSet<_>>().len() == ports.len() => ports,
+        _ => {
+            errs.push(format!("the check {name}'s local_ports is a list of ports, each from 1 to 65535 and named once"));
+            Vec::new()
+        }
+    }
 }
 
 /// A way content of the project can reach a step with network, over the links the engine itself carries.
@@ -1208,6 +1247,7 @@ impl TomlRole {
             // checks
             let mut checks = Vec::new();
             let mut impls = BTreeMap::new();
+            let mut check_ports = BTreeMap::new();
             for c in &s.checks {
                 let table = match c {
                     toml::Value::String(name) => {
@@ -1237,13 +1277,17 @@ impl TomlRole {
                             continue;
                         };
                         let mut given = table.clone();
-                        for k in ["use", "name", "reads"] {
+                        for k in ["use", "name", "reads", "local_ports"] {
                             given.remove(k);
                         }
                         if given.remove("cases").is_some() {
                             errs.push(format!("the check {u} is on the menu: its cases come with Jaynes, so it names none"));
                         }
                         let name = named.unwrap_or_else(|| u.to_string());
+                        if table.contains_key("local_ports") && !m.runs {
+                            errs.push(format!("the check {name} runs nothing in the box, so it reaches no port"));
+                        }
+                        check_ports.insert(name.clone(), ports_of_check(&table, &name, &mut errs));
                         let mut with = params(&given, m.params, &s.needs, &format!("the check {name}"), &mut errs);
                         for auto in m.auto {
                             match auto {
@@ -1275,7 +1319,7 @@ impl TomlRole {
                     }
                     (None, Some(script)) => {
                         for k in table.keys() {
-                            if !["script", "kind", "about", "name", "reads", "cases"].contains(&k.as_str()) {
+                            if !["script", "kind", "about", "name", "reads", "cases", "local_ports"].contains(&k.as_str()) {
                                 errs.push(format!("the check {script} takes no {k}"));
                             }
                         }
@@ -1314,6 +1358,7 @@ impl TomlRole {
                             }
                         };
                         checks.push(CheckDecl { name: name.clone(), kind, about, reads });
+                        check_ports.insert(name.clone(), ports_of_check(&table, &name, &mut errs));
                         impls.insert(name, CheckImpl::Script { path: script.to_string(), cases });
                     }
                     _ => errs.push("a check has either use (a check on the menu) or script, not both and not neither".into()),
@@ -1365,7 +1410,7 @@ impl TomlRole {
                 about: if s.about.is_empty() { s.uses.as_deref().and_then(menu_step).map(|m| m.about.to_string()).unwrap_or_default() } else { s.about.clone() },
             });
             let script = s.script.clone().filter(|_| s.by == By::Role);
-            extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, script, checks: impls, show: s.show.clone() });
+            extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, script, checks: impls, check_ports, show: s.show.clone() });
             errors.extend(errs.into_iter().map(|e| at(Some(line), FILE, format!("step {} {e}", s.name))));
         }
         let manifest = Manifest { role: file.role, version: file.version, protocol: MAJOR, steps, target: file.target, delivery: file.delivery };
@@ -1536,6 +1581,12 @@ impl TomlRole {
         notes
     }
 
+    /// The checks of a step that name local ports, in the step's order, with their ports.
+    fn ports_of_checks<'a>(&'a self, s: &'a StepDecl) -> Vec<(&'a str, &'a [u16])> {
+        let Some(x) = self.extras.get(&s.name) else { return Vec::new() };
+        s.checks.iter().filter_map(|c| x.check_ports.get(&c.name).filter(|p| !p.is_empty()).map(|p| (c.name.as_str(), p.as_slice()))).collect()
+    }
+
     /// What each step does to the world as resolved, a line each, so what a role left unsaid is never guessed: the
     /// effect it declares, or none with why (on a repository the floor of every step, which changes only the run's
     /// copy), and the network it has. A step whose network only reads stays none: what a request carries out is a
@@ -1570,6 +1621,9 @@ impl TomlRole {
                 }
                 if ports {
                     reaches.push_str(&format!("; it reaches the {}", local_ports_of(&s.reach)));
+                }
+                for (check, at) in self.ports_of_checks(s) {
+                    reaches.push_str(&format!("; its check {check} reaches the {}", ports_in_words(at)));
                 }
                 format!("{}: {effect}{reaches}", s.name)
             })
@@ -1646,12 +1700,20 @@ impl TomlRole {
                 }
             }
         }
+        // a check that names a local port runs on the run's copy of the project, and so is a way out of its own
+        for step in &m.steps {
+            for (check, ports) in self.ports_of_checks(step) {
+                let named = format!("the check {check} of {}", step.name);
+                let network = ports_in_words(ports);
+                flows.push(Flow { from: named.clone(), to: named.clone(), says: format!("{named} reads the run's copy of the project, and has network ({network})"), network });
+            }
+        }
         flows
     }
 
     /// The ways told by [`TomlRole::flows`] as `jaynes check` prints them: each way, or that there is none and why.
     pub fn flows_told(&self) -> Vec<String> {
-        if !self.manifest.steps.iter().any(|s| network_of(&s.reach).is_some()) {
+        if !self.manifest.steps.iter().any(|s| network_of(&s.reach).is_some() || !self.ports_of_checks(s).is_empty()) {
             return vec!["no step has network, so nothing a step reads of the project leaves through one".to_string()];
         }
         let flows = self.flows();
@@ -1866,6 +1928,10 @@ impl TomlRole {
         for s in &self.manifest.steps {
             if !s.reach.local_ports.is_empty() && !s.effect.irreversible() {
                 out.push(format!("{} reaches the {}, and that it changes nothing there is the role's word: nothing checks it", s.name, local_ports_of(&s.reach)));
+            }
+            // a check judges and does not act, so it has no effect to declare, and what it does at a port is its word
+            for (check, at) in self.ports_of_checks(s) {
+                out.push(format!("the check {check} of {} reaches the {}, and that it changes nothing there is the role's word: nothing checks it", s.name, ports_in_words(at)));
             }
         }
         out.extend(self.flows().into_iter().take(FLOWS_TOLD).map(|f| format!("what {} holds of the project can leave by the network of {}: {}", f.from, f.to, f.says)));
@@ -2229,9 +2295,9 @@ impl TomlRole {
             },
             Call::Check { step, check, request, output, given, project, source, any_port } => match step_of(&step) {
                 Err(b) => b,
-                Ok((d, x)) => {
+                Ok((_, x)) => {
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
-                                      "project": project, "source": source, "reach": reached(d), "any_port": any_port});
+                                      "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
@@ -2257,9 +2323,15 @@ impl TomlRole {
 }
 
 /// What the menu is told of a step's reach, inside the call: the local ports the step names, for what it runs in
-/// the box, a step's own script and a check's commands alike.
+/// the box.
 fn reached(step: &StepDecl) -> Value {
     json!({"local_ports": step.reach.local_ports})
+}
+
+/// What the menu is told of a check's reach, inside the call: the local ports the check names for the commands it
+/// runs in the box, none unless it names them. Never its step's: a check is a box of its own.
+pub fn check_reach(x: &StepExtra, check: &str) -> Value {
+    json!({"local_ports": x.check_ports.get(check).cloned().unwrap_or_default()})
 }
 
 /// What the person is shown of an output.
@@ -2991,6 +3063,54 @@ instructions = "Read the news about {{request}}."
         // a way names its ends, for what reads it after a run
         let first = &TomlRole::load(&role("flows-ends", FLOWING)).expect("reads").flows()[0];
         assert_eq!((first.from.as_str(), first.to.as_str(), first.network.as_str()), ("look", "search", "web"));
+    }
+
+    /// A role whose step reaches a local port and has two checks of its own: one names its port, one none.
+    fn checked_ports(ports: &str) -> String {
+        SCRIPTED.replace(
+            "effect = \"irreversible\"\nidempotent = true\n",
+            &format!("effect = \"irreversible\"\nidempotent = true\nchecks = [{{ script = \"steps/notify.sh\", about = \"it was heard\"{ports} }}, {{ script = \"steps/survey.sh\", name = \"quiet\", about = \"it shows\" }}]\n"),
+        )
+    }
+
+    #[test]
+    fn a_check_reaches_only_the_local_ports_it_names_never_its_step_s() {
+        let r = reads("check-ports", &checked_ports(", local_ports = [5432]"));
+        let x = &r.extras["announce"];
+        // what goes to the box: a check's own ports, and none from the step, whose ports are 8125
+        assert_eq!(check_reach(x, "notify"), json!({"local_ports": [5432]}));
+        assert_eq!(check_reach(x, "quiet"), json!({"local_ports": []}), "a check that names no port reached its step's");
+        // what the role shows: the check reaches it, and that it changes nothing there is the role's word
+        assert_eq!(r.effects()[2], "announce: irreversible, as the role declares, and a repeat is harmless (idempotent); it reaches the local port 8125; its check notify reaches the local port 5432");
+        assert!(r.not_proved().contains(&"the check notify of announce reaches the local port 5432, and that it changes nothing there is the role's word: nothing checks it".to_string()), "{:?}", r.not_proved());
+        assert!(!r.not_proved().iter().any(|l| l.contains("check quiet") && l.contains("reaches")), "{:?}", r.not_proved());
+        // and it is a way out of the project of its own, as a step with network is
+        let ways: Vec<String> = r.flows().into_iter().map(|f| f.says).collect();
+        assert!(ways.contains(&"the check notify of announce reads the run's copy of the project, and has network (local port 5432)".to_string()), "{ways:?}");
+        assert!(!ways.iter().any(|w| w.contains("check quiet")), "{ways:?}");
+        // a check of the menu that runs the project names its ports as a script does, and they are no parameter of it
+        let suite = TomlRole::load(&role("check-ports-menu", &GOOD.replacen("checks = [\"suite-passes\",", "checks = [{ use = \"suite-passes\", local_ports = [5432, 6379] },", 1))).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let x = &suite.extras["change"];
+        assert_eq!(check_reach(x, "suite-passes"), json!({"local_ports": [5432, 6379]}));
+        let CheckImpl::Menu { with, .. } = &x.checks["suite-passes"] else { panic!("{:?}", x.checks) };
+        assert!(!with.contains_key("local_ports"), "{with:?}");
+    }
+
+    #[test]
+    fn a_check_s_local_ports_are_read_strictly_and_only_where_it_runs_something() {
+        for (ports, says) in [
+            (", local_ports = 5432", "the check notify's local_ports is a list of ports, each from 1 to 65535 and named once"),
+            (", local_ports = [\"5432\"]", "the check notify's local_ports is a list of ports, each from 1 to 65535 and named once"),
+            (", local_ports = [0]", "the check notify's local_ports is a list of ports, each from 1 to 65535 and named once"),
+            (", local_ports = [70000]", "the check notify's local_ports is a list of ports, each from 1 to 65535 and named once"),
+            (", local_ports = [5432, 5432]", "the check notify's local_ports is a list of ports, each from 1 to 65535 and named once"),
+        ] {
+            let e = scripted_errors("check-ports-bad", &checked_ports(ports));
+            assert!(e.contains("step announce ") && e.contains(says), "{ports}: {e}");
+        }
+        // a check of the menu that runs nothing in the box reaches no port
+        let e = errors("check-ports-none", &GOOD.replacen("{ use = \"field-max-length\", field = \"summary\", max = 400 }", "{ use = \"field-max-length\", field = \"summary\", max = 400, local_ports = [5432] }", 1));
+        assert!(e.contains("step change the check field-max-length runs nothing in the box, so it reaches no port"), "{e}");
     }
 
     // --- the cases that come with a check ------------------------------------------------------------------------

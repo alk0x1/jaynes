@@ -11,8 +11,8 @@ runs), signalling outside the box, writing preferences, opening apps.
 
 Local ports, on macOS, are a list of what is allowed, closed by default: a project's commands bind and reach only
 the ports the run reserved for them, handed over in ``JAYNES_PORTS`` (free ports, comma separated), and the ports
-the step declares in its reach as ``local_ports``; never the Jaynes page's, through which an answer counts as the
-person's. Unix sockets work only in the box's own folders. A suite that serves on port 0 (Go's httptest, supertest,
+the step or the check that runs them names as ``local_ports`` (a check names its own, never its step's); never the
+Jaynes page's, through which an answer counts as the person's. Unix sockets work only in the box's own folders. A suite that serves on port 0 (Go's httptest, supertest,
 a test server on port 0) is refused the bind: it has to take its port from ``JAYNES_PORTS``, and until it does its
 check is blocked, the machine's fault, naming what was refused. Only a list of allowed ports holds: a deny of one
 port under ``localhost:*`` holds for some port numbers and not for others (measured on macOS 26.5.2).
@@ -101,7 +101,7 @@ class Box:
     # the internet
     local: bool = False
     reserved: tuple[int, ...] = ()  # the free ports the run reserved, handed over in JAYNES_PORTS
-    local_ports: tuple[int, ...] = ()  # the ports the step declares in its reach
+    local_ports: tuple[int, ...] = ()  # the ports the step, or the check, that runs the commands names
     any_port: bool = False  # with ``local``: every local TCP port, opened by the person for this project
     readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
     home: Path = field(default_factory=Path.home)

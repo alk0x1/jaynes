@@ -894,7 +894,7 @@ fn killed_while_its_check_runs_or_once_it_is_done_an_act_is_not_done_again() {
     std::fs::create_dir_all(role.join("checks")).expect("dir");
     std::fs::write(role.join("checks/c.sh"), format!("{}\nexit 0\n", MARK.replace("REGISTRY", &world.address()).replace("WHERE", "check"))).expect("write");
     let text = std::fs::read_to_string(role.join("role.toml")).expect("read");
-    std::fs::write(role.join("role.toml"), format!("{text}checks = [{{ script = \"checks/c.sh\", about = \"it shows\" }}]\n")).expect("write");
+    std::fs::write(role.join("role.toml"), format!("{text}checks = [{{ script = \"checks/c.sh\", about = \"it shows\", local_ports = [{}] }}]\n", world.port)).expect("write");
     killed_at(&s, &world, "killed-check", &role, "check");
     assert_eq!(world.announcements().len(), 1);
     std::fs::write(s.home.join("runs/killed-check/role/checks/c.sh"), "exit 0\n").expect("the run's copy of the check, which no longer waits");
@@ -914,6 +914,32 @@ fn killed_while_its_check_runs_or_once_it_is_done_an_act_is_not_done_again() {
     assert!(out.contains("finished: delivered"), "{out}");
     assert_eq!(world.announcements().len(), 1, "the act was done again after a kill once it was done: {out}");
     assert_eq!(git(&s.project, &["show", "jaynes/killed-done:NOTE"]), "note\n", "its change was lost");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_check_reaches_only_the_local_ports_it_names_never_its_step_s_in_a_real_run() {
+    // the step names the registry's port, its check names none: the check is refused it, and the run is not delivered
+    for (name, ports) in [("check-no-port", String::new()), ("check-own-port", "local_ports = [PORT]".to_string())] {
+        let world = World::open();
+        let s = scratch(name, &world.address());
+        let role = act_role(&s, &world, name, "none", "");
+        std::fs::create_dir_all(role.join("checks")).expect("dir");
+        let reach = format!(r#"python3 -c 'import urllib.request; urllib.request.urlopen("{}/mark/check/1", timeout=10)'"#, world.address());
+        std::fs::write(role.join("checks/c.sh"), format!("{reach}\n")).expect("write");
+        let text = std::fs::read_to_string(role.join("role.toml")).expect("read");
+        let declared = if ports.is_empty() { String::new() } else { format!(", {}", ports.replace("PORT", &world.port.to_string())) };
+        std::fs::write(role.join("role.toml"), format!("{text}checks = [{{ script = \"checks/c.sh\", about = \"it was heard\"{declared} }}]\n")).expect("write");
+        let (_, out) = engine(&s, &["start", "--run", name, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", "act", "--agent", NO_AGENT]);
+        assert_eq!(world.announcements().len(), 1, "{name}: the step did not reach its own port: {out}");
+        if ports.is_empty() {
+            assert!(world.marked("check").is_none(), "the check reached its step's port without naming it: {out}");
+            assert!(!out.contains("finished: delivered"), "a check refused its port delivered the run: {out}");
+        } else {
+            assert!(world.marked("check").is_some(), "the check did not reach the port it names: {out}");
+            assert!(out.contains("finished: delivered"), "{out}");
+        }
+    }
 }
 
 
