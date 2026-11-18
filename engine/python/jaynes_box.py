@@ -501,5 +501,15 @@ if __name__ == "__main__":
             print(why)
             sys.exit(1)
         sys.exit(0)
-    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT]")
+    # jaynes_box.py agent WORK SCRATCH -- PROGRAM ARGS...: the argv that runs an agent program inside the box, writing
+    # only its step's folder and scratch, reading nothing the engine keeps, and reaching no port
+    if len(args) >= 5 and args[0] == "agent" and args[3] == "--":
+        work, scratch = Path(args[1]), Path(args[2])
+        try:
+            print(json.dumps(command_in_box(shlex.join(args[4:]), Box((work, scratch), readable=(work,)))))
+        except Unavailable as e:
+            print(e)
+            sys.exit(1)
+        sys.exit(0)
+    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT] | agent WORK SCRATCH -- PROGRAM ARGS...")
     sys.exit(2)

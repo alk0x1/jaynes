@@ -17,7 +17,7 @@ use store::Store;
 
 const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
-  start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
+  start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
   continue RUN            go on after a stop of the process, or after a block
   version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you

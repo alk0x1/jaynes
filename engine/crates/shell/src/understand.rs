@@ -140,6 +140,8 @@ pub fn read(agent: &str, prompt: &str) -> Result<Value, String> {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", &c]);
         cmd
+    } else if agent.starts_with("codex:") {
+        return Err("this run's agent is Codex, and Jaynes does not yet read your words with it: answer with the buttons".into());
     } else if agent.starts_with("command:") {
         return Err("this run's agent is a command, so no model reads your words: answer with the buttons".into());
     } else {

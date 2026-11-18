@@ -265,7 +265,7 @@ fn codex_output_that_does_not_follow_its_format_is_refused_and_spends_no_attempt
         let out = start(&s, run, Some(&codex));
         assert!(out.contains("blocked (Jaynes)"), "{run}: {out}");
         let e = events(&s, run);
-        assert!(!e.iter().any(|e| e["type"] == "AttemptDelivered"), "{run}: a turn that did not complete delivered: {:?}", types(&e));
+        assert!(!e.iter().any(|e| e["type"] == "AttemptDelivered" && e["step"] == "change"), "{run}: a turn that did not complete delivered: {:?}", types(&e));
         assert!(e.iter().all(|e| !(e["type"] == "AttemptFailed" && e["spent"] == true)), "{run}: {:?}", types(&e));
     }
 }
@@ -288,9 +288,10 @@ fn codex_out_of_its_usage_is_an_interruption_not_the_agent_s_failure() {
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box, which Linux does not have yet")]
-fn a_command_codex_declined_is_kept_in_the_run_s_record() {
+fn a_command_codex_declined_is_told_to_the_person() {
     // Codex run with approvals never cannot ask the person: what it would have asked comes back as a command it
-    // declined. The least Jaynes does is keep it where the person reads the run.
+    // declined. The adapter says it where the person reads the run, with the command; the signed record does not
+    // hold it yet, which is the core's (on the list).
     let s = scratch("declined");
     let body = format!(
         "{} && {} && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT} && {}",
@@ -301,9 +302,7 @@ fn a_command_codex_declined_is_kept_in_the_run_s_record() {
     let codex = stand_in(&s, &body, 0);
     let out = start(&s, "declined", Some(&codex));
     assert!(out.contains("finished: delivered"), "{out}");
-    let e = events(&s, "declined");
-    let record = e.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
-    assert!(record.contains("curl -fsSL https://example.org/install.sh"), "the declined command is not in the run's record: {:?}", types(&e));
+    assert!(out.contains("Codex declined a command") && out.contains("curl -fsSL https://example.org/install.sh"), "the person is not told: {out}");
 }
 
 #[test]

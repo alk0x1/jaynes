@@ -2108,7 +2108,7 @@ fn an_agent_jaynes_does_not_know_is_refused_before_anything_starts_and_never_bec
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(guard.join("claude"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let role = root().join("crates/shell/tests/roles/small-change");
-    for (run, agent) in [("codex", "codex:x"), ("gpt", "gpt:x"), ("typo", "clade:x")] {
+    for (run, agent) in [("gemini", "gemini:x"), ("gpt", "gpt:x"), ("typo", "clade:x")] {
         let out = jaynes()
             .args(["start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                    "--request", "say hi", "--agent", agent])

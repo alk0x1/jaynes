@@ -41,24 +41,35 @@ impl Setup {
             (Some(p), Some(b)) => Some(crate::project::open(target, Path::new(p), &dir.join("project"), b)),
             _ => None,
         };
-        let agent = agent_named(s["agent"].as_str().unwrap_or("claude"));
+        let agent = agent_in(s["agent"].as_str().unwrap_or("claude"), Some(&role.library));
         Ok(Setup { run: run.to_string(), dir, role, copy, agent })
     }
 }
 
-/// Whether `spec` names an agent program Jaynes knows: `claude`, `claude:MODEL` or `command:CMD`. Anything else is
+/// Whether `spec` names an agent program Jaynes knows: `claude`, `claude:MODEL`, `codex:MODEL` or `command:CMD`. Anything else is
 /// refused before a run starts, and never taken for Claude Code: a name mistyped would spend the person's quota.
 pub fn known_agent(spec: &str) -> Result<(), String> {
-    if spec == "claude" || spec.starts_with("claude:") || spec.strip_prefix("command:").is_some_and(|c| !c.trim().is_empty()) {
+    if spec == "claude" || spec.starts_with("claude:") || spec.strip_prefix("command:").is_some_and(|c| !c.trim().is_empty())
+        || spec.strip_prefix("codex:").is_some_and(|m| !m.trim().is_empty())
+    {
         return Ok(());
     }
-    Err(format!("{spec} is not an agent Jaynes knows: the agent is claude, claude:MODEL or command:CMD"))
+    Err(format!("{spec} is not an agent Jaynes knows: the agent is claude, claude:MODEL, codex:MODEL or command:CMD"))
 }
 
-/// The agent a run's setup names: `command:CMD`, or `claude:MODEL` with the model fixed when the run started.
+/// The agent a run's setup names: `command:CMD`, `codex:MODEL`, or `claude:MODEL` with the model fixed when the run
+/// started.
 pub fn agent_named(spec: &str) -> Box<dyn Agent> {
+    agent_in(spec, None)
+}
+
+/// `agent_named`, with the role library whose box runs an agent program that has no guards of Jaynes's own.
+pub fn agent_in(spec: &str, library: Option<&Path>) -> Box<dyn Agent> {
     if let Some(cmd) = spec.strip_prefix("command:") {
         return Box::new(agent::Shell { command: cmd.to_string() });
+    }
+    if let Some(model) = spec.strip_prefix("codex:") {
+        return Box::new(agent::Codex::new(model, library));
     }
     let mut claude = agent::Claude::default();
     if let Some(model) = spec.strip_prefix("claude:").filter(|m| !m.is_empty()) {
@@ -1505,9 +1516,11 @@ mod tests {
         for known in ["claude", "claude:claude-opus-5-5", "command:true"] {
             assert!(known_agent(known).is_ok(), "{known}");
         }
-        for unknown in ["codex:x", "gpt:x", "clade:x", "Claude", "command:", "command: ", ""] {
+        for unknown in ["gemini:x", "gpt:x", "clade:x", "Claude", "command:", "command: ", ""] {
             assert!(known_agent(unknown).is_err_and(|e| e.contains("claude:MODEL") && e.contains("command:CMD")), "{unknown}");
         }
+        assert!(known_agent("codex:gpt-5.5").is_ok() && known_agent("codex:").is_err());
+        assert!(agent_named("codex:gpt-5.5").name().starts_with("codex gpt-5.5"));
     }
 
     #[test]

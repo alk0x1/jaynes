@@ -44,6 +44,10 @@ pub struct Spec<'a> {
 /// and what it says it runs with: its model, its permission mode, its tools.
 fn session_of(line: &str) -> Option<(String, jaynes_core::event::Confirmed)> {
     let v: Value = serde_json::from_str(line).ok()?;
+    // Codex names its thread as its turn starts, and nothing it runs with
+    if v["type"] == "thread.started" {
+        return Some((v["thread_id"].as_str()?.to_string(), Default::default()));
+    }
     if v["type"] != "system" {
         return None;
     }
@@ -265,10 +269,17 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
 /// How a line of Claude Code's stream changes the count of its tools at work: a tool it calls starts one, a tool's
 /// result ends one.
 fn tools_at_work(line: &str) -> i64 {
-    if !line.contains("tool_use") && !line.contains("tool_result") {
+    if !line.contains("tool_use") && !line.contains("tool_result") && !line.contains("\"item.") {
         return 0;
     }
     let Ok(v) = serde_json::from_str::<Value>(line) else { return 0 };
+    // Codex: a command it starts is at work until its item completes
+    let working = |v: &Value| matches!(v["item"]["type"].as_str(), Some("command_execution" | "mcp_tool_call" | "web_search"));
+    match v["type"].as_str() {
+        Some("item.started") if working(&v) => return 1,
+        Some("item.completed") if working(&v) && v["item"]["status"] != "declined" => return -1,
+        _ => {}
+    }
     let count = |kind: &str| v["message"]["content"].as_array().map(|a| a.iter().filter(|c| c["type"] == kind).count() as i64).unwrap_or(0);
     match v["type"].as_str() {
         Some("assistant") => count("tool_use"),
@@ -575,6 +586,185 @@ impl Agent for Claude {
             }
         };
         Turn { ended, applied }
+    }
+}
+
+// --- Codex -------------------------------------------------------------------------------------------------------
+
+/// Why the real Codex does not run yet.
+pub const CODEX_NOT_YET: &str = "Codex does not run yet: Jaynes runs it only inside its own box, and from there Codex cannot reach its model until Jaynes opens a way to it";
+
+/// `codex exec --json`, inside Jaynes's box: never with only its own sandbox, which reads the whole disk, the engine's
+/// home included. Its own sandbox is off inside the box (macOS opens no box inside another), and so are its approvals,
+/// the person's settings and rules. The format it speaks is that of codex-rs/exec's exec_events.rs.
+pub struct Codex {
+    pub model: String,
+    /// The program: a stand-in named by JAYNES_CODEX. None while the real Codex cannot reach its model from the box.
+    pub program: Option<PathBuf>,
+    /// The role library, whose box runs the program.
+    pub library: Option<PathBuf>,
+}
+
+impl Codex {
+    pub fn new(model: &str, library: Option<&Path>) -> Codex {
+        Codex { model: model.to_string(), program: std::env::var("JAYNES_CODEX").ok().map(PathBuf::from), library: library.map(Path::to_path_buf) }
+    }
+
+    /// The arguments of one turn, in `session` when it goes on in one.
+    pub fn arguments(&self, cwd: &Path, session: Option<&str>) -> Vec<String> {
+        let mut args: Vec<String> = ["exec", "--json", "--model", &self.model, "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--sandbox", "danger-full-access", "--cd"]
+            .iter().map(|s| s.to_string()).collect();
+        args.push(cwd.display().to_string());
+        for c in ["approval_policy=\"never\"", "project_doc_max_bytes=0", "web_search=\"disabled\""] {
+            args.extend(["-c".to_string(), c.to_string()]);
+        }
+        if let Some(s) = session {
+            args.extend(["resume".to_string(), s.to_string()]);
+        }
+        // the prompt on its input
+        args.push("-".to_string());
+        args
+    }
+
+    /// The command line that runs `args` inside Jaynes's box, from the role library's box.
+    fn boxed(&self, program: &Path, cwd: &Path, tmp: &Path, args: &[String]) -> Result<Vec<String>, String> {
+        let library = self.library.as_ref().ok_or("Jaynes has no box library for Codex in this run")?;
+        let python = std::env::var("JAYNES_PYTHON").unwrap_or_else(|_| "python3".to_string());
+        let done = Command::new(python)
+            .arg(library.join("jaynes_box.py"))
+            .args(["agent", &cwd.display().to_string(), &tmp.display().to_string(), "--", &program.display().to_string()])
+            .args(args)
+            .env("PYTHONPATH", library)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .map_err(|e| format!("Jaynes could not start its box for Codex: {e}"))?;
+        let said = String::from_utf8_lossy(&done.stdout).trim().to_string();
+        if !done.status.success() {
+            return Err(if said.is_empty() { String::from_utf8_lossy(&done.stderr).chars().take(300).collect() } else { said });
+        }
+        serde_json::from_str(&said).map_err(|e| format!("Jaynes's box gave no command line for Codex: {e}"))
+    }
+}
+
+impl Agent for Codex {
+    fn name(&self) -> String {
+        format!("codex {}", self.model)
+    }
+
+    fn probe(&self, cwd: &Path) -> Result<(), String> {
+        let Some(program) = &self.program else { return Err(CODEX_NOT_YET.to_string()) };
+        if !program.is_file() {
+            return Err(format!("the Codex program {} is not there", program.display()));
+        }
+        if self.library.is_none() {
+            return Err("Jaynes has no box library for Codex in this run".to_string());
+        }
+        probe_folder(cwd)
+    }
+
+    fn turn(&self, spec: Spec<'_>) -> Turn {
+        let args = self.arguments(spec.cwd, spec.session);
+        let applied = json!({"program": "codex", "model": self.model, "arguments": args, "in": "Jaynes's box", "resume": spec.session});
+        let Some(program) = &self.program else {
+            return Turn { ended: Ended::Fault { reason: CODEX_NOT_YET.to_string() }, applied };
+        };
+        let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
+        let _made = std::fs::create_dir_all(&tmp);
+        let argv = match self.boxed(program, spec.cwd, &tmp, &args) {
+            Ok(argv) if !argv.is_empty() => argv,
+            Ok(_) => return Turn { ended: Ended::Fault { reason: "Jaynes's box gave an empty command line for Codex".into() }, applied },
+            Err(reason) => return Turn { ended: Ended::Fault { reason }, applied },
+        };
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..]).current_dir(spec.cwd).env("TMPDIR", &tmp);
+        for (k, v) in &spec.env {
+            cmd.env(k, v);
+        }
+        let ended = match run(cmd, spec.prompt, spec.deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session, live(spec.transcript.as_deref())) {
+            Err(reason) => Ended::Fault { reason },
+            Ok(Watched { stalled: true, .. }) => Ended::Interrupted { reason: "its connection to the model went silent; continue the run to take it up again".to_string() },
+            Ok(Watched { code, out, err, took, timed_out, .. }) => {
+                if let Some(t) = &spec.transcript {
+                    let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
+                }
+                let read = CodexTurn::read(&out);
+                for command in &read.declined {
+                    say(&format!("Codex declined a command it was not allowed to run, and could not ask you: {command}"));
+                }
+                read.ended(code, &err, took, timed_out)
+            }
+        };
+        Turn { ended, applied }
+    }
+}
+
+fn say(line: &str) {
+    eprintln!("{line}");
+}
+
+/// What a turn of `codex exec --json` said.
+#[derive(Debug, Default)]
+struct CodexTurn {
+    session: Option<String>,
+    /// From turn.completed: input (the cached input counted inside it), cached input, output.
+    usage: Option<(u64, u64, u64)>,
+    /// From turn.failed and error.
+    failures: Vec<String>,
+    declined: Vec<String>,
+    /// Lines that are not its events.
+    other: usize,
+}
+
+impl CodexTurn {
+    fn read(out: &str) -> CodexTurn {
+        let mut t = CodexTurn::default();
+        for line in out.lines().filter(|l| !l.trim().is_empty()) {
+            let Ok(e) = serde_json::from_str::<Value>(line) else {
+                t.other += 1;
+                continue;
+            };
+            let n = |v: &Value, k: &str| v[k].as_u64().unwrap_or(0);
+            match e["type"].as_str() {
+                Some("thread.started") => t.session = e["thread_id"].as_str().map(str::to_string),
+                Some("turn.completed") => {
+                    let u = &e["usage"];
+                    t.usage = Some((n(u, "input_tokens"), n(u, "cached_input_tokens"), n(u, "output_tokens")));
+                }
+                Some("turn.failed") => t.failures.push(e["error"]["message"].as_str().unwrap_or("the turn failed").to_string()),
+                Some("error") => t.failures.push(e["message"].as_str().unwrap_or("an error").to_string()),
+                Some("item.completed") if e["item"]["type"] == "command_execution" && e["item"]["status"] == "declined" => {
+                    t.declined.push(e["item"]["command"].as_str().unwrap_or("").to_string());
+                }
+                Some(_) => {}
+                None => t.other += 1,
+            }
+        }
+        t
+    }
+
+    fn ended(self, code: Option<i32>, err: &str, took: Duration, timed_out: bool) -> Ended {
+        let (input, cached, output) = self.usage.unwrap_or((0, 0, 0));
+        // the cached input is inside the input for Codex: the tokens are the new input and the output
+        let usage = Usage { seconds: took.as_secs(), tokens: input.saturating_sub(cached) + output, cached };
+        if timed_out {
+            return Ended::Failed { reason: "the turn ran past its deadline".to_string(), usage };
+        }
+        let said = self.failures.last().cloned().unwrap_or_default();
+        let lower = format!("{} {err}", self.failures.join(" ")).to_lowercase();
+        if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("quota") {
+            return Ended::Interrupted { reason: "quota".to_string() };
+        }
+        if self.usage.is_none() && self.failures.is_empty() {
+            let tail: String = err.trim().chars().take(300).collect();
+            return Ended::Fault { reason: format!("Codex ended with no completed turn ({code:?}), {} lines not its events: {tail}", self.other) };
+        }
+        if !self.failures.is_empty() {
+            return Ended::Failed { reason: format!("the Codex turn failed: {}", said.chars().take(300).collect::<String>()), usage };
+        }
+        if code != Some(0) {
+            return Ended::Failed { reason: format!("Codex exited with {code:?}: {}", err.trim().chars().take(300).collect::<String>()), usage };
+        }
+        Ended::Ran { usage, session: self.session, model: String::new() }
     }
 }
 
