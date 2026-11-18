@@ -208,8 +208,10 @@ pub fn stop_agent_for(dir: &Path, input: &Input) {
             if !agent::stop_left(&dir.join("agent.pid")) {
                 let _gone = std::fs::remove_file(dir.join(HALTED_AGENT));
             }
+            // a mark an earlier halt left stays: that halt's stopped call may not have come back yet
+            let had = dir.join(HALTED_BOX).exists();
             let _marked = std::fs::write(dir.join(HALTED_BOX), "");
-            if !stop_box_groups(dir) {
+            if !stop_box_groups(dir) && !had {
                 let _gone = std::fs::remove_file(dir.join(HALTED_BOX));
             }
         }
@@ -1608,6 +1610,23 @@ mod tests {
         let _w = stranger.wait();
         let _k = role.kill();
         let _w = role.wait();
+        let _gone = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_halt_keeps_the_mark_of_the_first() {
+        // the first halt stopped a check's command and marked the call interrupted; a second, before the run's process
+        // took the first, stops nothing and must not take the mark away, or the stopped check would count as failed
+        let dir = std::env::temp_dir().join(format!("jaynes-box-mark-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join(HALTED_BOX), "").expect("mark");
+        stop_agent_for(&dir, &Input::Halt { by: By::Person });
+        assert!(dir.join(HALTED_BOX).exists(), "a second halt took away the first's mark");
+        // a halt that stops nothing, with no mark before it, leaves none
+        let _gone = std::fs::remove_file(dir.join(HALTED_BOX));
+        stop_agent_for(&dir, &Input::Halt { by: By::Person });
+        assert!(!dir.join(HALTED_BOX).exists(), "a halt that stopped nothing left a mark");
         let _gone = std::fs::remove_dir_all(&dir);
     }
 
