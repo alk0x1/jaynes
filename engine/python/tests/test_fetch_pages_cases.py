@@ -74,6 +74,21 @@ class TheReader(unittest.TestCase):
         self.assertIsInstance(got, Fail)
         self.assertIn("larger than", got.reasons[0])
 
+    def test_reads_a_name_of_hex_letters_as_a_name_and_never_asks_the_network_for_it(self):
+        case = {**self.PUBLIC, "url": "https://bad.cafe/a", "resolve": {"bad.cafe": ["93.184.215.14"]},
+                "answers": {"https://bad.cafe/a": self.PUBLIC["answers"]["https://docs.example.org/a"]}}
+        with mock.patch.object(menu, "_resolve", side_effect=AssertionError("a name went to the machine's resolver")):
+            self.assertIsInstance(menu.CASE_READERS["fetch-pages"](case), Pass)
+
+    def test_counts_as_off_the_internet_what_either_its_own_rule_or_the_menu_s_does(self):
+        # ranges the menu closes that Python may call global, an address with a zone, and what Python itself closes
+        for ip in ("192.0.0.8", "192.88.99.1", "3fff::1", "5f00::1", "fe80::1%en0", "10.0.0.1", "::ffff:8.8.8.8"):
+            self.assertFalse(menu._case_public(ip), ip)
+        self.assertTrue(menu._case_public("93.184.215.14"))
+        # the menu's rule alone, taken away, still leaves the reader's own
+        with mock.patch.object(menu, "_public", return_value=True):
+            self.assertFalse(menu._case_public("10.0.0.1"))
+
     def test_needs_no_network(self):
         with mock.patch("socket.create_connection", side_effect=AssertionError("a case reached the network")):
             for case in load("reject.json") + load("accept.json"):

@@ -1295,6 +1295,18 @@ def quotes_found_case(case: dict[str, Any]) -> Any:
     return quotes_found({"output": {"claims": [claim]}, "given": [{"step": "fetch", "output": fetched}]}, {"field": "claims", "pages": "fetch"})
 
 
+def _case_public(ip: str) -> bool:
+    """Whether a case's reader takes an address as on the public internet: by its own rule and by the menu's, so what
+    either calls off the internet is, and the reader stays as strict as the step at the least."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    own = "%" not in ip and a.is_global and not a.is_multicast and not (a.version == 6 and a.ipv4_mapped is not None)
+    return own and _public(ip)
+
+
 def fetch_pages_case(case: dict[str, Any]) -> Any:
     """What fetch-pages does with a case, as a run reads a page (download, then its text), with no network. A case
     gives the ``url`` an agent listed; ``resolve``, what each name resolves to (left out, and always for an address
@@ -1311,7 +1323,15 @@ def fetch_pages_case(case: dict[str, Any]) -> Any:
     now = [0.0]
 
     def numeric(host: str) -> bool:
-        return host == "localhost" or all(c in "0123456789abcdefx.:%" for c in host.lower())
+        """An address written as a number, or localhost: what the machine's resolver reads with no network."""
+        h = host.lower().rstrip(".")
+        if h == "localhost":
+            return True
+        try:
+            ipaddress.ip_address(h.split("%")[0])
+            return True
+        except ValueError:
+            return all(re.fullmatch(r"0x[0-9a-f]*|[0-9]+", label) for label in h.split("."))
 
     def resolve(host: str) -> list[str]:
         if "resolve" in case and not numeric(host):
@@ -1348,19 +1368,12 @@ def fetch_pages_case(case: dict[str, Any]) -> Any:
     def get(url: str) -> dict[str, Any]:
         return download(url, resolve=resolve, send=send, clock=lambda: now[0], sleep=lambda _s: None)
 
-    def public(ip: str) -> bool:
-        try:
-            a = ipaddress.ip_address(ip.split("%")[0])
-        except ValueError:
-            return False
-        return a.is_global and not a.is_multicast and not (a.version == 6 and a.ipv4_mapped is not None)
-
     try:
         page = read_page(case["url"], get)
     except Unreachable as e:
         page = {"read": False, "why": f"Jaynes could not read it in time: {e}"}
     # what was sent where it may not is let through, read or not
-    if page["read"] or any(not public(ip) for ip in sent):
+    if page["read"] or any(not _case_public(ip) for ip in sent):
         return Pass()
     return Fail(str(page["why"]))
 
