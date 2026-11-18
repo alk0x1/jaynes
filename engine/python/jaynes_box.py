@@ -24,6 +24,8 @@ writes none of the terminals (/dev/ttys*), so a command that needs a pty of its 
 Services of macOS reached by name (mach-lookup) are open but for the pasteboard's and the keychain's, which are
 denied (``MACH_DENIED``): no project command reads or writes what the person copied, nor asks their keychain. Every
 other service still answers; closing them all takes a profile that denies by default, with each service listed.
+A service's name may change in a later macOS: the end-to-end test that runs a real run's suite as a probe (it fails
+when it reads or writes the pasteboard or lists the keychains) is what notices, so it must keep passing.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
