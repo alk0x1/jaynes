@@ -29,6 +29,8 @@ pub struct Stop {
     pub title: String,
     pub step: String,
     pub permission: bool,
+    /// The question's kind, for the names of its verdicts ([`label_for`]).
+    pub kind: QuestionKind,
     pub choose: bool,
     pub offered: Vec<VerdictKind>,
     pub items: Vec<Item>,
@@ -79,6 +81,7 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
         title: crate::listing::title(q),
         step: q.question.step.clone(),
         permission: q.question.kind == QuestionKind::Permission,
+        kind: q.question.kind,
         choose: q.question.choose,
         offered: q.question.offered.clone(),
         items,
@@ -137,9 +140,17 @@ pub fn ahead(run: &Run, step: &str) -> Option<String> {
 
 /// How a verdict is offered, in a word.
 pub fn label(v: VerdictKind, permission: bool) -> &'static str {
-    match (v, permission) {
-        (VerdictKind::Keep, true) => "Allow",
-        (VerdictKind::Drop, true) => "Refuse",
+    label_for(v, if permission { QuestionKind::Permission } else { QuestionKind::Decision })
+}
+
+/// A verdict's name as the person reads it on a question of `kind`: a leave is allowed or refused, and a merge that
+/// brings in what runs later (G19) is merged, or the change is taken as a branch only.
+pub fn label_for(v: VerdictKind, kind: QuestionKind) -> &'static str {
+    match (v, kind) {
+        (VerdictKind::Keep, QuestionKind::Permission) => "Allow",
+        (VerdictKind::Drop, QuestionKind::Permission) => "Refuse",
+        (VerdictKind::Keep, QuestionKind::Merge) => "Merge",
+        (VerdictKind::Drop, QuestionKind::Merge) => "Branch only",
         (VerdictKind::Keep, _) => "Keep",
         (VerdictKind::Change, _) => "Change",
         (VerdictKind::Redo, _) => "Redo",
@@ -151,6 +162,13 @@ pub fn label(v: VerdictKind, permission: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_merge_s_verdicts_say_merge_or_a_branch_only_and_a_leave_s_allow_or_refuse() {
+        assert_eq!((label_for(VerdictKind::Keep, QuestionKind::Merge), label_for(VerdictKind::Drop, QuestionKind::Merge)), ("Merge", "Branch only"));
+        assert_eq!((label(VerdictKind::Keep, true), label(VerdictKind::Drop, true)), ("Allow", "Refuse"));
+        assert_eq!((label(VerdictKind::Keep, false), label_for(VerdictKind::Drop, QuestionKind::Decision)), ("Keep", "Drop"));
+    }
     use jaynes_core::manifest::{DeliveryKind, Effect, Executor, Manifest, Reach, SessionKind, StepDecl};
     use jaynes_core::question::{Item as QItem, Question};
     use jaynes_core::run::{Phase, QuestionState};

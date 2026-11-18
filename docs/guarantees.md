@@ -1,6 +1,6 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. G19 added by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -80,9 +80,14 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 - **G16.** Reading the record again gives the same state, and a run stays on the version of
   its role and of the engine it started with.
 
+## What lands on your branch
+
+- **G19.** A delivery that lands on your branch never brings in, without your answer, a file that other programs run or obey later outside any box: agents' and editors' settings and instructions, git hooks and attributes, CI, new packages or packages from a new source, environment and package scripts, as the engine lists them. The run waits before the merge, names each such file and shows what changes in it; you merge it, or take the change as a branch only. No agent and no rule answers it, and an answer counts only for the files and the changes it was shown.
+
 ## What this page does not promise
 
 - That Jaynes holds against a program that runs as you, outside any box, and rewrites Jaynes's own files.
+- That the list of such files is complete: it holds what is known to run by itself today, and a file a tool starts to obey later is not on it until it is added.
 - That a step is confined. Jaynes sets the agent program's own guards for each step and
   records the settings it applied; those guards are partial (in Claude Code the sandbox covers
   shell commands only), and Jaynes does not claim more than them.

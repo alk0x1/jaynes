@@ -80,7 +80,7 @@ theorem owedMove_cases (r : Run) (i : Nat) : r.owedMove i = .ask i ∨ r.owedMov
   split <;> simp
 
 theorem settled_cases (r : Run) :
-    r.settled = .deliver ∨ r.settled = .waitAnswers ∨ r.settled = .finish := by
+    r.settled = .deliver ∨ r.settled = .waitAnswers ∨ r.settled = .finish ∨ r.settled = .askMerge := by
   unfold Run.settled
   repeat' split
   all_goals simp
@@ -150,7 +150,7 @@ theorem next_start {r : Run} {i : Nat} (h : r.next = .start i) :
   obtain ⟨_, hb, hc⟩ := next_cases h (by simp)
   rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
   · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
-  · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases settled_cases r with h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
   · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨hst, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
     · simp at he
@@ -202,7 +202,7 @@ theorem g13_invalidate {r : Run} {i : Nat} (h : r.next = .invalidate i) :
   obtain ⟨_, _, hc⟩ := next_cases h (by simp)
   rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, hk, he⟩⟩
   · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
-  · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases settled_cases r with h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
   · obtain ⟨hnf, _⟩ := firstWhere_some hk
     rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨hst, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
@@ -221,7 +221,7 @@ theorem g14_never_redone {r : Run} {i : Nat} (h : r.next = .invalidate i) : (r.g
   obtain ⟨_, _, hc⟩ := next_cases h (by simp)
   rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, _, he⟩⟩
   · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
-  · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases settled_cases r with h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
   · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, hirr, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
     · simp at he
@@ -273,21 +273,21 @@ namespace Jaynes
 
 /-- **G9.** A rule never answers from outside the core. -/
 theorem g9_no_rule (a : AnswerCase) (h : a.who = .rule) : a.accepts = false := by
-  simp [AnswerCase.accepts, AnswerCase.acceptsActed, h]
+  simp [AnswerCase.accepts, AnswerCase.acceptsActed, AnswerCase.acceptsMerge, h]
 
 /-- **G9.** An agent's answer is taken only to let a result go on as it is, at a stop the role marks a release,
     never at the person's own step nor at a braked stop, never carrying context, and never over an answer. -/
 theorem g9_agent (a : AnswerCase) (h : a.accepts = true) (ha : a.who = .agent) :
     a.decision = true ∧ a.personStep = false ∧ a.input = false ∧ a.release = true ∧ a.allKeep = true ∧
       a.braked = false ∧ a.hasContext = false ∧ a.answered = false := by
-  unfold AnswerCase.accepts AnswerCase.acceptsActed at h
+  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsMerge at h
   simp only [ha] at h
   repeat' (split at h <;> try simp at h)
   all_goals simp_all
 
 /-- **G10.** An answer is taken only for the question as it stands: not replaced, and as it was shown. -/
 theorem g10_shown (a : AnswerCase) (h : a.accepts = true) : a.shownMatches = true ∧ a.superseded = false := by
-  unfold AnswerCase.accepts AnswerCase.acceptsActed at h
+  unfold AnswerCase.accepts AnswerCase.acceptsActed AnswerCase.acceptsMerge at h
   repeat' (split at h <;> try simp at h)
   all_goals simp_all
 
@@ -356,7 +356,7 @@ theorem g17_skip {r : Run} {i : Nat} (h : r.next = .skip i) :
       simp at hs
       exact ⟨hs.1.1, hs.1.2, hs.2⟩
     · simp at he
-  · rcases settled_cases r with h' | h' | h' <;> rw [h'] at he <;> simp at he
+  · rcases settled_cases r with h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
   · rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
     · simp at he
@@ -372,7 +372,7 @@ theorem g11_said_is_done (c : EffectCase)
     ∀ x, x ∈ c.said ↔ x ∈ c.did := by
   intro x
   unfold EffectCase.said EffectCase.did EffectCase.targets
-  by_cases hp : (c.permission || c.input) = true
+  by_cases hp : (c.permission || c.input || c.merge) = true
   · simp [hp]
   simp only [hp, Bool.false_eq_true, ↓reduceIte]
   by_cases hperson : c.personStep = true
@@ -410,5 +410,43 @@ theorem g11_said_is_done (c : EffectCase)
         simp only [List.any_eq_true, not_exists, not_and, Bool.not_eq_true] at hb
         exact hb it hit
       simp [this]
+
+end Jaynes
+
+namespace Jaynes
+
+/-! ## G19: what lands on the person's branch -/
+
+/-- **G19.** A delivery that merges into the person's branch and brings in what runs or is obeyed later outside any
+    box goes out only once the person answered about this very delivery. -/
+theorem g19_merge_waits {r : Run} (h : r.next = .deliver) (hh : r.mergeHeld = true) : r.mergeAnswered = true := by
+  obtain ⟨_, _, hc⟩ := next_cases h (by simp)
+  rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, _, he⟩⟩
+  · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
+  · unfold Run.settled at he
+    cases hd : r.deliveredCurrent <;> cases ha : r.mergeAnswered <;> cases hq : r.mergeAsked <;>
+      cases ho : r.anyOpenQuestion <;> simp [hd, ha, hq, ho, hh] at he ⊢
+  · exfalso
+    rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
+    · simp at he
+    · simp at he
+    · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+    · simp at he
+    · simp at he
+    · simp at he
+
+/-- **G19.** The answer about a merge is the person's alone, given once, about the delivery that would land: no
+    agent and no rule gives it, and an answer to a question about an earlier delivery is not taken. -/
+theorem g19_merge_answer (a : AnswerCase) (hm : a.merge = true) (hx : a.acted = false) (h : a.accepts = true) :
+    a.who = .person ∧ a.current = true ∧ a.answered = false := by
+  unfold AnswerCase.accepts at h
+  simp only [hx, hm, ↓reduceIte, Bool.false_eq_true] at h
+  unfold AnswerCase.acceptsMerge at h
+  cases hw : a.who <;> simp_all
+
+/-- **G11**, at G19's question: the answer about a merge, Merge or Branch only, says nothing will run again, and
+    nothing does. -/
+theorem g19_merge_answer_reruns_nothing (c : EffectCase) (h : c.merge = true) : c.said = [] ∧ c.did = [] := by
+  simp [EffectCase.said, EffectCase.did, h]
 
 end Jaynes

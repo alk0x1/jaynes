@@ -7,6 +7,7 @@ pub mod drive;
 pub mod index;
 pub mod install;
 pub mod listing;
+pub mod manifests;
 pub mod mcp;
 pub mod page;
 pub mod permit;

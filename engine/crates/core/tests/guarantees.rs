@@ -427,6 +427,17 @@ impl World {
                     }
                     let _ = i;
                 }
+                // G19: a merge that brings in what runs later outside any box goes out only on the person's keep about
+                // this very delivery, every file it showed kept; dropped, it delivers the branch only
+                Command::Deliver { digest, merge, given } if !post.merge_holds().is_empty() && post.manifest.lands() && !post.undone => {
+                    let answer = post.merge_answer(digest);
+                    assert!(answer.is_some(), "seed {seed}: G19 a merge bringing in {:?} went out unanswered", post.merge_holds().iter().map(|(c, _)| &c.what).collect::<Vec<_>>());
+                    assert_eq!(Some(*merge), answer, "seed {seed}: G19 the merge did not do what the person answered");
+                    for r in given {
+                        let j = post.manifest.index(&r.step).expect("read");
+                        assert_eq!(post.output(j), Some(&r.output), "seed {seed}: G2 an unchecked output was given");
+                    }
+                }
                 Command::RunRole { given, .. } | Command::Deliver { given, .. } => {
                     for r in given {
                         let j = post.manifest.index(&r.step).expect("read");
@@ -561,9 +572,9 @@ fn items_for(rng: &mut Rng, run: &Run, step: &str) -> Vec<Item> {
 fn changed(rng: &mut Rng) -> Vec<Changed> {
     match rng.below(10) {
         // raw, as any measure may report it: the mark at random, also off a path the core knows is on the floor
-        0 => vec![Changed { what: ".github/workflows/ci.yml".to_string(), size: 2, floor: rng.chance(50) }],
-        1 => vec![Changed { what: "src/big.rs".to_string(), size: 80, floor: rng.chance(20) }],
-        2..=5 => vec![Changed { what: format!("src/f{}.rs", rng.below(3)), size: 1 + rng.below(5) as u64, floor: rng.chance(10) }],
+        0 => vec![Changed { what: ".github/workflows/ci.yml".to_string(), size: 2, floor: rng.chance(50), ..Default::default() }],
+        1 => vec![Changed { what: "src/big.rs".to_string(), size: 80, floor: rng.chance(20), ..Default::default() }],
+        2..=5 => vec![Changed { what: format!("src/f{}.rs", rng.below(3)), size: 1 + rng.below(5) as u64, floor: rng.chance(10), ..Default::default() }],
         _ => Vec::new(),
     }
 }
@@ -672,8 +683,10 @@ impl World {
         let open: Vec<&jaynes_core::run::QuestionState> = run.questions.values().collect();
         let Some(q) = self.rng.pick(&open).map(|q| q.question.clone()) else { return };
         let mut verdicts = BTreeMap::new();
+        // a merge is answered file by file, so most of its answers say something of each file
+        let each = if q.kind == QuestionKind::Merge { 95 } else { 70 };
         for item in &q.items {
-            if self.rng.chance(70) {
+            if self.rng.chance(each) {
                 verdicts.insert(item.id.clone(), verdict(&mut self.rng, &q.offered));
             }
         }
@@ -696,7 +709,11 @@ impl World {
         }
         let wrong = self.rng.chance(5);
         let shown = if wrong { Digest("stale".to_string()) } else { q.shown() };
-        let by = match self.rng.below(20) {
+        // a merge and an act already done are the person's alone: most answers to them are theirs, so the runs held
+        // there go on to what follows (an agent's or a rule's answer is still tried, and refused)
+        let theirs = matches!(q.kind, QuestionKind::Merge | QuestionKind::Acted);
+        let roll = if theirs && self.rng.chance(80) { 19 } else { self.rng.below(20) };
+        let by = match roll {
             0..=2 => {
                 if self.rng.chance(60) {
                     verdicts.clear();
@@ -735,7 +752,7 @@ impl World {
                     || (person && q.items.iter().any(|x| answer.verdict(&x.id).sends_back() && run.manifest.index(&x.id).is_some_and(|j| run.acted(j)))));
                 let case = serde_json::json!({
                     "step": back_to, "personStep": person, "input": run.steps[i].inputs.contains(&q.id),
-                    "permission": q.kind == QuestionKind::Permission, "items": items,
+                    "permission": q.kind == QuestionKind::Permission, "merge": q.kind == QuestionKind::Merge, "items": items,
                 });
                 let show = |mut v: Vec<usize>| {
                     v.sort_unstable();
@@ -1408,10 +1425,66 @@ fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
             step: "change".to_string(),
             attempt: t,
             fix: 0,
-            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false }], usage: Usage::default(), session: None },
+            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false, ..Default::default() }], usage: Usage::default(), session: None },
         });
         assert_eq!(run.risk, Risk::High, "G7 {path} left the run at low risk");
     }
+}
+
+/// A run of one agent step on the whole project, delivered by merge, whose attempt brings in `changed`: what it
+/// commands once the change is in.
+fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
+    let mut change = step("change", Executor::Agent);
+    change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
+    let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: jaynes_core::manifest::DeliveryKind::Merge };
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new() }).expect("start");
+    let mut run = Run::fold(&out.events).expect("run");
+    let c = probe_ok(&mut run, out.commands);
+    let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
+    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None } });
+    (run, c)
+}
+
+fn merge_asked(c: &[Command]) -> Option<Question> {
+    c.iter().find_map(|c| if let Command::Ask { question } = c { (question.kind == QuestionKind::Merge).then(|| question.clone()) } else { None })
+}
+
+fn delivered_merge(c: &[Command]) -> Option<bool> {
+    c.iter().find_map(|c| if let Command::Deliver { merge, .. } = c { Some(*merge) } else { None })
+}
+
+#[test]
+fn g19_a_merge_that_brings_in_what_runs_later_waits_for_the_person_who_alone_answers_it() {
+    let envrc = Changed { what: ".envrc".to_string(), size: 1, floor: true, digest: Some("b1".to_string()), ..Default::default() };
+    let (mut run, c) = merging(vec![envrc.clone(), Changed::file("src/a.rs".to_string(), 1)]);
+    // the run waits before the merge, on a question that names each such file and is bound to its change
+    assert_eq!(delivered_merge(&c), None, "G19 the merge went out unasked: {c:?}");
+    let q = merge_asked(&c).expect("G19 the merge asks the person");
+    assert!(q.holds);
+    assert_eq!(q.items.iter().map(|x| (x.id.as_str(), x.digest.0.as_str())).collect::<Vec<_>>(), [(".envrc", "b1")]);
+    assert_eq!(run.risk, Risk::High, "G7 still raises the risk");
+    // no agent and no rule answers it
+    let keep = |by: By| Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::from([(".envrc".to_string(), Verdict::Keep)]), by, context: String::new() };
+    for by in [By::Agent { who: "claude".to_string() }, By::Rule { rule: "anything".to_string() }] {
+        assert!(decide(Some(&run), &Input::Answer { answer: keep(by.clone()) }).is_err(), "G19 {by:?} answered the merge");
+    }
+    // the person keeps it: it merges
+    assert_eq!(delivered_merge(&feed(&mut run, Input::Answer { answer: keep(By::Person) })), Some(true));
+    // dropped: it is delivered on the run's branch only
+    let (mut run, c) = merging(vec![envrc]);
+    let q = merge_asked(&c).expect("asked");
+    let drop = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::from([(".envrc".to_string(), Verdict::Drop)]), by: By::Person, context: String::new() };
+    assert_eq!(delivered_merge(&feed(&mut run, Input::Answer { answer: drop })), Some(false));
+    // a manifest the measure says changes neither what runs nor where code comes from does not hold it, though it
+    // raises the risk; without the measure's word, a manifest holds it
+    let quiet = Changed { what: "package.json".to_string(), size: 1, floor: true, holds: Some(false), ..Default::default() };
+    let (run, c) = merging(vec![quiet.clone()]);
+    assert_eq!((run.risk, delivered_merge(&c)), (Risk::High, Some(true)), "{c:?}");
+    let (_, c) = merging(vec![Changed { holds: None, ..quiet }]);
+    assert!(merge_asked(&c).is_some(), "G19 a manifest with no word from the measure went out unasked");
+    // nothing on the floor: it merges as before
+    let (_, c) = merging(vec![Changed::file("src/a.rs".to_string(), 1)]);
+    assert_eq!(delivered_merge(&c), Some(true));
 }
 
 #[test]
@@ -1629,6 +1702,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::StopSkipped { .. } => hit("a certified stop skipped"),
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Acted => hit("an act held, not done again"),
                 Event::ActKept { .. } => hit("an act kept as it acted"),
+                Event::QuestionOpened { question } if question.kind == QuestionKind::Merge => hit("a merge held for the person"),
                 _ => {}
             }
         }
@@ -1639,7 +1713,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
-        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered",
+        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -2045,6 +2119,9 @@ fn model_case(run: &Run) -> String {
         "ceilingReached": run.spent.seconds >= run.ceiling.seconds || run.spent.tokens >= run.ceiling.tokens,
         "deliveredCurrent": run.delivered.as_ref() == Some(&run.delivery().0),
         "anyOpenQuestion": !run.open_questions().is_empty(),
+        "mergeHeld": run.manifest.lands() && !run.undone && !run.merge_holds().is_empty(),
+        "mergeAnswered": run.merge_answer(&run.delivery().0).is_some(),
+        "mergeAsked": run.merge_open(&run.delivery().0).is_some(),
     });
     // The core's first move from this state; a run waiting is put back to running, so its wait shows as a move.
     let mut fresh = run.clone();
@@ -2058,6 +2135,7 @@ fn model_case(run: &Run) -> String {
             let first = out.events.iter().find(|e| !matches!(e, Event::QuestionSuperseded { .. }));
             match first {
                 None => "none".to_string(),
+                Some(Event::QuestionOpened { question }) if question.kind == QuestionKind::Merge => "ask merge".to_string(),
                 Some(Event::QuestionOpened { question }) => format!("ask {}", index(&question.step)),
                 Some(Event::StopSkipped { step, .. }) => format!("skip {}", index(step)),
                 Some(Event::StepInvalidated { step, .. }) => format!("invalidate {}", index(step)),
@@ -2082,7 +2160,11 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
     let d = &run.manifest.steps[i];
     let s = &run.steps[i];
     let acted = q.question.kind == QuestionKind::Acted;
-    let valid = if acted {
+    let merge = q.question.kind == QuestionKind::Merge;
+    let valid = if merge {
+        answer.verdicts.keys().all(|id| q.question.items.iter().any(|x| &x.id == id)) && answer.back.is_empty()
+            && q.question.items.iter().all(|x| matches!(answer.verdicts.get(&x.id), Some(Verdict::Keep | Verdict::Drop)))
+    } else if acted {
         answer.verdicts.keys().all(|id| *id == q.question.step) && matches!(answer.verdict(&q.question.step), Verdict::Keep | Verdict::Redo { .. })
             && q.question.offered.contains(&answer.verdict(&q.question.step).kind()) && answer.back.is_empty()
     } else { answer.verdicts.iter().all(|(id, v)| {
@@ -2109,6 +2191,8 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
             && s.question.as_deref() == Some(q.question.id.as_str()) && s.status == Status::Done
             && s.done.as_ref().is_some_and(|x| x.round == q.question.round),
         "acted": acted,
+        "merge": merge,
+        "current": !merge || run.merges.get(&q.question.id) == Some(&run.delivery().0),
     });
     serde_json::json!({"kind": "answer", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
 }

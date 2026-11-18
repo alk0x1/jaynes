@@ -32,7 +32,9 @@ pub const SMALL_FILES: usize = 5;
 /// Paths that trusted tools run or obey later, outside any box: agents' and editors' settings and instructions,
 /// git attributes, submodules, git-lfs settings and hooks (the person's own git obeys them when the delivery lands), the
 /// git hook managers' own files (husky, pre-commit, lefthook), direnv, interpreters and package scripts, test and build entry points, dev
-/// containers, CI. Ported from the Python engine (`jaynes.project.FLOOR`).
+/// containers, CI. Ported from the Python engine (`jaynes.project.FLOOR`). A merge that brings one in waits for the
+/// person (G19), but a package manifest that changes neither what runs nor where code comes from ([`MANIFESTS`]). A
+/// dependency that comes in only through a lock file, without being in the manifest, does not hold the merge.
 pub const FLOOR: &[&str] = &[
     "**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.vscode/**", "**/.idea/**",
     "**/.zed/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules",
@@ -46,7 +48,7 @@ pub const FLOOR: &[&str] = &[
 
 /// One thing a step changed in its target, as Jaynes measured it from the step's copy, never as the agent reported
 /// it. On a repository: a file, its lines added and removed, and whether it is on the floor ([`FLOOR`]).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(from = "ChangedOnRecord")]
 pub struct Changed {
     /// What changed, in the target's own words: a path, an element, an action.
@@ -55,14 +57,46 @@ pub struct Changed {
     pub size: u64,
     /// It runs or is obeyed later outside any box, or cannot be taken back: it alone makes the change risky.
     pub floor: bool,
+    /// The fingerprint of what the change leaves (a file's content), when the measure knows it: a question about the
+    /// change is bound to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// The measure's word on a package manifest ([`MANIFESTS`]): whether its change holds a merge. Read only for a
+    /// manifest, and only to narrow: every other thing on the floor holds a merge whatever this says (G19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holds: Option<bool>,
+    /// What changes in it, in a line the person reads where a merge waits for them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub about: String,
 }
 
 impl Changed {
     /// A file of a repository or a folder that changed by `lines`, on the floor when [`FLOOR`] names it.
     pub fn file(path: String, lines: u64) -> Changed {
         let floor = !floor([path.as_str()]).is_empty();
-        Changed { what: path, size: lines, floor }
+        Changed { what: path, size: lines, floor, ..Default::default() }
     }
+}
+
+/// The package manifests on the floor: a change to one holds a merge only when it changes what runs or where code
+/// comes from (its scripts, its build, a new dependency, a dependency from another source), as the measure says. A
+/// dependency that comes in only through a lock file holds nothing.
+pub const MANIFESTS: &[&str] = &["**/package.json", "**/pyproject.toml", "**/Cargo.toml"];
+
+/// Whether `path` is a package manifest ([`MANIFESTS`]).
+pub fn manifest(path: &str) -> bool {
+    MANIFESTS.iter().any(|g| glob::matches(&path.to_lowercase(), &g.to_lowercase()))
+}
+
+/// G19: whether a change brought in by a merge waits for the person first. Every thing on the floor does, but a
+/// package manifest the measure said changes neither what runs nor where code comes from. Without the measure's
+/// word, a manifest holds too.
+pub fn holds_merge(target: Target, c: &Changed) -> bool {
+    let on_floor = c.floor
+        || match target {
+            Target::Repository => !floor([c.what.as_str()]).is_empty(),
+        };
+    on_floor && !(manifest(&c.what) && c.holds == Some(false))
 }
 
 /// A change as the record holds it: as above, or as engines before targets wrote it (a path and its lines, the floor
@@ -74,12 +108,18 @@ struct ChangedOnRecord {
     #[serde(alias = "lines")]
     size: u64,
     floor: Option<bool>,
+    #[serde(default)]
+    digest: Option<String>,
+    #[serde(default)]
+    holds: Option<bool>,
+    #[serde(default)]
+    about: String,
 }
 
 impl From<ChangedOnRecord> for Changed {
     fn from(r: ChangedOnRecord) -> Changed {
         let floor = r.floor.unwrap_or_else(|| !floor([r.what.as_str()]).is_empty());
-        Changed { what: r.what, size: r.size, floor }
+        Changed { what: r.what, size: r.size, floor, digest: r.digest, holds: r.holds, about: r.about }
     }
 }
 
@@ -206,13 +246,13 @@ mod tests {
 
     #[test]
     fn a_measure_may_put_more_on_the_floor_and_never_take_off_what_the_core_knows() {
-        let marked = Changed { what: "src/a.py".into(), size: 1, floor: true };
+        let marked = Changed { what: "src/a.py".into(), size: 1, floor: true, ..Default::default() };
         assert_eq!(of_change(Target::Repository, &[marked]).0, Risk::High);
-        let unknown = Changed { what: "a form sent".into(), size: 1, floor: true };
+        let unknown = Changed { what: "a form sent".into(), size: 1, floor: true, ..Default::default() };
         assert_eq!(of_change(Target::Repository, &[unknown]).0, Risk::High, "a name the core does not know, marked by the measure");
-        let unmarked = Changed { what: ".github/workflows/ci.yml".into(), size: 1, floor: false };
+        let unmarked = Changed { what: ".github/workflows/ci.yml".into(), size: 1, floor: false, ..Default::default() };
         assert_eq!(of_change(Target::Repository, &[unmarked]).0, Risk::High);
-        let plain = Changed { what: "src/a.py".into(), size: 1, floor: false };
+        let plain = Changed { what: "src/a.py".into(), size: 1, floor: false, ..Default::default() };
         assert_eq!(of_change(Target::Repository, &[plain]).0, Risk::Low);
     }
 

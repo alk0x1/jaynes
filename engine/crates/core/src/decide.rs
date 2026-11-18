@@ -609,11 +609,77 @@ impl Ctx {
         false
     }
 
+    /// Whether the delivery `digest` merges into the person's branch: none while G19 waits for the person.
+    fn lands(&self, digest: &Digest) -> Option<bool> {
+        if !(self.run.manifest.lands() && !self.run.undone) {
+            return Some(false);
+        }
+        if self.run.merge_holds().is_empty() {
+            return Some(true);
+        }
+        self.run.merge_answer(digest)
+    }
+
+    /// G19: the merge would bring in what runs or is obeyed later outside any box, and the person has not answered
+    /// about this delivery: ask them, naming each such file with what changes in it, and wait. A question about an
+    /// earlier delivery is replaced, since what it showed is not what would land.
+    fn ask_merge(&mut self, digest: &Digest) {
+        const WHY: &str = "the merge waits for you: it brings into your branch what runs later outside any box";
+        if let Some(q) = self.run.merge_open(digest) {
+            let on = vec![q.question.id.clone()];
+            self.wait(None, on, WHY.to_string());
+            return;
+        }
+        let stale: Vec<String> = self.run.open_questions().iter().filter(|q| q.question.kind == QuestionKind::Merge).map(|q| q.question.id.clone()).collect();
+        for question in stale {
+            self.emit(Event::QuestionSuperseded { question });
+        }
+        let held = self.run.merge_holds();
+        let step = held
+            .iter()
+            .filter_map(|(_, s)| self.run.manifest.index(s))
+            .max()
+            .map(|i| self.name(i))
+            .unwrap_or_default();
+        let round = self.run.manifest.index(&step).map(|i| self.run.steps[i].round).unwrap_or(0);
+        let items = held
+            .iter()
+            .map(|(c, _)| Item {
+                id: c.what.clone(),
+                label: if c.about.is_empty() { c.what.clone() } else { format!("{}: {}", c.what, c.about) },
+                digest: c.digest.clone().map(Digest).unwrap_or_else(|| Digest::of_json(c)),
+            })
+            .collect();
+        let question = Question { back: Default::default(),
+            id: self.question_id("merge"),
+            step,
+            round,
+            kind: QuestionKind::Merge,
+            items,
+            offered: vec![VerdictKind::Keep, VerdictKind::Drop],
+            holds: true,
+            about: format!(
+                "This delivery brings into your branch files that run or are obeyed later outside any box. Keep merges them; drop delivers the change on the branch jaynes/{} only, and nothing lands.",
+                self.run.id
+            ),
+            choose: false,
+            pass: 0,
+            passes: 0,
+        };
+        let on = vec![question.id.clone()];
+        self.emit(Event::QuestionOpened { question: question.clone() });
+        self.command(Command::Ask { question });
+        self.wait(None, on, WHY.to_string());
+    }
+
     fn deliver(&mut self) -> bool {
         let (digest, given) = self.run.delivery();
         if self.run.delivered.as_ref() != Some(&digest) {
+            let Some(merge) = self.lands(&digest) else {
+                self.ask_merge(&digest);
+                return false;
+            };
             self.emit(Event::DeliveryAsked { digest: digest.clone() });
-            let merge = self.run.manifest.lands() && !self.run.undone;
             self.command(Command::Deliver { digest, given, merge });
             return false;
         }
@@ -970,7 +1036,8 @@ impl Ctx {
         }
         if let Some(digest) = self.run.delivering.clone() {
             let (_, given) = self.run.delivery();
-            let merge = self.run.manifest.lands() && !self.run.undone;
+            // a delivery under way was asked only once G19 let it: the person's answer decides again what it does
+            let merge = self.lands(&digest).unwrap_or(false);
             self.command(Command::Deliver { digest, given, merge });
         }
         let open: Vec<Question> = self.run.open_questions().iter().map(|q| q.question.clone()).collect();
@@ -1049,6 +1116,9 @@ impl Ctx {
         };
         if q.question.kind == QuestionKind::Acted {
             return self.answer_acted(&q, answer);
+        }
+        if q.question.kind == QuestionKind::Merge {
+            return self.answer_merge(&q, answer);
         }
         if let By::Rule { .. } = &answer.by {
             return refuse("a rule answers only inside the engine, and only routine leaves");
@@ -1143,8 +1213,8 @@ impl Ctx {
                     self.command(Command::Permit { step: q.question.step.clone(), attempt, allow });
                 }
             }
-            // answered in answer_acted, never here
-            QuestionKind::Acted => {}
+            // answered in answer_acted and answer_merge, never here
+            QuestionKind::Acted | QuestionKind::Merge => {}
             QuestionKind::Decision if executor == Executor::Person => self.answered_person(i, &q, answer),
             QuestionKind::Decision => {
                 let input = self.run.steps[i].inputs.contains(&q.question.id);
@@ -1209,6 +1279,37 @@ impl Ctx {
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
         self.wait(Some(name.clone()), on, format!("{name} cannot be undone and already acted: it waits for you to keep it or act again"));
+    }
+
+    /// G19: the person's answer about what a merge brings in: keep each file shown (it merges), or drop one (the
+    /// change stays on the run's branch only). Theirs alone, and only for the delivery it was asked about.
+    fn answer_merge(&mut self, q: &QuestionState, answer: &Answer) -> Result<(), Refusal> {
+        if q.superseded {
+            return refuse("this question was replaced by a newer one, since what the delivery brings in changed; answer that one");
+        }
+        if !q.open() {
+            return refuse("this merge was already answered, and that answer stands");
+        }
+        if !answer.by.person() {
+            return refuse("only you decide what lands on your branch: no agent and no rule answers this");
+        }
+        if self.run.merges.get(&q.question.id) != Some(&self.run.delivery().0) {
+            return refuse("what the delivery brings in changed since this was asked; answer the new question");
+        }
+        if answer.shown != q.question.shown() {
+            return refuse("the question changed since it was shown to you; look at it again");
+        }
+        let items: Vec<&str> = q.question.items.iter().map(|x| x.id.as_str()).collect();
+        if answer.verdicts.keys().any(|id| !items.contains(&id.as_str())) || !answer.back.is_empty() {
+            return refuse(format!("the question's items are the files it shows: {}", items.join(", ")));
+        }
+        if !items.iter().all(|id| matches!(answer.verdicts.get(*id), Some(Verdict::Keep | Verdict::Drop))) {
+            return refuse("keep or drop each file it shows");
+        }
+        let effects = effects(&self.run, &q.question, answer);
+        self.emit(Event::AnswerRecorded { answer: answer.clone(), effects });
+        self.advance();
+        Ok(())
     }
 
     /// The person's answer about an act: keep it as it is, on what holds now, or order a second act.
@@ -1383,6 +1484,15 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
 /// sends, and the record keeps it with the answer.
 pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     let mut sentences = Vec::new();
+    if q.kind == QuestionKind::Merge {
+        let files: Vec<&str> = q.items.iter().map(|x| x.id.as_str()).collect();
+        sentences.push(if q.items.iter().all(|x| answer.verdict(&x.id) == Verdict::Keep) {
+            format!("The delivery merges into your branch, with {}.", files.join(", "))
+        } else {
+            format!("Nothing lands on your branch: the change stays on the branch jaynes/{}, where you can look at it.", run.id)
+        });
+        return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
+    }
     let Some(i) = run.manifest.index(&q.step) else { return Effects::default() };
     if q.kind == QuestionKind::Acted {
         let again = answer.verdict(&q.step).sends_back();

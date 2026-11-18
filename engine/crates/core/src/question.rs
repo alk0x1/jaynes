@@ -75,6 +75,9 @@ pub enum QuestionKind {
     /// A step that cannot be undone already acted, and something sent it back or what it rested on changed: it is not
     /// done again on its own. The person keeps the act as it is, or orders a second act.
     Acted,
+    /// G19: a merge would bring into the person's branch what runs or is obeyed later outside any box. It waits for
+    /// the person, who keeps it (it merges) or drops it (the change stays on the run's branch only).
+    Merge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -86,6 +86,12 @@ structure Run where
   /-- the last delivery holds what the path holds now -/
   deliveredCurrent : Bool
   anyOpenQuestion : Bool
+  /-- G19: the delivery merges into the person's branch and brings in what runs later outside any box -/
+  mergeHeld : Bool
+  /-- G19: the person answered about this very delivery -/
+  mergeAnswered : Bool
+  /-- G19: a question about this very delivery waits for the person -/
+  mergeAsked : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 inductive Move where
@@ -99,6 +105,8 @@ inductive Move where
   | probe (i : Nat)
   | start (i : Nat)
   | deliver
+  /-- G19: ask the person about what the merge would bring in -/
+  | askMerge
   | finish
   deriving DecidableEq, Repr
 
@@ -113,6 +121,7 @@ def Move.render : Move → String
   | .probe i => s!"probe {i}"
   | .start i => s!"start {i}"
   | .deliver => "deliver"
+  | .askMerge => "ask merge"
   | .finish => "finish"
 
 namespace Run
@@ -180,9 +189,12 @@ def moveAt (r : Run) (i : Nat) : Move :=
   | .idle => r.idleMove i
   | _ => .none
 
-/-- When every step of the path is done on what holds now. -/
+/-- When every step of the path is done on what holds now. G19: a merge that brings in what runs later outside any
+    box waits for the person's answer about this very delivery. -/
 def settled (r : Run) : Move :=
-  if !r.deliveredCurrent then .deliver else if r.anyOpenQuestion then .waitAnswers else .finish
+  if !r.deliveredCurrent then
+    (if r.mergeHeld && !r.mergeAnswered then (if r.mergeAsked then .waitAnswers else .askMerge) else .deliver)
+  else if r.anyOpenQuestion then .waitAnswers else .finish
 
 /-- A stop owed a question skips it only when its count is certified, it is not braked, and the coin falls outside
     its sample. -/
@@ -237,14 +249,23 @@ structure AnswerCase where
   revisable : Bool
   /-- the question is about an act that cannot be undone and already acted -/
   acted : Bool
+  /-- G19: the question holds a merge -/
+  merge : Bool
+  /-- G19: the delivery it was asked about is the one that would land now -/
+  current : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 /-- An act already done is the person's alone to keep or to order again, once. -/
 def AnswerCase.acceptsActed (a : AnswerCase) : Bool :=
   a.who == .person && !a.answered && !a.superseded && a.shownMatches && a.verdictsValid
 
+/-- G19: what lands on the person's branch is theirs alone to decide, once, about the delivery that would land. -/
+def AnswerCase.acceptsMerge (a : AnswerCase) : Bool :=
+  a.who == .person && !a.answered && !a.superseded && a.current && a.shownMatches && a.verdictsValid
+
 def AnswerCase.accepts (a : AnswerCase) : Bool :=
   if a.acted then a.acceptsActed
+  else if a.merge then a.acceptsMerge
   else if a.who == .rule then false
   else if a.superseded then false
   else if !a.shownMatches then false
@@ -313,6 +334,8 @@ structure EffectCase where
   personStep : Bool
   input : Bool
   permission : Bool
+  /-- G19: the answer about what a merge brings in -/
+  merge : Bool
   items : List Verdicted
   deriving Repr, FromJson, ToJson, Inhabited
 
@@ -322,12 +345,12 @@ def EffectCase.targets (c : EffectCase) : List Nat :=
 
 /-- The steps the answer says will run again, before it is sent (`Effects::reruns`). -/
 def EffectCase.said (c : EffectCase) : List Nat :=
-  if c.permission || c.input then []
+  if c.permission || c.input || c.merge then []
   else if c.personStep && !c.targets.isEmpty then c.step :: c.targets else c.targets
 
 /-- The steps the answer makes run again once sent. -/
 def EffectCase.did (c : EffectCase) : List Nat :=
-  if c.permission || c.input then []
+  if c.permission || c.input || c.merge then []
   else if c.items.any (·.back) then
     (if c.personStep then (c.items.filterMap fun it => if it.back then it.standsFor else none) ++ [c.step] else [c.step])
   else []

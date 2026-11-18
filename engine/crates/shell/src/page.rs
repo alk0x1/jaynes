@@ -9,9 +9,9 @@
 
 use crate::drive::{self, say};
 use crate::listing::{short, title, where_in};
-use crate::stop::label;
+use crate::stop::label_for;
 use crate::store::Store;
-use jaynes_core::question::{Answer, By, QuestionKind, Verdict};
+use jaynes_core::question::{Answer, By, Verdict};
 use jaynes_core::run::{Phase, QuestionState, Run};
 use jaynes_core::{decide, Input};
 use serde_json::{json, Value};
@@ -1012,7 +1012,6 @@ fn base64(bytes: &[u8]) -> String {
 
 fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str) -> String {
     let question = &q.question;
-    let permission = question.kind == QuestionKind::Permission;
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
     let at = path.iter().position(|&j| j == i).map(|n| n + 1).unwrap_or(0);
@@ -1064,7 +1063,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
                 .iter()
                 .map(|v| {
                     let key = format!("{v:?}").to_lowercase();
-                    format!("<button class=\"{key}\" data-i=\"{}\" data-v=\"{key}\">{}</button>", esc(&it.id), label(*v, permission))
+                    format!("<button class=\"{key}\" data-i=\"{}\" data-v=\"{key}\">{}</button>", esc(&it.id), label_for(*v, question.kind))
                 })
                 .collect();
             format!(
@@ -1798,6 +1797,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jaynes_core::question::QuestionKind;
 
     /// The ports a test's bind was asked for on ::1, in order.
     type Asked = std::rc::Rc<std::cell::RefCell<Vec<u16>>>;

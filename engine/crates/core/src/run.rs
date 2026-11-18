@@ -42,6 +42,9 @@ pub struct Run {
     pub told: std::collections::BTreeSet<String>,
     /// Events folded into this state.
     pub seq: u64,
+    /// G19: each question that held a merge, with the delivery it was asked about: an answer counts only for it.
+    #[serde(default)]
+    pub merges: BTreeMap<String, Digest>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -236,6 +239,7 @@ impl Run {
             undone: false,
             told: Default::default(),
             seq: 1,
+            merges: BTreeMap::new(),
         })
     }
 
@@ -414,6 +418,10 @@ impl Run {
                     && let Some(s) = self.step_mut(&question.step.clone()) {
                         s.held = Some(id.clone());
                     }
+                if question.kind == QuestionKind::Merge {
+                    let delivery = self.delivery().0;
+                    self.merges.insert(id.clone(), delivery);
+                }
                 if question.kind == QuestionKind::Decision {
                     let step = question.step.clone();
                     if let Some(s) = self.step_mut(&step) {
@@ -691,6 +699,38 @@ impl Run {
             }
         }
         out
+    }
+
+    /// G19: what the delivery brings in that holds a merge, each with the last step on the path that changed it, in
+    /// the order the path changed them.
+    pub fn merge_holds(&self) -> Vec<(Changed, String)> {
+        let mut out: Vec<(Changed, String)> = Vec::new();
+        for i in self.path() {
+            let Some(done) = self.steps[i].done.as_ref() else { continue };
+            for c in &done.changed {
+                out.retain(|(o, _)| o.what != c.what);
+                if crate::risk::holds_merge(self.manifest.target, c) {
+                    out.push((c.clone(), self.manifest.steps[i].name.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// G19: the person's answer about merging the delivery `digest`, if they gave one about it: keep (it merges) when
+    /// they kept every file it showed, else drop (the run's branch only).
+    pub fn merge_answer(&self, digest: &Digest) -> Option<bool> {
+        self.merges
+            .iter()
+            .filter(|(_, d)| *d == digest)
+            .filter_map(|(id, _)| self.questions.get(id))
+            .filter(|q| !q.superseded)
+            .find_map(|q| q.answer.as_ref().filter(|a| a.by.person()).map(|a| q.question.items.iter().all(|x| a.verdict(&x.id) == Verdict::Keep)))
+    }
+
+    /// G19: the question that holds the merge of the delivery `digest`, while it waits for the person.
+    pub fn merge_open(&self, digest: &Digest) -> Option<&QuestionState> {
+        self.merges.iter().filter(|(_, d)| *d == digest).filter_map(|(id, _)| self.questions.get(id)).find(|q| q.open())
     }
 
     pub fn open_questions(&self) -> Vec<&QuestionState> {

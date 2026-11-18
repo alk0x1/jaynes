@@ -244,6 +244,22 @@ pub struct Copy {
 }
 
 impl Copy {
+    /// One staged file as G19 reads it: its lines, the fingerprint of its content in the index (`deleted` when it is
+    /// gone), and, for a package manifest, whether its change holds a merge and what changes in it, judged against
+    /// the copy's starting point.
+    fn measured(&self, path: &str, lines: u64) -> Changed {
+        let mut c = Changed::file(path.to_string(), lines);
+        c.digest = Some(self.g(&["rev-parse", "-q", "--verify", &format!(":{path}")]).map(|d| d.trim().to_string()).unwrap_or_else(|_| "deleted".to_string()));
+        if jaynes_core::risk::manifest(path) {
+            let before = self.g(&["show", &format!("HEAD:{path}")]).ok();
+            let after = self.g(&["show", &format!(":{path}")]).ok();
+            let judged = crate::manifests::judge(path, before.as_deref(), after.as_deref());
+            c.holds = Some(judged.holds);
+            c.about = judged.about;
+        }
+        c
+    }
+
     /// Clone the person's repository at its current commit, with their dependencies linked in. The engine's
     /// repository for it lives beside it; the copy gets a repository of its own for the agent (git status, git diff),
     /// which the engine never reads.
@@ -306,6 +322,7 @@ impl Copy {
 
     /// Stage what an attempt changed and say what it changed, with the fingerprint of the whole tree. Paths
     /// `write` does not let through are refused: the copy goes back to where it was, and the paths come back.
+    /// Each file staged is measured as [`Copy::measured`] says.
     pub fn stage(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
         // before git looks at the tree: a repository nested in it is refused, and removed with the rest of the attempt
         let nested = nested_git(&self.dir);
@@ -341,7 +358,7 @@ impl Copy {
             let mut parts = line.splitn(3, '\t');
             let (a, d, path) = (parts.next().unwrap_or("0"), parts.next().unwrap_or("0"), parts.next().unwrap_or(""));
             let lines = a.parse::<u64>().unwrap_or(1) + d.parse::<u64>().unwrap_or(0);
-            changed.push(Changed::file(path.to_string(), lines));
+            changed.push(self.measured(path, lines));
         }
         let outside: Vec<String> =
             changed.iter().filter(|c| !glob::allowed(&c.what, write)).map(|c| c.what.clone()).collect();
