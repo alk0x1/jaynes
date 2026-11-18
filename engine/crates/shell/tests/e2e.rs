@@ -118,6 +118,32 @@ fn skipped_without_a_test_browser() -> bool {
 }
 
 /// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+/// How long a test waits on a page: past it, the test fails saying what answered, instead of holding the queue.
+const PAGE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Wait until Jaynes's page answers on `port`: its /api/version, with the record's sequence, and nothing else's.
+/// A program of someone else's listening there fails the test at once, saying what it answered.
+fn page_up(port: u16) {
+    let until = std::time::Instant::now() + PAGE_WAIT;
+    let mut said = String::new();
+    while std::time::Instant::now() < until {
+        if let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            use std::io::{Read, Write};
+            let _timed = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            let _timed = s.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+            let _sent = s.write_all(format!("GET /api/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes());
+            said.clear();
+            let _read = s.read_to_string(&mut said);
+            if said.starts_with("HTTP/1.1 200") && said.contains("\"seq\"") {
+                return;
+            }
+            assert!(said.is_empty(), "something that is not Jaynes's page answers on port {port}: {}", said.chars().take(300).collect::<String>());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("Jaynes's page did not come up on port {port} within {} s", PAGE_WAIT.as_secs());
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
 }
@@ -485,10 +511,14 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
 fn http(port: u16, raw: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(PAGE_WAIT)).expect("timeout");
+    s.set_write_timeout(Some(PAGE_WAIT)).expect("timeout");
     s.write_all(raw.as_bytes()).expect("write");
-    let mut out = String::new();
-    let _read = s.read_to_string(&mut out);
-    out
+    let mut out = Vec::new();
+    if let Err(e) = s.read_to_end(&mut out) {
+        panic!("the page on port {port} did not answer within {} s ({e}); what came: {}", PAGE_WAIT.as_secs(), String::from_utf8_lossy(&out).chars().take(300).collect::<String>());
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn post(port: u16, path: &str, body: &str, cookie: &str) -> Value {
@@ -520,7 +550,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     // another address is refused, the key sets a cookie, and the question is on the page
     assert!(http(port, &format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n")).starts_with("HTTP/1.1 403"));
     let keyed = http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"));
@@ -691,7 +721,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     let me = "jaynes_key=k3y";
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you"), "{view}");
@@ -891,7 +921,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
     assert!(html.contains("ink on newsprint"), "the item's sentence is shown");
     assert!(html.contains("<img src=\"data:image/svg+xml;base64,"), "the item's picture is shown");
@@ -1040,7 +1070,7 @@ fn the_person_starts_a_run_from_the_page() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     let me = "jaynes_key=k3y";
     let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(form.contains("<form id=\"start\"") && form.contains("name=\"request\""), "{form}");
@@ -1087,11 +1117,7 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
         .spawn()
         .map(Page)
         .expect("page");
-    // the page is up once it takes a connection, which a loaded machine may take a while to give
-    let up = std::time::Instant::now();
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() && up.elapsed() < std::time::Duration::from_secs(5) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    page_up(port);
     let me = "jaynes_key=k3y";
     let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {me}\r\n\r\n"));
     let setup = get("/setup");
@@ -1254,7 +1280,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
     assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
 }
@@ -1497,7 +1523,7 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     let html = http(port, &format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
     let link = html.split("<a class=\"open\" href=\"/page/").nth(1).and_then(|r| r.split('"').next()).expect("a link to the page").to_string();
     assert!(pages.contains(&&link), "{link} {pages:?}");
@@ -1608,7 +1634,7 @@ fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     // the person keeps Ink with a change: the step that drew it works again
     let id = q["id"].as_str().expect("id");
     let body = format!(r#"{{"run":"again","question":"{id}","shown":"{shown}","verdicts":{{"Ink":"change","Sun":"drop"}},"notes":{{"Ink":"greener"}}}}"#);
@@ -2032,4 +2058,37 @@ grep -q hi greeting.txt
         assert_eq!(after.as_deref(), Some(token.as_bytes()), "the suite wrote the pasteboard");
     }
     assert!(pasteboard || keychain, "neither the pasteboard nor the keychain answers here, so this test proves nothing");
+}
+
+/// A test that finds someone else's program on its page's port (as one that had listened on 18082 for three days,
+/// and held a whole queue of tests for 55 minutes) fails within its wait, saying what answered, and never hangs.
+#[test]
+fn a_page_test_that_reaches_another_program_fails_within_its_wait() {
+    use std::io::{Read, Write};
+    // one that takes the connection and says nothing
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = silent.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        let held: Vec<_> = silent.incoming().take(64).flatten().collect();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        drop(held);
+    });
+    let started = std::time::Instant::now();
+    assert!(std::panic::catch_unwind(|| page_up(port)).is_err(), "a silent program is not the page");
+    assert!(started.elapsed() < PAGE_WAIT + std::time::Duration::from_secs(5), "it waited {:?}", started.elapsed());
+    // one that answers something else is told at once
+    let other = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = other.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        for mut c in other.incoming().take(8).flatten() {
+            let mut buf = [0u8; 512];
+            let _read = c.read(&mut buf);
+            let _sent = c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nnot jaynes");
+        }
+    });
+    let started = std::time::Instant::now();
+    let said = std::panic::catch_unwind(|| page_up(port)).expect_err("another program is not the page");
+    let said = said.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(said.contains("not Jaynes's page") && said.contains("not jaynes"), "{said}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }

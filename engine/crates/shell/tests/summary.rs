@@ -8,6 +8,32 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_jaynes");
 
 /// A port free now, the system's choice, so two runs of these tests at once never ask for the same one.
+/// How long a test waits on a page: past it, the test fails saying what answered, instead of holding the queue.
+const PAGE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Wait until Jaynes's page answers on `port`: its /api/version, with the record's sequence, and nothing else's.
+/// A program of someone else's listening there fails the test at once, saying what it answered.
+fn page_up(port: u16) {
+    let until = std::time::Instant::now() + PAGE_WAIT;
+    let mut said = String::new();
+    while std::time::Instant::now() < until {
+        if let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            use std::io::{Read, Write};
+            let _timed = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            let _timed = s.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+            let _sent = s.write_all(format!("GET /api/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes());
+            said.clear();
+            let _read = s.read_to_string(&mut said);
+            if said.starts_with("HTTP/1.1 200") && said.contains("\"seq\"") {
+                return;
+            }
+            assert!(said.is_empty(), "something that is not Jaynes's page answers on port {port}: {}", said.chars().take(300).collect::<String>());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("Jaynes's page did not come up on port {port} within {} s", PAGE_WAIT.as_secs());
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
 }
@@ -67,9 +93,13 @@ impl Drop for Page {
 fn get(port: u16, path: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(PAGE_WAIT)).expect("timeout");
+    s.set_write_timeout(Some(PAGE_WAIT)).expect("timeout");
     s.write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n").as_bytes()).expect("write");
     let mut out = String::new();
-    let _read = s.read_to_string(&mut out);
+    if let Err(e) = s.read_to_string(&mut out) {
+        panic!("the page on port {port} did not answer within {} s ({e}); what came: {}", PAGE_WAIT.as_secs(), out.chars().take(300).collect::<String>());
+    }
     out
 }
 
@@ -80,13 +110,17 @@ fn post(port: u16, path: &str, body: &str) -> serde_json::Value {
 fn post_as(port: u16, path: &str, body: &str, cookie: &str) -> serde_json::Value {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(PAGE_WAIT)).expect("timeout");
+    s.set_write_timeout(Some(PAGE_WAIT)).expect("timeout");
     let raw = format!(
         "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
     s.write_all(raw.as_bytes()).expect("write");
     let mut out = String::new();
-    let _read = s.read_to_string(&mut out);
+    if let Err(e) = s.read_to_string(&mut out) {
+        panic!("the page on port {port} did not answer within {} s ({e}); what came: {}", PAGE_WAIT.as_secs(), out.chars().take(300).collect::<String>());
+    }
     serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap_or(serde_json::Value::Null)
 }
 
@@ -137,7 +171,7 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
         .spawn()
         .map(Page)
         .expect("page");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    page_up(port);
     // a run that still waits shows no summary
     let waiting = get(port, "/run/asked");
     assert!(waiting.contains("Answer: ") && !waiting.contains("id=\"sumtext\""), "{waiting}");
