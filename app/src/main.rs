@@ -2025,6 +2025,18 @@ pub(crate) fn palette_does(what: String, cx: &mut App) {
     }
 }
 
+/// A click in the runs column (side.rs: `finished`, `cleared`, `clear <run>`, `clear-finished`, `back <run>`): for a test.
+#[cfg(feature = "test-driver")]
+pub(crate) fn column_does(what: String, cx: &mut App) {
+    let Some(main) = MAIN.with(|m| m.get()) else { return tracing::warn!("column {what}: no main window") };
+    let _ = main.update(cx, |_, window, cx| {
+        if let Some(Some(root)) = window.root::<Root>() {
+            let side = root.read(cx).side.clone();
+            side.update(cx, |s, cx| s.driven(&what, cx));
+        }
+    });
+}
+
 /// A bar's edge dragged with the pointer at x, or double clicked (`own`), as the person's hand does: for a test.
 #[cfg(feature = "test-driver")]
 pub(crate) fn drag_bar(what: String, cx: &mut App) {

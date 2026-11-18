@@ -167,6 +167,11 @@ impl Side {
         kept_cleared(&self.cleared, read.then_some(&runs.snap.listing))
     }
 
+    /// Every finished run of the record, cleared or not.
+    fn finished_ids(&self, cx: &App) -> Vec<String> {
+        self.runs.read(cx).snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| finished(r.mark)).map(|r| r.id.clone()).collect()
+    }
+
     fn clear(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
         self.cleared.extend(ids);
         cx.emit(Cleared);
@@ -417,8 +422,7 @@ impl Side {
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
-                            let runs = this.runs.read(cx);
-                            let ids = runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| finished(r.mark)).map(|r| r.id.clone()).collect();
+                            let ids = this.finished_ids(cx);
                             this.clear(ids, cx);
                         }))
                         .child("Clear finished"),
@@ -446,6 +450,34 @@ impl Side {
             }))
             .child(div().w(px(10.)).child(if shown { "▾" } else { "▸" }))
             .child(format!("{n} cleared · {}", if shown { "Hide" } else { "Show" }))
+    }
+}
+
+#[cfg(feature = "test-driver")]
+impl Side {
+    /// What a test does in the column, as the clicks do: `finished` (the "N finished" line), `cleared` (the "M cleared"
+    /// line), `clear <run>` (a finished run's x), `clear-finished`, `back <run>` (a cleared run's ↺).
+    pub fn driven(&mut self, what: &str, cx: &mut Context<Self>) {
+        let (verb, rest) = what.split_once(' ').unwrap_or((what, ""));
+        match verb {
+            "finished" => {
+                self.show_finished = !self.show_finished;
+                tracing::info!("column: finished {}: {:?}", if self.show_finished { "shown" } else { "hidden" }, self.finished_ids(cx));
+                cx.notify();
+            }
+            "cleared" => {
+                self.show_cleared = !self.show_cleared;
+                cx.notify();
+            }
+            "clear" => self.clear(vec![rest.to_owned()], cx),
+            "clear-finished" => {
+                let ids = self.finished_ids(cx);
+                self.clear(ids, cx);
+            }
+            "back" => self.bring_back(rest, cx),
+            _ => return tracing::warn!("column: no verb {verb}"),
+        }
+        tracing::info!("column: {what}: {} cleared", self.cleared.len());
     }
 }
 

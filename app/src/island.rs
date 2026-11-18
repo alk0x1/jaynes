@@ -400,7 +400,7 @@ impl Island {
 
 #[cfg(feature = "test-driver")]
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -515,6 +515,11 @@ impl Island {
             "palette" => {
                 let what = rest.to_string();
                 cx.defer(move |cx| crate::palette_does(what, cx));
+            }
+            // a click in the runs column: `column finished|cleared|clear <run>|clear-finished|back <run>`
+            "column" => {
+                let what = rest.to_string();
+                cx.defer(move |cx| crate::column_does(what, cx));
             }
             // a bar's edge dragged with the pointer at x, or double clicked: `bar column|steps|changes <x>|own`
             "bar" => {
