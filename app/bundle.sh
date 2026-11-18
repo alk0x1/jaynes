@@ -46,5 +46,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app"
+# hardened runtime and no entitlement (no get-task-allow), so no debugger attaches: the engine lets pair only such an
+# app (G18). Measured 18/11 on 0.2.2 signed so: it draws, its terminal, the keychain and herdr-core work, lldb -p is refused
+codesign --force --sign - -o runtime "$app"
 echo "$app"
