@@ -1356,15 +1356,15 @@ impl TomlRole {
                 Err(b) => b,
                 Ok((d, x)) => {
                     let call = json!({"step": step, "request": request, "round": round, "attempt": attempt, "given": given,
-                                      "previous": previous, "answers": answers, "key": key, "project": project, "source": source});
+                                      "previous": previous, "answers": answers, "key": key, "project": project, "source": source,
+                                      "reach": reached(d)});
                     match (&x.uses, &x.script) {
-                        (Some((uses, with)), _) => menu(library, &self.dir, json!({"kind": "step", "use": uses, "with": with, "reach": reached(d), "call": call})),
+                        (Some((uses, with)), _) => menu(library, &self.dir, json!({"kind": "step", "use": uses, "with": with, "call": call})),
                         // the role's own script, run in the box with what its step may reach
                         (None, Some(path)) => menu(library, &self.dir, json!({
                             "kind": "step", "use": "script",
                             "with": {"path": self.dir.join(path).display().to_string(), "name": path, "project": d.reach.project,
                                      "local_ports": d.reach.local_ports, "acts": d.effect.irreversible()},
-                            "reach": reached(d),
                             "call": call,
                         })),
                         (None, None) => Body::Error { message: format!("{step} is not a step of Jaynes's own or of the role's") },
@@ -1375,12 +1375,12 @@ impl TomlRole {
                 Err(b) => b,
                 Ok((d, x)) => {
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
-                                      "project": project, "source": source});
+                                      "project": project, "source": source, "reach": reached(d)});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
-                        Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "reach": reached(d), "call": call})),
+                        Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
                         Some(CheckImpl::Script { path }) => menu(library, &self.dir, json!({
-                            "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string()}, "reach": reached(d), "call": call,
+                            "kind": "check", "use": "script", "with": {"path": self.dir.join(path).display().to_string()}, "call": call,
                         })),
                     }
                 }
@@ -1400,8 +1400,8 @@ impl TomlRole {
     }
 }
 
-/// What the menu is told of a step's reach beside its parameters: the local ports the step names, for what it runs
-/// in the box.
+/// What the menu is told of a step's reach, inside the call: the local ports the step names, for what it runs in
+/// the box, a step's own script and a check's commands alike.
 fn reached(step: &StepDecl) -> Value {
     json!({"local_ports": step.reach.local_ports})
 }
