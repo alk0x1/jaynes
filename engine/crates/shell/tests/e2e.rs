@@ -1539,11 +1539,11 @@ fn serve_check(s: &Scratch, role: &Path, call: Value, env: &[(&str, &str)]) -> V
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which is macOS's sandbox-exec")]
-fn a_project_s_command_reads_nothing_the_engine_keeps_nor_another_run() {
+fn a_project_s_command_reads_nothing_the_engine_keeps_nor_another_run_and_sends_no_udp_nor_opens_a_terminal() {
     let s = scratch("wall");
     std::fs::create_dir_all(&s.home).expect("home");
-    // what the engine keeps that no project command may read: the page's key and log, the record, other runs, and the
-    // run's own steps (a hidden step's cases among them)
+    // what the engine keeps that no project command may read: the page's key and log, the record, other runs, and
+    // the run's own folder but for its copy of the project (its steps, a hidden step's cases among them)
     for f in ["page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm"] {
         std::fs::write(s.home.join(f), "secret\n").expect("write");
     }
@@ -1577,24 +1577,39 @@ said = json.load(sys.stdin)["output"]
 home, own = said["home"], said["own"]
 holes = []
 for f in ["page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm",
-          "runs/r-other/output.json", "runs/r-own/steps/cases/output.json"]:
+          "runs/r-other/output.json", "runs/r-own/steps/cases/output.json", "runs/r-own/role/tool.txt"]:
     try:
         open(os.path.join(home, f)).read()
         holes.append("read " + f)
     except OSError:
         pass
 try:
-    open(os.path.join(own, "role/tool.txt")).read()
+    open(os.path.join(own, "project/greeting.txt")).read()
 except OSError as e:
-    holes.append(f"could not read the run's own role: {e}")
-# a suite's own server on port 0 still answers it
-mine = socket.socket()
-mine.bind(("127.0.0.1", 0))
-mine.listen()
+    holes.append(f"could not read the run's own copy of the project: {e}")
+# a suite's own servers on port 0 still answer it
+for host, family in [("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)]:
+    mine = socket.socket(family)
+    mine.bind((host, 0))
+    mine.listen()
+    try:
+        socket.create_connection((host, mine.getsockname()[1]), timeout=3).close()
+    except OSError as e:
+        holes.append(f"its own server on {host} port 0 was not reached: {e}")
+# no UDP, not even to its own machine
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 try:
-    socket.create_connection(("127.0.0.1", mine.getsockname()[1]), timeout=3).close()
-except OSError as e:
-    holes.append(f"its own server on port 0 was not reached: {e}")
+    u.sendto(b"", ("127.0.0.1", 9))
+    holes.append("sent UDP to 127.0.0.1")
+except PermissionError:
+    pass
+# a terminal that is not the box's: neither read nor written
+for mode in (os.O_RDONLY, os.O_WRONLY):
+    try:
+        os.close(os.open(said["tty"], mode | os.O_NOCTTY))
+        holes.append(f"opened the terminal {said['tty']}")
+    except PermissionError:
+        pass
 if not os.path.isfile("greeting.txt"):
     holes.append("not run on the project")
 print("\n".join(holes))
@@ -1607,8 +1622,16 @@ sys.exit(1 if holes else 0)
     let (ok, out) = engine(&s, &["check", role.to_str().expect("path")]);
     assert!(ok, "{out}");
 
+    // a terminal of the person's: a pty held open outside the box for the length of the test
+    let mut holder = Command::new(python())
+        .args(["-c", "import os, pty, sys, time\nm, s = pty.openpty()\nprint(os.ttyname(s), flush=True)\ntime.sleep(60)"])
+        .stdout(std::process::Stdio::piped()).spawn().expect("pty");
+    let mut tty = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(holder.stdout.take().expect("out")), &mut tty).expect("tty");
     let call = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "look", "check": "wall", "request": "r",
-        "output": {"home": s.home, "own": own}, "given": [], "project": copy, "source": s.project});
+        "output": {"home": s.home, "own": own, "tty": tty.trim()}, "given": [], "project": copy, "source": s.project});
     let held = serve_check(&s, &role, call, &[]);
+    let _gone = holder.kill();
+    let _reaped = holder.wait();
     assert_eq!(held["verdict"], "pass", "{held}");
 }

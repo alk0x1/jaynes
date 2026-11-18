@@ -357,6 +357,35 @@ impl Default for Claude {
 
 const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 
+/// Everything in `runs` but the way down to `cwd`: the other runs, and in the step's own run every folder and file
+/// that does not hold `cwd`. Claude Code's box lets a hidden folder win over a readable one inside it, so the runs
+/// cannot be hidden whole; they are hidden one by one as they are when the step starts, and a run that begins later
+/// is not among them. Nothing when `cwd` is not under `runs`: then all of `runs` is hidden.
+fn beside(runs: &Path, cwd: &Path) -> Vec<PathBuf> {
+    let (Ok(runs), Ok(cwd)) = (std::fs::canonicalize(runs), std::fs::canonicalize(cwd)) else {
+        return vec![runs.to_path_buf()];
+    };
+    if !cwd.starts_with(&runs) || cwd == runs {
+        return vec![runs];
+    }
+    let mut out = Vec::new();
+    let mut at = runs;
+    for part in cwd.strip_prefix(&at).map(|r| r.components().map(|c| c.as_os_str().to_owned()).collect::<Vec<_>>()).unwrap_or_default() {
+        if let Ok(entries) = std::fs::read_dir(&at) {
+            let mut others: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.file_name() != Some(part.as_os_str())).collect();
+            others.sort();
+            out.extend(others);
+        }
+        at = at.join(part);
+    }
+    out
+}
+
+/// What the engine keeps under its home that no step reads, as the project commands' box hides it
+/// (`ENGINE_SECRETS` in jaynes_box.py).
+pub const ENGINE_SECRETS: &[&str] =
+    &["page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm"];
+
 /// The hosts a step that installs packages may reach from its commands, and nothing else.
 pub const PACKAGE_HOSTS: &[&str] = &[
     "registry.npmjs.org", "registry.yarnpkg.com", "proxy.golang.org", "sum.golang.org", "pypi.org",
@@ -397,13 +426,18 @@ impl Claude {
         }
         let mut read: Vec<String> = vec![cwd.display().to_string()];
         read.extend(reads.iter().map(|p| p.display().to_string()));
+        // the home and what the engine keeps, wherever its home is: the page's key and log, the record, the runs
+        let mut hide: Vec<String> = vec!["~/".into()];
+        let home = crate::home();
+        hide.extend(ENGINE_SECRETS.iter().map(|f| home.join(f).display().to_string()));
+        hide.extend(beside(&home.join("runs"), cwd).iter().map(|p| p.display().to_string()));
         json!({
             "permissions": {"defaultMode": if asks { "default" } else { "dontAsk" }, "allow": allow, "deny": deny,
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
             "sandbox": {"enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
                         "autoAllowBashIfSandboxed": true,
                         "network": {"allowedDomains": if reach.network == Network::Packages { PACKAGE_HOSTS.to_vec() } else { Vec::new() }, "strictAllowlist": true, "allowLocalBinding": true},
-                        "filesystem": {"denyRead": ["~/"], "allowRead": read,
+                        "filesystem": {"denyRead": hide, "allowRead": read,
                                        "allowWrite": [cwd.join(crate::project::EXCHANGE).join("tmp").display().to_string()]}},
             "disableAllHooks": true, "autoMemoryEnabled": false, "disableClaudeAiConnectors": true,
             "syncClaudeAiPlugins": false, "syncClaudeAiSkills": false, "disableBundledSkills": true
@@ -709,6 +743,22 @@ mod tests {
     }
 
     #[test]
+    fn the_runs_beside_the_step_s_folder_are_hidden_one_by_one() {
+        let base = std::env::temp_dir().join(format!("jaynes-beside-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        for d in ["runs/r-other", "runs/r-own/steps/cases", "runs/r-own/project/src"] {
+            std::fs::create_dir_all(base.join(d)).expect("dir");
+        }
+        std::fs::write(base.join("runs/r-own/lock"), "").expect("write");
+        let runs = std::fs::canonicalize(base.join("runs")).expect("runs");
+        let hidden = beside(&runs, &runs.join("r-own/project"));
+        assert_eq!(hidden, vec![runs.join("r-other"), runs.join("r-own/lock"), runs.join("r-own/steps")]);
+        // a step that works outside the runs reads none of them
+        assert_eq!(beside(&runs, &base), vec![runs.clone()]);
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn a_read_only_step_writes_only_its_exchange_folder() {
         let reach = Reach { project: ProjectAccess::Read, write: vec![], network: Network::None, commands: false };
         let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
@@ -718,8 +768,14 @@ mod tests {
         assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "Bash"));
         // the shell's box reads nothing in the person's home but the step's folder (a real run: `cat ~/file` was
         // refused with "Operation not permitted")
-        assert_eq!(s["sandbox"]["filesystem"]["denyRead"], json!(["~/"]));
+        let hidden: Vec<&str> = s["sandbox"]["filesystem"]["denyRead"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        assert_eq!(hidden[0], "~/");
         assert_eq!(s["sandbox"]["filesystem"]["allowRead"][0], "/w");
+        // and what the engine keeps, even when its home is not under the person's
+        let home = crate::home();
+        for f in ENGINE_SECRETS.iter().map(|f| home.join(f)) {
+            assert!(hidden.contains(&f.display().to_string().as_str()), "{f:?} is not hidden: {hidden:?}");
+        }
     }
 
     #[test]

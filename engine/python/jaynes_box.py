@@ -17,6 +17,10 @@ one port under ``localhost:*`` holds for some port numbers and not for others (m
 every time for the same profile), so no list of refused ports is written here. What holds is allowing listed ports
 only, which breaks suites that serve on port 0; that is still to be measured. A network of the box's own, which
 closes this, exists only on Linux.
+
+Other known limits on macOS: a command may still bind a server on 0.0.0.0, which other machines on the network can
+reach while it runs (the bind filter for localhost matches the wildcard too). The box sends no UDP, and reads and
+writes none of the terminals (/dev/ttys*), so a command that needs a pty of its own fails there.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
@@ -49,13 +53,15 @@ SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".n
            ".git-credentials", ".config/gh", ".config/gcloud", ".config/op", ".zsh_history", ".bash_history",
            ".claude", ".codex", "Library/Keychains", "Library/Cookies", "Library/Safari", "Library/Mail",
            "Library/Messages", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox")
-# What the engine keeps under its home that no project command reads: the page's key and log, the record. Other
-# runs' folders are hidden as well, and the run's own steps; the run's own copy and role stay readable.
+# What the engine keeps under its home that no project command reads: the page's key and log, the record. The runs'
+# folders are hidden as well, but for the run's own copy of the project, whose installed dependencies the box links.
 ENGINE_SECRETS = ("page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm")
 # What the Python engine that came before kept in ~/.jaynes.
 OLD_ENGINE = ("jaynes.sqlite3", "jaynes.sqlite3-wal", "jaynes.sqlite3-shm", "guard.json", "backups", "objects")
+# Devices a command may write. Not the terminals (/dev/ttys*): a pty's other end has the same names as the person's
+# own terminals, so the box reads and writes none of them, and a command that opens a pty of its own fails.
 DEVICES = ('(literal "/dev/null")', '(literal "/dev/zero")', '(literal "/dev/dtracehelper")',
-           '(literal "/dev/ptmx")', '(regex #"^/dev/tty")')
+           '(literal "/dev/ptmx")', '(literal "/dev/tty")')
 
 
 class Unavailable(Exception):
@@ -68,8 +74,20 @@ class Box:
     hidden: tuple[Path, ...] = ()  # folders it may not read, apart from its writable folders inside them
     ports: tuple[int, ...] = ()  # local ports it may connect to
     local: bool = False  # any local port: a test suite's own servers, and whatever else listens; never the internet
-    own_run: Path | None = None  # the run's own folder under the engine's runs, readable but for its steps
+    readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
     home: Path = field(default_factory=Path.home)
+
+
+def hidden_paths(box: Box) -> list[Path]:
+    """Everything the box may not read: where secrets usually live, what the engine keeps, the runs, and the
+    box's own hidden folders. One list for every system's box; ``box.readable`` and the writable folders inside
+    these stay readable."""
+    engine, old = engine_home(), box.home / ".jaynes"
+    # the runs are hidden from a box that says what it reads in them; a photograph's box does not, and its page is
+    # a step's output under the runs
+    runs = [engine / "runs"] if box.local or box.readable else []
+    return ([box.home / s for s in SECRETS] + [engine / f for f in ENGINE_SECRETS] + [old / f for f in OLD_ENGINE]
+            + runs + list(box.hidden))
 
 
 def engine_home() -> Path:
@@ -135,25 +153,23 @@ def profile(box: Box) -> str:
     lines += _chrome_lock()
     if box.writable:
         lines.append(f"(allow file-write* {_subpaths(box.writable)})")
-    engine, old = engine_home(), box.home / ".jaynes"
-    kept = [engine / f for f in ENGINE_SECRETS] + [old / f for f in OLD_ENGINE]
-    if box.local or box.own_run is not None:
-        # a project's commands read no other run; a photograph's page may be a step's output, so its box keeps them
-        kept.append(engine / "runs")
-    lines.append(f"(deny file-read* {_subpaths([box.home / s for s in SECRETS] + kept + list(box.hidden))})")
-    # the last rule that matches wins: the run's own folder is read again, then its steps and the hidden hidden again
-    if box.own_run is not None:
-        lines.append(f"(allow file-read* {_subpaths([box.own_run])})")
-        lines.append(f"(deny file-read* {_subpaths([box.own_run / 'steps', *box.hidden])})")
+    lines.append(f"(deny file-read* {_subpaths(hidden_paths(box))})")
+    # the last rule that matches wins: what it may read inside the hidden is read again, but for its hidden folders
+    if box.readable:
+        lines.append(f"(allow file-read* {_subpaths(box.readable)})")
+        if box.hidden:
+            lines.append(f"(deny file-read* {_subpaths(box.hidden)})")
     if box.writable:
         lines.append(f"(allow file-read* {_subpaths(box.writable)})")
     lines.append("(deny network-outbound)")
-    lines += [f'(allow network-outbound (remote ip "localhost:{int(p)}"))' for p in box.ports]
+    # TCP only: the box sends no UDP, not even to its own machine
+    lines += [f'(allow network-outbound (remote tcp "localhost:{int(p)}"))' for p in box.ports]
     if box.local:
-        lines.append('(allow network-outbound (remote ip "localhost:*"))')
+        lines.append('(allow network-outbound (remote tcp "localhost:*"))')
         # a suite's own servers on socket files, such as the role tools: only in its own folders, a rule each, since
         # a socket rule with several paths holds only the first
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
+    lines.append('(deny file-read* file-write* (regex #"^/dev/ttys[0-9]"))')
     lines += ["(deny signal)", "(allow signal (target same-sandbox))", "(deny user-preference-write)",
               "(deny appleevent-send)", "(deny lsopen)"]
     return "\n".join(lines) + "\n"
@@ -328,13 +344,6 @@ def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
     return env
 
 
-def own_run(project: Path) -> Path | None:
-    """The run's own folder when ``project`` is a run's copy under the engine's runs."""
-    runs = os.path.realpath(engine_home() / "runs")
-    rel = os.path.relpath(os.path.realpath(project), runs)
-    return None if rel.startswith("..") or rel == "." else Path(runs) / rel.split(os.sep)[0]
-
-
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
@@ -347,7 +356,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         link_dependencies(project, work)
         if source is not None:
             link_dependencies(source, work)
-        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True, own_run=own_run(project)))
+        argv = command_in_box(command, Box((work, scratch), hidden=hidden, local=True, readable=(project,)))
         proc = subprocess.Popen(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {})},
                                 stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, start_new_session=True)
