@@ -38,8 +38,9 @@ class EveryCheckOfTheMenu(unittest.TestCase):
                 self.assertGreater(len(cases(check, "accept.json")), 0, f"{check} has no case it must accept")
 
     def test_has_no_cases_for_a_check_that_is_gone(self):
+        # a step of the menu may come with cases too, such as one that downloads what an agent chose
         folders = {p.name for p in CASES.iterdir() if p.is_dir()}
-        self.assertEqual(folders - set(menu.CHECKS), set())
+        self.assertEqual(folders - set(menu.CHECKS) - set(menu.STEPS), set())
 
     def test_says_what_each_case_is_for(self):
         for check in sorted(set(menu.CHECKS) - {"script"}):

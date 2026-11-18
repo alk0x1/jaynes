@@ -593,6 +593,7 @@ fn menu_cases(name: &str) -> Option<(&'static str, &'static str)> {
         "field-empty" => cases!("field-empty"),
         "field-max-length" => cases!("field-max-length"),
         "files-within" => cases!("files-within"),
+        "quotes-found" => cases!("quotes-found"),
         _ => return None,
     })
 }
