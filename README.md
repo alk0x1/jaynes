@@ -76,6 +76,10 @@ ad hoc rather than by an Apple developer account, so macOS asks you once after
 each update before it reads its key in your keychain; the source is all here, to
 read or to build yourself.
 
+Each release says where it was built: GitHub signs an attestation that this repository's release workflow built
+the download from the version's tag, on GitHub's runners. The installer checks it with `gh` when gh is installed and
+logged in, and says so when it could not; the download's checksum is checked either way.
+
 Only the plugin, from Claude Code (the `jaynes` command is then built with Rust's
 `cargo` the first time):
 
