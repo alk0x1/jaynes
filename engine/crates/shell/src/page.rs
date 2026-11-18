@@ -247,6 +247,17 @@ impl Page {
     /// Answer one connection, holding its `turn` among those served at once until its reply is sent.
     fn handle(&self, stream: TcpStream, turn: Turn, came: std::time::Instant) -> Result<(), String> {
         let req = read(&stream, came + HEAD_DEADLINE)?;
+        // a font is bytes, and does not change: served here, kept by the browser
+        if req.method == "GET" && self.host(&req) == Host::Name
+            && let Some(name) = req.path.strip_prefix("/fonts/")
+            && let Some((_, kind, bytes)) = FONTS.iter().find(|(n, _, _)| *n == name)
+        {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: public, max-age=31536000, immutable\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            return send(&stream, came + WHOLE_DEADLINE, &[head.as_bytes(), bytes]);
+        }
         // Reading the person's words takes a model's time, and the person's tokens: only the person starts it, at most
         // MOST_READINGS run at once, and each is answered on a thread of its own that keeps this connection's turn
         // until the reply is sent, so the page goes on and its limit of connections still counts it.
@@ -346,6 +357,9 @@ impl Page {
                     let to = format!("/#key={}", self.key);
                     return ("303 See Other", "text/plain", String::new(), vec![("Set-Cookie".into(), CLEAR.into()), ("Location".into(), to)]);
                 }
+            if req.path.starts_with("/fonts/") {
+                return ("404 Not Found", "text/plain", "no such font".into(), vec![]);
+            }
             if req.path == "/api/knows" {
                 // the nonce is the asker's: hex, short, so the answer says nothing but the proof
                 let nonce = req.query.get("nonce").filter(|n| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_hexdigit()));
@@ -1707,7 +1721,17 @@ setInterval(async () => {
 
 /// What a page of Jaynes may load and run. Only its own script runs: what agents write is shown as text, and a script
 /// of this origin could read the page's key.
-const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+/// The page's fonts and their licences, served from /fonts/ by these names only: the page fetches nothing from the
+/// internet to draw itself. Both are under the SIL Open Font License, whose text goes with them.
+const FONTS: &[(&str, &str, &[u8])] = &[
+    ("InstrumentSans-Variable.ttf", "font/ttf", include_bytes!("../assets/fonts/InstrumentSans-Variable.ttf")),
+    ("IBMPlexMono-Regular.ttf", "font/ttf", include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf")),
+    ("IBMPlexMono-Medium.ttf", "font/ttf", include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf")),
+    ("OFL-InstrumentSans.txt", "text/plain; charset=utf-8", include_bytes!("../assets/fonts/OFL-InstrumentSans.txt")),
+    ("OFL-IBMPlexMono.txt", "text/plain; charset=utf-8", include_bytes!("../assets/fonts/OFL-IBMPlexMono.txt")),
+];
 
 /// What clears the cookie earlier versions kept the key in: every server on 127.0.0.1 received it, whatever its port.
 /// How a request names the page.
@@ -1724,9 +1748,11 @@ const CLEAR: &str = "jaynes_key=; Path=/; Max-Age=0";
 const PAGE: &str = r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jaynes</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+/* the page's own fonts, under the SIL Open Font License: /fonts/OFL-InstrumentSans.txt and /fonts/OFL-IBMPlexMono.txt */
+@font-face { font-family:"Instrument Sans"; src:url(/fonts/InstrumentSans-Variable.ttf) format("truetype"); font-weight:400 700; font-display:swap; }
+@font-face { font-family:"IBM Plex Mono"; src:url(/fonts/IBMPlexMono-Regular.ttf) format("truetype"); font-weight:400; font-display:swap; }
+@font-face { font-family:"IBM Plex Mono"; src:url(/fonts/IBMPlexMono-Medium.ttf) format("truetype"); font-weight:500; font-display:swap; }
 :root { --bg:#07090d; --panel:#0e1218; --panel-2:#121823; --line:#222a36; --line-2:#2c3646; --ink:#eef2f7; --dim:#93a0b2; --faint:#5d6a7c;
   --blue:#6fb4ff; --blue-soft:rgba(111,180,255,.12); --amber:#ffb35c; --amber-soft:rgba(255,179,92,.13); --green:#69dba0; --green-soft:rgba(105,219,160,.13);
   --red:#ff6f6f; --red-soft:rgba(255,111,111,.12); --display:"Instrument Sans","Helvetica Neue",Arial,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; }

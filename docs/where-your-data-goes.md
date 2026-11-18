@@ -50,8 +50,6 @@ in one step of the menu from its own library, only for these:
   clock of 60 seconds, in a process of its own. Every address asked and the text downloaded are kept in the
   run's record. When no page of a list answers, it asks `https://example.com/` once, to tell a page that is down
   from a machine that cannot reach the internet.
-- **The page's fonts.** The page's own HTML loads its two fonts from `fonts.googleapis.com`: your browser fetches
-  them when it opens the page.
 
 ## No telemetry
 
