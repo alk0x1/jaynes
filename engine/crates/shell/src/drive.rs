@@ -175,7 +175,7 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         Ok("now")
     } else {
         store.inbox_put(&run.id, &input)?;
-        stop_agent_for(&dir, &input);
+        stop_agent_for(&dir, &input)?;
         Ok("inbox")
     }
 }
@@ -185,21 +185,24 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
 const HALTED_AGENT: &str = "agent-halted";
 
 /// Stop the agent of a run left an abandon or a halt, once that input is in its inbox, so its process starts
-/// no other turn: nothing the agent would do from here is wanted, and it costs tokens.
-pub fn stop_agent_for(dir: &Path, input: &Input) {
+/// no other turn: nothing the agent would do from here is wanted, and it costs tokens. An agent that could not be
+/// stopped is said, never left silent: the input is recorded all the same.
+pub fn stop_agent_for(dir: &Path, input: &Input) -> Result<(), String> {
+    let unstopped = |e: String| format!("the input is recorded, but Jaynes could not stop the run's agent: {e}");
     match input {
         Input::Abandon { .. } => {
-            agent::stop_left(&dir.join("agent.pid"));
+            agent::stop_left(&dir.join("agent.pid")).map_err(unstopped)?;
         }
         Input::Halt { .. } => {
             // the mark goes first: the process may get the turn back as soon as the agent is gone
             let _marked = std::fs::write(dir.join(HALTED_AGENT), "");
-            if !agent::stop_left(&dir.join("agent.pid")) {
+            if !agent::stop_left(&dir.join("agent.pid")).map_err(unstopped)? {
                 let _gone = std::fs::remove_file(dir.join(HALTED_AGENT));
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 // --- each run on its own engine ----------------------------------------------------------------------------------
@@ -577,10 +580,11 @@ impl<'a> Driver<'a> {
         let lock = File::create(setup.dir.join("lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| "another process is driving this run".to_string())?;
         // macOS tells no child that its parent died: an agent the last process started may still be writing.
-        if agent::stop_left(&setup.dir.join("agent.pid")) {
+        let unstopped = |e: String| format!("a process that died left the run's agent or role running, and Jaynes could not stop it: {e}");
+        if agent::stop_left(&setup.dir.join("agent.pid")).map_err(unstopped)? {
             say("stopped an agent program that a process which died had left running");
         }
-        if agent::stop_left(&setup.dir.join("role.pid")) {
+        if agent::stop_left(&setup.dir.join("role.pid")).map_err(unstopped)? {
             say("stopped a call to the role that a process which died had left running");
         }
         if let Some((seq, _)) = store.verify()? {

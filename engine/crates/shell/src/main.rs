@@ -680,7 +680,7 @@ fn send(mut s: Store, id: &str, input: Input) -> Result<(), String> {
         Err(_) => {
             s.inbox_put(id, &input)?;
             // Abandoning or halting stops the agent at once, after the input is left for the run's process.
-            drive::stop_agent_for(&home().join("runs").join(id), &input);
+            drive::stop_agent_for(&home().join("runs").join(id), &input)?;
             say("recorded for the process that drives the run");
         }
     }
