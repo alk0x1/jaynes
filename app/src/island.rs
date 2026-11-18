@@ -350,7 +350,7 @@ impl Island {
             for v in &stop.offered {
                 let (item, v) = (it.id.clone(), *v);
                 let on = self.marks.get(&it.id) == Some(&v);
-                controls = controls.child(button(format!("v-{}-{v:?}", it.id), stop::label(v, stop.permission), on, colour_of(v)).on_click(cx.listener(move |this, _, window, cx| this.mark(item.clone(), v, window, cx))));
+                controls = controls.child(button(format!("v-{}-{v:?}", it.id), stop::label_for(v, stop.kind), on, colour_of(v)).on_click(cx.listener(move |this, _, window, cx| this.mark(item.clone(), v, window, cx))));
             }
         }
         let words = if back {
