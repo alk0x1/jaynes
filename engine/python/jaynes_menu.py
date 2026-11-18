@@ -362,6 +362,7 @@ PAGES_MAX = 12              # pages one step downloads
 URL_CHARS = 2048            # an address longer than this is not sent
 QUOTE_CHARS = 20            # a quote shorter than this, as compared, proves nothing
 ECHO_WORDS = 4              # this many words of a quote in a row, in the page's address, and the address carries it
+WINDOW_CHARS = 160          # the text shown on each side of a quote found, for the person to judge what it means
 SCRIPTED_BELOW = 200        # an HTML page with scripts and less text than this is put together by them
 RESOLVER_CANARY = "example.com"  # a name that always exists: when it is not found either, the machine cannot look names up
 PAGE_AGENT = "jaynes"
@@ -499,21 +500,43 @@ class Prepared:
     and without them, and read both ways where a hyphen ends a line."""
 
     def __init__(self, text: str) -> None:
-        self.blocks: list[tuple[str, str]] = []
+        self.blocks: list[tuple[int, str, str]] = []
         self.plain: list[str] = []
-        for block in _GAP.split(text):
+        for n, block in enumerate(_GAP.split(text)):
             compared = same_words(block)
             self.plain.append(_searchable(compared))
             for notes in ((True, False) if _NOTE_OPEN in block else (True,)):
                 marked = compared if notes else same_words(block, notes=False)
-                self.blocks.append((marked, _searchable(marked)))
+                self.blocks.append((n, marked, _searchable(marked)))
                 if _WRAPPED.search(block):
                     hanging = same_words(block, hanging=True, notes=notes)
-                    self.blocks.append((hanging, _searchable(hanging)))
+                    self.blocks.append((n, hanging, _searchable(hanging)))
 
     def holds(self, quote: str) -> bool:
         words = _searchable(same_words(quote))
-        return bool(words) and any(_bounded_in(words, b, search) for b, search in self.blocks)
+        return bool(words) and any(_bounded_in(words, b, search) for _, b, search in self.blocks)
+
+    def locate(self, quote: str) -> tuple[int, int, str] | None:
+        """Where the quote stands: the block of the page (counting from 0), where in that block's compared text,
+        and the window around it, with the quote marked between \u00bb and \u00ab. The window goes on into the
+        blocks before and after, each break between blocks shown as \u00b6, since a heading or the paragraph before
+        can say that a source mentions a claim only to deny it."""
+        words = _searchable(same_words(quote))
+        if not words:
+            return None
+        for n, block, search in self.blocks:
+            at = _bounded_at(words, block, search)
+            if at >= 0:
+                end = at + len(words)
+                shown = search
+                earlier = " \u00b6 ".join(b for b in self.plain[:n] if b)
+                later = " \u00b6 ".join(b for b in self.plain[n + 1:] if b)
+                before = ((earlier + " \u00b6 ") if earlier else "") + shown[:at]
+                after = shown[end:] + ((" \u00b6 " + later) if later else "")
+                window = (("..." if len(before) > WINDOW_CHARS else "") + before[-WINDOW_CHARS:] + "\u00bb" + shown[at:end] + "\u00ab"
+                          + after[:WINDOW_CHARS] + ("..." if len(after) > WINDOW_CHARS else ""))
+                return n, at, window
+        return None
 
     def nearest(self, quote: str) -> str:
         """What Jaynes read nearest to a quote it did not find: the block sharing most of its words, cut around
@@ -1096,7 +1119,9 @@ def fetch_pages(call: Call, params: Params, *, download: Callable[[str], dict[st
             page["quotes"] = []
             for q in quotes:
                 found, why, near = _found(q, prepared, page["asked"]) if prepared else (False, f"the page was not read: {page['why']}", "")
-                page["quotes"].append({"quote": q, "found": found, "why": why + _near(near)})
+                where = prepared.locate(q) if found and prepared else None
+                block, at, window = where if where else (None, None, "")
+                page["quotes"].append({"quote": q, "found": found, "why": why + _near(near), "block": block, "at": at, "window": window})
     pages = [p for p in done if p is not None]
     texts = {p["url"]: p.pop("text") for p in pages if p["read"]}
     for p in pages:
@@ -1160,8 +1185,67 @@ def quotes_found(call: Call, params: Params) -> Any:
     return Fail(*reasons[:20]) if reasons else Pass()
 
 
+def quote_windows(call: Call, params: Params) -> Any:
+    """Each quote a later step lists (``claims``, items with a url and a quote), shown in the page Jaynes downloaded
+    (``pages``, a fetch-pages step): whether it is there, why not, the fingerprint of the page, where it stands,
+    and the window of the page's own text around it. The check of code says only that the words stand there; the
+    window is for the person, who judges whether the source says them or only mentions them. Nothing here comes
+    from an agent but the quotes and their urls. ``beside``, a field of an earlier step, is copied as it was, to be
+    shown with the quotes; ``windows`` is all of it as one text, for a stop."""
+    given = _given(call)
+    step, _, field = str(params["claims"]).partition(".")
+    listed = (given.get(step) or {}).get(field)
+    fetched = given.get(str(params["pages"]))
+    pages = fetched.get("pages") if isinstance(fetched, dict) else None
+    texts = fetched.get("texts") if isinstance(fetched, dict) else None
+    if not isinstance(pages, list) or not isinstance(texts, dict) or not all(isinstance(p, dict) for p in pages):
+        return Refused(f"{params['pages']} made no pages to show the quotes in: it is a fetch-pages step")
+    by_url: dict[str, dict[str, Any]] = {}
+    for p in pages:
+        for u in (p.get("final_url"), p.get("url")):
+            if isinstance(u, str) and u:
+                by_url[_key(u)] = p
+    prepared: dict[str, Prepared] = {}
+    shown: list[dict[str, Any]] = []
+    lines: list[str] = []
+    for item in listed if isinstance(listed, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        for quote in _quotes_of(item):
+            n = len(shown) + 1
+            page = by_url.get(_key(url))
+            entry: dict[str, Any] = {"n": n, "url": url, "quote": quote, "found": False, "why": "", "page_sha256": "",
+                                     "block": None, "at": None, "window": ""}
+            if page is None:
+                entry["why"] = "its page was not downloaded by Jaynes in this run"
+            elif not page.get("read"):
+                entry.update(why=f"the page was not read: {page.get('why')}", page_sha256=page.get("sha256", ""))
+            else:
+                key = str(page.get("url"))
+                text = texts.get(key, "")
+                if not isinstance(text, str) or _fingerprint(text.encode()) != page.get("text_sha256"):
+                    return Refused(f"the text kept from {key} is not the text that was downloaded")
+                if key not in prepared:
+                    prepared[key] = Prepared(text)
+                found, why, near = _found(quote, prepared[key], page.get("asked") or [key])
+                entry.update(found=found, why=why + _near(near), page_sha256=page.get("sha256", ""))
+                where = prepared[key].locate(quote) if found else None
+                if where:
+                    entry.update(block=where[0], at=where[1], window=where[2])
+            shown.append(entry)
+            seen = entry["window"] if entry["found"] else f"(not on the page: {entry['why']})"
+            lines.append(f"{n}. \"{quote}\"\n   {url}\n   {seen}")
+    out: dict[str, Any] = {"quotes": shown, "judged": len(shown),
+                           "windows": "\n\n".join(lines) if lines else "No quotation to show: the note quotes nothing."}
+    if params.get("beside"):
+        b_step, _, b_field = str(params["beside"]).partition(".")
+        out["beside"] = (given.get(b_step) or {}).get(b_field)
+    return out
+
+
 STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,
-                                                       "fetch-pages": fetch_pages}
+                                                       "fetch-pages": fetch_pages, "quote-windows": quote_windows}
 CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "suite-passes": suite_passes,
     "tests-fail-for-the-bug": tests_fail_for_the_bug,

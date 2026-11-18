@@ -257,6 +257,14 @@ const MENU_STEPS: &[MenuStep] = &[
         fields: &["pages", "any_read", "unread"],
         network: Some(Network::Web),
     },
+    MenuStep {
+        name: "quote-windows",
+        about: "Shows each quote an earlier step lists in the page Jaynes downloaded, with the text around it, for the person to judge what it means there.",
+        reach: Reach::default,
+        params: &[("claims", Param::StepField, true), ("pages", Param::Step, true), ("beside", Param::StepField, false)],
+        fields: &["quotes", "windows", "judged", "beside"],
+        network: None,
+    },
 ];
 
 fn text(t: &toml::Table, k: &str) -> String {
@@ -961,6 +969,8 @@ Run the project's suite before you answer: {{{{runner.suite}}}}
 checks = ["output-follows-schema", "suite-passes"]
 # Where the person is asked: verdicts from keep, change, redo, drop, skip. from_risk = "high" asks only on a
 # risky run; holds = true makes the steps after it wait; release = true lets an agent let it go on.
+# redo = "STEP" sends what the person sends back to the agent's step that made the work: from an agent's step that
+# reviews it, or from one of Jaynes's own that shows it (such as quotes in their pages), to an agent's step it needs.
 stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
 # A step that makes options asks the person to choose one: stop = {{ ask = "Which one?", choose = true, holds = true }},
 # with show = {{ each = "options", id = "{{{{name}}}}", label = "{{{{name}}}}", detail = "{{{{why}}}}", picture = "{{{{page}}}}" }}.
@@ -1412,6 +1422,7 @@ with = {{ pages = "read.sources" }}
         for m in MENU_STEPS.iter().map(|m| m.name).chain(MENU_CHECKS.iter().map(|m| m.name)) {
             assert!(text.contains(&format!("#   {m}")), "{m} is not listed");
         }
+        assert!(text.contains("or from one of Jaynes's own that shows it"), "where a stop may send work back is said");
         let (lines, all) = r.prove();
         assert!(all, "{lines:?}");
     }

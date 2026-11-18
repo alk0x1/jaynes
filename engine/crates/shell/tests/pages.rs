@@ -181,3 +181,89 @@ fn a_quote_is_held_to_the_text_jaynes_downloaded() {
     let distrusted = verdict(json!([{"url": "https://example.org/caching", "quote": "A cache MAY store anything it likes, forever."}]), &changed);
     assert_eq!(distrusted["verdict"], "blocked", "{distrusted}");
 }
+
+const WINDOWS: &str = r#"# A test role: the note's quotes shown in their pages, at a stop that sends work back to the note.
+
+role = "windows"
+version = "1.0.0"
+
+[[step]]
+name = "read"
+reach = { project = "none", network = "web" }
+instructions = "Find sources for {{request}}."
+
+[step.output]
+sources = { type = "array", items = { type = "object", fields = { url = "string", quotes = { type = "array", items = "string" } } } }
+
+[[step]]
+name = "fetch"
+by = "jaynes"
+use = "fetch-pages"
+needs = ["read"]
+with = { pages = "read.sources" }
+reach = { network = "web" }
+
+[[step]]
+name = "note"
+needs = ["read", "fetch"]
+reach = { project = "write", write = ["notes/**"] }
+instructions = "Write the note from {{fetch.pages}}."
+
+checks = [{ use = "quotes-found", field = "claims", pages = "fetch" }]
+
+[step.output]
+reading = "string"
+claims = { type = "array", items = { type = "object", fields = { url = "string", quote = "string" } } }
+
+[[step]]
+name = "windows"
+by = "jaynes"
+use = "quote-windows"
+needs = ["note", "fetch"]
+with = { claims = "note.claims", pages = "fetch", beside = "note.reading" }
+stop = { ask = "Do the sources say what the note says?", verdicts = ["keep", "change"], redo = "note" }
+show = { label = "The note's quotations in their pages", detail = "{{beside}}", aspects = [{ label = "Quotations", text = "{{windows}}" }] }
+
+[[promise]]
+says = "No note is delivered unless every quote in it is in a page Jaynes downloaded"
+never = "deliver"
+unless = "check quotes-found of note passed"
+"#;
+
+/// A promise of the same shape that does not hold: the windows' stop does not hold the run, so the note can be
+/// delivered before the person answered there.
+const WINDOWS_FALSE: &str = r#"
+[[promise]]
+says = "No note is delivered before you answered at the windows"
+never = "deliver"
+unless = "person answered at windows"
+"#;
+
+#[test]
+fn the_quotes_of_a_note_are_shown_in_their_pages_at_a_stop_of_jaynes_s_own() {
+    let s = scratch("windows");
+    std::fs::write(s.role.join("role.toml"), WINDOWS).expect("write");
+    let (ok, out) = engine(&s, &["check", s.role.to_str().expect("path")]);
+    assert!(ok && out.contains("windows 1.0.0 reads: read → fetch → note → windows"), "{out}");
+    // the prover goes round the loop where the windows send the note back, and the promise holds over it
+    assert!(out.contains("✔ \"No note is delivered unless every quote in it is in a page Jaynes downloaded\": proved"), "{out}");
+    std::fs::write(s.role.join("role.toml"), format!("{WINDOWS}{WINDOWS_FALSE}")).expect("write");
+    let (ok, out) = engine(&s, &["check", s.role.to_str().expect("path")]);
+    assert!(!ok && out.contains("✘ \"No note is delivered before you answered at the windows\""), "{out}");
+    std::fs::write(s.role.join("role.toml"), WINDOWS).expect("write");
+    let text = "HTTP Caching\n\nA cache MUST NOT store a response when the no-store directive is present.\n";
+    let fingerprint = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let fetched = json!({"pages": [{"url": "https://example.org/caching", "read": true, "why": "", "sha256": "abc", "text_sha256": fingerprint, "asked": ["https://example.org/caching"]}],
+                         "texts": {"https://example.org/caching": text}, "any_read": true});
+    let note = json!({"reading": "Reading, not measured: it matters.", "claims": [{"url": "https://example.org/caching", "quote": "A cache MUST NOT store a response"}]});
+    let reply = serve(&s, json!({"jaynes": 1, "id": "x", "call": "execute", "step": "windows", "request": "r", "round": 0, "attempt": 1,
+        "given": [{"step": "note", "output": note}, {"step": "fetch", "output": fetched}], "previous": null, "answers": [], "key": null, "project": null, "source": null}));
+    let output = &reply["output"];
+    assert_eq!((output["judged"].as_u64(), output["quotes"][0]["found"].as_bool()), (Some(1), Some(true)), "{reply}");
+    assert!(output["windows"].as_str().unwrap_or("").contains("HTTP Caching \u{b6} \u{bb}A cache MUST NOT store a response\u{ab} when the no-store"), "{reply}");
+    let items = serve(&s, json!({"jaynes": 1, "id": "y", "call": "items", "step": "windows", "output": output}));
+    let item = &items["items"][0];
+    assert_eq!(item["detail"], "Reading, not measured: it matters.", "{items}");
+    assert!(item["aspects"][0]["text"].as_str().unwrap_or("").contains("1. \"A cache MUST NOT store a response\""), "{items}");
+}
+
