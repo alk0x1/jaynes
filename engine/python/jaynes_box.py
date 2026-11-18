@@ -306,7 +306,9 @@ def _shim(path: Path) -> bool:
 
 def _libraries(roots: Iterable[Path]) -> set[Path]:
     """The folders of the libraries outside ``roots`` that the binaries inside them load, followed recursively, but
-    the system's (which the system's own rules already let read)."""
+    the system's (which the system's own rules already let read); and each library by the path its binary names, when
+    links lead from it to the real one (Homebrew's /opt/homebrew/opt/sqlite is a link into its Cellar): the loader
+    follows them, so the box opens their metadata too."""
     roots = [Path(os.path.realpath(r)) for r in roots]
     todo = [f for r in roots for f in r.rglob("*") if f.is_file() and (f.suffix in (".so", ".dylib") or os.access(f, os.X_OK))]
     seen: set[Path] = set()
@@ -328,6 +330,8 @@ def _libraries(roots: Iterable[Path]) -> set[Path]:
             if any(r == real or r in real.parents for r in roots) or not real.exists():
                 continue
             out.add(real.parent)
+            if Path(lib) != real:
+                out.add(Path(lib))
             todo.append(real)
     return out
 

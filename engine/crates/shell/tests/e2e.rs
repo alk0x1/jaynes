@@ -2563,6 +2563,32 @@ print(json.dumps(got))
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the box of a role's program is macOS's sandbox-exec here")]
+fn a_program_s_box_holds_with_each_python_of_this_mac() {
+    // a Python of Homebrew's loads its libraries by a path through links (/opt/homebrew/opt/sqlite -> ../Cellar/...):
+    // the box opens where the links lead, and the links themselves too, or its sqlite3 does not load
+    let mut pythons = vec![python()];
+    for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let mut found: Vec<String> = entries.flatten().map(|e| e.path()).filter(|p| {
+            let n = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            n.strip_prefix("python3.").is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        }).map(|p| p.display().to_string()).collect();
+        found.sort();
+        pythons.extend(found);
+    }
+    for py in pythons {
+        let engine = std::env::temp_dir().join(format!("jaynes-program-pythons-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&engine);
+        std::fs::create_dir_all(&engine).expect("dir");
+        let out = Command::new(&py).arg("-I").arg(root().join("python/jaynes_box.py")).arg("program-proof")
+            .env("JAYNES_ENGINE_HOME", &engine).output().expect("run");
+        let _gone = std::fs::remove_dir_all(&engine);
+        assert!(out.status.success(), "{py}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box of a role's program is macOS's sandbox-exec here")]
 fn a_program_s_box_is_proved_on_this_macos_before_use_and_stays_shut_when_the_proof_fails() {
     let base = std::env::temp_dir().join(format!("jaynes-program-proof-{}", std::process::id()));
     let _gone = std::fs::remove_dir_all(&base);
