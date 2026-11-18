@@ -145,8 +145,30 @@ fn page_up(port: u16) {
     panic!("Jaynes's page did not come up on port {port} within {} s", PAGE_WAIT.as_secs());
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+/// Starts the page on a port the system gives (`--port 0`), reads the port from the first line it says on stderr
+/// ("the page: http://localhost:PORT/ ..."), and waits until it answers there. Its other lines go on being read,
+/// so the page never blocks on a full pipe.
+fn page_on_any_port(cmd: &mut Command) -> (Page, u16) {
+    use std::io::BufRead;
+    let mut child = cmd.args(["--port", "0"]).stderr(std::process::Stdio::piped()).spawn().expect("page");
+    let out = child.stderr.take().expect("what the page says");
+    let page = Page(child);
+    let (said, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            let _told = said.send(line);
+        }
+    });
+    let until = std::time::Instant::now() + PAGE_WAIT;
+    let port = loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        let line = heard.recv_timeout(left).unwrap_or_else(|e| panic!("the page never said its port within {} s: {e}", PAGE_WAIT.as_secs()));
+        if let Some(p) = line.split("the page: http://localhost:").nth(1).and_then(|r| r.split('/').next()).and_then(|p| p.parse::<u16>().ok()) {
+            break p;
+        }
+    };
+    page_up(port);
+    (page, port)
 }
 
 struct Scratch {
@@ -543,18 +565,14 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let e = events(&s, "page");
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
-        .env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
     // another address is refused, an old link with the key goes on to the fragment, and the question is on the page
     assert!(http(port, &format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n")).starts_with("HTTP/1.1 403"));
     let keyed = http(port, &format!("GET /?key=k3y HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
@@ -712,18 +730,14 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let s = scratch("acts");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "acts", &agent);
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
-        .env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
     let me = "jaynes_key=k3y";
     let view = http(port, &format!("GET /run/acts HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(view.contains("class=\"stages told\"") && view.contains("waiting for you"), "{view}");
@@ -914,16 +928,12 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
     let (ok, out) = engine(&s, &["start", "--run", "looks", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                                  "--request", "make looks", "--agent", &format!("command:{agent}")]);
     assert!(ok && out.contains("Which looks go on?"), "{out}");
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
-        .env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
     let html = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(html.contains("ink on newsprint"), "the item's sentence is shown");
     assert!(html.contains("<img src=\"data:image/svg+xml;base64,"), "the item's picture is shown");
@@ -1060,19 +1070,15 @@ impl Drop for Page {
 fn the_person_starts_a_run_from_the_page() {
     let s = scratch("new");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
         .env("JAYNES_PAGE_KEY", "k3y")
-        .env("JAYNES_AGENT", format!("command:{agent}"))
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_AGENT", format!("command:{agent}")),
+    );
     let me = "jaynes_key=k3y";
     let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     assert!(form.contains("<form id=\"start\"") && form.contains("name=\"request\""), "{form}");
@@ -1107,19 +1113,15 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
         std::fs::write(install.join(".crates.toml"), line).expect("write");
     };
     installed(&"a".repeat(40));
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_HOME", &settings)
         .env("JAYNES_INSTALL_ROOT", &install)
         .env("JAYNES_NO_UPDATE_CHECK", "1")
-        .env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
     let me = "jaynes_key=k3y";
     let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
     let setup = get("/setup");
@@ -1274,15 +1276,11 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     assert!(!s.home.join("runs/old/project").exists(), "the finished run's copy is cleared");
     assert!(s.home.join("runs/new/project/.git").exists(), "the run just started keeps its copy");
     // the page still shows what the old run changed
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
-        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k3y").env("JAYNES_NO_UPDATE_CHECK", "1")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k3y").env("JAYNES_NO_UPDATE_CHECK", "1"),
+    );
     let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
 }
@@ -1516,16 +1514,12 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     let photo = std::fs::read(copy.join(".jaynes/pictures/design/ink.png")).expect("the photograph is in the copy");
     assert_eq!(&photo[1..4], b"PNG");
     // on the page the photograph opens the page, served apart: sandboxed, so what an agent wrote cannot answer
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
-        .env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
     let html = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     let link = html.split("<a class=\"open\" href=\"/page/").nth(1).and_then(|r| r.split('"').next()).expect("a link to the page").to_string();
     assert!(pages.contains(&&link), "{link} {pages:?}");
@@ -1625,18 +1619,14 @@ fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
     assert!(ok && out.contains("Which direction goes on?"), "{out}");
     let q = question_of(&s, "again", 0);
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
-    let port = free_port();
-    let _page = jaynes()
-        .args(["page", "--port", &port.to_string()])
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
         .env("PYTHONPATH", "")
-        .env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
     // the person keeps Ink with a change: the step that drew it works again
     let id = q["id"].as_str().expect("id");
     let body = format!(r#"{{"run":"again","question":"{id}","shown":"{shown}","verdicts":{{"Ink":"change","Sun":"drop"}},"notes":{{"Ink":"greener"}}}}"#);

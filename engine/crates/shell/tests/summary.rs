@@ -34,8 +34,30 @@ fn page_up(port: u16) {
     panic!("Jaynes's page did not come up on port {port} within {} s", PAGE_WAIT.as_secs());
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).expect("a free port")
+/// Starts the page on a port the system gives (`--port 0`), reads the port from the first line it says on stderr
+/// ("the page: http://localhost:PORT/ ..."), and waits until it answers there. Its other lines go on being read,
+/// so the page never blocks on a full pipe.
+fn page_on_any_port(cmd: &mut Command) -> (Page, u16) {
+    use std::io::BufRead;
+    let mut child = cmd.args(["--port", "0"]).stderr(std::process::Stdio::piped()).spawn().expect("page");
+    let out = child.stderr.take().expect("what the page says");
+    let page = Page(child);
+    let (said, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            let _told = said.send(line);
+        }
+    });
+    let until = std::time::Instant::now() + PAGE_WAIT;
+    let port = loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        let line = heard.recv_timeout(left).unwrap_or_else(|e| panic!("the page never said its port within {} s: {e}", PAGE_WAIT.as_secs()));
+        if let Some(p) = line.split("the page: http://localhost:").nth(1).and_then(|r| r.split('/').next()).and_then(|p| p.parse::<u16>().ok()) {
+            break p;
+        }
+    };
+    page_up(port);
+    (page, port)
 }
 
 struct Scratch {
@@ -166,15 +188,11 @@ fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     start(&s, "asked", &format!("printf 'hi\\n' > greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}"));
     let (ok, early) = engine(&s, &["summary", "asked"]);
     assert!(!ok && early.contains("run asked is not finished: a summary tells what a finished run did"), "{early}");
-    let port = free_port();
-    let _page = Command::new(BIN)
-        .args(["page", "--port", &port.to_string()])
-        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_NO_UPDATE_CHECK", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y")
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(Page)
-        .expect("page");
-    page_up(port);
+    let (_page, port) = page_on_any_port(
+        Command::new(BIN)
+        .arg("page")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_NO_UPDATE_CHECK", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y"),
+    );
     // a run that still waits shows no summary
     let waiting = get(port, "/run/asked");
     assert!(waiting.contains("Answer: ") && !waiting.contains("id=\"sumtext\""), "{waiting}");
