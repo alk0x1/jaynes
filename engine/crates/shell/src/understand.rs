@@ -157,24 +157,58 @@ pub fn read(agent: &str, prompt: &str) -> Result<Value, String> {
             .env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd
     };
+    use std::os::unix::process::CommandExt;
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("the reader could not start: {e}"))?;
     child.stdin.take().ok_or("no input to the reader")?.write_all(prompt.as_bytes()).map_err(|e| e.to_string())?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!("the reader failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    // what it prints is read as it comes, so a reader that prints much never stalls on a full pipe
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            if let Some(mut p) = pipe {
+                let _read = p.read_to_end(&mut kept);
+            }
+            kept
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let seconds = deadline();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if std::time::Instant::now() >= until {
+            // the reader and whatever it started are stopped together
+            let _killed = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status();
+            let _reaped = child.wait();
+            return Err(format!("Jaynes stopped reading your words: the model took longer than {seconds} s. Answer with the buttons, or try again."));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let (stdout, stderr) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    if !status.success() {
+        return Err(format!("the reader failed: {}", String::from_utf8_lossy(&stderr).trim()));
     }
-    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let said = String::from_utf8_lossy(&stdout).to_string();
     // Claude Code wraps the text in its result; a command prints the JSON itself
     let text = serde_json::from_str::<Value>(&said)
         .ok()
         .and_then(|v| v["result"].as_str().map(str::to_string))
         .unwrap_or(said);
     json_in(&text).ok_or_else(|| "the reader did not answer in JSON".to_string())
+}
+
+/// How long a reading of the person's words may take before its model is stopped: JAYNES_UNDERSTAND_SECONDS, or
+/// 90 seconds.
+fn deadline() -> u64 {
+    std::env::var("JAYNES_UNDERSTAND_SECONDS").ok().and_then(|s| s.parse().ok()).filter(|s| *s > 0).unwrap_or(90)
 }
 
 /// The first JSON object in a text, fenced or not.

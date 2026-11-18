@@ -65,14 +65,47 @@ static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Connections the page serves at once, on both of its addresses.
 const MOST_AT_ONCE: usize = 64;
 
-/// A connection being served: when it came, and a handle to close it.
+/// A connection being served: when it came, a handle to close it, and whether it is kept from being closed to make
+/// way, as a reading of the person's words is.
 struct Slot {
     id: u64,
     since: std::time::Instant,
     stream: TcpStream,
+    kept: bool,
 }
 
 static SERVED: std::sync::Mutex<(u64, Vec<Slot>)> = std::sync::Mutex::new((0, Vec::new()));
+
+/// Readings of the person's words by a model at once, page-wide: each costs the person's tokens and a process.
+const MOST_READINGS: usize = 2;
+// a reading is kept from being closed when the page is full, so a place that is not kept must always be left to close
+const _: () = assert!(MOST_READINGS < MOST_AT_ONCE);
+static READINGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A reading's place among those that run at once, given back when it ends, however it ends.
+struct Reading;
+
+impl Reading {
+    fn take() -> Option<Reading> {
+        use std::sync::atomic::Ordering;
+        let mut n = READINGS.load(Ordering::SeqCst);
+        loop {
+            if n >= MOST_READINGS {
+                return None;
+            }
+            match READINGS.compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(Reading),
+                Err(now) => n = now,
+            }
+        }
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        READINGS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// A connection's place among those served at once, given back when it ends, however it ends.
 struct Turn(u64);
@@ -80,20 +113,32 @@ struct Turn(u64);
 impl Turn {
     /// A place for a new connection. When every place is taken, the oldest connection is closed to make way,
     /// whether it is still sending its request or still taking its reply: one that only holds its place, sending or
-    /// taking a byte at a time, cannot keep the person out, and a new connection is never refused.
+    /// taking a byte at a time, cannot keep the person out, and a new connection is never refused. A kept one, a
+    /// reading the person waits for, is passed over: there are at most [`MOST_READINGS`], far fewer than the places.
     fn take(stream: &TcpStream) -> Option<Turn> {
         let handle = stream.try_clone().ok()?;
         let mut served = SERVED.lock().ok()?;
         if served.1.len() >= MOST_AT_ONCE
-            && let Some(oldest) = served.1.iter().enumerate().min_by_key(|(_, s)| s.since).map(|(i, _)| i)
+            && let Some(oldest) = served.1.iter().enumerate().min_by_key(|(_, s)| (s.kept, s.since)).map(|(i, _)| i)
         {
             let gone = served.1.remove(oldest);
             let _closed = gone.stream.shutdown(std::net::Shutdown::Both);
         }
         served.0 += 1;
         let id = served.0;
-        served.1.push(Slot { id, since: std::time::Instant::now(), stream: handle });
+        served.1.push(Slot { id, since: std::time::Instant::now(), stream: handle, kept: false });
         Some(Turn(id))
+    }
+
+    /// Keep this connection from being closed to make way for others. Only a reading is kept, so at most
+    /// [`MOST_READINGS`] are, and [`Turn::take`] always finds one not kept to close while they are fewer than the
+    /// places, which the build holds. Were the limit of readings ever set at run time, that would need holding there.
+    fn keep(&self) {
+        if let Ok(mut served) = SERVED.lock()
+            && let Some(s) = served.1.iter_mut().find(|s| s.id == self.0)
+        {
+            s.kept = true;
+        }
     }
 }
 
@@ -174,30 +219,39 @@ impl Page {
             };
             let page = self.clone();
             let _started = std::thread::Builder::new().name("page-connection".into()).spawn(move || {
-                let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream, &turn, came)));
-                drop(turn);
+                let _done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.handle(stream, turn, came)));
             });
         }
     }
 
-    fn handle(&self, stream: TcpStream, _turn: &Turn, came: std::time::Instant) -> Result<(), String> {
+    /// Answer one connection, holding its `turn` among those served at once until its reply is sent.
+    fn handle(&self, stream: TcpStream, turn: Turn, came: std::time::Instant) -> Result<(), String> {
         let req = read(&stream, came + HEAD_DEADLINE)?;
-        // reading the person's words takes a model's time: it is answered on a thread of its own, and the page goes on
+        // Reading the person's words takes a model's time, and the person's tokens: only the person starts it, at most
+        // MOST_READINGS run at once, and each is answered on a thread of its own that keeps this connection's turn
+        // until the reply is sent, so the page goes on and its limit of connections still counts it.
         if req.method == "POST" && req.path == "/api/understand" && self.host(&req) != Host::Other {
             let json_body = req.headers.get("content-type").is_some_and(|c| c.starts_with("application/json"));
             let origin_ok = req.headers.get("origin").is_none_or(|o| self.local(Some(o), true));
             if json_body && origin_ok {
+                if !self.person(&req) {
+                    let said = json!({"ok": false, "refused": "only the person has their words read here: open the page with its key"});
+                    return reply_json(&stream, came + WHOLE_DEADLINE, "403 Forbidden", &said);
+                }
+                let Some(reading) = Reading::take() else {
+                    let said = json!({"ok": false, "busy": true, "refused": "Jaynes is reading two answers already: try again in a moment, or answer with the buttons"});
+                    return reply_json(&stream, came + WHOLE_DEADLINE, "429 Too Many Requests", &said);
+                };
+                // a reading the person waits for is not closed to make way for others: at most two are kept so
+                turn.keep();
                 let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-                let by = if self.person(&req) { By::Person } else { By::Agent { who: "a client without the page's key".into() } };
                 let home = self.home.clone();
                 std::thread::spawn(move || {
-                    let reply = understand_in(&home, &body, by).unwrap_or_else(|e| json!({"ok": false, "refused": e})).to_string();
-                    let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
-                        reply.len()
-                    );
+                    let said = understand_in(&home, &body, By::Person).unwrap_or_else(|e| json!({"ok": false, "refused": e}));
                     // the reading took a model's time, which is not the connection's: its reply has its own deadline
-                    let _sent = send(&stream, std::time::Instant::now() + WHOLE_DEADLINE, &[head.as_bytes(), reply.as_bytes()]);
+                    let _sent = reply_json(&stream, std::time::Instant::now() + WHOLE_DEADLINE, "200 OK", &said);
+                    drop(reading);
+                    drop(turn);
                 });
                 return Ok(());
             }
@@ -395,6 +449,16 @@ pub fn answer_in(home: &std::path::Path, body: &Value, by: By) -> Result<(Run, Q
             .unwrap_or_default();
         let answer = Answer { back, question: q.question.id.clone(), shown, verdicts, by, context };
         Ok((run, q, answer))
+}
+
+/// Send a JSON reply, all of it by `until`, and close.
+fn reply_json(stream: &TcpStream, until: std::time::Instant, status: &str, said: &Value) -> Result<(), String> {
+    let body = said.to_string();
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    send(stream, until, &[head.as_bytes(), body.as_bytes()])
 }
 
 /// The person's words read into the answer they mean, with what Jaynes says it will do: a proposal, never an answer.

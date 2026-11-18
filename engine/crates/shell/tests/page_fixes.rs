@@ -402,14 +402,21 @@ fn only_the_page_s_own_name_and_numbers_reach_it_and_a_number_with_an_origin_is_
     // a target that is not a path is never sent on
     let reply = ask(port, format!("GET http://evil.example/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes(), Duration::from_secs(3)).expect("reply");
     assert!(!reply.starts_with("HTTP/1.1 308") && !reply.contains("evil"), "{reply}");
-    // the reading of the person's words answers with nosniff like the rest
+    // the reading of the person's words answers with nosniff like the rest, the person's and the refusal alike
+    let reply = ask(
+        port,
+        format!("POST /api/understand HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: k3y\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes(),
+        Duration::from_secs(3),
+    )
+    .expect("reply");
+    assert!(reply.starts_with("HTTP/1.1 200") && reply.contains("X-Content-Type-Options: nosniff\r\n"), "{reply}");
     let reply = ask(
         port,
         format!("POST /api/understand HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes(),
         Duration::from_secs(3),
     )
     .expect("reply");
-    assert!(reply.starts_with("HTTP/1.1 200") && reply.contains("X-Content-Type-Options: nosniff\r\n"), "{reply}");
+    assert!(reply.starts_with("HTTP/1.1 403") && reply.contains("X-Content-Type-Options: nosniff\r\n"), "{reply}");
 }
 
 #[test]
