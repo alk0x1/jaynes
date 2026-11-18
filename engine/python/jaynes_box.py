@@ -951,11 +951,13 @@ def reserve(n: int = RESERVED) -> tuple[int, ...]:
 
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
-        readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False) -> Ran:
+        readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False,
+        over: dict[str, str | None] | None = None) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
     ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
     inside the hidden ones, such as the run's own copy of the role a check's script is in. Its servers bind the ports
-    in ``JAYNES_PORTS`` and the step's ``local_ports``. Raises ``Unavailable`` where there is no box."""
+    in ``JAYNES_PORTS`` and the step's ``local_ports``. ``over`` puts files back in the copy before it runs: a path
+    inside the project to the text it holds, or None to take it out. Raises ``Unavailable`` where there is no box."""
     with tempfile.TemporaryDirectory(prefix="jaynes-suite-") as tmp:
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".jaynes", *DEPENDENCIES))
@@ -964,6 +966,16 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         link_dependencies(project, work)
         if source is not None:
             link_dependencies(source, work)
+        for path, text in (over or {}).items():
+            put = work / path
+            if Path(path).is_absolute() or ".." in Path(path).parts or not put.resolve().is_relative_to(work.resolve()) \
+                    or put.resolve() == work.resolve():
+                raise ValueError(f"{path} is not a file inside the project")
+            if text is None:
+                put.unlink(missing_ok=True)
+            else:
+                put.parent.mkdir(parents=True, exist_ok=True)
+                put.write_text(text)
         ports, declared = reserve(), tuple(sorted({int(p) for p in local_ports} - {PAGE_PORT}))
         # the run's say, from its setup, in the engine's call: the person opened this project's local ports
         anyone = any_port is True

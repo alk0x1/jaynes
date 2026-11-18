@@ -129,68 +129,150 @@ class ACase(unittest.TestCase):
         self.assertEqual((said["reply"], said["verdict"]["verdict"]), ("verdict", "fail"))
 
 
+def a_start(folder: str, files: dict[str, str]) -> dict[str, str]:
+    """The start of a run as the engine keeps it, beside the copy: a repository and its base commit."""
+    repo = Path(folder) / "start"
+    repo.mkdir()
+    for path, text in files.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "start"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    return {"git": str(repo / ".git"), "commit": commit}
+
+
 @unittest.skipUnless(box.available(), "needs the box")
-class AFailureMakeWasToldToIgnore(unittest.TestCase):
-    """Is the agent's only when the line that tells make to ignore it is new since the run began: what the person's
-    Makefile already ignored is not the agent's doing."""
+class TheSuiteAsTheRunBegan(unittest.TestCase):
+    """When the run changed how the suite is defined (a Makefile, the test scripts of package.json, pytest's
+    configuration), the suite runs again as the project defined it when the run began, over the code of now, and
+    both pass: a suite the run made unable to fail is caught whatever made it so."""
 
-    MAKEFILE = "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
+    PERSON = "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
 
-    def start(self, folder: str, makefile: str) -> dict[str, str]:
-        """The start of the run as the engine keeps it, beside the copy: a repository and its base commit."""
-        repo = Path(folder) / "start"
-        repo.mkdir()
-        (repo / "Makefile").write_text(makefile)
-        (repo / "greeting.txt").write_text("hello\n")
-        for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "start"]):
-            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
-        commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-        return {"git": str(repo / ".git"), "commit": commit}
-
-    def judge(self, start: Any, makefile: str) -> Any:
+    def judge(self, start: Any, makefile: str, greeting: str = "hi\n", check: str = "suite-passes", run: str = "") -> Any:
         with tempfile.TemporaryDirectory() as project:
             (Path(project) / "Makefile").write_text(makefile)
-            (Path(project) / "greeting.txt").write_text("hi\n")
+            (Path(project) / "greeting.txt").write_text(greeting)
+            (Path(project) / "tests").mkdir()
+            (Path(project) / "tests/says_hi.sh").write_text("grep -q hi greeting.txt\n")
+            if run:
+                (Path(project) / "tests/run.sh").write_text(run)
             runner = {"kind": "make", "suite": "make test", "each": "", "found": "Makefile test target"}
-            call = {"project": project, "given": [{"step": "runner", "output": runner}], "output": {}, "start": start}
+            given = [{"step": "runner", "output": runner}, {"step": "reproduce", "output": {"tests": ["tests/says_hi.sh"]}}]
+            call = {"project": project, "given": given, "output": {}, "start": start}
+            if check == "tests-pass":
+                return menu.tests_pass(call, {"suite_step": "runner", "tests_from": "reproduce"})
             return menu.suite_passes(call, {"suite_step": "runner"})
 
-    def test_is_the_person_s_when_the_start_of_the_run_already_had_it(self):
+    def test_a_failure_the_person_s_makefile_ignored_is_the_person_s(self):
         with tempfile.TemporaryDirectory() as folder:
-            self.assertIsInstance(self.judge(self.start(folder, self.MAKEFILE), self.MAKEFILE), Pass)
+            self.assertIsInstance(self.judge(a_start(folder, {"Makefile": self.PERSON}), self.PERSON), Pass)
 
-    def test_is_the_agent_s_when_the_run_added_it(self):
+    def test_a_makefile_changed_so_its_suite_cannot_fail_fails_as_the_suite_of_the_start_does(self):
+        for now in ("test:\n\t-grep -q hi greeting.txt\n", "test:\n\tgrep -q hi greeting.txt || true\n",
+                    "test:\n\tif grep -q hi greeting.txt; then :; fi\n", "test:\n\tgrep -q hi greeting.txt; echo done\n"):
+            for check in ("suite-passes", "tests-pass"):
+                with self.subTest(now=now, check=check), tempfile.TemporaryDirectory() as folder:
+                    got = self.judge(a_start(folder, {"Makefile": "test:\n\tgrep -q hi greeting.txt\n"}), now, "hello\n", check)
+                    self.assertIsInstance(got, Fail)
+                    self.assertIn("as the project defined it when the run began", got.reasons[0])
+                    self.assertIn("Makefile", got.reasons[0])
+
+    def test_a_makefile_changed_whose_suite_of_the_start_still_passes_passes(self):
+        # a target added, a line added beside the person's ignore, the tested line changed: the start's suite holds
+        for now in (self.PERSON + "fmt:\n\t@echo formatted\n", self.PERSON + "\techo done\n",
+                    self.PERSON.replace("grep -q hi", "grep -q h")):
+            with self.subTest(now=now), tempfile.TemporaryDirectory() as folder:
+                self.assertIsInstance(self.judge(a_start(folder, {"Makefile": self.PERSON}), now), Pass)
+
+    def test_a_script_the_test_target_runs_is_held_as_it_began(self):
+        makefile = "test:\n\tsh tests/run.sh\n"
         with tempfile.TemporaryDirectory() as folder:
-            got = self.judge(self.start(folder, "test:\n\tgrep -q hi greeting.txt\n"), self.MAKEFILE)
+            start = a_start(folder, {"Makefile": makefile, "tests/run.sh": "grep -q hi greeting.txt\n"})
+            got = self.judge(start, makefile, "hello\n", run="grep -q hi greeting.txt || true\n")
         self.assertIsInstance(got, Fail)
-        self.assertIn("make: [test] Error 1 (ignored)", got.reasons[0])
-        self.assertIn("Makefile: -rm gone.txt", got.reasons[0])
-
-    def test_is_the_agent_s_when_the_run_changed_a_line_the_person_ignored(self):
+        self.assertIn("the run changed tests/run.sh", got.reasons[0])
+        # changed without harm, it passes as it began too
         with tempfile.TemporaryDirectory() as folder:
-            got = self.judge(self.start(folder, self.MAKEFILE), "test:\n\t-grep -q hello greeting.txt\n")
+            start = a_start(folder, {"Makefile": makefile, "tests/run.sh": "grep -q hi greeting.txt\n"})
+            self.assertIsInstance(self.judge(start, makefile, run="echo checking\ngrep -q hi greeting.txt\n"), Pass)
+
+    def test_with_the_start_not_known_a_failure_ignored_or_a_line_that_cannot_fail_is_the_step_s(self):
+        self.assertIsInstance(self.judge(None, self.PERSON), Fail)
+        self.assertIsInstance(self.judge({"git": "/no/such/repository", "commit": "0" * 40}, self.PERSON), Fail)
+        got = self.judge(None, "test:\n\tgrep -q hi greeting.txt || true\n")
         self.assertIsInstance(got, Fail)
-        self.assertIn("-grep -q hello greeting.txt", got.reasons[0])
+        self.assertIn("grep -q hi greeting.txt || true", got.reasons[0])
+        self.assertIsInstance(self.judge(None, "test:\n\tgrep -q hi greeting.txt\n"), Pass)
 
-    def test_is_the_agent_s_when_the_run_has_make_ignore_every_failure_of_a_target_the_person_ignored_one_of(self):
-        person = "test:\n\t$(MAKE) check\ncheck:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n"
-        with tempfile.TemporaryDirectory() as folder:
-            self.assertIsInstance(self.judge(self.start(folder, person), person), Pass)
-        with tempfile.TemporaryDirectory() as folder:
-            got = self.judge(self.start(folder, person), person.replace("$(MAKE) check", "-$(MAKE) -i check"))
-        self.assertIsInstance(got, Fail)
-        self.assertIn("-$(MAKE) -i check", got.reasons[0])
 
-    def test_is_the_agent_s_when_the_run_gives_a_variable_the_recipe_expands_a_dash(self):
-        person = "RUN = grep -q hi greeting.txt\ntest:\n\t-rm gone.txt\n\t$(RUN)\n"
-        with tempfile.TemporaryDirectory() as folder:
-            got = self.judge(self.start(folder, person), person.replace("RUN = grep", "RUN = -grep").replace("hi greeting", "bye greeting"))
-        self.assertIsInstance(got, Fail)
-        self.assertIn("does not account for", got.reasons[0])
+class WhatDefinesTheSuite(unittest.TestCase):
+    """What the suite's definition is for each runner, and what is put back to run it as the run began."""
 
-    def test_is_the_agent_s_when_the_start_is_not_known(self):
-        self.assertIsInstance(self.judge(None, self.MAKEFILE), Fail)
-        self.assertIsInstance(self.judge({"git": "/no/such/repository", "commit": "0" * 40}, self.MAKEFILE), Fail)
+    def back(self, kind: str, start: dict[str, str], now: dict[str, str]) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as project:
+            for path, text in now.items():
+                (Path(project) / path).parent.mkdir(parents=True, exist_ok=True)
+                (Path(project) / path).write_text(text)
+            return menu.as_it_began(kind, (list(start), start.get), Path(project))
+
+    def test_of_make_is_its_makefiles_and_what_they_include(self):
+        start = {"Makefile": "include rules.inc\ntest:\n\tgrep -q hi greeting.txt\n", "rules.inc": "X = 1\n"}
+        self.assertEqual(self.back("make", start, dict(start)), {})
+        now = {**start, "rules.inc": ".IGNORE: test\n", "sub/Makefile": "check:\n\t-false\n"}
+        self.assertEqual(self.back("make", start, now), {"rules.inc": "X = 1\n", "sub/Makefile": None})
+        # what the tests are is not how the suite is defined: a test the step changed runs as it is now
+        self.assertEqual(self.back("make", {**start, "tests/a.sh": "a"}, {**start, "tests/a.sh": "b"}), {})
+
+    def test_of_make_holds_the_scripts_its_test_target_runs_and_not_the_files_it_reads(self):
+        start = {"Makefile": "test: unit\nunit:\n\tsh tests/run.sh && ./tools/lint\n\tgrep -q hi greeting.txt\n\tpython3 -B tests/check.py x\n",
+                 "tests/run.sh": "grep -q hi greeting.txt\n", "tools/lint": "true\n", "tests/check.py": "pass\n", "greeting.txt": "hello\n"}
+        now = {**start, "tests/run.sh": "grep -q hi greeting.txt || true\n", "tools/lint": "exit 0\n", "tests/check.py": "x = 1\n", "greeting.txt": "hi\n"}
+        self.assertEqual(self.back("make", start, now), {"tests/run.sh": start["tests/run.sh"], "tools/lint": "true\n", "tests/check.py": "pass\n"})
+        # a script added beside, which no runner reads on its own and the start's Makefile does not run, stays as it is
+        moved = {**start, "Makefile": start["Makefile"].replace("tests/run.sh", "tests/other.sh"), "tests/other.sh": "true\n"}
+        self.assertEqual(self.back("make", start, moved), {"Makefile": start["Makefile"]})
+
+    def test_of_node_holds_the_scripts_its_test_scripts_run(self):
+        start = {"package.json": json.dumps({"scripts": {"test": "node tests/greet.js"}}), "tests/greet.js": "check()\n"}
+        now = {**start, "tests/greet.js": "check() || true\n"}
+        self.assertEqual(self.back("node", start, now), {"tests/greet.js": "check()\n"})
+
+    def test_of_node_is_the_test_scripts_of_package_json(self):
+        start = {"package.json": json.dumps({"name": "a", "scripts": {"test": "node --test", "build": "tsc"}})}
+        same = {"package.json": json.dumps({"name": "a", "version": "2", "scripts": {"test": "node --test", "build": "esbuild"}})}
+        self.assertEqual(self.back("node", start, same), {})
+        now = {"package.json": json.dumps({"name": "a", "scripts": {"test": "node --test || true", "pretest": "exit 0", "build": "esbuild"}})}
+        put = json.loads(self.back("node", start, now)["package.json"])
+        self.assertEqual(put["scripts"], {"test": "node --test", "build": "esbuild"})
+
+    def test_of_pytest_is_its_configuration_and_every_conftest(self):
+        start = {"pytest.ini": "[pytest]\n", "tests/test_a.py": "def test_a(): pass\n"}
+        self.assertEqual(self.back("pytest", start, dict(start)), {})
+        now = {"pytest.ini": "[pytest]\naddopts = -k nothing\n", "tests/conftest.py": "skip everything", "tests/test_a.py": "changed"}
+        self.assertEqual(self.back("pytest", start, now), {"pytest.ini": "[pytest]\n", "tests/conftest.py": None})
+
+    def test_holds_the_script_the_suite_s_own_command_runs(self):
+        start = {"tests/run.sh": "grep -q hi greeting.txt\n"}
+        with tempfile.TemporaryDirectory() as project:
+            (Path(project) / "tests").mkdir()
+            (Path(project) / "tests/run.sh").write_text("grep -q hi greeting.txt\nexit 0\n")
+            self.assertEqual(menu.as_it_began("given", (list(start), start.get), Path(project), "sh tests/run.sh"), start)
+            self.assertEqual(menu.as_it_began("given", (list(start), start.get), Path(project), "npm test"), {})
+
+    def test_a_shell_script_that_cannot_fail_is_told_and_one_that_can_is_not(self):
+        for text in ("grep -q hi g || true\n", "grep -q hi g\nexit 0\n", "grep -q hi g\necho ok\n"):
+            with self.subTest(text=text):
+                self.assertTrue(menu._script_cannot_fail(text))
+        for text in ("grep -q hi g\n", "grep -q hi g || exit 1\necho ok\n", "set -e\ngrep -q hi g\necho ok\n",
+                     "#!/bin/sh -e\ngrep -q hi g\nexit 0\n", "echo nothing to test\n", "if grep -q hi g; then :; else exit 1; fi\n"):
+            with self.subTest(text=text):
+                self.assertIsNone(menu._script_cannot_fail(text))
+
+    def test_of_a_runner_whose_suite_is_its_own_command_is_nothing(self):
+        for kind in ("go", "cargo", "given"):
+            self.assertEqual(self.back(kind, {"go.mod": "a"}, {"go.mod": "b"}), {})
 
 
 if __name__ == "__main__":

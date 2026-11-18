@@ -420,5 +420,218 @@
    "greeting.txt": "hello\n"
   },
   "expect": "reject"
+ },
+ {
+  "id": "failing-line-or-true",
+  "hole": "a failing line the run made end in || true cannot fail, and the suite with it",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt || true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "failing-line-then-true",
+  "hole": "a failing line the run made end in ; true exits with true's status",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt; true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "failing-line-inside-an-if",
+  "hole": "a failing line the run put in an if's condition cannot fail the recipe",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tif grep -q hi greeting.txt; then :; fi\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "failing-line-or-true-start-unknown",
+  "hole": "a failing line ending in || true cannot fail, the start known or not",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tgrep -q hi greeting.txt || true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "script-the-target-runs-made-unable-to-fail",
+  "hole": "a || true the run put in the script the test target runs makes the suite unable to fail, as one in the recipe would",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tsh tests/run.sh\n",
+   "tests/run.sh": "grep -q hi greeting.txt\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/run.sh\n",
+   "tests/run.sh": "grep -q hi greeting.txt || true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "script-the-target-runs-made-unable-to-fail-start-unknown",
+  "hole": "a script the test target runs, ending its failing line in || true, cannot fail, the start known or not",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tsh tests/run.sh\n",
+   "tests/run.sh": "grep -q hi greeting.txt || true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "script-suite-made-unable-to-fail",
+  "hole": "the suite found at the start is this script; a || true the run put on its failing line makes it unable to fail",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "tests/run.sh": "grep -q hi greeting.txt\n"
+  },
+  "project": {
+   "tests/run.sh": "grep -q hi greeting.txt || true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "script-suite-ends-in-exit-0",
+  "hole": "the suite found at the start is this script; an exit 0 the run put at its end makes it pass whatever ran before",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "tests/run.sh": "grep -q hi greeting.txt\n"
+  },
+  "project": {
+   "tests/run.sh": "grep -q hi greeting.txt\nexit 0\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
  }
 ]

@@ -689,7 +689,7 @@ fn jaynes_check_runs_a_check_of_the_role_s_own_on_its_cases_in_the_box() {
     let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
     assert!(ok, "{out}");
     assert!(out.contains("✔ check files-exist of make: rejected 2 of 2, accepted 2 of 2"), "{out}");
-    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 16 it rejects and 7 it accepts"), "{out}");
+    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 24 it rejects and 7 it accepts"), "{out}");
     // the same from the role's own folder, as an author runs it: jaynes check .
     let here = Command::new(BIN).args(["check", "."]).current_dir(&dir).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").output().expect("check");
     let said = format!("{}{}", String::from_utf8_lossy(&here.stdout), String::from_utf8_lossy(&here.stderr));
@@ -771,7 +771,8 @@ fn suite_checked(s: &Scratch, name: &str, act: &str) -> PathBuf {
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_failure_the_project_s_makefile_ignored_before_the_run_is_not_the_step_s() {
-    // the suite-passes of the menu reads the start of the run where the engine keeps it, beside the copy
+    // the suite-passes of the menu reads the start of the run where the engine keeps it, beside the copy, and runs
+    // the suite again as it was defined there when the run changed that
     let s = scratch("ignored", "http://127.0.0.1:1");
     std::fs::write(s.project.join("greeting.txt"), "hello\n").expect("write");
     std::fs::write(s.project.join("Makefile"), "test:\n\t-rm gone.txt\n\tgrep -q hi greeting.txt\n").expect("write");
@@ -781,14 +782,100 @@ fn a_failure_the_project_s_makefile_ignored_before_the_run_is_not_the_step_s() {
     let theirs = suite_checked(&s, "theirs", "printf 'hi\\n' > greeting.txt");
     let out = start(&s, "theirs", &theirs, "say hi");
     assert!(out.contains("finished: delivered"), "{out}");
-    // the same kind of line, added by the step: its failure is the step's
-    let added = suite_checked(&s, "added", "printf 'hi\\n' > greeting.txt && printf 'test:\\n\\t-rm gone.txt\\n\\t-grep -q bye greeting.txt\\n' > Makefile");
+    // a step that makes the suite unable to fail, by the same kind of line, fails as the suite of the start does
+    let added = suite_checked(&s, "added", "printf 'hello there\\n' > greeting.txt && printf 'test:\\n\\t-rm gone.txt\\n\\t-grep -q hi greeting.txt\\n' > Makefile");
     let out = start(&s, "added", &added, "say hi");
     assert!(!out.contains("finished: delivered"), "{out}");
     let e = events(&s, "added");
     let failed = of(&e, "AttemptFailed", "act");
     let said = failed.iter().map(|f| f["reasons"].to_string()).collect::<Vec<_>>().join(" ");
-    assert!(said.contains("make went on after a failure") && said.contains("Makefile: -grep -q bye greeting.txt") && !said.contains("Makefile: -rm gone.txt"), "{said}");
+    assert!(said.contains("as the project defined it when the run began: the run changed Makefile"), "{said}");
+}
+
+/// A project of `files`, committed, in a scratch of its own.
+fn project_of(name: &str, files: &[(&str, &str)]) -> Scratch {
+    let s = scratch(name, "http://127.0.0.1:1");
+    for (path, text) in files {
+        let at = s.project.join(path);
+        std::fs::create_dir_all(at.parent().expect("parent")).expect("dir");
+        std::fs::write(at, text).expect("write");
+    }
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a suite"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    s
+}
+
+/// What the step's failed attempts said.
+fn failures(s: &Scratch, run: &str) -> String {
+    let e = events(s, run);
+    of(&e, "AttemptFailed", "act").iter().map(|f| f["reasons"].to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// A step that makes the suite unable to fail through a script the suite runs is not delivered; one that changes
+/// that script without harm is: the suite runs again with the start's script, over the code of now.
+fn a_suite_neutralized_through_what_it_runs_is_caught(s: &Scratch, harmless: &str, neutralizing: &str, changed: &str) {
+    let fine = suite_checked(s, "fine", harmless);
+    let out = start(s, "fine", &fine, "say hi");
+    assert!(out.contains("finished: delivered"), "{out}");
+    let bad = suite_checked(s, "bad", neutralizing);
+    let out = start(s, "bad", &bad, "say hi");
+    assert!(!out.contains("finished: delivered"), "{out}");
+    let said = failures(s, "bad");
+    assert!(said.contains(&format!("as the project defined it when the run began: the run changed {changed}")), "{said}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_suite_neutralized_in_the_script_its_make_target_runs_is_caught() {
+    let s = project_of("runner-script", &[("Makefile", "test:\n\tsh tests/run.sh\n"), ("tests/run.sh", "grep -q hi greeting.txt\n"), ("greeting.txt", "hello\n")]);
+    a_suite_neutralized_through_what_it_runs_is_caught(
+        &s,
+        "printf 'hi\\n' > greeting.txt && printf 'echo checking\\ngrep -q hi greeting.txt\\n' > tests/run.sh",
+        "printf 'hello there\\n' > greeting.txt && printf 'grep -q hi greeting.txt || true\\n' > tests/run.sh",
+        "tests/run.sh",
+    );
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_suite_neutralized_in_package_json_is_caught() {
+    if !Command::new("npm").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        eprintln!("not run: no npm here");
+        return;
+    }
+    let s = project_of("node", &[
+        ("package.json", r#"{"name": "greet", "scripts": {"test": "node tests/greet.js"}}"#),
+        ("tests/greet.js", "if (!require('fs').readFileSync('greeting.txt', 'utf8').includes('hi')) { console.log('expected hi'); process.exit(1) }\n"),
+        ("greeting.txt", "hello\n"),
+    ]);
+    a_suite_neutralized_through_what_it_runs_is_caught(
+        &s,
+        r#"printf 'hi\n' > greeting.txt && printf '{"name": "greet", "scripts": {"test": "node tests/greet.js && echo ok"}}' > package.json"#,
+        r#"printf 'hello there\n' > greeting.txt && printf '{"name": "greet", "scripts": {"test": "node tests/greet.js || true"}}' > package.json"#,
+        "package.json",
+    );
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_suite_neutralized_by_a_conftest_is_caught() {
+    if !Command::new("python3").args(["-c", "import pytest"]).output().is_ok_and(|o| o.status.success()) {
+        eprintln!("not run: no pytest here");
+        return;
+    }
+    let s = project_of("pytest", &[
+        ("pytest.ini", "[pytest]\n"),
+        ("tests/test_greet.py", "def test_greet():\n    assert 'hi' in open('greeting.txt').read()\n"),
+        ("greeting.txt", "hello\n"),
+    ]);
+    let skip = "import pytest\\n\\n\\ndef pytest_collection_modifyitems(items):\\n    for item in items:\\n        item.add_marker(pytest.mark.skip)\\n";
+    a_suite_neutralized_through_what_it_runs_is_caught(
+        &s,
+        "printf 'hi\\n' > greeting.txt && printf 'import pytest\\n' > tests/conftest.py",
+        &format!("printf 'hello there\\n' > greeting.txt && printf '{skip}' > tests/conftest.py"),
+        "tests/conftest.py",
+    );
 }
 
 #[test]
