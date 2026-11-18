@@ -14,11 +14,6 @@ passed, and the result is still wrong, so you fix it yourself. You either
 review everything and become the bottleneck, or let them run and have no idea
 how often they get it wrong.
 
-In a one-person company run by agents, over seven weeks: 11,894 tool calls,
-25 of them seen by the person. Of 8 design screens, none followed the first
-four steps of the design method, and screens that passed every automated check
-were still sent back.
-
 ## How it works
 
 1. **A role is a method.** Its steps, what each may reach, its checks and where
@@ -210,10 +205,6 @@ one before it, so a change to any past entry shows (`jaynes verify`).
 
 Missing, roughly in order: plans of several runs, the Codex adapter, roles for
 design work on this protocol, Linux, targets other than a repository.
-
-The same change that took the earlier engine three runs and 1 h 35 min without
-delivering was delivered by this one in under ten minutes, in one attempt
-([the design record](docs/specs/2026-11-12-engine-redesign-design.md)).
 
 ## Maintenance
 
