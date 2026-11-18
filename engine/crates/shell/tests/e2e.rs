@@ -77,8 +77,9 @@ fn test_browser_in(named: Option<String>, home: &Path, roots: &[PathBuf]) -> Opt
             let name = e.file_name().to_string_lossy().to_string();
             let version = name.rsplit('-').next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
             let (kind, inside): (u8, &[&str]) = if name.starts_with("chromium_headless_shell-") {
+                // the layouts Playwright has used: the newer by platform, and the older chrome-mac and chrome-linux
                 (0, &["chrome-headless-shell-mac-arm64/chrome-headless-shell", "chrome-headless-shell-mac-x64/chrome-headless-shell",
-                      "chrome-headless-shell-linux64/chrome-headless-shell", "chrome-linux/headless_shell"])
+                      "chrome-headless-shell-linux64/chrome-headless-shell", "chrome-mac/headless_shell", "chrome-linux/headless_shell"])
             } else if name.starts_with("chromium-") {
                 (1, &["chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
                       "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
