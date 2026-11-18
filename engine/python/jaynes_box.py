@@ -155,6 +155,8 @@ def linux_argv(exe: str, script: str, box: Box) -> list[str]:
         argv += ["--hide", str(h)]
     for r in box.readable:
         argv += ["--show", str(r)]
+    for r in box.readonly:
+        argv += ["--readonly", str(r)]
     for p in box.ports:
         argv += ["--port", str(int(p))]
     if box.local:
@@ -573,6 +575,9 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
                 link_dependencies(source, work)
         # what it reads is said, so the engine's runs are hidden from it but for its role's folder
         reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
+        # a folder it may only read that is not there yet: where the box holds it by an empty folder in its place
+        # (Linux), that folder goes once the command ends
+        absent = [r for r in readonly if not r.exists()]
         argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads))
         env = {**os.environ, **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
         proc = subprocess.Popen(argv, cwd=work, env=env, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
@@ -585,6 +590,11 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
             said, _ = proc.communicate()
             said += f"\n(stopped after {timeout:.0f} s)".encode()
             code = 124
+        for r in absent:
+            try:
+                r.rmdir()
+            except OSError:
+                pass
         text = said.decode(errors="replace")
         output, unread = _output(out / "output.json")
         return Stepped(Ran(code, text[-TAIL:], text), output, unread)
@@ -616,8 +626,10 @@ def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str
 
 def refused(ran: Ran) -> list[str]:
     """What the box refused, when the command failed for it: then its failure says nothing about the project."""
+    # macOS's box refuses with EPERM; Linux's Landlock with EACCES, its seccomp filter with EPERM, its read-only mounts with EROFS
+    said = ("operation not permitted", "permission denied", "read-only file system") if sys.platform.startswith("linux") else ("operation not permitted",)
     lines = [line.strip() for line in ran.printed.splitlines()
-             if "operation not permitted" in line.lower() and not any(h in line for h in HARMLESS)]
+             if any(s in line.lower() for s in said) and not any(h in line for h in HARMLESS)]
     return lines if ran.code != 0 else []
 
 
