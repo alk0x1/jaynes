@@ -229,7 +229,7 @@ impl Page {
                 return ("308 Permanent Redirect", "text/plain", String::new(), headers);
             }
             // a program, such as an agent, may still speak to the page by number, and never as the person
-            Host::Number if req.headers.get("origin").is_none() => {}
+            Host::Number if !req.headers.contains_key("origin") => {}
             _ => return ("403 Forbidden", "text/plain", "this page answers only on its own local address".into(), vec![]),
         }
         if req.method == "GET" {
