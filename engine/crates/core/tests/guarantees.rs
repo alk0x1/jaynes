@@ -973,8 +973,10 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         let (n, k) = match w.rng.below(3) { 0 => (40, 0), 1 => (30, 12), _ => (5, 0) };
         attention.insert(s.name.clone(), Count { key, n, k, pending: 0, braked: w.rng.chance(25) });
     }
-    // some runs have the person's device paired, and some of those ask to leave their box (G18)
-    let person = if w.rng.chance(30) { Some(jaynes_core::io::StartPerson { keys: paired_keys(), nonce: format!("start-{seed}"), unboxed: w.rng.chance(40) }) } else { None };
+    // some runs have the person's device paired, and some of those ask to leave their box (G18); more of those that
+    // merge, so a merge held for the person (G19) is often answered where the device's proof is needed
+    let merges = manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge;
+    let person = if w.rng.chance(if merges { 55 } else { 30 }) { Some(jaynes_core::io::StartPerson { keys: paired_keys(), nonce: format!("start-{seed}"), unboxed: w.rng.chance(40) }) } else { None };
     let started = w.send(Input::Start {
         run: format!("run-{seed}"),
         request: "change the button's text".to_string(),
@@ -1502,10 +1504,15 @@ fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
 /// A run of one agent step on the whole project, delivered by merge, whose attempt brings in `changed`: what it
 /// commands once the change is in.
 fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
+    merging_with(changed, None)
+}
+
+/// [`merging`], with `person` at the start: the person's device keys paired, or not.
+fn merging_with(changed: Vec<Changed>, person: Option<jaynes_core::io::StartPerson>) -> (Run, Vec<Command>) {
     let mut change = step("change", Executor::Agent);
     change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: jaynes_core::manifest::DeliveryKind::Merge };
-    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, person: None }).expect("start");
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, person }).expect("start");
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
@@ -1519,6 +1526,29 @@ fn merge_asked(c: &[Command]) -> Option<Question> {
 
 fn delivered_merge(c: &[Command]) -> Option<bool> {
     c.iter().find_map(|c| if let Command::Deliver { merge, .. } = c { Some(*merge) } else { None })
+}
+
+/// G19 with G14's levels: where the person's device is paired, merging what runs later outside any box takes the
+/// device's proof, as letting go on what cannot be undone does; Branch only, which lets nothing in, takes their word;
+/// and with no device paired, their word merges, as before.
+#[test]
+fn g19_with_a_device_paired_a_merge_takes_its_proof_and_branch_only_their_word() {
+    let envrc = Changed { what: ".envrc".to_string(), size: 1, floor: true, digest: Some("b1".to_string()), ..Default::default() };
+    let paired = || Some(jaynes_core::io::StartPerson { keys: paired_keys(), nonce: "start".to_string(), unboxed: false });
+    let answer = |q: &Question, v: Verdict| Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::from([(".envrc".to_string(), v)]), by: By::Person, context: String::new() };
+    let (mut run, c) = merging_with(vec![envrc.clone()], paired());
+    let q = merge_asked(&c).expect("asked");
+    let merge = Input::Answer { answer: answer(&q, Verdict::Keep) };
+    let said = decide(Some(&run), &merge).expect_err("G19 a merge with a device paired was taken on the person's word");
+    assert!(said.0.contains("Jaynes app"), "{said}");
+    let proved = proved_by(&run.id, &run.started, merge, "n1", KeyKind::Presence, &device(KeyKind::Presence));
+    assert_eq!(delivered_merge(&feed(&mut run, proved)), Some(true), "with the device's proof it merges");
+    let (mut run, c) = merging_with(vec![envrc.clone()], paired());
+    let q = merge_asked(&c).expect("asked");
+    assert_eq!(delivered_merge(&feed(&mut run, Input::Answer { answer: answer(&q, Verdict::Drop) })), Some(false), "Branch only takes their word");
+    let (mut run, c) = merging_with(vec![envrc], None);
+    let q = merge_asked(&c).expect("asked");
+    assert_eq!(delivered_merge(&feed(&mut run, Input::Answer { answer: answer(&q, Verdict::Keep) })), Some(true), "no device paired: their word merges");
 }
 
 #[test]
@@ -1768,6 +1798,12 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::QuestionSuperseded { .. } => hit("question superseded"),
                 Event::Delivered { .. } => hit("delivered"),
                 Event::StopSkipped { .. } => hit("a certified stop skipped"),
+                Event::Proved { input, .. }
+                    if matches!(&**input, jaynes_core::Input::Answer { answer } if !answer.sends_back()
+                        && run.questions.get(&answer.question).is_some_and(|q| q.question.kind == QuestionKind::Merge)) =>
+                {
+                    hit("a merge kept with the device's proof")
+                }
                 Event::Proved { .. } => hit("an answer with the device's proof"),
                 Event::AnswerRecorded { answer, .. } if answer.question == UNBOX && answer.verdict("box") == Verdict::Keep => hit("let out of its box"),
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Acted => hit("an act held, not done again"),
@@ -1783,7 +1819,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
     for k in [
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
-        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person", "an answer with the device's proof", "let out of its box",
+        "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person", "an answer with the device's proof", "let out of its box", "a merge kept with the device's proof",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }

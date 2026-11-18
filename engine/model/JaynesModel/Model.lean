@@ -284,10 +284,12 @@ def AnswerCase.acceptsActed (a : AnswerCase) : Bool :=
 def AnswerCase.acceptsMerge (a : AnswerCase) : Bool :=
   a.who == .person && !a.answered && !a.superseded && a.current && a.shownMatches && a.verdictsValid
 
-/-- Whether the answer needs the device's proof (G14, G18): opening the box; and, when a device is paired, acting
-    again after an act and letting go on what a step that cannot be undone could rest on. -/
+/-- Whether the answer needs the device's proof (G14, G18, G19): opening the box; and, when a device is paired,
+    acting again after an act, letting go on what a step that cannot be undone could rest on, and merging a delivery
+    held for what runs later outside any box. -/
 def AnswerCase.needsProof (a : AnswerCase) : Bool :=
-  (a.unbox && a.allKeep) || (a.acted && !a.allKeep && a.keysPaired) || (a.restsAct && a.letsGo && a.keysPaired)
+  (a.unbox && a.allKeep) || (a.acted && !a.allKeep && a.keysPaired) || (a.restsAct && a.letsGo && a.keysPaired) ||
+    (a.merge && a.allKeep && a.keysPaired)
 
 /-- Leaving the box is the person's answer alone, once. -/
 def AnswerCase.acceptsUnbox (a : AnswerCase) : Bool :=

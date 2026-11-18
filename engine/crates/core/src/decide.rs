@@ -1776,8 +1776,9 @@ pub fn requires(run: &Run, id: &str, lets_go: bool) -> crate::proof::Requires {
         // G14: acting again, a second act or the same intent repeated; a run with no device of the person's paired
         // keeps taking their word, as before
         QuestionKind::Acted if !lets_go && !run.person_keys.is_empty() => Requires::Presence,
-        // G19, when it is in: merging what runs later outside any box takes the device's proof where one is paired
-        // (QuestionKind::Merge if lets_go && !run.person_keys.is_empty() => Requires::Presence)
+        // G19: merging what runs later outside any box takes the device's proof where one is paired; Branch only,
+        // which lets nothing in, takes the person's word
+        QuestionKind::Merge if lets_go && !run.person_keys.is_empty() => Requires::Presence,
         // G14: letting go on what a step that cannot be undone could rest on, the current output of its step
         QuestionKind::Decision
             if lets_go
