@@ -3,8 +3,9 @@
 Make your AI agents follow the method, check what they deliver, and call you
 only where it matters. For people who run a team of agents in Claude Code.
 
-> **Alpha.** Jaynes runs end to end on macOS with Claude Code. Its protocol
-> with roles is at version 1 and may still change. See [Status](#status).
+> **Alpha.** Jaynes runs end to end on macOS with Claude Code, and on nothing
+> else yet. Its protocol with roles is at version 1 and may still change. See
+> [Status](#status) and [What is still true](#what-is-still-true).
 
 ## The problem
 
@@ -39,6 +40,16 @@ were still sent back.
 5. **A stop asks less only on evidence.** One that keeps being right asks only
    a sample of runs, by a test that holds however often it is checked; two
    errors among its last ten answers make it ask every time again.
+
+6. **A run says what it did.** When it finishes, `jaynes summary RUN` tells it
+   to someone who never installed Jaynes, in Markdown to paste in a merge
+   request: the role and its version, each step with the checks that passed,
+   the promises proved of the role, how it was delivered, and what it cost in
+   agents' work and in people's. How long a run waited at its stops and how
+   long a person gave it are never mixed: a person's time is measured only
+   from their presence on a stop's screen, and a stop answered with none
+   recorded says "not measured", never zero. The page and the app show the
+   same summary under a finished run, with a button that copies it.
 
 ## What it guarantees
 
@@ -84,6 +95,24 @@ Free owners in Setup, and every repository of that organization passes at once.
 A forced push, deleting a branch or a tag, and deleting or archiving a
 repository ask every time, on your own repositories too.
 
+## The app
+
+A window where you work with your agents. At the left, your agents and shells
+in their spaces, then the runs: what waits for you first, then each project's.
+In the middle, Claude Code's terminal, an agent you open from the column, a
+run's tab with its story, or the Inbox of what needs you across them all. A
+run's question shows over Claude Code's terminal and on its tab, where you
+answer it; a run's tab also has the page's own controls (Resume, Continue,
+Raise the risk, Raise the ceiling, Abandon), each only when it can do
+something. The terminals live in herdr-core, not in the app, so closing the
+window leaves every conversation running; the app opens again as you left it.
+Command-K finds any agent, run or command by typing.
+
+Its settings (Command-comma) are a file of yours, kept as you change them:
+dark, light (Linen) or as macOS is; the terminal's colours, font, size, Option
+key, copy on select and scroll speed; notifications; the command a new agent
+starts; the editor a file opens in.
+
 ## MCP, and your instruction files
 
 The plugin brings three things to Claude Code: the `jaynes` skill, which hands an approved plan to Jaynes; the
@@ -107,6 +136,11 @@ writes each step's settings itself, so what a run must know goes in the request 
 and data go: [docs/where-your-data-goes.md](docs/where-your-data-goes.md).
 
 ## Roles
+
+A role names what a run works on, its target. Today the one kind is a
+repository: the run works in a copy of it at the commit it had, its reach is
+given in the repository's paths, its risk is judged by the lines and files it
+changes, and it delivers a branch, or a merge that Undo reverts.
 
 Roles are listed in an index, [jaynes-roles](https://github.com/alk0x1/jaynes-roles), and installed by name with
 `jaynes add`, which checks the role is what the index lists and proves its promises again. Two to start:
@@ -148,12 +182,13 @@ you trust. The protocol's schema is
 ## Commands
 
 ```text
-jaynes start --role NAME --project DIR --request TEXT [--risk high]
-jaynes show RUN | runs | page | verify
+jaynes start --role NAME --request TEXT [--project DIR] [--risk high]
+jaynes show RUN | runs | summary RUN | log RUN | cost | verify | page [--port N]
 jaynes answer RUN QUESTION [ITEM=keep|change:TEXT|redo:TEXT|drop|skip] [--context TEXT] --send
-jaynes halt RUN | resume RUN | continue RUN | abandon RUN | undo RUN | correct RUN --note TEXT
+jaynes halt RUN | resume RUN | continue RUN | abandon RUN | raise RUN high|--seconds N|--tokens N
+jaynes undo RUN [--note TEXT] | correct RUN --note TEXT [--step STEP]
 jaynes add SOURCE | remove NAME | roles | update | guide
-jaynes new NAME | check DIR
+jaynes new NAME | check DIR | conformance DIR | schema
 ```
 
 The record of every run lives in `~/.jaynes/engine`, each entry chained to the
@@ -169,10 +204,12 @@ one before it, so a change to any past entry shows (`jaynes verify`).
 | Recovery after a crash, a record that shows tampering, runs pinned to their role's and engine's version | Works in tests |
 | Merging alone, and Undo | Works in tests |
 | Sampled stops and the brake | Works in tests; no real certification yet |
+| The MCP server for agents in Claude Code | Works |
+| A run's summary, with people's time from their presence at stops | Works |
+| The app: agents, runs, stops and terminals in one window | Works on macOS; alpha |
 
 Missing, roughly in order: plans of several runs, the Codex adapter, roles for
-design work on this protocol, a native app where the person works, with runs,
-terminals and stops in one window, Linux.
+design work on this protocol, Linux, targets other than a repository.
 
 The same change that took the earlier engine three runs and 1 h 35 min without
 delivering was delivered by this one in under ten minutes, in one attempt
@@ -181,6 +218,38 @@ delivering was delivered by this one in under ten minutes, in one attempt
 ## Maintenance
 
 Jaynes has one maintainer today, @alk0x1.
+
+## What is still true
+
+- **Alpha.** Formats and the protocol may still change between releases.
+- **One system.** The installer is for macOS on Apple silicon. A run's agent
+  works inside the macOS sandbox that Claude Code's guards need, so runs need
+  macOS; the program alone builds from source elsewhere.
+- **One agent program.** Claude Code is the only agent Jaynes has an adapter
+  for: it writes each step's settings for it and reads its stream. Any other
+  program runs only as a plain command (`--agent command:CMD`), with the
+  prompt on its input and none of the step's guards set for it.
+- **One target.** A run works on a repository; nothing else yet.
+
+## How to leave
+
+Nothing of yours is locked in a format only Jaynes reads.
+
+- **The record** is one SQLite file, `~/.jaynes/engine/record.sqlite3`. Every
+  change of every run is a row of its `events` table (the run, the event's
+  type, its time, the event itself as JSON, and the hash that chains it to the
+  one before), readable with `sqlite3` alone.
+- **A role** is text: a folder with a `role.toml` and the prose its agent
+  reads. The starting file `jaynes new` writes says what each key does in its
+  comments, and what a role becomes for the engine follows a published schema,
+  [engine/protocol/role-protocol-1.schema.json](engine/protocol/role-protocol-1.schema.json)
+  (also `jaynes schema`).
+- **What a run delivered** is a branch or a merge in your own repository, with
+  its summary in Markdown.
+- **To remove Jaynes:** `claude plugin uninstall jaynes@jaynes`; then delete
+  `Jaynes.app` from `/Applications` (or `~/Applications`), `~/.local/bin/jaynes`,
+  and `~/.jaynes` if you want the record gone too. herdr-core, if the installer
+  put it in `~/.local/bin`, is Herdr's and stays useful on its own.
 
 ## From a clone
 
