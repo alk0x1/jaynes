@@ -32,6 +32,7 @@ mod news;
 mod notify;
 mod prefs;
 mod settings_window;
+mod trail;
 mod presence;
 mod rail;
 mod settings;
@@ -1228,25 +1229,18 @@ fn paste_into(t: &Entity<TerminalView>) -> impl Fn(&Paste, &mut Window, &mut App
 fn main() {
     #[cfg(target_os = "macos")]
     core_bin::fill_path();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("JAYNES_APP_LOG").unwrap_or_else(|_| "warn,jaynes_app=info".into()),
-        )
-        .init();
+    // what the app says goes to its own log too, and it ends saying why (trail.rs)
+    trail::start(tracing_subscriber::EnvFilter::try_from_env("JAYNES_APP_LOG").unwrap_or_else(|_| "warn,jaynes_app=info".into()));
     if let Some(bin) = core_bin::find(None) {
         core_bin::use_core(bin);
     }
     tracing::info!("bundle: {}", if std::env::current_exe().is_ok_and(|e| e.to_string_lossy().contains(".app/Contents/MacOS/")) { "Jaynes.app" } else { "none, a bare build" });
     let core = match hc::Core::connect() {
         Ok(core) => core,
-        Err(e) => {
-            eprintln!("jaynes-app: cannot reach herdr-core (hc): {e:#}");
-            std::process::exit(1);
-        }
+        Err(e) => trail::fail(&format!("cannot reach herdr-core (hc): {e:#}")),
     };
     if let Err(e) = hc::check(&core.hello) {
-        eprintln!("jaynes-app: this herdr-core cannot serve the app: {e:?}");
-        std::process::exit(1);
+        trail::fail(&format!("this herdr-core cannot serve the app: {e:?}"));
     }
 
     gpui_platform::application().run(move |cx| {
@@ -1338,11 +1332,21 @@ fn main() {
                 ],
             },
         ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| {
+            trail::ending(trail::Ending::Quit);
+            cx.quit();
+        });
+        // the app's last line in its log, however it ends
+        cx.on_app_quit(|_| {
+            trail::ended();
+            async {}
+        })
+        .detach();
         cx.on_action(|_: &OpenSettings, cx| settings_window::open(cx));
         // The terminal stays in herdr-core when the window closes; the app has nothing else to show.
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
+                trail::ending(trail::Ending::LastWindow);
                 cx.quit();
             }
         })
@@ -1374,10 +1378,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let address = existing(&core).unwrap_or_else(|| {
             let labels = json!({LABEL.0: LABEL.1});
             core.run(vec!["claude".into()], Some(folder()), labels, None, None, terminal::initial_display(window))
-                .unwrap_or_else(|e| {
-                    eprintln!("jaynes-app: cannot start claude in a terminal: {e:#}");
-                    std::process::exit(1);
-                })
+                .unwrap_or_else(|e| trail::fail(&format!("cannot start claude in a terminal: {e:#}")))
         });
         let view = cx.new(|cx| TerminalView::attach(core.clone(), address, (120, 40), cx));
         let focus = view.read(cx).focus_handle().clone();

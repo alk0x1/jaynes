@@ -392,7 +392,7 @@ impl Island {
 }
 
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-fonts`, `copy-summary`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `settings`, `settings-section <name>`, `settings-fonts`, `copy-summary`, `close-window`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -478,6 +478,9 @@ impl Island {
                     crate::settings_window::with_open(cx, |v, _, cx| v.show(s, cx));
                 }
             }
+            // the window's close button, as a click on it closes the window; and a panic, to see the app's log keep it
+            "close-window" => window.remove_window(),
+            "panic" => panic!("a test asked the app to panic"),
             // the Copy as Markdown button under a finished run's story
             "copy-summary" => window.dispatch_action(Box::new(crate::CopySummary), cx),
             "settings-fonts" => {
