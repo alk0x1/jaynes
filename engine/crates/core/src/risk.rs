@@ -30,12 +30,14 @@ pub const SMALL_LINES: u64 = 30;
 pub const SMALL_FILES: usize = 5;
 
 /// Paths that trusted tools run or obey later, outside any box: agents' and editors' settings and instructions,
-/// git attributes, submodules, git-lfs settings and hooks (the person's own git obeys them when the delivery lands), direnv, interpreters and package scripts, test and build entry points, dev
+/// git attributes, submodules, git-lfs settings and hooks (the person's own git obeys them when the delivery lands), the
+/// git hook managers' own files (husky, pre-commit, lefthook), direnv, interpreters and package scripts, test and build entry points, dev
 /// containers, CI. Ported from the Python engine (`jaynes.project.FLOOR`).
 pub const FLOOR: &[&str] = &[
     "**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.vscode/**", "**/.idea/**",
     "**/.zed/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules",
     "**/.git*", "**/.gitattributes", "**/.gitmodules", "**/.lfsconfig", "**/.husky/**", "**/.pre-commit-config.yaml", "**/.envrc",
+    "**/lefthook.yml", "**/lefthook.yaml", "**/.lefthook.yml", "**/.lefthook.yaml", "**/lefthook-local.yml", "**/lefthook-local.yaml",
     "**/.venv/**", "**/venv/**", "**/package.json", "**/.npmrc", "**/.yarnrc*", "**/pyproject.toml",
     "**/setup.py", "**/setup.cfg", "**/sitecustomize.py", "**/usercustomize.py", "**/conftest.py",
     "**/Makefile", "**/GNUmakefile", "**/.devcontainer/**", ".gitlab-ci.yml", ".circleci/**", ".buildkite/**",
@@ -171,6 +173,26 @@ mod tests {
 
     fn c(path: &str, lines: u64) -> Changed {
         Changed::file(path.to_string(), lines)
+    }
+
+    #[test]
+    fn the_paths_that_turn_into_code_on_the_person_s_machine_are_on_the_floor() {
+        // what runs or is obeyed by itself once the delivery lands, or once the person opens the project: an agent can
+        // write each of these in the copy today (measured with Claude Code in the agent's box, by its Write tool or by
+        // Bash), so each must make the change risky, wherever it is in the project
+        for path in [
+            ".vscode/tasks.json", ".vscode/settings.json", ".vscode/launch.json", "web/.vscode/tasks.json",
+            ".claude/settings.json", ".claude/settings.local.json", ".claude/commands/x.md", ".claude/hooks/x.sh",
+            ".mcp.json", ".envrc", "sub/.envrc", ".devcontainer/devcontainer.json", ".github/workflows/ci.yml",
+            ".husky/pre-commit", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", "lefthook-local.yml", "app/lefthook.yml",
+            ".pre-commit-config.yaml", ".venv/bin/activate", "venv/bin/python", "CLAUDE.md", "AGENTS.md", ".gitattributes",
+        ] {
+            assert_eq!(floor([path]), [path], "{path} turns into code on the person's machine and is not on the floor");
+        }
+        // and what does not stays off it
+        for path in ["src/lefthook.rs", "docs/lefthook.md", "README.md", "src/main.rs"] {
+            assert!(floor([path]).is_empty(), "{path}");
+        }
     }
 
     #[test]
