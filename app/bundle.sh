@@ -23,6 +23,9 @@ cp "$target/$profile/jaynes-app" "$app/Contents/MacOS/Jaynes"
 # the icon, made by assets/make-icon.sh: Assets.car holds its light and dark looks (macOS 26), AppIcon.icns the light
 # one for older systems
 cp "$here/assets/Assets.car" "$here/assets/AppIcon.icns" "$app/Contents/Resources/"
+# the licenses every copy carries (licenses/gather.sh); a release gives the crates' list too, THIRD_PARTY, made by
+# licenses/third-party.sh, and release.yml refuses one without it (licenses/check.sh)
+sh "$here/../licenses/gather.sh" "$app/Contents/Resources/Licenses" ${THIRD_PARTY:+"$THIRD_PARTY"}
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
