@@ -1,8 +1,8 @@
 //! The box on Linux: `jaynes box` runs a command confined by the kernel, as `sandbox-exec` confines it on macOS
-//! (engine/python/jaynes_box.py, `profile`). The program confines itself, then becomes the command: Landlock limits
-//! what it may read, write, connect to and signal, and a seccomp filter refuses the kinds of sockets and calls
-//! Landlock does not see. Neither needs root: the box makes a user namespace of its own, where the machine lets a
-//! process make one, so it opens inside a container too.
+//! (engine/python/jaynes_box.py, `profile`). The program confines itself, then starts the command under the first
+//! process of a process namespace of its own: Landlock limits what it may read, write, connect to and signal, and a
+//! seccomp filter refuses the kinds of sockets and calls Landlock does not see. Neither needs root: the box makes a
+//! user namespace of its own, where the machine lets a process make one, so it opens inside a container too.
 //!
 //! What the macOS box promises, and what holds it on Linux. Where Linux cannot hold a promise the same way, the box
 //! refuses to open; it never opens a looser box. Each line has its test in tests/linux_box.rs.
@@ -48,6 +48,12 @@
 //! |                                                           | (Landlock does not see a file already open); if one   |
 //! |                                                           | stays open into the command, the box refuses          |
 //! | no gain of privilege (a setuid program)                   | no_new_privs, which Landlock and seccomp require      |
+//! | (Linux) nothing the command starts outlives it, a process | a process namespace of the box's own: its first       |
+//! | in a session of its own neither                           | process starts the command and ends with it, and the  |
+//! |                                                           | kernel then ends the rest; it ends too when the box's |
+//! |                                                           | own process is gone (a pipe it watches closes)        |
+//! | (Linux) no keys put in a terminal's input, as if the      | seccomp refuses ioctl TIOCSTI, and TIOCLINUX, on any  |
+//! | person typed them; no console control call               | file (Landlock lets the box use /dev/tty)             |
 //!
 //! "web" and "packages", the network a step's agent may reach, are Claude Code's own sandbox, not this box.
 //!
@@ -61,9 +67,11 @@
 //! Jaynes page's port, is within reach of the command. Where that network has a way out, the box refuses.
 //!
 //! What the box does not hold, on Linux as on macOS: the machine's resources (a command may fill the disk of its
-//! folders, take the memory or start processes until the system says no; the caller's deadline stops it), the time
-//! and the processor it takes, and side channels such as the timing of other processes. The environment reaches the
-//! command as the caller gives it.
+//! folders, take the memory or start processes until the system says no, a fork bomb among them; only the caller's
+//! deadline stops it), the time and the processor it takes, and side channels such as the timing of other processes.
+//! A hard link the person already has to a secret, in a folder the box reads, is read through that link: the box
+//! hides paths, and such a link is another path to the same file. The environment reaches the command whole, as the
+//! caller gives it: taking secrets out of it is a delivery of its own, still to come.
 //!
 //! The kernel must have Landlock ABI 6 (Linux 6.12): below it, or with Landlock off, the box refuses.
 
@@ -179,13 +187,19 @@ pub fn apparmor_profile() -> Result<String, String> {
     ))
 }
 
-/// Confine this process as `spec` says, then become `argv`. Returns only when it could not: the box never runs
-/// the command unconfined.
+/// Confine this process as `spec` says, then run `argv` under the first process of the box's own process namespace,
+/// and end with its status. Returns only when it could not: the box never runs the command unconfined.
 pub fn run(spec: &Spec, argv: &[String]) -> String {
     if argv.is_empty() {
         return "the box needs a command to run".into();
     }
     imp::run(spec, argv)
+}
+
+/// The first process of the box's process namespace: start `argv`, end with its status, and end at once when the pipe
+/// `watch` closes. Only the box starts it. Returns only when it could not.
+pub fn init(watch: i32, argv: &[String]) -> String {
+    imp::init(watch, argv)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -197,6 +211,10 @@ mod imp {
     }
 
     pub fn run(_spec: &Spec, _argv: &[String]) -> String {
+        unavailable().unwrap_or_default()
+    }
+
+    pub fn init(_watch: i32, _argv: &[String]) -> String {
         unavailable().unwrap_or_default()
     }
 
@@ -218,7 +236,6 @@ mod imp {
     };
     use seccompiler::{BpfProgram, SeccompAction, SeccompCmpArgLen as Len, SeccompCmpOp as Op, SeccompCondition as Cond, SeccompFilter, SeccompRule, TargetArch};
     use std::collections::BTreeMap;
-    use std::os::unix::process::CommandExt;
     use std::path::Path;
 
     pub fn unavailable() -> Option<String> {
@@ -239,13 +256,84 @@ mod imp {
         if let Some(failed) = close_handed_open() {
             return failed;
         }
-        match confine(spec) {
-            // the command is told which network it got, for itself and for tests; it opens nothing
-            Ok(net) => format!(
-                "the command did not start in the box: {}",
-                std::process::Command::new(&argv[0]).args(&argv[1..]).env("JAYNES_BOX_NETWORK", net.name()).exec()
-            ),
-            Err(e) => e,
+        let net = match confine(spec) {
+            Ok(net) => net,
+            Err(e) => return e,
+        };
+        // The command starts under the first process of the box's process namespace (init, below), which watches this
+        // process by a pipe: when this one ends, killed or not, that one ends, and with it everything in the namespace.
+        // Only the pipe's reading end reaches it, and it keeps that from the command.
+        let (watch, held) = match std::io::pipe() {
+            Ok(p) => p,
+            Err(e) => return format!("the box could not make the pipe its first process watches: {e}"),
+        };
+        if let Err(e) = rustix::io::fcntl_setfd(&watch, rustix::io::FdFlags::empty()) {
+            return format!("the box could not hand its first process the pipe: {e}");
+        }
+        let exe = match std::env::current_exe() {
+            Ok(e) => e,
+            Err(e) => return format!("the box cannot find itself to start its first process: {e}"),
+        };
+        use std::os::fd::AsRawFd;
+        // the command is told which network it got, for itself and for tests; it opens nothing
+        let started = std::process::Command::new(exe)
+            .arg("box-init")
+            .arg("--watch")
+            .arg(watch.as_raw_fd().to_string())
+            .arg("--")
+            .args(argv)
+            .env("JAYNES_BOX_NETWORK", net.name())
+            .spawn();
+        drop(watch);
+        let ended = match started {
+            Ok(mut first) => first.wait(),
+            Err(e) => return format!("the command did not start in the box: {e}"),
+        };
+        drop(held);
+        match ended {
+            Ok(status) => {
+                use std::os::unix::process::ExitStatusExt;
+                std::process::exit(status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
+            }
+            Err(e) => format!("the box lost its first process: {e}"),
+        }
+    }
+
+    /// The first process of the box's process namespace (`jaynes box-init`, which only the box starts): it starts the
+    /// command, collects whatever ends in the namespace, and ends with the command's status. The kernel then ends
+    /// every process left in the namespace, one in a session of its own too, so nothing the command started goes on
+    /// after it, changing the copy after its checks. It ends the same way, at once, when the box's own process is gone
+    /// and the pipe `watch` it holds closes.
+    pub fn init(watch: i32, argv: &[String]) -> String {
+        // the pipe is this process's alone: marked before any thread starts, so the command never holds it
+        if let Err(e) = close_on_exec(watch) {
+            return format!("the box's first process could not keep its pipe from the command: {e}");
+        }
+        let pipe = match std::fs::File::open(format!("/proc/self/fd/{watch}")) {
+            Ok(p) => p,
+            Err(e) => return format!("the box's first process cannot read its pipe: {e}"),
+        };
+        let Some((program, args)) = argv.split_first() else { return "the box was given no command".into() };
+        let command = match std::process::Command::new(program).args(args).spawn() {
+            Ok(c) => c,
+            Err(e) => return format!("the command did not start in the box: {e}"),
+        };
+        let pid = rustix::process::Pid::from_child(&command);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let (mut pipe, mut b) = (pipe, [0u8; 1]);
+            while matches!(pipe.read(&mut b), Ok(n) if n > 0) {}
+            // the box's process is gone: ending here ends the namespace
+            std::process::exit(137)
+        });
+        loop {
+            match rustix::process::wait(rustix::process::WaitOptions::empty()) {
+                Ok(Some((p, status))) if p == pid => {
+                    std::process::exit(status.exit_status().unwrap_or_else(|| 128 + status.terminating_signal().unwrap_or(0)))
+                }
+                Ok(_) => {}
+                Err(e) => return format!("the box's first process lost the command: {e}"),
+            }
         }
     }
 
@@ -497,6 +585,13 @@ mod imp {
         rustix::thread::unshare(flags)
     }
 
+    /// unshare(CLONE_NEWPID): the next process this one starts is the first of a process namespace of its own. As
+    /// new_namespaces says of rustix's deprecation: no CLONE_FILES, and one thread.
+    #[allow(deprecated)]
+    fn new_process_namespace() -> Result<(), rustix::io::Errno> {
+        rustix::thread::unshare(rustix::thread::UnshareFlags::NEWPID)
+    }
+
     /// In the box's mount namespace, so that nothing of what it hides shows, not even its names, sizes or times:
     /// the folder holding a hidden file is seen without it (an empty read-only folder where what else it holds is
     /// mounted back, or, for a folder the box writes, an empty read-only file in the hidden one's place); each hidden
@@ -571,7 +666,12 @@ mod imp {
             mount_remount(dir, quiet | MountFlags::RDONLY, c"").map_err(|e| fail("close", dir, e))?;
         }
         // 2. the hidden folders, outer first: one inside a folder already hidden is hidden with it, unless it lies in
-        // what was mounted back; one no longer there was left out of its folder's view
+        // what was mounted back; one no longer there was left out of its folder's view.
+        // Whether each is a folder is read here, after step 1, on purpose: it looks at the view step 1 left. A hidden
+        // folder in a folder step 1 put a tmpfs on (as the home, when it holds a hidden file such as .bash_history) is
+        // not in that view, so nothing of it shows and it is skipped; unless something the box keeps lies inside it,
+        // and then step 1 mounted it back whole, and it is covered here like any other, with what is kept mounted
+        // back again. No hidden folder is left whole, and none is mounted on a path that is gone.
         let mut done: Vec<PathBuf> = Vec::new();
         for h in hidden.iter().filter(|h| h.is_dir()) {
             let under = done.iter().filter(|d| h.starts_with(d)).max_by_key(|d| d.as_os_str().len());
@@ -705,6 +805,9 @@ mod imp {
         if let (true, Some(channel)) = (own, channel) {
             relay_in(&ports, channel)?;
         }
+        // a process namespace of its own, after the relay's forwarder, which stays outside it as this process does:
+        // the first process started from here is its first, and everything the command starts ends with it
+        new_process_namespace().map_err(|e| format!("the box could not make its process namespace: {e}"))?;
         let net = network(spec, own)?;
         let fail = |e: &dyn std::fmt::Display| format!("the box could not be made: {e}");
         // Landlock ABI 9 checks a Unix socket's path; ABI 6 is the least the box opens with, since it keeps signals
@@ -790,6 +893,14 @@ mod imp {
         let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
         rules.insert(libc::SYS_socket, socket);
         rules.insert(libc::SYS_socketpair, vec![r(vec![c(0, Op::Ne, unix)?])?]);
+        // a terminal's TIOCSTI puts keys in its input, as if typed by the person who started the run, where the kernel
+        // still allows it (dev.tty.legacy_tiocsti); TIOCLINUX is the Linux console's control call. Landlock lets the
+        // box use /dev/tty, so the filter refuses both on any file (the kernel reads the request as 32 bits)
+        // (by number: Linux's generic ones, those of x86_64, aarch64 and riscv64, the architectures this filter is made
+        // for; libc's type for them differs by libc)
+        const TIOCSTI: u64 = 0x5412;
+        const TIOCLINUX: u64 = 0x541C;
+        rules.insert(libc::SYS_ioctl, vec![r(vec![c(1, Op::Eq, TIOCSTI)?])?, r(vec![c(1, Op::Eq, TIOCLINUX)?])?]);
         for call in [
             libc::SYS_io_uring_setup, libc::SYS_io_uring_enter, libc::SYS_io_uring_register, libc::SYS_bpf, libc::SYS_perf_event_open,
             libc::SYS_keyctl, libc::SYS_add_key, libc::SYS_request_key, libc::SYS_unshare, libc::SYS_setns, libc::SYS_mount,

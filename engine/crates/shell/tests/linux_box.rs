@@ -501,6 +501,47 @@ fn a_command_started_inside_what_the_box_holds_reaches_it_only_through_the_box()
     assert!(!said(&o).contains("k3y"), "started inside the hidden, the command read it: {}", said(&o));
 }
 
+#[test]
+fn a_home_with_a_hidden_file_and_hidden_folders_shows_none_of_them_and_keeps_what_is_shown_inside_one() {
+    // the arrangement the mounts' step 2 reads after step 1: the home holds a hidden file, so step 1 puts a tmpfs on
+    // it, and two hidden folders beside it, one of which holds something the box is shown
+    let p = place("home-arrangement");
+    opens();
+    let home = p.base.join("person");
+    for d in [".ssh", ".aws", "notes"] {
+        std::fs::create_dir_all(home.join(d)).expect("dir");
+    }
+    std::fs::write(home.join(".bash_history"), "a command of the person's\n").expect("write");
+    std::fs::write(home.join(".ssh/id_ed25519"), "the key\n").expect("write");
+    std::fs::write(home.join(".aws/credentials"), "the credentials\n").expect("write");
+    std::fs::write(home.join(".aws/config"), "region = shown\n").expect("write");
+    std::fs::write(home.join("notes/todo"), "readable\n").expect("write");
+    let h = |s: &str| home.join(s).display().to_string();
+    let hide: Vec<String> = [".bash_history", ".ssh", ".aws"].iter().flat_map(|s| ["--hide".to_string(), h(s)]).collect();
+    let mut args: Vec<&str> = hide.iter().map(String::as_str).collect();
+    // what it lists of the home, and what it reads of each: an error of cat names the path it was given, so names
+    // are judged by the listings and contents by what was read
+    let listed = said(&boxed(&p, &format!("ls -a {}", home.display()), &args));
+    assert!(listed.contains("notes"), "what is not hidden is there: {listed}");
+    for name in [".bash_history", ".ssh", ".aws"] {
+        assert!(!listed.contains(name), "{name} showed in the home: {listed}");
+    }
+    let read = said(&boxed(&p, &format!("cat {home}/notes/todo; cat {home}/.bash_history {home}/.ssh/id_ed25519 {home}/.aws/credentials; true", home = home.display()), &args));
+    assert!(read.contains("readable"), "what is not hidden is read: {read}");
+    for secret in ["a command of", "the key", "the credentials"] {
+        assert!(!read.contains(secret), "{secret} was read: {read}");
+    }
+    // shown inside a hidden folder: that alone of it is there, and the rest of it stays hidden
+    let config = h(".aws/config");
+    args.extend(["--show", config.as_str()]);
+    let read = said(&boxed(&p, &format!("cat {config}; cat {}/credentials; true", h(".aws")), &args));
+    assert!(read.contains("region = shown") && !read.contains("the credentials"), "{read}");
+    let listed = said(&boxed(&p, &format!("ls -a {}; ls -a {}", h(".aws"), home.display()), &args));
+    for name in ["credentials", ".bash_history", ".ssh"] {
+        assert!(!listed.contains(name), "{name} showed: {listed}");
+    }
+}
+
 // --- what a command leaves behind, and the person's terminal ---------------------------------------------------
 
 /// A command line that starts, in the background, a process in a session of its own that adds a line to `f` every
@@ -717,8 +758,10 @@ fn the_relay_holds_only_its_channel_and_ends_with_the_command_even_when_it_is_ki
     let mut boxed = c.current_dir(&p.work).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("box");
     let pid = boxed.id();
     let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // the box's children that are its relay (the first process of its process namespace is another one)
+    let relay = |p: &u32| std::fs::read(format!("/proc/{p}/cmdline")).is_ok_and(|c| String::from_utf8_lossy(&c).contains("box-relay"));
     let relays = loop {
-        let r = children_running(pid);
+        let r: Vec<u32> = children_running(pid).into_iter().filter(relay).collect();
         if r.len() >= 2 || std::time::Instant::now() > until {
             break r;
         }

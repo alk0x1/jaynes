@@ -747,6 +747,12 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
         .spawn()
         .expect("start");
     agent_started(&mark);
+    // what this test needs before the crash: the session the agent named in its first message, in the record
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !events(&s, "crash").iter().any(|e| e["type"] == "SessionStarted") {
+        assert!(std::time::Instant::now() < until, "the engine did not record the agent's session within 20 s");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     // the engine dies at once, as with kill -9: nothing of it runs any more, and its agent goes on
     let _killed = engine_process.kill();
     let _waited = engine_process.wait();

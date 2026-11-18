@@ -440,6 +440,15 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
+        "box-init" => {
+            // the first process of the Linux box's process namespace, which only the box starts (sandbox.rs, init)
+            let (opts, argv) = match rest.iter().position(|a| a == "--") {
+                Some(i) => (&rest[..i], &rest[i + 1..]),
+                None => (rest, &[][..]),
+            };
+            let watch = opts.windows(2).find(|w| w[0] == "--watch").and_then(|w| w[1].parse::<i32>().ok()).ok_or("box-init is the box's own, started with the pipe it watches")?;
+            Err(jaynes_shell::sandbox::init(watch, argv))
+        }
         #[cfg(target_os = "linux")]
         "box-relay" => {
             // the Linux box's relay, which only the box starts (relay.rs)
