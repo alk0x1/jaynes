@@ -141,6 +141,8 @@ pub(crate) struct Root {
     steps: bool,
     /// Whether the runs column shows.
     sidebar: bool,
+    /// How wide the person left the column, the steps panel and Changes (bars.rs), by dragging their edges.
+    bars: bars::Bars,
     /// The branch of the folder Claude Code works in, read every few seconds; empty outside git.
     branch: String,
     /// Whether the list of shortcuts shows over the window (Command-/).
@@ -182,6 +184,14 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         terminal::next_frame();
         self.remember(window, cx);
+        // the column narrower than its names is the rail (bars.rs)
+        let rail = self.column_is_rail();
+        if self.side.read(cx).rail != rail {
+            self.side.update(cx, |s, cx| {
+                s.rail = rail;
+                cx.notify();
+            });
+        }
         let terminal = self.terminal.clone();
         let shown = self.shown_terminal();
         let middle = div()
@@ -222,9 +232,9 @@ impl Render for Root {
                             // a run's question, over Claude Code's terminal and the runs' tabs, not over an agent or the Inbox
                             .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox && self.tabs.read(cx).changes.is_none(), |d| d.child(self.island.clone())),
                     )
-                    // at the right, Changes when it is on, else the run's steps
-                    .when(self.changes_on, |d| d.child(self.changes.clone()))
-                    .when(!self.changes_on && self.steps, |d| d.child(self.rail.clone())),
+                    // at the right, Changes when it is on, else the run's steps, each as wide as the person left it
+                    .when(self.changes_on, |d| d.child(self.bar(bars::Bar::Changes, self.changes.clone().into_any_element(), cx)))
+                    .when(!self.changes_on && self.steps, |d| d.child(self.bar(bars::Bar::Steps, self.rail.clone().into_any_element(), cx))),
             );
         div()
             .size_full()
@@ -249,6 +259,13 @@ impl Render for Root {
                     }
                 });
             }).absolute().size_0())
+            // a bar's edge dragged: the bar follows the pointer, within its bounds (bars.rs)
+            .on_drag_move::<DragBar>(cx.listener(|this, e: &DragMoveEvent<DragBar>, window, cx| {
+                let bar = e.drag(cx).0;
+                if this.bars.drag(bar, e.event.position.x.into(), window.viewport_size().width.into(), this.bars_shown()) {
+                    cx.notify();
+                }
+            }))
             .on_action(copy_into(&shown))
             .on_action(paste_into(&shown))
             .on_action(cx.listener(|this, _: &ToggleSteps, _, cx| {
@@ -353,16 +370,18 @@ impl Render for Root {
                     .when(self.sidebar, |d| {
                         d.child(
                             div()
-                                .w(px(side::WIDTH))
+                                .w(px(self.bars.column))
                                 .h_full()
                                 .flex_none()
                                 .flex()
                                 .flex_col()
+                                .relative()
                                 .border_r_1()
                                 .border_color(rgb(look::line()))
                                 .bg(rgb(look::side()))
                                 .child(self.side_head(cx))
-                                .child(div().flex_1().min_h_0().child(self.side.clone())),
+                                .child(div().flex_1().min_h_0().child(self.side.clone()))
+                                .child(Self::edge(bars::Bar::Column, cx)),
                         )
                     })
                     .child(middle),
@@ -399,6 +418,12 @@ fn title_bar(id: &'static str) -> Stateful<Div> {
 fn own_press<E: InteractiveElement>(e: E) -> E {
     e.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
+
+/// A bar's edge in the person's hand.
+struct DragBar(bars::Bar);
+
+/// The room the macOS buttons take at the top left, from the window's edge.
+const BUTTONS: f32 = 82.;
 
 struct Cover {
     was: Shown,
@@ -658,6 +683,50 @@ impl Root {
         self.kept = Some(state);
     }
 
+    /// Whether the column shows as the rail.
+    fn column_is_rail(&self) -> bool {
+        self.sidebar && bars::is_rail(self.bars.column)
+    }
+
+    /// What shows beside the middle, for the bars' widths.
+    fn bars_shown(&self) -> bars::Shown {
+        let right = if self.changes_on { Some(bars::Bar::Changes) } else { self.steps.then_some(bars::Bar::Steps) };
+        bars::Shown { column: self.sidebar, right }
+    }
+
+    /// A bar at the right, as wide as the person left it, with the edge they drag.
+    fn bar(&self, bar: bars::Bar, inside: AnyElement, cx: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(self.bars.of(bar))).h_full().flex_none().relative().child(inside).child(Self::edge(bar, cx))
+    }
+
+    /// The edge of a bar the person drags to widen or narrow it, over the bar's own border; a double click gives
+    /// the bar its own width back.
+    fn edge(bar: bars::Bar, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = match bar {
+            bars::Bar::Column => "edge-column",
+            bars::Bar::Steps => "edge-steps",
+            bars::Bar::Changes => "edge-changes",
+        };
+        div()
+            .id(id)
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .when(bar.from_right(), |d| d.left_0())
+            .when(!bar.from_right(), |d| d.right_0())
+            .w(px(bars::EDGE))
+            // the press is the edge's, not the top bar's under it, which would move the window
+            .occlude()
+            .cursor(CursorStyle::ResizeColumn)
+            .on_drag(DragBar(bar), |_, _, _, cx| cx.new(|_| EmptyView))
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                if e.click_count() == 2 {
+                    this.bars.reset(bar);
+                    cx.notify();
+                }
+            }))
+    }
+
     /// What the window shows now, as app_state keeps it.
     fn what_stands(&self, window: &Window, cx: &App) -> app_state::State {
         let t = self.tabs.read(cx);
@@ -668,13 +737,16 @@ impl Root {
             (None, false, None) => app_state::Open::Main,
         };
         let frame = Some(app_state::frame_of(window.window_bounds().get_bounds(), window.display(cx).map(|d| d.id().into())));
-        // the bars' widths join when their edges can be dragged (bars.rs): until then each is its own
-        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: app_state::Widths::default() }
+        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept() }
     }
 
     /// Keeps what the window shows when it changed, once what stood was shown again.
     fn remember(&mut self, window: &Window, cx: &App) {
         let Some(kept) = &self.kept else { return };
+        // a bar's edge in the person's hand: kept once it is let go, not at every move
+        if cx.has_active_drag() {
+            return;
+        }
         let now = self.what_stands(window, cx);
         if now == *kept {
             return;
@@ -1090,13 +1162,13 @@ impl Root {
     }
 
     /// The runs column's header, after herdr: the macOS buttons, the mark and the name, then the column's switch.
+    /// On the rail it is under the macOS buttons alone, and the switch goes to the tabs bar.
     fn side_head(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        title_bar("side-head")
+        let rail = self.column_is_rail();
+        title_bar("side-head").when(!rail, |d| {
             // room for the macOS buttons, as the familiar look leaves it
-            .pl(px(82.))
-            .pr(px(8.))
-            .child(div().flex_1())
-            .child(self.sidebar_switch(cx))
+            d.pl(px(BUTTONS)).pr(px(8.)).child(div().flex_1()).child(self.sidebar_switch(cx))
+        })
     }
 
     fn sidebar_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1112,9 +1184,13 @@ impl Root {
             .items_stretch()
             .pr(px(10.))
             .gap(px(4.))
-            // without the runs column, the macOS buttons and its switch move here
-            .when(!self.sidebar, |d| d.pl(px(82.)).child(div().flex().items_center().child(self.sidebar_switch(cx))))
-            .when(self.sidebar, |d| d.pl(px(4.)))
+            // without the runs column, the macOS buttons and its switch move here; beside the rail, what of the
+            // buttons' room the rail does not give
+            .when(!self.sidebar || self.column_is_rail(), |d| {
+                let inset = if self.sidebar { BUTTONS - self.bars.column } else { BUTTONS };
+                d.pl(px(inset)).child(div().flex().items_center().child(self.sidebar_switch(cx)))
+            })
+            .when(self.sidebar && !self.column_is_rail(), |d| d.pl(px(4.)))
             .child(self.tabs.clone())
             .child(div().flex_1())
             .child(
@@ -1807,6 +1883,12 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                 cx.notify();
             })
             .detach();
+            // the rail's »: the column takes its names back
+            cx.subscribe(&side, |this: &mut Root, _, _: &side::Widen, cx| {
+                this.bars.reset(bars::Bar::Column);
+                cx.notify();
+            })
+            .detach();
             // a tab split or a pane gone, here or in Herdr: the panes shown follow
             cx.observe(&agents, |this: &mut Root, _, cx| {
                 this.show_what_stood(cx);
@@ -1890,7 +1972,11 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             // the window moved or resized is kept as it stands
             let bounds = cx.observe_window_bounds(window, |this: &mut Root, window, cx| this.remember(window, cx));
             let (changes_on, steps, sidebar) = (state.changes || crate::testing::var("JAYNES_APP_CHANGES").is_some(), state.steps, state.column && crate::testing::var("JAYNES_APP_NOSIDE").is_none());
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
+            let (bars, why) = bars::Bars::from_kept(state.widths);
+            for why in why {
+                tracing::warn!("{why}");
+            }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {
@@ -1935,6 +2021,36 @@ pub(crate) fn palette_does(what: String, cx: &mut App) {
     if let Err(e) = updated {
         tracing::warn!("palette {what}: the window could not be updated: {e}");
     }
+}
+
+/// A bar's edge dragged with the pointer at x, or double clicked (`own`), as the person's hand does: for a test.
+#[cfg(feature = "test-driver")]
+pub(crate) fn drag_bar(what: String, cx: &mut App) {
+    let (name, at) = what.split_once(' ').unwrap_or((what.as_str(), ""));
+    let bar = match name {
+        "column" => bars::Bar::Column,
+        "steps" => bars::Bar::Steps,
+        "changes" => bars::Bar::Changes,
+        _ => return tracing::warn!("bar {what}: no bar {name}"),
+    };
+    let Some(main) = MAIN.with(|m| m.get()) else { return tracing::warn!("bar {what}: no main window") };
+    let _ = main.update(cx, |_, window, cx| {
+        let Some(Some(root)) = window.root::<Root>() else { return };
+        let wide: f32 = window.viewport_size().width.into();
+        root.update(cx, |r, cx| {
+            match at {
+                "own" => r.bars.reset(bar),
+                x => match x.parse::<f32>() {
+                    Ok(x) => {
+                        r.bars.drag(bar, x, wide, r.bars_shown());
+                    }
+                    Err(_) => return tracing::warn!("bar {what}: {x} is not a place"),
+                },
+            }
+            tracing::info!("the {bar:?} is {} wide", r.bars.of(bar));
+            cx.notify();
+        });
+    });
 }
 
 /// Later on the line over the agent, as a click on it: for a test.

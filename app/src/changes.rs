@@ -13,8 +13,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_base::input::{InputEvent, InputState};
 
-pub const WIDTH: f32 = 360.;
-
 pub struct Changes {
     /// The folder the middle works in; the repository is the one holding it.
     pub folder: String,
@@ -296,7 +294,7 @@ impl Render for Changes {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let frame = div()
             .id("changes")
-            .w(px(WIDTH))
+            .w_full()
             .h_full()
             .flex_none()
             .flex()

@@ -168,6 +168,31 @@ pub fn word(mark: Mark) -> &'static str {
 }
 
 /// A small heading, as written: quiet, after T3 Code, not shouted in capitals.
+/// A name shown over what the pointer rests on: the rail's things, which show no name of their own.
+pub struct Tip(SharedString);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(rgb(panel()))
+            .border_1()
+            .border_color(rgb(line()))
+            .font_family(UI_FONT)
+            .text_size(px(12.))
+            .text_color(rgb(text()))
+            .child(self.0.clone())
+    }
+}
+
+/// The tooltip that says `text`.
+pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tip(text.clone())).into()
+}
+
 pub fn label(text: &str, color: u32) -> Div {
     div().text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(rgb(color)).child(text.to_string())
 }

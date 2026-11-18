@@ -67,9 +67,141 @@ pub fn wanted_at(bar: Bar, x: f32, window: f32) -> f32 {
     if bar.from_right() { window - x } else { x }
 }
 
+/// How wide the edge the person drags is, inside its bar.
+pub const EDGE: f32 = 6.;
+
+/// What shows beside the middle: the column or not, and the bar at the right (Changes over the steps), if any.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shown {
+    pub column: bool,
+    pub right: Option<Bar>,
+}
+
+/// The bars' widths as the window stands.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bars {
+    pub column: f32,
+    pub steps: f32,
+    pub changes: f32,
+}
+
+impl Default for Bars {
+    fn default() -> Self {
+        Bars { column: Bar::Column.default_width(), steps: Bar::Steps.default_width(), changes: Bar::Changes.default_width() }
+    }
+}
+
+impl Bars {
+    pub fn of(&self, bar: Bar) -> f32 {
+        match bar {
+            Bar::Column => self.column,
+            Bar::Steps => self.steps,
+            Bar::Changes => self.changes,
+        }
+    }
+
+    fn at(&mut self, bar: Bar) -> &mut f32 {
+        match bar {
+            Bar::Column => &mut self.column,
+            Bar::Steps => &mut self.steps,
+            Bar::Changes => &mut self.changes,
+        }
+    }
+
+    /// The widths kept, each within its bounds, and why one opens at its own.
+    pub fn from_kept(k: crate::app_state::Widths) -> (Bars, Vec<String>) {
+        let mut why = Vec::new();
+        let mut take = |bar, w| {
+            let (w, said) = kept(bar, w);
+            why.extend(said);
+            w
+        };
+        let bars = Bars { column: take(Bar::Column, k.column), steps: take(Bar::Steps, k.steps), changes: take(Bar::Changes, k.changes) };
+        (bars, why)
+    }
+
+    /// As kept: none for a bar at its own width.
+    pub fn to_kept(&self) -> crate::app_state::Widths {
+        let keep = |bar: Bar| Some(self.of(bar)).filter(|w| *w != bar.default_width());
+        crate::app_state::Widths { column: keep(Bar::Column), steps: keep(Bar::Steps), changes: keep(Bar::Changes) }
+    }
+
+    /// The width of what shares the window with the bar across the middle: for the column, the bar at the right;
+    /// for a bar at the right, the column.
+    fn across(&self, bar: Bar, shown: Shown) -> f32 {
+        match bar {
+            Bar::Column => shown.right.map_or(0., |b| self.of(b)),
+            _ if shown.column => self.column,
+            _ => 0.,
+        }
+    }
+
+    /// The bar's edge dragged with the pointer at `x` in a window `window` wide; whether its width changed.
+    pub fn drag(&mut self, bar: Bar, x: f32, window: f32, shown: Shown) -> bool {
+        let w = dragged(bar, wanted_at(bar, x, window), window, self.across(bar, shown));
+        std::mem::replace(self.at(bar), w) != w
+    }
+
+    /// A double click on the bar's edge: its own width back.
+    pub fn reset(&mut self, bar: Bar) {
+        *self.at(bar) = bar.default_width();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn both() -> Shown {
+        Shown { column: true, right: Some(Bar::Steps) }
+    }
+
+    #[test]
+    fn a_drag_of_an_edge_changes_that_bar_alone_and_a_double_click_gives_its_own_back() {
+        let mut b = Bars::default();
+        // the column's edge to 400, the steps' edge to 1000 in a 1600 window: 600 wide
+        assert!(b.drag(Bar::Column, 400., 1600., both()));
+        assert!(b.drag(Bar::Steps, 1000., 1600., both()));
+        assert_eq!((b.column, b.steps, b.changes), (400., 560., 360.));
+        // the same place again changes nothing
+        assert!(!b.drag(Bar::Column, 400., 1600., both()));
+        b.reset(Bar::Steps);
+        assert_eq!(b.steps, 300.);
+        assert_eq!(b.column, 400.);
+    }
+
+    #[test]
+    fn the_middle_keeps_its_width_beside_what_shows_and_not_beside_what_is_hidden() {
+        let mut b = Bars { column: 480., ..Bars::default() };
+        // beside a 480 column a 1200 window leaves the steps 1200 - 480 - 320 = 400
+        b.drag(Bar::Steps, 100., 1200., both());
+        assert_eq!(b.steps, 400.);
+        // the column hidden: the steps take up to their highest
+        b.drag(Bar::Steps, 100., 1200., Shown { column: false, right: Some(Bar::Steps) });
+        assert_eq!(b.steps, 560.);
+        // Changes at the right is what the column shares the window with, not the steps hidden under it
+        let mut b = Bars { changes: 640., steps: 160., ..Bars::default() };
+        b.drag(Bar::Column, 700., 1200., Shown { column: true, right: Some(Bar::Changes) });
+        assert_eq!(b.column, 240.);
+        b.drag(Bar::Column, 700., 1200., Shown { column: true, right: None });
+        assert_eq!(b.column, 480.);
+    }
+
+    #[test]
+    fn the_widths_are_kept_only_where_the_person_changed_them_and_come_back_so() {
+        let (b, why) = Bars::from_kept(crate::app_state::Widths::default());
+        assert_eq!((b, why.len()), (Bars::default(), 0));
+        assert_eq!(Bars::default().to_kept(), crate::app_state::Widths::default());
+        let dragged = Bars { column: RAIL, steps: 410., ..Bars::default() };
+        let k = dragged.to_kept();
+        assert_eq!(k, crate::app_state::Widths { column: Some(RAIL), steps: Some(410.), changes: None });
+        assert_eq!(Bars::from_kept(k), (dragged, vec![]));
+        // one out of its bounds opens at its own, the others as kept, and the log says which
+        let (b, why) = Bars::from_kept(crate::app_state::Widths { column: Some(9000.), steps: Some(410.), changes: None });
+        assert_eq!(b, Bars { steps: 410., ..Bars::default() });
+        assert_eq!(why.len(), 1);
+        assert!(why[0].contains("Column"), "{why:?}");
+    }
 
     #[test]
     fn a_drag_keeps_each_bar_within_its_bounds_and_the_middle_wide_enough() {

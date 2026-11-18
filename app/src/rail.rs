@@ -10,8 +10,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::{Mark, Stage};
 
-pub const WIDTH: f32 = 300.;
-
 pub struct Rail {
     runs: Entity<Runs>,
     tabs: Entity<Tabs>,
@@ -148,7 +146,7 @@ impl Render for Rail {
         // lit only while the story shown is this run's
         let lit = chosen.as_ref().filter(|d| tabs.open.as_deref() == Some(d.id.as_str())).and(tabs.lit.clone());
         let frame = div()
-            .w(px(WIDTH))
+            .w_full()
             .h_full()
             .flex_none()
             .flex()

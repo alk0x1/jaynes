@@ -2,6 +2,11 @@
 //! person's spaces with their agents (read from herdr-core, as Herdr arranges them), each with its dot and a short word,
 //! then the Jaynes runs. The runs' list is the engine's own (`jaynes_shell::listing`), read from the record, so it says
 //! what `jaynes runs` and the page say.
+//!
+//! Narrower than its names (bars.rs), the column is a rail, as Herdr's: the Inbox's icon and count, the spaces
+//! numbered with a dot where something waits or works, the agents of one space numbered with their mark, the runs
+//! that wait or work as their dot, and a » that gives the column its names back. Each says its name on a tooltip and
+//! opens as in the column.
 
 use crate::agents::{self, Agent, Agents, State};
 use crate::look;
@@ -11,14 +16,102 @@ use gpui::*;
 use jaynes_shell::listing::{Mark, Row};
 use std::collections::HashSet;
 
-pub const WIDTH: f32 = 292.;
-
 pub struct Side {
     runs: Entity<Runs>,
     agents: Entity<Agents>,
     tabs: Entity<crate::tabs::Tabs>,
-    /// The spaces the person folded.
+    /// The spaces and the sections the person folded (a section by its key: "§needs", "§work", "§spaces").
     folded: HashSet<String>,
+    /// Whether the finished runs show, under their count.
+    show_finished: bool,
+    /// Whether the column is the rail (bars.rs): the window says so, as the person drags its edge.
+    pub rail: bool,
+}
+
+/// The rail's » pressed: the column takes its names back (its own width).
+pub struct Widen;
+
+impl EventEmitter<Widen> for Side {}
+
+/// The column in the order the person chose ("Needs you first"): what waits for them, runs and agents in one list;
+/// then the runs at work; then the finished runs, folded to a count; then the spaces with the agents that do not
+/// wait for them.
+#[derive(Debug, Default, PartialEq)]
+struct Order {
+    /// The runs whose question is open, then the agents that ask or failed, with their space's name.
+    needs: Vec<Row>,
+    asking: Vec<(String, Agent)>,
+    /// The runs not finished that wait on nothing: working, halted, blocked.
+    at_work: Vec<Row>,
+    /// The finished runs (delivered, merged, undone, abandoned), by project as the record lists them.
+    finished: Vec<(String, Vec<Row>)>,
+    /// Each space with its agents that are not in `asking`.
+    spaces: Vec<(agents::Space, Vec<Agent>)>,
+}
+
+impl Order {
+    fn finished_count(&self) -> usize {
+        self.finished.iter().map(|(_, rows)| rows.len()).sum()
+    }
+}
+
+/// Whether an agent waits for the person: it asks, or it failed.
+fn asks(a: &Agent) -> bool {
+    matches!(a.state, State::Waiting | State::Error)
+}
+
+fn finished(m: Mark) -> bool {
+    matches!(m, Mark::Delivered | Mark::Merged | Mark::Undone | Mark::Abandoned)
+}
+
+fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space]) -> Order {
+    let mut o = Order { needs: listing.needs.clone(), ..Order::default() };
+    for (project, rows) in &listing.projects {
+        let (done, open): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|r| finished(r.mark));
+        o.at_work.extend(open.into_iter().cloned());
+        if !done.is_empty() {
+            o.finished.push((project.clone(), done.into_iter().cloned().collect()));
+        }
+    }
+    for space in spaces {
+        let (asking, rest): (Vec<&Agent>, Vec<&Agent>) = space.agents.iter().partition(|a| asks(a));
+        o.asking.extend(asking.into_iter().map(|a| (space.name.clone(), a.clone())));
+        o.spaces.push((space.clone(), rest.into_iter().cloned().collect()));
+    }
+    o
+}
+
+/// What a run at work says at the right of its name: where it is ("step 2 of 4"), or that it halted or is blocked.
+fn at_work_tag(row: &Row) -> String {
+    match row.mark {
+        Mark::Halted => "halted".into(),
+        Mark::Blocked => "blocked".into(),
+        _ => row.line.split(", ").next().unwrap_or_default().to_owned(),
+    }
+}
+
+/// A thing on the rail: centred, its name on a tooltip.
+fn rail_item(id: SharedString, on: bool, tip: String) -> Stateful<Div> {
+    div()
+        .id(id)
+        .mx(px(6.))
+        .h(px(26.))
+        .flex_none()
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(4.))
+        .text_size(px(12.))
+        .text_color(rgb(if on { look::text() } else { look::dim() }))
+        .when(on, |d| d.bg(rgb(look::selected())))
+        .hover(|d| d.bg(rgb(look::selected())).text_color(rgb(look::text())))
+        .cursor_pointer()
+        .tooltip(look::tip(tip))
+}
+
+fn rail_rule() -> Div {
+    div().mx(px(14.)).my(px(6.)).h(px(1.)).flex_none().bg(rgb(look::line()))
 }
 
 /// An agent's state as the column colours it.
@@ -41,7 +134,14 @@ impl Side {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
         cx.observe(&agents, |_, _, cx| cx.notify()).detach();
         cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
-        Side { runs, agents, tabs, folded: HashSet::new() }
+        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, rail: false }
+    }
+
+    fn fold(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.folded.remove(key) {
+            self.folded.insert(key.to_owned());
+        }
+        cx.notify();
     }
 
     fn inbox(&self, waiting: usize, review: usize, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -81,7 +181,26 @@ impl Side {
             })
     }
 
-    fn space_head(&self, id: &str, name: &str, folded: bool, waits: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A section's name that folds it, with its count.
+    fn section(&self, key: &'static str, name: &str, count: Option<usize>, color: u32, cx: &mut Context<Self>) -> impl IntoElement {
+        let folded = self.folded.contains(key);
+        div()
+            .id(key)
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(18.))
+            .pt(px(16.))
+            .pb(px(4.))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.fold(key, cx)))
+            .child(div().w(px(10.)).text_size(px(10.)).text_color(rgb(look::faint())).child(if folded { "▸" } else { "▾" }))
+            .child(look::label(name, color))
+            .child(div().flex_1())
+            .children(count.map(|n| div().text_size(px(11.)).text_color(rgb(look::faint())).child(n.to_string())))
+    }
+
+    fn space_head(&self, id: &str, name: &str, folded: bool, waits: bool, count: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let key = id.to_owned();
         div()
             .id(SharedString::from(format!("space-{id}")))
@@ -98,16 +217,12 @@ impl Side {
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(look::dim()))
             .hover(|d| d.text_color(rgb(look::text())))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.folded.remove(&key) {
-                    this.folded.insert(key.clone());
-                }
-                cx.notify();
-            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.fold(&key, cx)))
             .child(div().w(px(10.)).text_color(rgb(look::faint())).child(if folded { "▸" } else { "▾" }))
             .child(div().flex_1().min_w_0().truncate().child(name.to_owned()))
-            // a folded space still says that something in it waits
+            // a folded space still says that something in it waits, and how many agents it holds
             .when(folded && waits, |d| d.child(dot(look::amber())))
+            .when(folded && count > 0, |d| d.child(div().text_size(px(11.)).text_color(rgb(look::faint())).child(count.to_string())))
     }
 
     fn agent(&self, a: &Agent, on: bool, now: u64, cx: &mut Context<Self>) -> impl IntoElement {
@@ -137,7 +252,42 @@ impl Side {
             .child(right.flex_none().text_size(px(11.5)))
     }
 
-    fn row(&self, row: &Row, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// An agent that waits for the person, in "Needs you": its space and name, what it asks under them.
+    fn asking(&self, space: &str, a: &Agent, on: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let (tabs, address, title) = (self.tabs.clone(), a.address.clone(), a.title.clone());
+        div()
+            .id(SharedString::from(format!("asking-{}", a.address)))
+            .mx(px(8.))
+            .px(px(10.))
+            .py(px(7.))
+            .rounded(px(7.))
+            .flex()
+            .gap(px(10.))
+            .items_start()
+            .when(on, |d| d.bg(rgb(look::selected())))
+            .hover(|d| d.bg(rgb(look::selected())))
+            .cursor_pointer()
+            .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |t, cx| t.show_agent(address.clone(), title.clone(), cx))))
+            .child(div().mt(px(3.)).size(px(12.)).flex_none().flex().items_center().justify_center().child(agent_icon(a, "asking")))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .flex_1()
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(format!("{space} · {}", a.title)))
+                            .child(div().flex_none().text_size(px(11.5)).text_color(rgb(colour(a.state))).child(a.state.word())),
+                    )
+                    .when(!a.msg.trim().is_empty(), |d| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(look::amber())).child(a.msg.clone()))),
+            )
+    }
+
+    /// A run: its mark and its request, with a word at the right (`tag`) and its line under it (`line`).
+    fn row(&self, row: &Row, on: bool, tag: Option<(String, u32)>, line: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let id = row.id.clone();
         let tabs = self.tabs.clone();
         div()
@@ -153,20 +303,53 @@ impl Side {
             .hover(|d| d.bg(rgb(look::selected())))
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| tabs.update(cx, |tabs, cx| tabs.show(Some(id.clone()), cx))))
-            .child(div().mt(px(3.)).size(px(12.)).flex_none().flex().items_center().justify_center().child(if row.mark == Mark::Working {
-                look::spinner(SharedString::from(format!("spin-{}", row.id)), 11., look::blue()).into_any_element()
-            } else {
-                dot(look::colour(row.mark)).into_any_element()
-            }))
+            .child(div().mt(px(3.)).size(px(12.)).flex_none().flex().items_center().justify_center().child(run_icon(row, "spin")))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .min_w_0()
                     .flex_1()
-                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(row.title.clone()))
-                    .child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::amber() } else { look::dim() })).child(row.line.clone())),
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(row.title.clone()))
+                            .children(tag.map(|(t, c)| div().flex_none().text_size(px(11.5)).text_color(rgb(c)).child(t))),
+                    )
+                    .when(line, |d| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::amber() } else { look::dim() })).child(row.line.clone()))),
             )
+    }
+
+    /// The finished runs' count, that shows or hides them.
+    fn finished_line(&self, n: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let shown = self.show_finished;
+        div()
+            .id("finished")
+            .mx(px(8.))
+            .px(px(10.))
+            .py(px(5.))
+            .flex()
+            .gap(px(6.))
+            .cursor_pointer()
+            .text_size(px(11.5))
+            .text_color(rgb(look::faint()))
+            .hover(|d| d.text_color(rgb(look::dim())))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.show_finished = !this.show_finished;
+                cx.notify();
+            }))
+            .child(div().w(px(10.)).child(if shown { "▾" } else { "▸" }))
+            .child(format!("{n} finished · {}", if shown { "Hide" } else { "Show" }))
+    }
+}
+
+/// A run's mark: a spinner while it works, else a dot in its mark's colour. `at` keeps spinners apart.
+fn run_icon(row: &Row, at: &str) -> AnyElement {
+    if row.mark == Mark::Working {
+        look::spinner(SharedString::from(format!("{at}-{}", row.id)), 11., look::blue()).into_any_element()
+    } else {
+        dot(look::colour(row.mark)).into_any_element()
     }
 }
 
@@ -184,66 +367,247 @@ pub fn agent_icon(a: &Agent, at: &str) -> AnyElement {
         }
 }
 
-fn section(name: &str, count: Option<usize>, color: u32) -> impl IntoElement {
-    div()
-        .flex()
-        .justify_between()
-        .px(px(18.))
-        .pt(px(16.))
-        .pb(px(4.))
-        .child(look::label(name, color))
-        .children(count.map(|n| div().text_size(px(11.)).text_color(rgb(look::faint())).child(n.to_string())))
+/// A section's name that does not fold.
+fn heading(name: &str, color: u32) -> impl IntoElement {
+    div().px(px(18.)).pt(px(16.)).pb(px(4.)).child(look::label(name, color))
 }
 
-impl Render for Side {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Side {
+    /// The column as a rail, in the column's order: the Inbox; what needs the person; the runs at work; the spaces
+    /// numbered, the agents of an open one under it; and the » that gives the names back.
+    fn rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let runs = self.runs.read(cx);
-        let (listing, selected, trouble) = (runs.snap.listing.clone(), runs.selected.clone(), runs.trouble.clone());
+        let (listing, selected) = (runs.snap.listing.clone(), runs.selected.clone());
         let agents = self.agents.read(cx);
-        let (spaces, core_trouble) = (agents.spaces.clone(), agents.trouble.clone());
+        let o = order(&listing, &agents.spaces);
         let (waiting, review) = agents.counts();
-        let now = agents::now_ms();
-        let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
-        let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
-        let inbox_on = self.tabs.read(cx).inbox;
-        list = list.child(self.inbox(waiting + listing.needs.len(), review, inbox_on, cx));
+        let tabs = self.tabs.read(cx);
+        let (open, inbox_on) = (tabs.agent.as_ref().map(|(a, _)| a.clone()), tabs.inbox);
+        let mut list = div().id("rail-list").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().pt(px(8.)).pb(px(8.)).gap(px(2.));
 
-        list = list.child(section("Spaces", None, look::faint()));
-        if let Some(trouble) = core_trouble {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("herdr-core cannot be read: {trouble}")));
-        } else if spaces.is_empty() {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No spaces yet."));
+        let (need, waits) = (waiting + listing.needs.len() + review, waiting + listing.needs.len() > 0);
+        let tabs = self.tabs.clone();
+        list = list.child(
+            rail_item("rail-inbox".into(), inbox_on, if need > 0 { format!("Inbox · {need} need you") } else { "Inbox".into() })
+                .relative()
+                .on_click(move |_, _, cx| tabs.update(cx, |t, cx| t.show_inbox(cx)))
+                .child(look::icon(look::Icon::Inbox, 14., look::dim()))
+                .when(need > 0, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .top(px(-3.))
+                            .right(px(1.))
+                            .px(px(4.))
+                            .rounded(px(7.))
+                            .bg(rgb(if waits { look::amber() } else { look::violet() }))
+                            .text_size(px(9.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(look::on_fill()))
+                            .child(need.to_string()),
+                    )
+                }),
+        );
+
+        let run = |row: &Row| {
+            let (tabs, id) = (self.tabs.clone(), row.id.clone());
+            rail_item(SharedString::from(format!("rail-run-{}", row.id)), selected.as_deref() == Some(row.id.as_str()), format!("{} · {}", row.title, row.line))
+                .on_click(move |_, _, cx| tabs.update(cx, |t, cx| t.show(Some(id.clone()), cx)))
+                .child(run_icon(row, "rail-spin"))
+        };
+        let agent = |a: &Agent, tip: String| {
+            let (tabs, address, title) = (self.tabs.clone(), a.address.clone(), a.title.clone());
+            rail_item(SharedString::from(format!("rail-agent-{}", a.address)), open.as_deref() == Some(a.address.as_str()), tip)
+                .on_click(move |_, _, cx| tabs.update(cx, |t, cx| t.show_agent(address.clone(), title.clone(), cx)))
+                .child(agent_icon(a, "rail"))
+        };
+
+        if !o.needs.is_empty() || !o.asking.is_empty() {
+            list = list.child(rail_rule());
+            for row in &o.needs {
+                list = list.child(run(row));
+            }
+            for (space, a) in &o.asking {
+                list = list.child(agent(a, format!("{space} · {} · {}", a.title, a.state.word())));
+            }
         }
-        for space in &spaces {
+        if !o.at_work.is_empty() {
+            list = list.child(rail_rule());
+            for row in &o.at_work {
+                list = list.child(run(row));
+            }
+        }
+        if !o.spaces.is_empty() {
+            list = list.child(rail_rule());
+        }
+        for (i, (space, rest)) in o.spaces.iter().enumerate() {
             let folded = self.folded.contains(&space.id);
-            let waits = space.agents.iter().any(|a| matches!(a.state, State::Waiting | State::Error));
-            list = list.child(self.space_head(&space.id, &space.name, folded, waits, cx));
+            let key = space.id.clone();
+            list = list.child(
+                rail_item(SharedString::from(format!("rail-space-{}", space.id)), false, space.name.clone())
+                    .on_click(cx.listener(move |this, _, _, cx| this.fold(&key, cx)))
+                    .child(
+                        div()
+                            .size(px(20.))
+                            .rounded(px(5.))
+                            .border_1()
+                            .border_color(rgb(look::line()))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.))
+                            .child((i + 1).to_string()),
+                    ),
+            );
             if !folded {
-                for a in &space.agents {
-                    list = list.child(self.agent(a, open.as_deref() == Some(a.address.as_str()), now, cx));
+                for a in rest {
+                    list = list.child(agent(a, format!("{} · {}", a.title, a.state.word())));
                 }
             }
         }
 
-        list = list.child(section("Runs", None, look::faint()));
-        if let Some(trouble) = trouble {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("The record cannot be read: {trouble}")));
-        } else if listing.needs.is_empty() && listing.projects.is_empty() {
-            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No runs yet."));
+        let widen = rail_item("rail-widen".into(), false, "Show names".into()).on_click(cx.listener(|_, _, _, cx| cx.emit(Widen))).child("»");
+        div().size_full().flex().flex_col().min_h_0().font_family(look::UI_FONT).child(list).child(div().flex_none().pb(px(8.)).child(widen)).into_any_element()
+    }
+}
+
+impl Render for Side {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.rail {
+            return self.rail(cx);
         }
-        if !listing.needs.is_empty() {
-            list = list.child(section("Waits for you", Some(listing.needs.len()), look::amber()));
-            for row in &listing.needs {
-                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), cx));
+        let runs = self.runs.read(cx);
+        let (listing, selected, trouble) = (runs.snap.listing.clone(), runs.selected.clone(), runs.trouble.clone());
+        let agents = self.agents.read(cx);
+        let core_trouble = agents.trouble.clone();
+        let o = order(&listing, &agents.spaces);
+        let (waiting, review) = agents.counts();
+        let now = agents::now_ms();
+        let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
+        let inbox_on = self.tabs.read(cx).inbox;
+        let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
+        list = list.child(self.inbox(waiting + listing.needs.len(), review, inbox_on, cx));
+
+        // what waits for the person, runs and agents in one list
+        let needs = o.needs.len() + o.asking.len();
+        if needs > 0 {
+            list = list.child(self.section("§needs", "Needs you", Some(needs), look::amber(), cx));
+            if !self.folded.contains("§needs") {
+                for row in &o.needs {
+                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(("run".into(), look::faint())), true, cx));
+                }
+                for (space, a) in &o.asking {
+                    list = list.child(self.asking(space, a, open.as_deref() == Some(a.address.as_str()), cx));
+                }
             }
         }
-        for (project, rows) in &listing.projects {
-            list = list.child(section(project, None, look::faint()));
-            for row in rows {
-                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), cx));
+
+        // the runs: at work, then the finished folded to their count
+        if let Some(trouble) = trouble {
+            list = list.child(heading("Runs", look::faint()));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("The record cannot be read: {trouble}")));
+        } else if listing.needs.is_empty() && listing.projects.is_empty() {
+            list = list.child(heading("Runs", look::faint()));
+            list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No runs yet."));
+        } else if !o.at_work.is_empty() || o.finished_count() > 0 {
+            list = list.child(self.section("§work", "Runs at work", Some(o.at_work.len()), look::faint(), cx));
+            if !self.folded.contains("§work") {
+                for row in &o.at_work {
+                    let tag = (at_work_tag(row), if row.mark == Mark::Working { look::blue() } else { look::colour(row.mark) });
+                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(tag), false, cx));
+                }
+                if o.finished_count() > 0 {
+                    list = list.child(self.finished_line(o.finished_count(), cx));
+                    if self.show_finished {
+                        for (project, rows) in &o.finished {
+                            list = list.child(heading(project, look::faint()));
+                            for row in rows {
+                                list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), None, true, cx));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // the spaces, with the agents that do not wait for the person
+        list = list.child(self.section("§spaces", "Spaces", None, look::faint(), cx));
+        if !self.folded.contains("§spaces") {
+            if let Some(trouble) = core_trouble {
+                list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("herdr-core cannot be read: {trouble}")));
+            } else if o.spaces.is_empty() {
+                list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No spaces yet."));
+            }
+            for (space, rest) in &o.spaces {
+                let folded = self.folded.contains(&space.id);
+                let waits = space.agents.iter().any(asks);
+                list = list.child(self.space_head(&space.id, &space.name, folded, waits, space.agents.len(), cx));
+                if !folded {
+                    for a in rest {
+                        list = list.child(self.agent(a, open.as_deref() == Some(a.address.as_str()), now, cx));
+                    }
+                }
             }
         }
         // the column's width, its header and its line at the right are the window's (main.rs)
-        div().size_full().flex().flex_col().min_h_0().font_family(look::UI_FONT).child(list)
+        div().size_full().flex().flex_col().min_h_0().font_family(look::UI_FONT).child(list).into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
+    use super::{Agent, Mark, Order, Row, State, agents, at_work_tag, order};
+    use jaynes_shell::listing::Listing;
+
+    fn agent(address: &str, state: State) -> Agent {
+        Agent { address: address.into(), title: address.into(), state, since_ms: 0, shell: false, turn: 0, kind: None, msg: String::new(), cwd: String::new() }
+    }
+
+    fn row(id: &str, mark: Mark, line: &str) -> Row {
+        Row { id: id.into(), title: id.into(), line: line.into(), mark }
+    }
+
+    #[test]
+    fn what_waits_for_the_person_comes_first_runs_and_agents_together_and_leaves_its_space() {
+        let listing = Listing { needs: vec![row("q", Mark::Needs, "Keep this fix?")], projects: vec![] };
+        let spaces = vec![agents::Space {
+            id: "w1".into(),
+            name: "jaynes".into(),
+            folder: String::new(),
+            agents: vec![agent("w1:t1", State::Working), agent("w1:t2", State::Waiting), agent("w1:t3", State::Error), agent("w1:t4", State::ToReview)],
+            tabs: Vec::new(),
+        }];
+        let o = order(&listing, &spaces);
+        assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q"]);
+        assert_eq!(o.asking.iter().map(|(s, a)| format!("{s} {}", a.address)).collect::<Vec<_>>(), ["jaynes w1:t2", "jaynes w1:t3"]);
+        // to review is not waiting: it stays in its space, with the one at work
+        assert_eq!(o.spaces[0].1.iter().map(|a| a.address.as_str()).collect::<Vec<_>>(), ["w1:t1", "w1:t4"]);
+    }
+
+    #[test]
+    fn the_runs_at_work_come_before_the_finished_ones_which_keep_their_projects() {
+        let listing = Listing {
+            needs: vec![],
+            projects: vec![
+                ("my-app".into(), vec![row("a", Mark::Working, "step 2 of 4, running"), row("b", Mark::Merged, "merged"), row("c", Mark::Halted, "step 1 of 3, halted")]),
+                ("api".into(), vec![row("d", Mark::Abandoned, "abandoned"), row("e", Mark::Blocked, "step 3 of 3, blocked: no room")]),
+                ("notes".into(), vec![row("f", Mark::Undone, "reverted by you"), row("g", Mark::Delivered, "delivered")]),
+            ],
+        };
+        let o = order(&listing, &[]);
+        assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "c", "e"]);
+        let finished: Vec<(String, Vec<String>)> = o.finished.iter().map(|(p, rows)| (p.clone(), rows.iter().map(|r| r.id.clone()).collect())).collect();
+        assert_eq!(finished, [("my-app".to_string(), vec!["b".to_string()]), ("api".into(), vec!["d".into()]), ("notes".into(), vec!["f".into(), "g".into()])]);
+        assert_eq!(o.finished_count(), 4);
+        assert_eq!(at_work_tag(&o.at_work[0]), "step 2 of 4");
+        assert_eq!(at_work_tag(&o.at_work[1]), "halted");
+        assert_eq!(at_work_tag(&o.at_work[2]), "blocked");
+    }
+
+    #[test]
+    fn nothing_waits_nothing_works_the_column_is_its_spaces() {
+        let o = order(&Listing::default(), &[]);
+        assert_eq!(o, Order::default());
     }
 }
