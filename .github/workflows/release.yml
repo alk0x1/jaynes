@@ -39,6 +39,11 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} is not v$engine"; exit 1
           fi
           echo "version=$engine" >> "$GITHUB_OUTPUT"
+      # every crate the program and the app are built from, with its license's text: a release carries them
+      - name: The crates' licenses
+        run: |
+          cargo install --locked cargo-about --version 0.9.3 --features cli
+          licenses/third-party.sh "$RUNNER_TEMP/THIRD-PARTY-NOTICES.md"
       - name: The program
         working-directory: engine
         run: cargo build --release --locked -p jaynes-shell
@@ -47,6 +52,7 @@ jobs:
         env:
           ZIG: /opt/homebrew/opt/zig@0.16/bin/zig
           PROFILE: release
+          THIRD_PARTY: ${{ runner.temp }}/THIRD-PARTY-NOTICES.md
         run: ./bundle.sh "$RUNNER_TEMP/dist"
       - name: Package
         run: |
@@ -54,9 +60,17 @@ jobs:
           mkdir -p "$out" "$RUNNER_TEMP/pkg"
           cp engine/target/release/jaynes "$RUNNER_TEMP/pkg/"
           cp -R "$RUNNER_TEMP/dist/Jaynes.app" "$RUNNER_TEMP/pkg/"
+          licenses/gather.sh "$RUNNER_TEMP/pkg/licenses" "$RUNNER_TEMP/THIRD-PARTY-NOTICES.md"
           "$RUNNER_TEMP/pkg/jaynes" guide > /dev/null
           codesign --verify --deep --strict "$RUNNER_TEMP/pkg/Jaynes.app"
-          tar -czf "$out/jaynes-macos-aarch64.tar.gz" -C "$RUNNER_TEMP/pkg" jaynes Jaynes.app
+          # no release without the licenses, beside the program and inside the app (Apache-2.0 4(a), MIT)
+          licenses/check.sh "$RUNNER_TEMP/pkg/licenses"
+          licenses/check.sh "$RUNNER_TEMP/pkg/Jaynes.app/Contents/Resources/Licenses"
+          tar -czf "$out/jaynes-macos-aarch64.tar.gz" -C "$RUNNER_TEMP/pkg" jaynes Jaynes.app licenses
+          # and what is packed is what was checked
+          mkdir "$RUNNER_TEMP/unpacked" && tar -xzf "$out/jaynes-macos-aarch64.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          licenses/check.sh "$RUNNER_TEMP/unpacked/licenses"
+          licenses/check.sh "$RUNNER_TEMP/unpacked/Jaynes.app/Contents/Resources/Licenses"
           sum=$(shasum -a 256 "$out/jaynes-macos-aarch64.tar.gz" | cut -d' ' -f1)
           version=${{ steps.version.outputs.version }}
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v$version/jaynes-macos-aarch64.tar.gz"
