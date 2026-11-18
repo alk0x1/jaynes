@@ -171,7 +171,6 @@ fn branches(project: &Path) -> String {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "a delivered run needs the box, which Linux does not have yet")]
 fn without_a_yes_it_shows_everything_and_removes_nothing() {
     let w = World::new("show");
     let project = w.delivered();
@@ -188,7 +187,6 @@ fn without_a_yes_it_shows_everything_and_removes_nothing() {
 }
 
 #[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "a delivered run needs the box, which Linux does not have yet")]
 fn with_a_yes_it_removes_the_plugin_first_then_the_app_and_the_program_and_keeps_the_data_and_the_repository() {
     let w = World::new("yes");
     let project = w.delivered();
@@ -201,7 +199,8 @@ fn with_a_yes_it_removes_the_plugin_first_then_the_app_and_the_program_and_keeps
     assert!(!w.herdr().exists(), "the herdr-core Jaynes installed, unchanged and not running, goes:\n{said}");
     assert!(w.engine().join("record.sqlite3").exists() && w.data().join("guard.json").exists(), "the data was kept");
     assert_eq!(branches(&project), before, "the repository is the person's");
-    assert!(said.contains("tccutil reset Accessibility dev.jaynes.test-app"), "the permissions line:\n{said}");
+    // what macOS keeps of the app's permissions; Linux keeps none
+    assert_eq!(said.contains("tccutil reset Accessibility dev.jaynes.test-app"), cfg!(target_os = "macos"), "the permissions line:\n{said}");
     assert!(said.contains("PATH"), "says the shell's PATH was never changed:\n{said}");
 }
 
