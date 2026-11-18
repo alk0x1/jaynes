@@ -19,6 +19,7 @@ pub mod project_prefs;
 pub mod protocol;
 pub mod refused;
 pub mod role;
+pub mod sandbox;
 pub mod stop;
 pub mod store;
 pub mod summary;
