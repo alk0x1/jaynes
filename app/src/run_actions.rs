@@ -2,7 +2,6 @@
 //! stopped, Raise the risk, Raise the ceiling near or at it, Abandon one not finished. Each shows only when it can do
 //! something, as on the page. They are sent as the person's through `send`, the one place that sends them.
 
-use jaynes_core::Input;
 use jaynes_core::question::By;
 use jaynes_core::run::{Phase, Run};
 
@@ -98,20 +97,13 @@ pub fn read(run: &str) -> Option<Run> {
     jaynes_shell::store::Store::open(&jaynes_shell::home().join("record.sqlite3")).ok()?.state(run).ok().flatten()
 }
 
-/// Sends `act` on `run` as the person's, the way the page's /api/act does: the one place that sends them, so a
-/// signed path (G18) or the engine's own act_in replaces this body alone. The core refuses what is not the person's.
+/// Sends `act` on `run` as the person's, through the engine's own act_in, the one the page's /api/act calls: the same
+/// body, so the app and the page can never send two different things. The one place that sends them, so a signed
+/// path (G18) replaces this body alone. The core refuses what is not the person's; a refusal is said on the button's
+/// row, in the engine's words.
 pub fn send(run: &str, act: Act) -> Result<(), String> {
-    let r = read(run).ok_or("no such run")?;
-    let by = By::Person;
-    let input = match act {
-        Act::Resume => Input::Resume { by },
-        Act::Continue => Input::Continue { by },
-        Act::Abandon => Input::Abandon { by },
-        Act::RaiseRisk => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
-        // as the page raises it: half an hour and two million tokens more
-        Act::RaiseCeiling => Input::RaiseCeiling { ceiling: jaynes_core::risk::Ceiling { seconds: r.ceiling.seconds + 1800, tokens: r.ceiling.tokens + 2_000_000 }, by },
-    };
-    jaynes_shell::drive::submit(&jaynes_shell::home(), &crate::answer::engine_program(), &r, input).map(|_| ())
+    let body = serde_json::json!({"run": run, "action": act.word()});
+    jaynes_shell::page::act_in(&jaynes_shell::home(), &crate::answer::engine_program(), &body, By::Person).map(|_| ())
 }
 
 #[cfg(test)]
