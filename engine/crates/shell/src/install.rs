@@ -323,10 +323,14 @@ pub const GUIDE: &str = "How to carry out an agreed change through Jaynes
    with a failing test, then fixes it. If none is installed, install them:
      jaynes add small-change
      jaynes add fix-bug
-2. Start the run from the project's folder, with the whole agreed plan as the request, and in the background, since it
-   runs agents for minutes:
-     jaynes start --role <role> --project . --request \"<the plan, in full>\"
-   If the change is not small, add --risk high: the run then takes the full path and its ceiling is higher.
+2. Start the run with the Jaynes plugin's MCP tool \"start\" (mcp__plugin_jaynes_jaynes__start): role, the project's
+   folder as a full path, the whole agreed plan as the request, and risk \"high\" if the change is not small (the run
+   then takes the full path and its ceiling is higher). The tool runs Jaynes outside your own sandbox, so Jaynes can
+   put its box around the project's commands. Only when the tool is not there (no plugin), start it from the
+   project's folder with a command, in the background, since it runs agents for minutes:
+     jaynes start --role <role> --project . --request \"<the plan, in full>\" [--risk high]
+   From a shell with a sandbox of its own (as Claude Code's Bash with its sandbox on), Jaynes cannot put its box around
+   the project's commands, and the run refuses them: use the tool, or a terminal of the person's.
 3. Tell the person that the run goes on by itself and that what needs them is on the page Jaynes opens in their
    browser (http://127.0.0.1:8750). Do not answer for them.
 4. `jaynes show <run>` says where a run is; `jaynes runs` lists them. When it finishes, its branch is jaynes/<run> in
@@ -538,6 +542,16 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).status().expect("git").success();
         assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn the_guide_starts_a_run_with_the_plugin_s_tool_before_the_command() {
+        // the tool runs Jaynes outside the agent's own sandbox, where its box opens; the command, from a sandboxed
+        // shell, does not
+        let tool = GUIDE.find("mcp__plugin_jaynes_jaynes__start").expect("the guide names the tool");
+        let command = GUIDE.find("jaynes start --role").expect("and the command, for when there is no plugin");
+        assert!(tool < command, "the tool comes first");
+        assert!(GUIDE.contains("Only when the tool is not there"), "{GUIDE}");
     }
 
     #[test]
