@@ -119,6 +119,34 @@ impl World {
             .env("JAYNES_PAGE_PORT", page_port.to_string()).env("JAYNES_NO_PAGE", "1").env("PATH", path);
     }
 
+    /// The environment, with no lsof on the PATH: what a machine without lsof gives, as a Linux image without it.
+    fn env_without_lsof(&self, cmd: &mut Command, page_port: u16) {
+        self.env_without(cmd, page_port, "lsof");
+    }
+
+    /// The environment with no program `name` on the PATH, every other program kept: a folder that holds it is
+    /// replaced by one with links to all it holds but that one.
+    fn env_without(&self, cmd: &mut Command, page_port: u16, name: &str) {
+        self.env(cmd, page_port);
+        let shadow = self.base.join(format!("no-{name}"));
+        std::fs::create_dir_all(&shadow).expect("dir");
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut dirs = vec![self.base.join("tools")];
+        for d in std::env::split_paths(&path) {
+            if !d.join(name).exists() {
+                dirs.push(d);
+                continue;
+            }
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                if e.file_name() != name && !shadow.join(e.file_name()).exists() {
+                    std::os::unix::fs::symlink(e.path(), shadow.join(e.file_name())).expect("link");
+                }
+            }
+        }
+        dirs.push(shadow);
+        cmd.env("PATH", std::env::join_paths(dirs).expect("path"));
+    }
+
     /// `jaynes uninstall` with `args`, standard input not a terminal: whether it succeeded, and what it said.
     fn uninstall(&self, args: &[&str]) -> (bool, String) {
         let mut cmd = Command::new(BIN);
@@ -313,4 +341,77 @@ fn the_installer_s_note_is_the_one_uninstall_reads() {
     assert!(note_it(&w.herdr()) && w.note().exists());
     let (ok, said) = w.uninstall(&["--yes", "--keep-data"]);
     assert!(ok && !w.herdr().exists(), "the herdr-core the installer noted goes:\n{said}");
+}
+
+/// What a machine without lsof gives: on Linux, /proc says what runs; where nothing can say it (macOS without lsof),
+/// nothing is removed, and the person reads why and what to install. Never "nothing runs" by not knowing.
+#[test]
+fn a_herdr_core_that_runs_is_never_taken_for_stopped_without_lsof() {
+    let mut w = World::new("herdr-no-lsof");
+    let herdr = w.herdr();
+    w.running(&herdr);
+    std::fs::write(w.note(), serde_json::json!({"path": herdr, "sha256": sha256(&herdr)}).to_string()).expect("note");
+    let mut cmd = Command::new(BIN);
+    cmd.args(["uninstall", "--yes", "--keep-data"]).stdin(Stdio::null());
+    w.env_without_lsof(&mut cmd, port());
+    let out = cmd.output().expect("uninstall");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(w.herdr().exists(), "a running herdr-core was removed without lsof:\n{said}");
+    if cfg!(target_os = "linux") {
+        assert!(out.status.success() && said.contains("hc server stop") && !w.app().exists(), "/proc tells it runs:\n{said}");
+    } else {
+        assert!(!out.status.success() && said.contains("cannot tell") && said.contains("lsof"), "says why:\n{said}");
+        assert!(w.app().exists() && w.program().exists() && w.calls().is_empty(), "removed something:\n{said}");
+    }
+}
+
+#[test]
+fn the_page_is_never_said_stopped_without_lsof() {
+    let mut w = World::new("page-no-lsof");
+    let p = port();
+    let mut page = Command::new(BIN);
+    page.args(["page", "--port", &p.to_string()]).env("JAYNES_NO_UPDATE_CHECK", "1").stdout(Stdio::null()).stderr(Stdio::null());
+    w.env(&mut page, p);
+    let child = page.spawn().expect("page");
+    let pid = child.id();
+    w.kids.push(child);
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(("127.0.0.1", p)).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut cmd = Command::new(BIN);
+    cmd.args(["uninstall", "--yes", "--keep-data"]).stdin(Stdio::null());
+    w.env_without_lsof(&mut cmd, p);
+    let out = cmd.output().expect("uninstall");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let alive = Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().expect("kill").success();
+    let reaped = w.kids.last_mut().and_then(|k| k.try_wait().ok().flatten()).is_some();
+    if cfg!(target_os = "linux") {
+        assert!(out.status.success() && (!alive || reaped), "/proc finds the page's process and it stops:\n{said}");
+    } else {
+        assert!(alive && !reaped, "the page was stopped without its process known:\n{said}");
+        assert!(!out.status.success() && said.contains("cannot tell") && !said.contains("the page stopped"), "{said}");
+        assert!(w.program().exists() && w.calls().is_empty(), "removed something:\n{said}");
+    }
+}
+
+/// A machine where the kill program cannot run (a container without procps): whether a run's agent lives cannot be
+/// told, so nothing is removed, and the person reads why. Never "nothing works" by not knowing.
+#[test]
+fn nothing_is_removed_when_kill_cannot_run_and_a_run_s_agent_may_still_work() {
+    let mut w = World::new("no-kill");
+    let dir = w.engine().join("runs/busy");
+    std::fs::create_dir_all(&dir).expect("dir");
+    let agent = Command::new("sh").args(["-c", "sleep 60"]).process_group(0).spawn().expect("agent");
+    std::fs::write(dir.join("agent.pid"), agent.id().to_string()).expect("pid");
+    w.kids.push(agent);
+    let mut cmd = Command::new(BIN);
+    cmd.args(["uninstall", "--yes", "--keep-data"]).stdin(Stdio::null());
+    w.env_without(&mut cmd, port(), "kill");
+    let out = cmd.output().expect("uninstall");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success() && said.contains("cannot tell") && said.contains("kill could not run"), "says why:\n{said}");
+    assert!(w.app().exists() && w.program().exists() && w.calls().is_empty(), "removed something:\n{said}");
 }
