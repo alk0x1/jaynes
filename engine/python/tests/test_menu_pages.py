@@ -734,9 +734,37 @@ class SecondReading(unittest.TestCase):
             self.assertEqual(menu._wait(0, {"retry-after": odd}), menu.PAGE_WAITS[0], odd)
 
     def test_markup_the_parser_cannot_read_is_the_source_s_answer(self):
-        with self.assertRaises(menu.Unread) as e:
-            menu.page_text(f"<p>{LONG}</p><![foo[ x ]]><p>{LONG}</p>".encode(), "text/html")
-        self.assertIn("markup", str(e.exception))
+        # whatever the parser raises on a page, the page is the source's no, never Jaynes's fault: a parser made to
+        # break shows it on every Python
+        real = menu._reader
+
+        def breaking() -> Any:
+            class Breaks:
+                def __init__(self, skipped: Any) -> None:
+                    pass
+
+                def feed(self, text: str) -> None:
+                    raise NotImplementedError("markup this parser does not read")
+
+            return Breaks
+
+        try:
+            menu._reader = breaking
+            with self.assertRaises(menu.Unread) as e:
+                menu.page_text(f"<p>{LONG}</p>".encode(), "text/html")
+        finally:
+            menu._reader = real
+        self.assertIn("its markup could not be read (NotImplementedError)", str(e.exception))
+
+    def test_odd_markup_is_read_or_is_the_source_s_no(self):
+        # some Pythons' parsers refuse a marked section like this one and others read it; either is right, and
+        # nothing else is: never Jaynes's fault, never another error
+        try:
+            text = menu.page_text(f"<p>{LONG}</p><![foo[ x ]]><p>{LONG}</p>".encode(), "text/html")
+        except menu.Unread as e:
+            self.assertIn("markup", str(e))
+        else:
+            self.assertTrue(menu.held(text, LONG.strip()[:60].rsplit(" ", 1)[0]))
 
     # N2. raised and lowered text as a reader writes it
     def test_lowered_text_joins_its_base(self):
