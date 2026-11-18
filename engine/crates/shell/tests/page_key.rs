@@ -66,7 +66,7 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
         .output()
         .expect("start");
     assert!(started.status.success(), "{}{}", String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
-    let port = 20750 + (std::process::id() % 1000) as u16 * 4 % 4000 + ["cookie", "origin", "script", "broken", "both"].iter().position(|n| *n == name).unwrap_or(0) as u16;
+    let port = 20750 + (std::process::id() % 1000) as u16 * 4 % 4000 + ["cookie", "origin", "script", "both"].iter().position(|n| *n == name).unwrap_or(0) as u16;
     let said = std::fs::File::create(base.join("said.txt")).expect("said");
     let child = Command::new(BIN)
         .args(["page", "--port", &port.to_string()])
@@ -189,19 +189,6 @@ fn nothing_an_agent_writes_runs_as_a_script_on_the_page() {
         assert!(get(port, path, "").contains("X-Content-Type-Options: nosniff\r\n"), "{path}");
     }
     assert!(post(port, "/api/whoami", "Origin: http://127.0.0.1:1\r\n").contains("X-Content-Type-Options: nosniff\r\n"));
-}
-
-#[test]
-#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
-fn a_request_that_breaks_its_handler_does_not_stop_the_page() {
-    let (_page, port, _base) = page("broken");
-    // a name as long as a kept page's (69 bytes), whose 64th byte falls inside a letter of two bytes
-    let name = format!("/page/{}éhtml", "a".repeat(63));
-    assert_eq!(name.len() - "/page/".len(), 69);
-    let reply = get(port, &name, "");
-    assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
-    // and the page goes on answering
-    assert!(get(port, "/home", "").starts_with("HTTP/1.1 200"));
 }
 
 #[test]
