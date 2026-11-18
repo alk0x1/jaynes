@@ -560,6 +560,18 @@ pub fn set_guard_watch(watch: bool) -> Result<(), String> {
     write_guard(&v)
 }
 
+/// The folders where the person turned the guard off, as the guard reads them ("off_in").
+pub fn guard_off_in() -> Vec<String> {
+    guard_json()["off_in"].as_array().map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
+/// Set the folders where the guard is off; the rest of its settings stay as they were.
+pub fn set_guard_off_in(folders: &[String]) -> Result<(), String> {
+    let mut v = guard_json();
+    v["off_in"] = serde_json::json!(folders);
+    write_guard(&v)
+}
+
 /// Where the watching guard notes what it would have asked: beside its settings, one JSON line a note.
 pub fn guard_notes_path() -> Result<PathBuf, String> {
     Ok(guard_path()?.with_file_name("guard-watch.jsonl"))

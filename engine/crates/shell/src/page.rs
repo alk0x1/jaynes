@@ -570,13 +570,49 @@ impl Page {
     /// What the person does to a run from its page: halt, resume, continue, raise, abandon, correct.
     /// Change the guard, update Jaynes, or restart the page; only the person does these.
     fn setup(&self, body: &Value, by: By) -> Result<Value, String> {
-        use crate::install::{guard, guard_notes_path, set_guard, set_guard_watch};
+        use crate::install::{guard, guard_notes_path, guard_off_in, set_guard, set_guard_off_in, set_guard_watch};
         if by != By::Person {
             return Err("only you change the setup: open the link the page printed".into());
         }
         let (on, mut owners) = guard();
         let owner = body["owner"].as_str().unwrap_or("").trim().to_string();
+        let folder = body["folder"].as_str().unwrap_or("").trim().to_string();
         match body["action"].as_str().unwrap_or("") {
+            // the guard off in one project, by its folder: the person's word, which a project's own file cannot say
+            "off-in-add" => {
+                let named = match folder.strip_prefix('~') {
+                    Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{}{rest}", std::env::var("HOME").unwrap_or_default()),
+                    _ => folder.clone(),
+                };
+                let path = std::path::PathBuf::from(&named);
+                if !path.is_absolute() {
+                    return Err("a project's folder is written from / or ~/".into());
+                }
+                let real = path.canonicalize().map_err(|e| format!("{named} is not a folder here ({e})"))?;
+                if !real.is_dir() {
+                    return Err(format!("{named} is not a folder"));
+                }
+                // a folder that holds the person's home is almost everything, and one that holds Jaynes's own folder
+                // would turn the guard off on its own files: neither is a project
+                let holds = |inner: &std::path::Path| inner.canonicalize().is_ok_and(|i| i.starts_with(&real));
+                if real.parent().is_none() || std::env::var_os("HOME").is_some_and(|h| holds(std::path::Path::new(&h))) {
+                    return Err(format!("{} is your home folder or holds it, which is almost everything: to turn the guard off everywhere, use Turn off", real.display()));
+                }
+                if holds(&self.home) {
+                    return Err(format!("{} holds Jaynes's own folder ({}), where the guard stays on", real.display(), self.home.display()));
+                }
+                let real = real.display().to_string();
+                let mut off = guard_off_in();
+                if !off.contains(&real) {
+                    off.push(real);
+                }
+                set_guard_off_in(&off)?
+            }
+            "off-in-remove" => {
+                let mut off = guard_off_in();
+                off.retain(|f| *f != folder);
+                set_guard_off_in(&off)?
+            }
             "guard-on" => set_guard_watch(false)?,
             "guard-watch" => set_guard_watch(true)?,
             "guard-off" => set_guard(false, &owners)?,
@@ -1350,6 +1386,12 @@ fn setup_html(home: &std::path::Path) -> String {
         "<span class=\"chip green\">on</span> <button class=\"act\" data-setup=\"guard-off\">Turn off</button> <button class=\"act\" data-setup=\"guard-watch\">Only watch</button>"
     };
     let notes = guard_notes_html(&owners);
+    let off_in = crate::install::guard_off_in();
+    let off_rows: String = off_in
+        .iter()
+        .map(|f| format!("<span class=\"owner\"><code>{}</code><button class=\"act\" data-setup=\"off-in-remove\" data-folder=\"{0}\">Turn on here</button></span>", esc(f)))
+        .collect();
+    let off_none = if off_in.is_empty() { "<span class=\"none\">none: it works in every project</span>" } else { "" };
     let rows: String = owners.iter().map(|o| format!("<span class=\"owner\"><code>{}</code><button class=\"act\" data-setup=\"owner-remove\" data-owner=\"{0}\">Remove</button></span>", esc(o))).collect();
     let none = if owners.is_empty() { "<span class=\"none\">none: every held action asks, wherever it lands</span>" } else { "" };
     let installed = crate::install::installed_commit();
@@ -1363,7 +1405,7 @@ fn setup_html(home: &std::path::Path) -> String {
     format!(
         "<h1>Setup</h1>\
          <section class=\"part\"><h2>Guard</h2><p class=\"sub\">In every Claude Code session with the Jaynes plugin, it asks before what cannot be undone in git and GitHub: push, reset --hard, clean, deleting branches or tags, merging or closing pull requests, and creating or deleting repositories. Everything else passes. On a free owner's repositories, a plain push and a pull request opened or merged pass; what cannot be undone asks always. Watching, it asks none of those that can be taken back and notes them here instead.</p>\
-         <table class=\"kv\"><tr><td>state</td><td>{state}</td></tr>{notes}<tr><td>free owners</td><td>{rows}{none}<span class=\"owner\"><input id=\"owner\" placeholder=\"GitHub owner\"><button class=\"act\" data-setup=\"owner-add\">Add</button></span></td></tr><tr><td>settings</td><td><code>{}</code></td></tr></table></section>\
+         <table class=\"kv\"><tr><td>state</td><td>{state}</td></tr>{notes}<tr><td>free owners</td><td>{rows}{none}<span class=\"owner\"><input id=\"owner\" placeholder=\"GitHub owner\"><button class=\"act\" data-setup=\"owner-add\">Add</button></span></td></tr><tr><td>off in</td><td>{off_rows}{off_none}<span class=\"owner\"><input id=\"folder\" placeholder=\"a project's folder\"><button class=\"act\" data-setup=\"off-in-add\">Turn off here</button></span></td></tr><tr><td>settings</td><td><code>{}</code></td></tr></table></section>\
          <section class=\"part\"><h2>Version</h2><table class=\"kv\"><tr><td>running</td><td>{running}</td></tr><tr><td>installed</td><td>{version}</td></tr></table>{log}</section>\
          <div class=\"refused\" id=\"setupmsg\"></div>",
         esc(&path)
@@ -1831,7 +1873,8 @@ if (base) {
 document.querySelectorAll("[data-setup]").forEach(b => b.addEventListener("click", async () => {
   const act = b.dataset.setup;
   const owner = b.dataset.owner || (document.getElementById("owner") || {}).value || "";
-  const r = await (await fetch("/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: act, owner }) })).json();
+  const folder = b.dataset.folder || (document.getElementById("folder") || {}).value || "";
+  const r = await (await fetch("/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: act, owner, folder }) })).json();
   const msg = document.getElementById("setupmsg");
   if (!r.ok) { if (msg) msg.textContent = r.refused; else alertless(r.refused); return; }
   if (act === "restart") { document.body.style.opacity = .4; setTimeout(function back() { fetch("/api/version").then(() => location.reload(), () => setTimeout(back, 500)); }, 1200); }

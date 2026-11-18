@@ -62,8 +62,9 @@ the way without losing the guard. A file in the project is what an agent can
 write and what a cloned repository brings, so it may add care and never remove
 it: a project's own config adds checks the same way in pre-commit.
 
-**Costs.** Setup does not yet edit `off_in`; until it does, it is written by
-hand in `guard.json`. The skill's description still loads in a session where
+**Costs.** At first Setup did not edit `off_in`, and it was written by hand in
+`guard.json`; Setup now turns the guard off in a project's folder and on again
+(Off in), the folder kept as itself, never `/`. The skill's description still loads in a session where
 Jaynes is off: the session's first words tell the model not to use it.
 
 ## 2026-11-18: The page's one origin is localhost

@@ -1313,6 +1313,84 @@ fn the_page_shows_what_the_watching_guard_would_have_asked_and_frees_an_owner_fr
 }
 
 #[test]
+fn the_page_turns_the_guard_off_in_a_project_and_the_guard_reads_it_so() {
+    let s = scratch("off-in");
+    let base = s.home.parent().expect("base").to_path_buf();
+    let settings = base.join("settings");
+    let install = base.join("install");
+    let project = base.join("pro<j>ect");
+    for d in [&settings, &install, &project] {
+        std::fs::create_dir_all(d).expect("dir");
+    }
+    for args in [vec!["init", "-q"], vec!["remote", "add", "origin", "https://github.com/someone-else/thing.git"]] {
+        assert!(Command::new("git").arg("-C").arg(&project).args(&args).status().expect("git").success());
+    }
+    std::fs::write(settings.join("guard.json"), r#"{"on": true, "owners": ["me"]}"#).expect("write");
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_HOME", &settings)
+        .env("JAYNES_INSTALL_ROOT", &install)
+        .env("JAYNES_NO_UPDATE_CHECK", "1")
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
+    let me = "jaynes_key=k3y";
+    let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+    // the guard as Claude Code runs it, on a push from inside the project: whether it asks
+    let guard_asks = || {
+        let mut child = Command::new("python3")
+            .arg(root().join("../hooks/guard.py"))
+            .env("JAYNES_HOME", &settings).env("GH_CONFIG_DIR", base.join("gh")).env("CLAUDE_PLUGIN_ROOT", root().join(".."))
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+            .spawn().expect("guard");
+        let event = serde_json::json!({"session_id": "s", "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": project.join("src"), "tool_input": {"command": "git push origin main"}});
+        std::io::Write::write_all(&mut child.stdin.take().expect("stdin"), event.to_string().as_bytes()).expect("event");
+        let done = child.wait_with_output().expect("guard");
+        assert!(done.stderr.is_empty(), "{}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stdout).contains("\"ask\"")
+    };
+    std::fs::create_dir_all(project.join("src")).expect("dir");
+    assert!(guard_asks(), "the guard asks before a push to someone else's repository");
+    let folder = project.display().to_string();
+    let add = serde_json::json!({"action": "off-in-add", "folder": folder}).to_string();
+    // only the person turns the guard off in a project
+    assert_eq!(post(port, "/api/setup", &add, "")["ok"], false);
+    assert!(guard_asks());
+    // a folder that is not one, or one that holds the person's home (almost everything) or Jaynes's own folder, is
+    // refused: Turn off is for everywhere, and says what it is
+    let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
+    let above_home = home.parent().expect("a home has a parent").display().to_string();
+    let engine = s.home.display().to_string();
+    let above_engine = base.display().to_string();
+    for bad in ["relative/path", "/no/such/folder/anywhere", "/", "~", "~/", &above_home, &engine, &above_engine] {
+        let body = serde_json::json!({"action": "off-in-add", "folder": bad}).to_string();
+        let said = post(port, "/api/setup", &body, me);
+        assert_eq!(said["ok"], false, "{bad}: {said}");
+    }
+    let g: Value = serde_json::from_str(&std::fs::read_to_string(settings.join("guard.json")).expect("guard")).expect("json");
+    assert!(g["off_in"].is_null(), "nothing was written: {g}");
+    assert_eq!(post(port, "/api/setup", &add, me)["ok"], true);
+    let g: Value = serde_json::from_str(&std::fs::read_to_string(settings.join("guard.json")).expect("guard")).expect("json");
+    let canonical = project.canonicalize().expect("canonical").display().to_string();
+    assert_eq!(g["off_in"], serde_json::json!([canonical]), "kept as the folder itself, once");
+    assert_eq!((g["on"].clone(), g["owners"].clone()), (Value::Bool(true), serde_json::json!(["me"])), "the rest stays");
+    assert_eq!(post(port, "/api/setup", &add, me)["ok"], true);
+    let g: Value = serde_json::from_str(&std::fs::read_to_string(settings.join("guard.json")).expect("guard")).expect("json");
+    assert_eq!(g["off_in"].as_array().map(Vec::len), Some(1), "added twice, kept once");
+    assert!(!guard_asks(), "the guard reads what the page wrote: off in this project, inside its folders too");
+    let setup = get("/setup");
+    let shown = canonical.replace('<', "&lt;").replace('>', "&gt;");
+    assert!(setup.contains(&shown) && !setup.contains("pro<j>ect"), "the folder is shown, escaped: {setup}");
+    assert!(setup.contains("data-setup=\"off-in-remove\"") && setup.contains("data-setup=\"off-in-add\""), "{setup}");
+    // and on again
+    let remove = serde_json::json!({"action": "off-in-remove", "folder": canonical}).to_string();
+    assert_eq!(post(port, "/api/setup", &remove, "")["ok"], false);
+    assert_eq!(post(port, "/api/setup", &remove, me)["ok"], true);
+    assert!(guard_asks(), "turned on again in the project, the guard asks again");
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_their_words() {
     let s = scratch("impossible");
