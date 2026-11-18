@@ -209,10 +209,19 @@ fn a_file_handed_open_outside_the_box_is_not_reached() {
             .arg("-c").arg(r#"exec 7<>"$1"; shift; exec "$@""#).arg("sh").arg(&file)
             .arg(BIN).arg("box").arg("--write").arg(&p.work).args(hide(&p)).arg("--").args(["sh", "-c", script])
             .output().expect("box");
+        // the box closes it before the command starts: the command finds no descriptor 7
         assert!(!o.status.success(), "the box let through {what}: {}", said(&o));
-        assert!(said(&o).contains("handed open files (7)"), "the box refuses to open, and says why: {}", said(&o));
+        assert!(!said(&o).contains("outside"), "the command reached the file outside by {what}: {}", said(&o));
     }
     assert_eq!(std::fs::read_to_string(p.outside.join("file")).expect("read"), "outside\n");
+    // as a CI runner's shell hands it: two descriptors past 9, the box opens all the same and neither is inside
+    let o = Command::new("bash")
+        .arg("-c").arg(r#"exec 142<>"$1" 145<>"$1"; shift; exec "$@""#).arg("bash").arg(&file)
+        .arg(BIN).arg("box").arg("--write").arg(&p.work).args(hide(&p)).arg("--").args(["sh", "-c", "ls /proc/self/fd"])
+        .output().expect("box");
+    assert!(o.status.success(), "the box opens though it was handed files open: {}", said(&o));
+    let fds: Vec<String> = String::from_utf8_lossy(&o.stdout).split_whitespace().map(str::to_string).collect();
+    assert!(fds.iter().all(|f| ["0", "1", "2", "3"].contains(&f.as_str())), "only 0, 1, 2 and ls's own listing: {fds:?}");
     // with only the standard three, the box opens, and nothing else is open inside it but what it opens itself
     let o = boxed(&p, "ls /proc/self/fd", &[]);
     assert!(o.status.success(), "{}", said(&o));

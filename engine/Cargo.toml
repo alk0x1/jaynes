@@ -16,7 +16,9 @@ proptest = "1"
 schemars = "1"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# deny, not forbid, for one place only: the Linux box marks the files it was handed open to close on exec
+# (sandbox.rs, close_handed_open), which no safe call can name by number
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
