@@ -2405,3 +2405,120 @@ if b"hi" not in got:
     assert_eq!((served["passed"].as_bool(), served["blocked"].as_bool()), (Some(true), Some(false)), "the script check did not pass in the box: {judged}");
     assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{judged}", types(&e));
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box of a role's program is macOS's sandbox-exec here")]
+fn a_role_s_program_in_its_box_closed_by_default_does_its_work_and_none_of_the_escapes() {
+    // the box as program_profile() writes it, from what program_needs() works out of the real interpreter; a
+    // pretend engine's home with secrets planted in it; the program does what a role's program does, then tries out
+    let base = std::env::temp_dir().join(format!("jaynes-program-closed-{}", std::process::id()));
+    let _gone = std::fs::remove_dir_all(&base);
+    let engine = base.join("engine");
+    let (role_dir, library, project) = (engine.join("runs/r1/role"), engine.join("runs/r1/library"), engine.join("runs/r1/project"));
+    let (tmp, declared) = (base.join("call-tmp"), base.join("declared"));
+    for d in [&role_dir, &library, &tmp, &declared, &project, &engine.join("runs/r2")] {
+        std::fs::create_dir_all(d).expect("dir");
+    }
+    for (f, text) in [(engine.join("page.key"), "secret"), (engine.join("runs/r2/output.json"), "secret"), (role_dir.join("role.toml"), "role"),
+        (library.join("jaynes_role.py"), "lib"), (declared.join("data.txt"), "data"), (project.join("greeting.txt"), "hello")] {
+        std::fs::write(f, text).expect("write");
+    }
+    let broker = tmp.join("broker.sock");
+    let _broker = std::os::unix::net::UnixListener::bind(&broker).expect("broker");
+    let other_sock = base.join("other.sock");
+    let _other = std::os::unix::net::UnixListener::bind(&other_sock).expect("other");
+    let service = std::net::TcpListener::bind("127.0.0.1:0").expect("service");
+    let undeclared = std::net::TcpListener::bind("127.0.0.1:0").expect("undeclared");
+    let (port, other_port) = (service.local_addr().expect("a").port(), undeclared.local_addr().expect("b").port());
+    // the real interpreter, as a role declares it: /usr/bin/python3 is a shim the box refuses
+    let real = Command::new(python()).args(["-c", "import sys; print(sys.executable)"]).output().expect("python");
+    let interpreter = String::from_utf8_lossy(&real.stdout).trim().to_string();
+    let profile_of = |given: Value| -> (bool, String) {
+        let mut make = Command::new(&interpreter)
+            .args([root().join("python/jaynes_box.py").to_str().expect("path"), "program-profile"])
+            .env("JAYNES_ENGINE_HOME", &engine)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().expect("profile");
+        {
+            use std::io::Write;
+            make.stdin.take().expect("stdin").write_all(given.to_string().as_bytes()).expect("write");
+        }
+        let out = make.wait_with_output().expect("out");
+        (out.status.success(), String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let given = serde_json::json!({"interpreter": interpreter, "role_dir": role_dir, "library": library, "tmp": tmp, "broker": broker,
+        "reads": [declared], "local_ports": [port, 8750], "project": project, "project_write": false});
+    let (ok, profile) = profile_of(given.clone());
+    assert!(ok && profile.contains("(deny default)"), "{profile}");
+    // what it never opens is refused before the program starts, never opened with less
+    for bad in [serde_json::json!({"interpreter": "/usr/bin/python3"}), serde_json::json!({"reads": [std::env::var("HOME").expect("home")]}),
+        serde_json::json!({"reads": [engine.clone()]})] {
+        let mut g = given.clone();
+        for (k, v) in bad.as_object().expect("obj") {
+            g[k] = v.clone();
+        }
+        let (ok, said) = profile_of(g);
+        assert!(!ok && !said.contains("(version 1)"), "{bad}: {said}");
+    }
+    std::fs::write(role_dir.join("prog.py"), r#"
+import hashlib, json, os, socket, sqlite3, ssl, subprocess, sys, tempfile, threading
+a = json.loads(sys.argv[1])
+got = {}
+def try_(name, f):
+    try: got[name] = f() or "ok"
+    except Exception as e: got[name] = type(e).__name__
+# what a role's program does
+try_("work: sqlite, ssl, hashlib, a thread", lambda: (sqlite3.connect(":memory:").execute("select 1").fetchone(), ssl.create_default_context(),
+     hashlib.sha256(b"x").hexdigest(), threading.Thread(target=lambda: None).start()) and "ok")
+try_("work: a temporary file", lambda: tempfile.NamedTemporaryFile(dir=os.environ["TMPDIR"]).close())
+try_("work: its own folder", lambda: open(os.path.join(a["role_dir"], "role.toml")).read() and "ok")
+try_("work: Jaynes's library", lambda: open(os.path.join(a["library"], "jaynes_role.py")).read() and "ok")
+try_("work: the declared folder", lambda: open(os.path.join(a["declared"], "data.txt")).read() and "ok")
+try_("work: the project", lambda: open(os.path.join(a["project"], "greeting.txt")).read() and "ok")
+try_("work: a child of itself", lambda: "ok" if subprocess.run([sys.executable, "-c", "print(1)"], capture_output=True).returncode == 0 else "failed")
+s = socket.socket(socket.AF_UNIX)
+try_("work: the broker", lambda: s.connect(a["broker"]))
+c = socket.socket(); c.settimeout(3)
+try_("work: the declared port", lambda: c.connect(("127.0.0.1", a["port"])))
+# what it must not do
+home = a["real_home"]
+try_("escape: list the person's home", lambda: os.listdir(home) and "listed")
+try_("escape: know whether ~/.ssh exists", lambda: "knows" if os.path.exists(os.path.join(home, ".ssh")) else "does not know")
+try_("escape: read the page's key", lambda: open(os.path.join(a["engine"], "page.key")).read() and "read")
+try_("escape: read another run", lambda: open(os.path.join(a["engine"], "runs", "r2", "output.json")).read() and "read")
+try_("escape: write its own folder", lambda: open(os.path.join(a["role_dir"], "x"), "w").write("x") and "wrote")
+try_("escape: write the project", lambda: open(os.path.join(a["project"], "greeting.txt"), "w").write("x") and "wrote")
+try_("escape: run a program it did not declare", lambda: subprocess.run(["/bin/ls", "/"], capture_output=True) and "ran")
+try_("escape: open an app", lambda: subprocess.run(["/usr/bin/open", "-a", "Calculator"], capture_output=True) and "ran")
+o = socket.socket(socket.AF_UNIX)
+try_("escape: another socket", lambda: o.connect(a["other_sock"]) or "reached")
+for name, p in (("escape: an undeclared port", a["other_port"]), ("escape: the page's port, declared", 8750)):
+    t = socket.socket(); t.settimeout(3)
+    try_(name, lambda: t.connect(("127.0.0.1", p)) or "reached")
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try_("escape: UDP", lambda: u.sendto(b"", ("127.0.0.1", 9)) and "sent")
+b = socket.socket()
+try_("escape: bind", lambda: b.bind(("127.0.0.1", 0)) or "bound")
+try_("escape: a name on the network", lambda: socket.getaddrinfo("example.com", 80) and "resolved")
+print(json.dumps(got))
+"#).expect("write");
+    let home = std::env::var("HOME").expect("home");
+    let args = serde_json::json!({"role_dir": role_dir, "library": library, "declared": declared, "project": project, "engine": engine,
+        "broker": broker, "other_sock": other_sock, "port": port, "other_port": other_port, "real_home": home});
+    let out = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", &profile, &interpreter, role_dir.join("prog.py").to_str().expect("path"), &args.to_string()])
+        .current_dir(&role_dir).env_clear().env("PATH", "/usr/bin:/bin").env("TMPDIR", &tmp).env("HOME", &tmp)
+        .env("PYTHONDONTWRITEBYTECODE", "1").env("LANG", "en_US.UTF-8")
+        .output().expect("sandbox-exec");
+    let got: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
+    for (k, v) in got.as_object().expect("got") {
+        let v = v.as_str().unwrap_or("");
+        if k.starts_with("work:") {
+            assert_eq!(v, "ok", "{k}: {got}");
+        } else {
+            assert!(v == "PermissionError" || v == "does not know" || v == "gaierror", "{k} got through: {v}: {got}");
+        }
+    }
+    assert_eq!(got.as_object().expect("got").len(), 23, "{got}");
+    drop((service, undeclared));
+    let _gone = std::fs::remove_dir_all(&base);
+}

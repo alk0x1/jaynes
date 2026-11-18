@@ -30,6 +30,16 @@ denied (``MACH_DENIED``): no project command reads or writes what the person cop
 other service still answers; closing them all takes a profile that denies by default, with each service listed.
 A service's name may change in a later macOS: the end-to-end test that runs a real run's suite as a probe (it fails
 when it reads or writes the pasteboard or lists the keychains) is what notices, so it must keep passing.
+A role's own program has a box of its own, closed by default (``program_profile``): the system's own rules for what
+any process needs (``system.sb``, Apple's, private, which may change with macOS: the test of this box runs a sample
+program and the escapes, and must keep passing), then only its interpreter and declared commands to run, by the
+declared and the real path; its folder, Jaynes's library, its interpreter's folders and the libraries they load
+(``program_needs`` works them out with otool, never by hand) and what it declares, to read; its call's temporary
+folder to write; the metadata of the paths it walks, link by link, and of nothing else, so it cannot even tell
+whether ~/.ssh exists; one socket file, the broker that runs the project's commands for it (macOS opens no box inside
+a box), and the local TCP ports it declares. The person's home, the engine's folder and the page's port stay shut,
+and a declaration of them is refused before the program starts. A shim of /usr/bin is refused too: it finds its
+program through xcrun, which reads the whole disk.
 Elsewhere there is no box yet: commands refuse to run unless ``JAYNES_UNBOXED=1`` accepts running them unboxed.
 """
 
@@ -240,6 +250,187 @@ def profile(box: Box) -> str:
 INSIDE = ("Jaynes was started inside another program's sandbox and cannot put its own box around your project's "
           "commands. Start the run outside it: with the Jaynes plugin's MCP tool \"start\" "
           "(mcp__plugin_jaynes_jaynes__start), or by running \"jaynes start\" in an ordinary terminal")
+
+
+# --- the box of a role's own program --------------------------------------------------------------------------
+
+# The Jaynes page's port: a role's program never reaches it, even when it declares it.
+PROGRAM_NEVER_PORT = 8750
+
+
+class Refused(Exception):
+    """What a program's box will not open, said before the program starts: it never runs with less than it asked."""
+
+
+@dataclass(frozen=True)
+class ProgramBox:
+    """The box a role's program runs in, one call at a time, closed by default: it runs its interpreter and the
+    commands it declares, reads its own folder, Jaynes's library, its interpreter's and what it declares, writes only
+    its call's temporary folder, has no network but one socket file (the broker that runs the project's commands for
+    it, since macOS opens no box inside a box) and the local ports it declares. What the engine works out at pinning
+    (``program_needs``) goes in ``needs``."""
+    role_dir: Path
+    library: Path
+    tmp: Path
+    needs: "Needs"
+    broker: Path | None = None  # the one socket file it may reach
+    reads: tuple[Path, ...] = ()  # declared: read only
+    writes: tuple[Path, ...] = ()  # declared: read and write
+    local_ports: tuple[int, ...] = ()  # declared: TCP connect only, never the page's
+    project: Path | None = None  # the run's copy, when the step this call serves reaches it
+    project_write: bool = False  # and written, when its reach says write
+    home: Path = field(default_factory=Path.home)
+
+
+@dataclass(frozen=True)
+class Needs:
+    """What a program needs to start at all, worked out from its interpreter and commands, never written by hand."""
+    run: tuple[Path, ...]  # executables, by the path declared and by the real one
+    run_inside: tuple[Path, ...] = ()  # folders it may execute anything in: a framework Python runs itself there
+    read: tuple[Path, ...] = ()  # folders it reads: the interpreter's, its environment's, the libraries it loads
+
+
+def _shim(path: Path) -> bool:
+    """A program of /usr/bin that only finds the real one through xcrun, which reads the whole disk."""
+    try:
+        out = subprocess.run(["otool", "-L", str(path)], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "libxcselect" in out
+
+
+def _libraries(roots: Iterable[Path]) -> set[Path]:
+    """The folders of the libraries outside ``roots`` that the binaries inside them load, followed recursively, but
+    the system's (which the system's own rules already let read)."""
+    roots = [Path(os.path.realpath(r)) for r in roots]
+    todo = [f for r in roots for f in r.rglob("*") if f.is_file() and (f.suffix in (".so", ".dylib") or os.access(f, os.X_OK))]
+    seen: set[Path] = set()
+    out: set[Path] = set()
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        try:
+            listed = subprocess.run(["otool", "-L", str(f)], capture_output=True, text=True, timeout=20).stdout.splitlines()[1:]
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in listed:
+            lib = line.strip().split(" (")[0]
+            if not lib.startswith("/") or lib.startswith(("/usr/lib/", "/System/")):
+                continue
+            real = Path(os.path.realpath(lib))
+            if any(r == real or r in real.parents for r in roots) or not real.exists():
+                continue
+            out.add(real.parent)
+            todo.append(real)
+    return out
+
+
+def program_needs(interpreter: Path, commands: Iterable[Path] = ()) -> Needs:
+    """What a program run by ``interpreter`` and calling ``commands`` needs, from the files themselves: each by the
+    path declared and the real one; the interpreter's folder and its environment's (a framework Python runs itself
+    inside its folder); the libraries they load outside them (Homebrew's openssl, sqlite). Raises ``Refused`` for a
+    shim of /usr/bin, which works only by reading the whole disk: the real program is to be declared."""
+    run, inside, read = [], [], []
+    for exe in [interpreter, *commands]:
+        real = Path(os.path.realpath(exe))
+        if not real.is_file() or not os.access(real, os.X_OK):
+            raise Refused(f"{exe} is not a program on this machine")
+        if _shim(real):
+            raise Refused(f"{exe} is a shim that finds its program through xcrun, which reads the whole disk; declare the "
+                          "real program instead (xcrun --find NAME says where it is)")
+        run += [Path(exe), real]
+    prefix = subprocess.run([str(interpreter), "-c", "import sys; print(sys.prefix); print(sys.base_prefix)"],
+                            capture_output=True, text=True, timeout=60)
+    if prefix.returncode != 0:
+        raise Refused(f"{interpreter} did not say where it lives: {prefix.stderr.strip()[-200:]}")
+    for line in prefix.stdout.split():
+        real = Path(os.path.realpath(line))
+        if real not in read:
+            read.append(real)
+        if ".framework" in str(real) and real not in inside:
+            inside.append(real)
+    for c in commands:
+        real = Path(os.path.realpath(c)).parent
+        if real not in read:
+            read.append(real)
+    read += sorted(_libraries(read) - set(read))
+    return Needs(tuple(dict.fromkeys(run)), tuple(inside), tuple(read))
+
+
+def _chain(path: Path | str) -> list[str]:
+    """Every path a lookup of ``path`` passes through, each link followed: the only places whose metadata a box
+    closed by default lets read, so that nothing else, not even whether ~/.ssh/known_hosts exists, shows."""
+    out: list[str] = []
+    todo, seen = [os.path.abspath(path)], set()
+    while todo:
+        p = todo.pop()
+        parts = p.split("/")
+        cur = "/"
+        for i, part in enumerate(parts[1:], 1):
+            if not part:
+                continue
+            cur = os.path.join(cur, part)
+            if cur in seen:
+                continue
+            seen.add(cur)
+            out.append(cur)
+            if os.path.islink(cur):
+                target = os.readlink(cur)
+                target = target if target.startswith("/") else os.path.join(os.path.dirname(cur), target)
+                rest = "/".join(parts[i + 1:])
+                todo.append(os.path.normpath(os.path.join(target, rest) if rest else target))
+                break
+    return out
+
+
+def _literals(paths: Iterable[str]) -> str:
+    return " ".join('(literal "' + p.replace("\\", "\\\\").replace('"', '\\"') + '")' for p in paths)
+
+
+def _declared(paths: Iterable[Path], home: Path) -> list[Path]:
+    """The declared folders a program's box opens. Raises ``Refused`` for one that is the person's home or holds it,
+    holds a place secrets live, or is the engine's folder, inside it or holding it: those are never opened."""
+    engine = Path(os.path.realpath(engine_home()))
+    home = Path(os.path.realpath(home))
+    secrets = [home / s for s in SECRETS]
+    out = []
+    for p in paths:
+        real = Path(os.path.realpath(p))
+        holds = lambda inner: real == inner or real in inner.parents  # noqa: E731
+        if holds(home) or holds(engine) or engine in real.parents or any(holds(x) for x in secrets):
+            raise Refused(f"{p} is the person's home, holds a place secrets live, or is the engine's folder: a role's "
+                          "program never reaches it")
+        out.append(real)
+    return out
+
+
+def program_profile(box: ProgramBox) -> str:
+    """The sandbox-exec profile for a role's program: closed by default, with the system's own rules for what any
+    process needs, and only what the program and its call need opened. The last rule that matches wins."""
+    reads, writes = _declared(box.reads, box.home), _declared(box.writes, box.home)
+    project = [box.project] if box.project is not None else []
+    writable = [box.tmp, *writes, *(project if box.project_write else [])]
+    readable = [box.role_dir, box.library, *box.needs.read, *reads, *project]
+    lines = ["(version 1)", "(deny default)", '(import "system.sb")', "(allow process-fork)",
+             f"(allow process-exec {_literals(dict.fromkeys(str(p) for p in box.needs.run))})"]
+    if box.needs.run_inside:
+        lines.append(f"(allow process-exec {_subpaths(box.needs.run_inside)})")
+    lines += [f"(allow file-read* {_subpaths(readable)})",
+              f"(allow file-read* file-write* {_subpaths(writable)})",
+              f"(allow file-read* file-write* {' '.join(DEVICES)})"]
+    walked = dict.fromkeys(q for p in [*readable, *writable, *box.needs.run, *([box.broker] if box.broker else [])]
+                           for q in _chain(p))
+    lines.append(f"(allow file-read-metadata {_literals(walked)})")
+    if box.broker is not None:
+        lines.append(f"(allow network-outbound (remote unix-socket (literal {_lit(box.broker)})))")
+    lines += [f'(allow network-outbound (remote tcp "localhost:{int(p)}"))'
+              for p in sorted(set(box.local_ports) - {PROGRAM_NEVER_PORT})]
+    # what is secret stays out even where a declared folder or the role's own reaches it
+    lines.append(f"(deny file-read* {_subpaths([box.home / s for s in SECRETS] + [engine_home() / f for f in ENGINE_SECRETS])})")
+    lines += ["(deny lsopen)", "(deny appleevent-send)"]
+    return "\n".join(lines) + "\n"
 
 
 def command_in_box(script: str, box: Box) -> list[str]:
@@ -716,7 +907,21 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
 
 if __name__ == "__main__":
     # jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT]: for the engine and for a role's scripts
+    # jaynes_box.py program-profile < BOX.json: the profile of a role's program's box, for the engine that starts it,
+    # with what its interpreter and commands need worked out here; a refusal is its sentence and exit 3
     args = sys.argv[1:]
+    if args == ["program-profile"]:
+        given = json.load(sys.stdin)
+        try:
+            needs = program_needs(Path(given["interpreter"]), [Path(c) for c in given.get("commands", [])])
+            paths = {k: Path(v) for k, v in given.items() if k in ("role_dir", "library", "tmp", "broker", "project", "home") and v}
+            lists = {k: tuple(Path(v) for v in given.get(k, [])) for k in ("reads", "writes")}
+            print(program_profile(ProgramBox(**paths, **lists, needs=needs, project_write=given.get("project_write") is True,
+                                             local_ports=tuple(int(p) for p in given.get("local_ports", [])))), end="")
+        except Refused as e:
+            print(e)
+            sys.exit(3)
+        sys.exit(0)
     if len(args) in (3, 4) and args[0] == "photograph":
         w, _, h = (args[3] if len(args) == 4 else f"{SIZE[0]}x{SIZE[1]}").partition("x")
         why = photograph(args[1], Path(args[2]), (int(w), int(h)))
