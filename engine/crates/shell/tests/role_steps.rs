@@ -887,6 +887,10 @@ fn the_roles_written_before_still_pass_jaynes_check_as_they_are() {
         let (ok, out) = engine(&s, &["check", roles().join(name).to_str().expect("path")]);
         assert!(ok && out.contains(&format!("✔ {name} ")) && !out.contains('✘'), "{name}: {out}");
     }
+    // and small-change says what a run of it delivers, each claim with what proves it
+    let (_, out) = engine(&s, &["check", roles().join("small-change").to_str().expect("path")]);
+    assert!(out.contains("claim \"The change comes with what changed, in a sentence or two\": proved in a run when the check field-required of change passes"), "{out}");
+    assert!(out.contains("claim \"The change does what the request asked\": nothing checks it: ") && !out.contains("claims nothing"), "{out}");
 }
 
 #[test]

@@ -2677,7 +2677,8 @@ with = {{ pages = "read.sources" }}
     /// a key made from the manifest, so a role that reads into another manifest loses what its stops earned.
     const BEFORE: &[(&str, &str)] = &[
         ("small-change", "f9584e45bb1763dce2c9e6f9f8a7c1c799e905bfaf016b2102f0e18ba28d71d6"),
-        ("fix-bug", "22cd365ec135f0126115afe25d59e53394d6e263ee7bcaf98f5170a3615c6912"),
+        // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own
+        ("fix-bug", "e1708e2c11ff3e65585ed6db58411e0a8b0d757b9a2d7c99104e064cee6f3777"),
         ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
     ];
 
@@ -3444,6 +3445,34 @@ script = "requires/changelog.sh"
         for said in ["by = \"role\"", "script = \"steps/", "JAYNES_OUTPUT", "effect = \"irreversible\"", "idempotent", "local_ports"] {
             assert!(text.contains(said), "the template does not show {said}");
         }
+    }
+
+    #[test]
+    fn the_public_roles_claim_what_a_run_of_them_proves() {
+        // small-change and fix-bug as this repository keeps them for its tests, the copies of the public ones
+        let at = |name: &str| TomlRole::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles").join(name)).expect("reads");
+        let small = at("small-change");
+        assert_eq!(small.claims_listed(), [
+            "claim \"The project's test suite passes on the delivered change, run by Jaynes without internet, as the project defined it when the run began\": nothing checks it: the suite's check also passes a project that has no suite, having run nothing, so a run cannot yet prove its suite ran; until a check can say it judged nothing, this is not proved run by run",
+            "claim \"The change comes with what changed, in a sentence or two\": proved in a run when the check field-required of change passes",
+            "claim \"The change does what the request asked\": nothing checks it: no check compares the change with the request; the person sees the change only when it turns out bigger than a small one or touches a file that runs later outside any box",
+        ]);
+        let fix = at("fix-bug");
+        let proved: Vec<String> = fix.claims_listed().into_iter().filter(|c| c.contains(": proved in a run when ")).map(|c| c.split(": proved in a run when ").nth(1).unwrap_or("").to_string()).collect();
+        assert_eq!(proved, [
+            "the check tests-fail-for-the-bug of reproduce passes",
+            "the check tests-pass of fix passes",
+            "the check proof of fix passes",
+            "fix is done",
+        ]);
+        assert_eq!(fix.claims_listed().iter().filter(|c| c.contains(": nothing checks it: ")).count(), 1);
+        for r in [&small, &fix] {
+            assert!(r.notes().iter().all(|n| !n.starts_with("the role claims nothing")), "{:?}", r.notes());
+        }
+        // zero cases prove nothing: the hidden step that writes them fails with none, and says what it cannot test in untestable
+        let cases = fix.manifest.steps.iter().find(|s| s.name == "cases").expect("cases");
+        assert!(cases.checks.iter().any(|c| c.name == "field-required"), "{:?}", cases.checks);
+        assert_eq!(fix.extras["cases"].checks["field-required"], CheckImpl::Menu { uses: "field-required".into(), with: json!({"field": "cases"}).as_object().cloned().unwrap_or_default() });
     }
 
     #[test]

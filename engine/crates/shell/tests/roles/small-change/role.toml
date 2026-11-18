@@ -39,3 +39,16 @@ files = { type = "array", items = "string" }
 says = "Nothing is delivered before the project's suite passed on the change"
 never = "deliver"
 unless = "check suite-passes of change passed"
+
+# What a run delivers, and what proves it in that run: `jaynes check` lists each claim with what proves it in a run.
+[[claim]]
+says = "The project's test suite passes on the delivered change, run by Jaynes without internet, as the project defined it when the run began"
+unchecked = "the suite's check also passes a project that has no suite, having run nothing, so a run cannot yet prove its suite ran; until a check can say it judged nothing, this is not proved run by run"
+
+[[claim]]
+says = "The change comes with what changed, in a sentence or two"
+proved_by = "check field-required of change passed"
+
+[[claim]]
+says = "The change does what the request asked"
+unchecked = "no check compares the change with the request; the person sees the change only when it turns out bigger than a small one or touches a file that runs later outside any box"

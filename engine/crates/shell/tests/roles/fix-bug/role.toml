@@ -24,7 +24,7 @@ reach = { project = "read", commands = true }
 attempts = 2
 about = "Writes, from the request alone, the checks the fix will be judged by."
 instructions = "cases.md"
-checks = ["output-follows-schema"]
+checks = ["output-follows-schema", { use = "field-required", field = "cases" }]
 
 [step.output]
 cases = { type = "array", max_items = 8, items = { type = "object", fields = { says = "string", run = "string" } } }
@@ -99,3 +99,24 @@ only_after = "check tests-fail-for-the-bug of reproduce passed"
 says = "Nothing is merged before the hidden cases passed on the fix"
 never = "merge"
 unless = "check proof of fix passed"
+
+# What a run delivers, and what proves it in that run: `jaynes check` lists each claim with what proves it in a run.
+[[claim]]
+says = "Before the fix, a test failed because of the bug, printing the line the person was shown"
+proved_by = "check tests-fail-for-the-bug of reproduce passed"
+
+[[claim]]
+says = "The tests that showed the bug pass on the fix, and then the whole suite, as the project defined it when the run began too"
+proved_by = "check tests-pass of fix passed"
+
+[[claim]]
+says = "The fix holds on the cases written from the request alone, by an agent whose work the fix's maker never read"
+proved_by = "check proof of fix passed"
+
+[[claim]]
+says = "The fix changed no test: Jaynes measured that it changed none of the files the role counts as tests"
+proved_by = "step fix done"
+
+[[claim]]
+says = "The fix is the one the person meant"
+unchecked = "the tests and the cases come from the request as written; the person is asked at the stops of reproduce and fix, and what they did not read there is not checked"
