@@ -307,7 +307,7 @@ fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
     let s = scratch("risky");
-    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}");
     let out = start(&s, "risky", &agent);
     assert!(out.contains("risk raised to high"), "{out}");
     assert!(out.contains("waiting: delivered; your answers can still correct it"), "{out}");
@@ -331,7 +331,7 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s() {
     let s = scratch("release");
-    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}");
     start(&s, "release", &agent);
     let e = events(&s, "release");
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
@@ -560,7 +560,7 @@ fn post(port: u16, path: &str, body: &str, me: &str) -> Value {
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_answers_as_the_person_only_with_its_key() {
     let s = scratch("page");
-    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}");
     start(&s, "page", &agent);
     let e = events(&s, "page");
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
@@ -728,7 +728,7 @@ fn no_run_goes_on_over_a_record_that_was_changed() {
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn the_page_halts_resumes_and_records_a_correction() {
     let s = scratch("acts");
-    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}");
     start(&s, "acts", &agent);
     let (_page, port) = page_on_any_port(
         jaynes()
@@ -970,7 +970,7 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
 fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     let s = scratch("mcp");
     assert!(engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]).0);
-    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}");
     // the agent program of the run is a command; the MCP start uses Claude by default, so start here and read through MCP
     start(&s, "viamcp", &agent);
     let child = jaynes()

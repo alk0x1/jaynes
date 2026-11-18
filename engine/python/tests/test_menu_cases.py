@@ -23,6 +23,10 @@ CASES = Path(__file__).resolve().parent.parent / "cases"
 RUN_COMMANDS = {"suite-passes", "tests-pass", "tests-fail-for-the-bug", "hidden-cases-pass"}
 # a check with a reader of its own for its cases is held by the test that comes with it
 OWN_READER = set(getattr(menu, "CASE_READERS", {}))
+# a step of the menu that comes with cases and is judged as a check is: a reject is refused, an accept goes on
+STEPS_WITH_CASES = {p.name for p in CASES.iterdir() if p.is_dir()} & set(menu.STEPS) - OWN_READER
+# the steps that run the project's commands, which need the box
+STEPS_RUN_COMMANDS = {"find-suite"}
 
 
 def cases(check: str, file: str) -> list[dict[str, Any]]:
@@ -32,7 +36,8 @@ def cases(check: str, file: str) -> list[dict[str, Any]]:
 
 class EveryCheckOfTheMenu(unittest.TestCase):
     def test_comes_with_a_case_to_reject_and_a_case_to_accept(self):
-        for check in sorted(set(menu.CHECKS) - {"script"}):
+        self.assertEqual(STEPS_WITH_CASES, {"find-suite", "refuse-when-false"})
+        for check in sorted(set(menu.CHECKS) - {"script"} | STEPS_WITH_CASES):
             with self.subTest(check):
                 self.assertGreater(len(cases(check, "reject.json")), 0, f"{check} has no case it must reject")
                 self.assertGreater(len(cases(check, "accept.json")), 0, f"{check} has no case it must accept")
@@ -43,7 +48,7 @@ class EveryCheckOfTheMenu(unittest.TestCase):
         self.assertEqual(folders - set(menu.CHECKS) - set(menu.STEPS), set())
 
     def test_says_what_each_case_is_for(self):
-        for check in sorted(set(menu.CHECKS) - {"script"}):
+        for check in sorted(set(menu.CHECKS) - {"script"} | STEPS_WITH_CASES):
             ids = [c.get("id") for c in cases(check, "reject.json") + cases(check, "accept.json")]
             self.assertEqual(len(ids), len(set(ids)), f"{check}: every case has an id of its own")
             for case in cases(check, "reject.json"):
@@ -53,8 +58,8 @@ class EveryCheckOfTheMenu(unittest.TestCase):
 
     def test_refuses_every_reject_and_accepts_every_accept(self):
         ran = 0
-        for check in sorted(set(menu.CHECKS) - {"script"} - OWN_READER):
-            if check in RUN_COMMANDS and not box.available():
+        for check in sorted(set(menu.CHECKS) - {"script"} - OWN_READER | STEPS_WITH_CASES):
+            if check in RUN_COMMANDS | STEPS_RUN_COMMANDS and not box.available():
                 continue
             for case in cases(check, "reject.json"):
                 with self.subTest(f"{check} rejects {case['id']}"):
@@ -107,6 +112,15 @@ class ACase(unittest.TestCase):
             got = menu.judge_case("script", {"path": "/roles/r/checks/c.sh"}, {"output": {"a": 1}, "given": []})
         self.assertIsInstance(got, Fail)
         self.assertEqual((ran.call_args.args[0]["output"], ran.call_args.args[1]), ({"a": 1}, {"path": "/roles/r/checks/c.sh"}))
+
+    def test_of_a_step_is_judged_by_what_the_step_does(self):
+        # a step's reject is a refusal, said as a failure with the step's words; a step that goes on passes
+        got = menu.judge_case("refuse-when-false", {}, {"with": {"field": "a.ok", "says": "not shown"}, "given": [{"step": "a", "output": {"ok": False}}], "output": {}})
+        self.assertIsInstance(got, Fail)
+        self.assertEqual(got.reasons, ["not shown"])
+        self.assertIsInstance(menu.judge_case("refuse-when-false", {}, {"with": {"field": "a.ok", "says": "x"}, "given": [{"step": "a", "output": {"ok": True}}], "output": {}}), Pass)
+        # a step whose cases another reader runs is not judged here
+        self.assertIsInstance(menu.judge_case("fetch-pages", {}, {"output": {}}), Blocked)
 
     def test_is_asked_for_by_the_engine_as_a_verdict(self):
         said = menu.answer({"kind": "case", "use": "field-required", "with": {"field": "summary"}, "case": {"output": {"summary": " "}}})

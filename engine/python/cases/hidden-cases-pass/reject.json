@@ -26,7 +26,36 @@
  },
  {
   "id": "one-of-two",
-  "hole": "one case failing among cases that hold",
+  "hole": "one case of two does not hold",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": [
+      {
+       "says": "there is a greeting",
+       "run": "test -f greeting.txt"
+      },
+      {
+       "says": "the greeting says hi",
+       "run": "grep -q hi greeting.txt"
+      }
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "url-in-a-comment",
+  "hole": "a case that only mentions the app's address in a comment is still a case to run",
   "with": {
    "cases_step": "cases"
   },
@@ -37,11 +66,7 @@
      "cases": [
       {
        "says": "the greeting says hi",
-       "run": "grep -q hi greeting.txt"
-      },
-      {
-       "says": "the greeting is one line",
-       "run": "test $(wc -l < greeting.txt) -eq 1"
+       "run": "grep -q hi greeting.txt  # not ${JAYNES_URL}"
       }
      ]
     }
@@ -49,7 +74,57 @@
   ],
   "output": {},
   "project": {
-   "greeting.txt": "hi\nhi\n"
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "only-url-cases",
+  "hole": "when every case needs an app and none is served, nothing was checked: zero is not passing",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": [
+      {
+       "says": "the page says hi",
+       "run": "curl -fs $JAYNES_URL | grep -q hi"
+      }
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "killed-by-a-signal",
+  "hole": "a case that dies by a signal did not hold",
+  "with": {
+   "cases_step": "cases"
+  },
+  "given": [
+   {
+    "step": "cases",
+    "output": {
+     "cases": [
+      {
+       "says": "the greeting is read",
+       "run": "kill -9 $$"
+      }
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "greeting.txt": "hello\n"
   },
   "expect": "reject"
  }

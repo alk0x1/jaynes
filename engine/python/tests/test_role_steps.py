@@ -234,7 +234,10 @@ class WhatARoleNeedsOfTheProject(unittest.TestCase):
             got = menu.requires({"use": "suite"}, Path(project))
             self.assertIsInstance(got, menu.Fail)
             self.assertIn("no test runner was found", got.reasons[0])
-            (Path(project) / "Makefile").write_text("test:\n\ttrue\n")
+            # a test target that only succeeds runs no test, as npm's placeholder runs none
+            (Path(project) / "Makefile").write_text("test:\n\t@true\n")
+            self.assertIn("no test runner was found", menu.requires({"use": "suite"}, Path(project)).reasons[0])
+            (Path(project) / "Makefile").write_text("test:\n\tsh tests/a.sh\n")
             with mock.patch.object(menu.box, "missing", return_value=None):
                 self.assertIsInstance(menu.requires({"use": "suite"}, Path(project)), Pass)
             with mock.patch.object(menu.box, "missing", side_effect=box.Unavailable("no box")):

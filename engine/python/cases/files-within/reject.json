@@ -20,7 +20,8 @@
   "hole": "a folder whose name only starts the same",
   "with": {
    "write": [
-    "src/**"
+    "src/**",
+    "!src/generated/**"
    ]
   },
   "output": {
@@ -35,13 +36,187 @@
   "hole": "one file outside among files inside",
   "with": {
    "write": [
-    "src/**"
+    "src/**",
+    "!src/generated/**"
    ]
   },
   "output": {
    "files": [
     "src/app.py",
     "README.md"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "up-and-out",
+  "hole": "a path that goes up out of the folder it starts in",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/../README.md"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "up-into-kept-out",
+  "hole": "a path that goes up and back into a folder kept out",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/x/../generated/api.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "dot-into-kept-out",
+  "hole": "a ./ inside the path that leads into a folder kept out",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/./generated/api.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "double-slash-into-kept-out",
+  "hole": "two slashes, which the file system reads as one, into a folder kept out",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src//generated/api.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "capitals-into-kept-out",
+  "hole": "on a disk that does not tell capitals apart, as a Mac's, Generated is generated",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/Generated/api.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "decomposed-into-kept-out",
+  "hole": "an accent written as a separate mark is the same name on a Mac's disk",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/caf\u00e9/**"
+   ]
+  },
+  "output": {
+   "files": [
+    "src/cafe\u0301/menu.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "absolute-with-any-folder",
+  "hole": "a path outside the project, matched by a glob that starts with **/",
+  "with": {
+   "write": [
+    "**/*.py"
+   ]
+  },
+  "output": {
+   "files": [
+    "/etc/hooks.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "up-with-any-folder",
+  "hole": "a path above the project, matched by a glob that starts with **/",
+  "with": {
+   "write": [
+    "**/*.py"
+   ]
+  },
+  "output": {
+   "files": [
+    "../other-project/setup.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "home-with-any-folder",
+  "hole": "a path in the home folder, matched by a glob that starts with **/",
+  "with": {
+   "write": [
+    "**/*.py"
+   ]
+  },
+  "output": {
+   "files": [
+    "~/.config/startup.py"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "empty-path",
+  "hole": "an empty path names no file the step may write",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    ""
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "null-path",
+  "hole": "nothing where a path should be",
+  "with": {
+   "write": [
+    "src/**",
+    "!src/generated/**"
+   ]
+  },
+  "output": {
+   "files": [
+    null
    ]
   },
   "expect": "reject"

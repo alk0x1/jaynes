@@ -775,7 +775,7 @@ def _node(root: Path) -> Runner | None:
         return None
     scripts = cast("dict[str, object]", package).get("scripts") if isinstance(package, dict) else None
     script = cast("dict[str, object]", scripts).get("test") if isinstance(scripts, dict) else None
-    if not isinstance(script, str) or not script.strip() or NPM_DEFAULT in script:
+    if not isinstance(script, str) or not script.strip() or NPM_DEFAULT in script or noop([script]):
         return None
     manager = next((m for lock, m in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"),
                                       ("bun.lock", "bun")) if (root / lock).is_file()), "npm")
@@ -796,11 +796,97 @@ def _cargo(root: Path) -> Runner | None:
     return Runner(kind="cargo", suite="cargo test --offline", each="cargo test --offline", found="Cargo.toml")
 
 
+MAKEFILES = ("Makefile", "GNUmakefile", "makefile")
+
+
 def _make(root: Path) -> Runner | None:
-    for name in ("Makefile", "GNUmakefile", "makefile"):
+    for name in MAKEFILES:
         path = root / name
-        if path.is_file() and re.search(r"^test\s*:", path.read_text(errors="replace"), re.M):
+        if path.is_file():
+            target = make_target(path.read_text(errors="replace"), "test")
+            if target is None or not target[0] and noop(target[1]):
+                return None
             return Runner(kind="make", suite="make test", each="", found=f"{name} test target")
+    return None
+
+
+# A rule: its targets, then : or :: and what it needs; never an assignment (test := unit, test ::= unit, test != x).
+RULE = re.compile(r"^(?P<targets>[^\s#:=][^:=]*?)\s*::?(?!:*=)(?P<rest>.*)$")
+INCLUDE = re.compile(r"^\s*-?s?include\s", re.M)
+
+
+def make_target(text: str, name: str) -> tuple[list[str], list[str]] | None:
+    """What a Makefile's rules for the target ``name`` need and run: its prerequisites and its recipe's lines, or
+    None when no rule names it. A target named only in a comment, or a variable of that name, is no rule. A Makefile
+    that includes another and gives the target no recipe of its own may run anything: it needs ``include``."""
+    lines = re.sub(r"\\\n", " ", text).split("\n")
+    found, needs, recipe, inside = False, [], [], False
+    for line in lines:
+        if line.startswith("\t"):
+            if inside:
+                recipe.append(line[1:])
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        inside = False
+        m = RULE.match(line)
+        if not m or name not in m.group("targets").split():
+            continue
+        rest = m.group("rest").split("#", 1)[0]
+        prerequisites, _, now = rest.partition(";")
+        if "=" in prerequisites:  # a variable for the target, test: X = 1, is no rule of it
+            continue
+        found, inside = True, True
+        needs += [p for p in prerequisites.split() if p != "|"]
+        if now.strip():
+            recipe.append(now)
+    if not found:
+        return None
+    if not recipe and INCLUDE.search(text):
+        needs.append("include")
+    return needs, recipe
+
+
+# What runs nothing that could fail: a command that only prints or only succeeds.
+NOTHING = re.compile(r"(true|/bin/true|/usr/bin/true|:|exit(\s+0)?|(echo|printf)(\s.*)?)")
+
+
+def noop(commands: list[str]) -> bool:
+    """Whether ``commands``, a recipe's lines or a script's, run nothing that could fail: each is empty, true, :,
+    exit 0, or only prints (echo, printf), joined by ; or &&. Anything the shell or make would expand first, $(...),
+    ${...} or backquotes, may run something, and so does any other command."""
+    for line in commands:
+        line = line.strip().lstrip("@-+").strip()
+        if "$(" in line or "${" in line or "`" in line or "|" in line.replace("||", ""):
+            return False
+        for piece in re.split(r";|&&|\|\|", line):
+            if piece.strip() and not NOTHING.fullmatch(piece.strip()):
+                return False
+    return True
+
+
+def runs_nothing(root: Path, runner: Runner) -> str | None:
+    """What makes the suite ``runner`` found run nothing that could fail, as the project at ``root`` now stands, or
+    None: a test target or test script that only succeeds or prints, or that is gone. Told only of a make test target
+    and a package.json test script, the suites whose text says what they run."""
+    if runner.kind == "make":
+        name = next((n for n in MAKEFILES if (root / n).is_file()), None)
+        target = make_target((root / name).read_text(errors="replace"), "test") if name else None
+        if target is None:
+            return "the project has no make test target any more"
+        needs, recipe = target
+        if not needs and noop(recipe):
+            return f"make test runs only {'; '.join(r.strip().lstrip('@-+') for r in recipe if r.strip()) or 'nothing'}"
+    if runner.kind == "node":
+        try:
+            package = json.loads((root / "package.json").read_text())
+            scripts = package.get("scripts") or {}
+        except (OSError, ValueError, AttributeError):
+            return None
+        script = scripts.get("test") if isinstance(scripts, dict) else None
+        if isinstance(script, str) and noop([script]) and not any(isinstance(scripts.get(k), str) and not noop([scripts[k]])
+                                                                for k in ("pretest", "posttest")):
+            return f"the test script runs only {script.strip() or 'nothing'}"
     return None
 
 

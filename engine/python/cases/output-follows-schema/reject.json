@@ -1,186 +1,1140 @@
 [
  {
   "id": "required-missing",
-  "hole": "a required field that is not there",
+  "hole": "a required field left out",
   "with": {
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": {
-   "files": [
-    "a"
-   ]
+   "summary": "hello becomes hi",
+   "meta": {
+    "id": "a1"
+   }
   },
   "expect": "reject"
  },
  {
-  "id": "required-blank",
+  "id": "required-null",
+  "hole": "a required field set to nothing",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": null,
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "required-spaces",
   "hole": "a required text of spaces alone",
   "with": {
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": {
-   "summary": "  "
+   "summary": "   ",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
   },
   "expect": "reject"
  },
  {
-  "id": "one-over",
-  "hole": "one character over the text's limit",
+  "id": "required-zero-width",
+  "hole": "a required text of a zero-width space alone shows nothing",
   "with": {
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": {
-   "summary": "eleven char"
+   "summary": "\u200b",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "required-byte-order-mark",
+  "hole": "a required text of a byte order mark alone shows nothing",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "\ufeff",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "required-empty-list",
+  "hole": "a required list with nothing in it is blank, as field-required holds",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "required-empty-object",
+  "hole": "a required object with nothing in it is blank",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {}
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "text-one-over",
+  "hole": "a text one past its maxLength",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "xxxxxxxxxxxxxxxxxxxxx",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "list-one-over",
+  "hole": "a list one past its maxItems",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "a",
+    "b",
+    "c",
+    "d"
+   ],
+   "meta": {
+    "id": "a1"
+   }
   },
   "expect": "reject"
  },
  {
   "id": "number-for-text",
-  "hole": "a number where the schema says text",
+  "hole": "a number where text is asked",
   "with": {
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": {
-   "summary": 7
+   "summary": 5,
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
   },
   "expect": "reject"
  },
  {
-  "id": "wrong-item",
-  "hole": "one item of a list of another type",
+  "id": "list-for-text",
+  "hole": "a list where text is asked",
   "with": {
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": {
-   "summary": "ok",
+   "summary": [
+    "hello becomes hi"
+   ],
    "files": [
-    "a",
-    2
-   ]
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   }
   },
   "expect": "reject"
  },
  {
-  "id": "one-item-over",
-  "hole": "one item over the list's limit",
+  "id": "text-for-integer",
+  "hole": "digits in quotes are text, not an integer",
   "with": {
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": {
-   "summary": "ok",
+   "summary": "hello becomes hi",
    "files": [
-    "a",
-    "b",
-    "c"
-   ]
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   },
+   "count": "3"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "fraction-for-integer",
+  "hole": "a fraction is not an integer",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   },
+   "count": 1.5
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "boolean-for-integer",
+  "hole": "true is not the number 1",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   },
+   "count": true
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "text-for-boolean",
+  "hole": "the word true is text, not a boolean",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   },
+   "ok": "true"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "number-for-boolean",
+  "hole": "1 is a number, not a boolean",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   },
+   "ok": 1
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "null-for-integer",
+  "hole": "nothing where an integer is asked: optional means it may be left out, not set to null",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "a1"
+   },
+   "count": null
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "item-number",
+  "hole": "an item of the wrong type in a list",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt",
+    7
+   ],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "item-null",
+  "hole": "an item set to nothing in a list of texts",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    null
+   ],
+   "meta": {
+    "id": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "nested-required-missing",
+  "hole": "a required field of an object inside the output left out",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "name": "a1"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "nested-required-zero-width",
+  "hole": "a required field of an inner object that shows nothing",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": {
+   "summary": "hello becomes hi",
+   "files": [
+    "greeting.txt"
+   ],
+   "meta": {
+    "id": "\u200b"
+   }
   },
   "expect": "reject"
  },
@@ -191,26 +1145,99 @@
    "schema": {
     "type": "object",
     "required": [
-     "summary"
+     "summary",
+     "files",
+     "meta"
     ],
     "properties": {
      "summary": {
       "type": "string",
-      "maxLength": 10
+      "maxLength": 20
      },
      "files": {
       "type": "array",
-      "maxItems": 2,
       "items": {
        "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
       }
      }
     }
    }
   },
   "output": [
-   "ok"
+   {
+    "summary": "hello becomes hi",
+    "files": [
+     "greeting.txt"
+    ],
+    "meta": {
+     "id": "a1"
+    }
+   }
   ],
+  "expect": "reject"
+ },
+ {
+  "id": "output-null",
+  "hole": "no output at all",
+  "with": {
+   "schema": {
+    "type": "object",
+    "required": [
+     "summary",
+     "files",
+     "meta"
+    ],
+    "properties": {
+     "summary": {
+      "type": "string",
+      "maxLength": 20
+     },
+     "files": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 3
+     },
+     "count": {
+      "type": "integer"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "meta": {
+      "type": "object",
+      "required": [
+       "id"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  "output": null,
   "expect": "reject"
  }
 ]

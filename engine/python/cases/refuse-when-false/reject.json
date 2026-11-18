@@ -1,0 +1,39 @@
+[
+ {
+  "id": "false",
+  "hole": "an earlier step that says false stops the run for the person",
+  "with": {
+   "field": "reproduce.reproduced",
+   "says": "the bug could not be shown: {{reproduce.why}}"
+  },
+  "given": [
+   {
+    "step": "reproduce",
+    "output": {
+     "reproduced": false
+    }
+   }
+  ],
+  "output": {},
+  "expect": "reject"
+ },
+ {
+  "id": "false-with-the-reason",
+  "hole": "the sentence filled with what the earlier step said, and still a refusal",
+  "with": {
+   "field": "reproduce.reproduced",
+   "says": "the bug could not be shown: {{reproduce.why}}"
+  },
+  "given": [
+   {
+    "step": "reproduce",
+    "output": {
+     "reproduced": false,
+     "why": "the greeting is never read"
+    }
+   }
+  ],
+  "output": {},
+  "expect": "reject"
+ }
+]

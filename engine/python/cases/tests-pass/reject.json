@@ -10,10 +10,10 @@
    {
     "step": "runner",
     "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
     }
    },
    {
@@ -27,8 +27,141 @@
   ],
   "output": {},
   "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/run.sh": "sh tests/says_hi.sh\n",
    "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "named-pass-suite-fails",
+  "hole": "the named tests pass and the rest of the suite fails",
+  "with": {
+   "tests_from": "reproduce",
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   },
+   {
+    "step": "reproduce",
+    "output": {
+     "tests": [
+      "tests/says_hi.sh"
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh && sh tests/other.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "tests/other.sh": "exit 1\n",
+   "greeting.txt": "hi\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "named-test-gone",
+  "hole": "a test that showed the bug and is gone after the fix proves nothing",
+  "with": {
+   "tests_from": "reproduce",
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   },
+   {
+    "step": "reproduce",
+    "output": {
+     "tests": [
+      "tests/says_hi.sh"
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "tests/run.sh": "true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "none-named",
+  "hole": "no test named: zero tests passing is not the bug's tests passing",
+  "with": {
+   "tests_from": "reproduce",
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   },
+   {
+    "step": "reproduce",
+    "output": {
+     "tests": []
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "tests/run.sh": "true\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "test-made-to-pass",
+  "hole": "the test that showed the bug, changed by the fix to pass whatever the code does",
+  "with": {
+   "tests_from": "reproduce",
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   },
+   {
+    "step": "reproduce",
+    "output": {
+     "tests": [
+      "tests/says_hi.sh"
+     ]
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "exit 0\n",
    "greeting.txt": "hello\n"
   },
   "expect": "reject"

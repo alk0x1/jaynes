@@ -11,6 +11,94 @@
   "expect": "reject"
  },
  {
+  "id": "only-line-breaks",
+  "hole": "line breaks and tabs alone are not filled",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\n\t \r\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "no-break-spaces",
+  "hole": "no-break spaces alone are not filled",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\u00a0\u2007\u202f"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "zero-width-space",
+  "hole": "a zero-width space shows nothing, so it is not filled",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\u200b"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "byte-order-mark",
+  "hole": "a byte order mark shows nothing",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\ufeff"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "word-joiner",
+  "hole": "joiners and invisible separators show nothing",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\u2060\u200c\u200d"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "blank-braille",
+  "hole": "the blank braille cell looks like a space and is no word",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\u2800\u2800"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "hangul-filler",
+  "hole": "a filler character renders blank",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": "\u3164"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "null",
+  "hole": "a field set to nothing is not filled",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary": null
+  },
+  "expect": "reject"
+ },
+ {
   "id": "another-field",
   "hole": "another field being there does not fill this one",
   "with": {
@@ -18,6 +106,28 @@
   },
   "output": {
    "summery": "hello becomes hi"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "another-case",
+  "hole": "a field named with other capitals is another field",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "Summary": "hello becomes hi"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "trailing-space-in-name",
+  "hole": "a name with a space after it is another field",
+  "with": {
+   "field": "summary"
+  },
+  "output": {
+   "summary ": "hello becomes hi"
   },
   "expect": "reject"
  },
@@ -33,14 +143,52 @@
   "expect": "reject"
  },
  {
-  "id": "null",
-  "hole": "a field set to nothing is not filled",
+  "id": "list-of-empty-text",
+  "hole": "a list whose every item is empty says nothing",
+  "with": {
+   "field": "files"
+  },
+  "output": {
+   "files": [
+    ""
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "list-of-spaces",
+  "hole": "a list whose every item is blank says nothing",
+  "with": {
+   "field": "files"
+  },
+  "output": {
+   "files": [
+    "  ",
+    "\u200b"
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "empty-object",
+  "hole": "an object with nothing in it is not filled",
+  "with": {
+   "field": "meta"
+  },
+  "output": {
+   "meta": {}
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "output-not-an-object",
+  "hole": "an output that is not an object has no field",
   "with": {
    "field": "summary"
   },
-  "output": {
-   "summary": null
-  },
+  "output": [
+   "hello becomes hi"
+  ],
   "expect": "reject"
  }
 ]

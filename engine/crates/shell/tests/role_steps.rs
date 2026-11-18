@@ -689,7 +689,7 @@ fn jaynes_check_runs_a_check_of_the_role_s_own_on_its_cases_in_the_box() {
     let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
     assert!(ok, "{out}");
     assert!(out.contains("✔ check files-exist of make: rejected 2 of 2, accepted 2 of 2"), "{out}");
-    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts"), "{out}");
+    assert!(out.contains("✔ check suite-passes of make: comes with Jaynes, which holds it to 5 it rejects and 2 it accepts"), "{out}");
     // the same from the role's own folder, as an author runs it: jaynes check .
     let here = Command::new(BIN).args(["check", "."]).current_dir(&dir).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "").output().expect("check");
     let said = format!("{}{}", String::from_utf8_lossy(&here.stdout), String::from_utf8_lossy(&here.stderr));
@@ -755,7 +755,7 @@ fn a_role_that_needs_tests_says_so_when_the_project_has_none() {
     std::fs::write(role.join("role.toml"), format!("{}\n[[requires]]\nsays = \"The project has tests Jaynes can run\"\nuse = \"suite\"\n", std::fs::read_to_string(role.join("role.toml")).expect("read"))).expect("write");
     let (ok, out) = engine(&s, &["start", "--run", "nosuite", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"), "--request", "go", "--agent", NO_AGENT]);
     assert!(!ok && out.contains("- The project has tests Jaynes can run: no test runner was found in the project"), "{out}");
-    std::fs::write(s.project.join("Makefile"), "test:\n\ttrue\n").expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tgrep -q project README.md\n").expect("write");
     assert!(start(&s, "suite", &role, "go").contains("finished: delivered"));
 }
 

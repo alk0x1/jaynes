@@ -24,8 +24,8 @@
   "expect": "reject"
  },
  {
-  "id": "says-it-passed",
-  "hole": "an output that says the suite passed does not make it pass",
+  "id": "one-of-two-fails",
+  "hole": "a suite whose second test fails while the first passes",
   "with": {
    "suite_step": "runner"
   },
@@ -40,12 +40,82 @@
     }
    }
   ],
-  "output": {
-   "summary": "all tests pass"
-  },
+  "output": {},
   "project": {
-   "Makefile": "test:\n\tgrep -q hi greeting.txt\n",
+   "Makefile": "test:\n\tgrep -q h greeting.txt\n\tgrep -q hi greeting.txt\n",
    "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "errors-ignored",
+  "hole": "a suite whose failing line is told to be ignored (make's -) still fails on the project",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\t-grep -q hi greeting.txt\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "emptied-suite",
+  "hole": "a suite the step emptied to pass: its test target now runs nothing",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\t@true\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "killed-by-a-signal",
+  "hole": "a suite that dies by a signal did not pass",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tsh -c 'kill -9 $$$$'\n"
   },
   "expect": "reject"
  }

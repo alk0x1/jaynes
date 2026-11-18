@@ -21,6 +21,9 @@ says), `hole` or `keeps`, and the check's input:
 
 A check whose input is easier to write another way reads its cases with a reader of its own, kept beside the check.
 
+A step of the menu that judges what it is given comes with cases too, in a folder of the same kind (find-suite,
+refuse-when-false): a reject is an input it must refuse, an accept one it must go on with.
+
 A reject must fail and an accept must pass. A check that could not judge a case (it broke, there was no box to run
 it in) has not rejected it: the case did not run, and that is said, never counted.
 

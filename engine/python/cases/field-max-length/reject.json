@@ -1,28 +1,102 @@
 [
  {
   "id": "one-over",
-  "hole": "one character over the limit",
+  "hole": "one character past the limit",
   "with": {
    "field": "summary",
-   "max": 5
+   "max": 10
   },
   "output": {
-   "summary": "123456"
+   "summary": "aaaaaaaaaaa"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "accents-one-over",
+  "hole": "letters with accents count one each, and one past is past",
+  "with": {
+   "field": "summary",
+   "max": 10
+  },
+  "output": {
+   "summary": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "emoji-one-over",
+  "hole": "emoji count one each, and one past is past",
+  "with": {
+   "field": "summary",
+   "max": 10
+  },
+  "output": {
+   "summary": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "invisible-padding",
+  "hole": "invisible characters count as characters",
+  "with": {
+   "field": "summary",
+   "max": 10
+  },
+  "output": {
+   "summary": "hi\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "line-breaks",
+  "hole": "line breaks count as characters",
+  "with": {
+   "field": "summary",
+   "max": 10
+  },
+  "output": {
+   "summary": "a\nb\nc\nd\ne\nf"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "number",
+  "hole": "a number written as more digits than the limit",
+  "with": {
+   "field": "summary",
+   "max": 10
+  },
+  "output": {
+   "summary": 12345678901
   },
   "expect": "reject"
  },
  {
   "id": "long-list",
-  "hole": "a list is measured as it is written, so a long one does not slip by as no text",
+  "hole": "a list whose text is past the limit",
   "with": {
-   "field": "files",
-   "max": 5
+   "field": "summary",
+   "max": 10
   },
   "output": {
-   "files": [
-    "a.py",
-    "b.py"
+   "summary": [
+    "aaaa",
+    "bbbb"
    ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "object",
+  "hole": "an object whose text is past the limit",
+  "with": {
+   "field": "summary",
+   "max": 10
+  },
+  "output": {
+   "summary": {
+    "a": "bbbbbbbb"
+   }
   },
   "expect": "reject"
  }

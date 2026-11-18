@@ -1,39 +1,127 @@
 [
  {
   "id": "one-word",
-  "hole": "a single word is a matter put before the person",
+  "hole": "one word is a matter put before the person",
   "with": {
-   "field": "in_the_way",
-   "says": "A test stands in the way"
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
   },
   "output": {
-   "in_the_way": "tests/old.py"
+   "wrong_test": "test_greet"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "word-after-spaces",
+  "hole": "words after blank lines are still words",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": "\n\n   test_greet expects hello"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "invisible-then-word",
+  "hole": "a word behind invisible characters is still there",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": "\u200b\u200btest_greet"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "only-invisible",
+  "hole": "invisible characters are not nothing: something was written there",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": "\u200b"
   },
   "expect": "reject"
  },
  {
   "id": "list-of-one",
-  "hole": "a list with one entry is filled",
+  "hole": "a list with one item is filled",
   "with": {
-   "field": "in_the_way",
-   "says": "A test stands in the way"
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
   },
   "output": {
-   "in_the_way": [
-    "tests/old.py"
+   "wrong_test": [
+    "test_greet"
    ]
   },
   "expect": "reject"
  },
  {
-  "id": "false",
-  "hole": "false is something said, not an empty field",
+  "id": "list-of-empty-text",
+  "hole": "a list holding an empty item is not an empty list",
   "with": {
-   "field": "in_the_way",
-   "says": "A test stands in the way"
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
   },
   "output": {
-   "in_the_way": false
+   "wrong_test": [
+    ""
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "object",
+  "hole": "an object with a field is filled",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": {
+    "name": "test_greet"
+   }
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "false",
+  "hole": "false is a value, not nothing",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": false
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "zero",
+  "hole": "zero is a value, not nothing",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": 0
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "null-as-text",
+  "hole": "the word null is text",
+  "with": {
+   "field": "wrong_test",
+   "says": "a test you may not change stands in the way"
+  },
+  "output": {
+   "wrong_test": "null"
   },
   "expect": "reject"
  }

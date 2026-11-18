@@ -12,10 +12,10 @@
    {
     "step": "runner",
     "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
     }
    }
   ],
@@ -27,15 +27,15 @@
    "failure": "expected hi, got hello"
   },
   "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
-   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "echo 'expected hi, got hello'; grep -q hi greeting.txt\n",
    "greeting.txt": "hi\n"
   },
   "expect": "reject"
  },
  {
   "id": "quote-never-printed",
-  "hole": "a failure quoted that the tests never print",
+  "hole": "a failure quoted that the test never prints",
   "with": {
    "suite_step": "runner",
    "write": [
@@ -46,10 +46,10 @@
    {
     "step": "runner",
     "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
     }
    }
   ],
@@ -58,10 +58,10 @@
    "tests": [
     "tests/says_hi.sh"
    ],
-   "failure": "expected hi, got hallo"
+   "failure": "expected a greeting"
   },
   "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/run.sh": "sh tests/says_hi.sh\n",
    "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
    "greeting.txt": "hello\n"
   },
@@ -69,7 +69,7 @@
  },
  {
   "id": "quote-says-nothing",
-  "hole": "a quoted line that only says something failed, not why",
+  "hole": "a quote of status words alone names no reason",
   "with": {
    "suite_step": "runner",
    "write": [
@@ -80,10 +80,10 @@
    {
     "step": "runner",
     "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
     }
    }
   ],
@@ -92,52 +92,154 @@
    "tests": [
     "tests/says_hi.sh"
    ],
-   "failure": "Error"
+   "failure": "FAILED"
   },
   "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
-   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "echo FAILED; exit 1\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "make-s-own-line",
+  "hole": "make's own line for a failed target says no reason",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "make: *** [test] Error 1"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "echo 'make: *** [test] Error 1'; exit 1\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "npm-s-own-line",
+  "hole": "npm's own line for failed tests says no reason",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "npm ERR! Test failed.  See above for more details."
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "echo 'npm ERR! Test failed.  See above for more details.'; exit 1\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "cargo-s-own-line",
+  "hole": "cargo's own line for a failed target says no reason",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "error: test failed, to rerun pass `--lib`"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "echo 'error: test failed, to rerun pass `--lib`'; exit 1\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "shell-s-own-line",
+  "hole": "the shell's line for a missing program says nothing of the bug",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "command not found"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "no_such_program_xyz\n",
    "greeting.txt": "hello\n"
   },
   "expect": "reject"
  },
  {
   "id": "test-where-it-may-not-write",
-  "hole": "a test in a file the step may not write",
-  "with": {
-   "suite_step": "runner",
-   "write": [
-    "spec/**"
-   ]
-  },
-  "given": [
-   {
-    "step": "runner",
-    "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
-    }
-   }
-  ],
-  "output": {
-   "reproduced": true,
-   "tests": [
-    "tests/says_hi.sh"
-   ],
-   "failure": "expected hi, got hello"
-  },
-  "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
-   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
-   "greeting.txt": "hello\n"
-  },
-  "expect": "reject"
- },
- {
-  "id": "test-that-is-not-there",
-  "hole": "a test named that the project does not have",
+  "hole": "a test in a path the step may not write",
   "with": {
    "suite_step": "runner",
    "write": [
@@ -148,22 +250,92 @@
    {
     "step": "runner",
     "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
     }
    }
   ],
   "output": {
    "reproduced": true,
    "tests": [
-    "tests/says_hello.sh"
+    "src/says_hi.sh"
    ],
    "failure": "expected hi, got hello"
   },
   "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n",
+   "src/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "test-up-and-out",
+  "hole": "a test path that goes up out of tests/ into code the step may not write",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/../src/says_hi.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n",
+   "src/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "test-that-is-not-there",
+  "hole": "a test named that does not exist",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/missing.sh"
+   ],
+   "failure": "tests/missing.sh: No such file or directory"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
    "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
    "greeting.txt": "hello\n"
   },
@@ -171,7 +343,7 @@
  },
  {
   "id": "no-failure-quoted",
-  "hole": "a bug said to be reproduced with no failure quoted",
+  "hole": "a reproduced bug with no failure quoted",
   "with": {
    "suite_step": "runner",
    "write": [
@@ -182,10 +354,10 @@
    {
     "step": "runner",
     "output": {
-     "kind": "make",
-     "suite": "make test",
-     "each": "",
-     "found": "Makefile test target"
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
     }
    }
   ],
@@ -197,7 +369,71 @@
    "failure": ""
   },
   "project": {
-   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "no-tests-named",
+  "hole": "a reproduced bug with no test named",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [],
+   "failure": "expected hi, got hello"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "reproduced-as-text",
+  "hole": "reproduced written as the text false is not the boolean the check lets pass",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": "false",
+   "tests": [],
+   "failure": ""
+  },
+  "project": {
+   "tests/run.sh": "sh tests/says_hi.sh\n",
    "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
    "greeting.txt": "hello\n"
   },

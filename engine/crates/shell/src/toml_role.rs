@@ -3241,8 +3241,8 @@ files = { type = "array", items = "string" }
         let (lines, held) = r.cases_told(&|_, _| panic!("the menu's cases are run by the engine's own tests"));
         assert!(held);
         assert_eq!(lines, [
-            "✔ check suite-passes of change: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts",
-            "✔ check field-max-length of change: comes with Jaynes, which holds it to 2 it rejects and 2 it accepts",
+            "✔ check suite-passes of change: comes with Jaynes, which holds it to 5 it rejects and 2 it accepts",
+            "✔ check field-max-length of change: comes with Jaynes, which holds it to 8 it rejects and 2 it accepts",
         ]);
     }
 

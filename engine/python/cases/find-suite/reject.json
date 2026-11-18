@@ -1,0 +1,74 @@
+[
+ {
+  "id": "nothing-to-run",
+  "hole": "a project with no test runner, when the role requires one",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "README.md": "a project\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "npm-s-placeholder",
+  "hole": "npm's placeholder test script runs no test",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "package.json": "{\"scripts\": {\"test\": \"echo \\\"Error: no test specified\\\" && exit 1\"}}"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "blank-test-script",
+  "hole": "a test script of spaces alone runs nothing",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "package.json": "{\"scripts\": {\"test\": \"   \"}}"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "package-json-unreadable",
+  "hole": "a package.json that is not JSON names no test script",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "package.json": "{ scripts: test }"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "make-variable-not-target",
+  "hole": "a Makefile variable named test (test := unit) is not a test target: make test has no rule to run",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "Makefile": "test := unit\nall:\n\t@echo built\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "make-target-in-a-comment",
+  "hole": "a test target written in a comment is no target",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "Makefile": "# test: run the tests\nall:\n\t@echo built\n"
+  },
+  "expect": "reject"
+ }
+]

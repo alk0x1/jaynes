@@ -185,7 +185,7 @@ fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
 fn the_run_s_screen_shows_the_summary_to_copy_once_the_run_is_finished() {
     let s = scratch("page");
     // a change to the Makefile runs later outside any box: the risk goes up and the person is asked
-    start(&s, "asked", &format!("printf 'hi\\n' > greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}"));
+    start(&s, "asked", &format!("printf 'hi\\n' > greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}"));
     let (ok, early) = engine(&s, &["summary", "asked"]);
     assert!(!ok && early.contains("run asked is not finished: a summary tells what a finished run did"), "{early}");
     let (_page, port) = page_on_any_port(

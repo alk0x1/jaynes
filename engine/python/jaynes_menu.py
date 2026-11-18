@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
+import shutil
 import sys
 import tempfile
 import traceback
+import unicodedata
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Callable
@@ -90,7 +93,8 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
 # --- steps -----------------------------------------------------------------------------------------------------
 
 NO_RUNNER = ("no test runner was found in the project: Jaynes looks for pytest, a test script in package.json, "
-             "go.mod, Cargo.toml and a Makefile test target")
+             "go.mod, Cargo.toml and a Makefile test target, and a test script or target that only succeeds or "
+             "prints (true, echo) runs no test")
 
 
 def find_suite(call: Call, params: Params) -> Any:
@@ -188,31 +192,89 @@ def _suite(call: Call, params: Params) -> dict[str, Any]:
     return _given(call).get(str(params.get("suite_step") or "")) or {}
 
 
+# make's line for a failure it went on after, as a - before a recipe's line, -i or .IGNORE tell it to
+IGNORED = re.compile(r"^g?make(\[\d+\])?: \[.*\] Error \d+ \(ignored\)$", re.M)
+
+
+def _emptied(call: Call, runner: dict[str, Any]) -> Any:
+    """A failure when the suite an earlier step found now runs nothing that could fail: emptied, it passes whatever
+    the project does. A project whose test target never ran anything has no suite to begin with (find-suite)."""
+    if not call.get("project"):
+        return None
+    why = box.runs_nothing(Path(call["project"]), box.Runner.from_dict(runner))
+    return Fail(f"the suite runs nothing now: {why}, so it passes whatever the project does; the suite is to run "
+                "the tests it ran when the run began") if why else None
+
+
+def _ran_clean(command: str, ran: Any, what: str) -> Any:
+    """A failure when ``ran`` failed, or passed only by going on after a failure that make was told to ignore."""
+    if ran.code != 0:
+        return Fail(f"{what}: {command} exited with {ran.code}. The end of what it printed:\n{ran.output}")
+    ignored = IGNORED.search(ran.printed)
+    if ignored:
+        return Fail(f"{what}: {command} passed only because make went on after a failure it was told to ignore "
+                    f"({ignored.group(0)}); a suite passes when nothing in it fails. The end of what it printed:\n"
+                    f"{ran.output}")
+    return None
+
+
 def suite_passes(call: Call, params: Params) -> Any:
-    command = str(_suite(call, params).get("suite") or "")
+    runner = _suite(call, params)
+    command = str(runner.get("suite") or "")
     if not command:
         return Pass()
+    emptied = _emptied(call, runner)
+    if emptied:
+        return emptied
     ran = _box(call, command)
     if isinstance(ran, Blocked):
         return ran
-    if ran.code != 0:
-        return Fail(f"the suite fails: {command} exited with {ran.code}. The end of what it printed:\n{ran.output}")
-    return Pass()
+    return _ran_clean(command, ran, "the suite fails") or Pass()
 
 
 def _allowed(path: str, globs: list[str]) -> bool:
-    """Whether ``path`` matches a glob of ``globs`` and none of its ``!`` globs."""
-    def match(g: str) -> bool:
-        return fnmatchcase(path, g) or (g.startswith("**/") and fnmatchcase(path, g[3:]))
-    return any(match(g) for g in globs if not g.startswith("!")) and not any(match(g[1:]) for g in globs if g.startswith("!"))
+    """Whether ``path``, a path inside the project as :func:`in_project` gives it, matches a glob of ``globs`` and
+    none of its ``!`` globs. A folder kept out holds every spelling a disk may take for its name: its ``!`` globs
+    match whatever the capitals, as a Mac's disk compares names, and a glob that lets in matches only as written."""
+    def match(p: str, g: str) -> bool:
+        return fnmatchcase(p, g) or (g.startswith("**/") and fnmatchcase(p, g[3:]))
+    path = unicodedata.normalize("NFC", path)
+    globs = [unicodedata.normalize("NFC", g) for g in globs]
+    return any(match(path, g) for g in globs if not g.startswith("!")) and \
+        not any(match(path.casefold(), g[1:].casefold()) for g in globs if g.startswith("!"))
+
+
+def in_project(path: str) -> str | None:
+    """``path`` as the project's file system reads it, or None when it names no file inside the project: an empty
+    path, an absolute one, one in a home folder (``~``), or one that goes above the project once its ``..`` are
+    followed. Its ``./`` and ``//`` are dropped, its ``..`` followed, and its accents composed, as a Mac's disk
+    stores names."""
+    if not path or path.startswith(("/", "~")):
+        return None
+    named = posixpath.normpath(unicodedata.normalize("NFC", path))
+    return None if named == "." or named == ".." or named.startswith("../") else named
+
+
+def _not_within(path: str, globs: list[str], may: str) -> str | None:
+    """Why ``path`` is not a file of the project the step may ``may`` (change, write), as the person reads it, or
+    None."""
+    named = in_project(path)
+    if named is None:
+        return f"{path or 'an empty path'} is not a file inside the project, and this step may {may} only files in it"
+    if not _allowed(named, globs):
+        return f"{path} is not a file this step may {may}" if named == path else \
+            f"{path} is {named}, which is not a file this step may {may}"
+    return None
 
 
 def files_within(call: Call, params: Params) -> Any:
+    """The files the output names in ``field`` are files of the project the step may change: the list the person
+    reads tells the truth. What the step really changed is measured apart, from the copy, by the engine."""
     field = str(params.get("field") or "files")
     files = [str(f) for f in (call.get("output") or {}).get(field) or []] if isinstance(call.get("output"), dict) else []
-    outside = [f for f in files if not _allowed(f, list(params.get("write") or []))]
+    outside = [why for why in (_not_within(f, list(params.get("write") or []), "change") for f in files) if why]
     if outside:
-        return Fail(*(f"{f} is not a file this step may change" for f in outside))
+        return Fail(*outside)
     return Pass()
 
 
@@ -225,11 +287,32 @@ STATUS = {"fail", "failed", "failure", "failures", "error", "errors", "not", "ok
           "tests", "setup", "build"}
 
 
+# Lines a runner or the shell prints of any failure, whatever made it, each with whose line it is: quoted, they name
+# no reason. Matched against the whole quote.
+RUNNER_LINES = (
+    (r"g?make(\[\d+\])?: \*\*\* .*", "make's own line for a target that failed"),
+    (r"g?make(\[\d+\])?: \[.*\] Error \d+ \(ignored\)", "make's own line for a failure it was told to ignore"),
+    (r"npm (ERR!|error)(\s.*)?", "npm's own line"),
+    (r"error Command failed with exit code \d+\.?", "yarn's own line"),
+    (r".*\bELIFECYCLE\b.*|.*\bERR_PNPM_\w+.*", "pnpm's own line"),
+    (r"error: (test failed, to rerun pass .*|\d+ targets? failed.*)", "cargo's own line"),
+    (r"test result: FAILED\..*", "the test runner's count of what failed"),
+    (r"--- FAIL: \S+ \([\d.]+s\)|FAIL\s+\S+\s+[\d.]+s|FAIL: \S+ \([\w.]+\)|FAILED \S+", "the test runner's line naming what failed"),
+    (r"=+ .*\b(failed|errors?)\b.* in [\d.]+s.*=+", "the test runner's count of what failed"),
+    (r"((\S+: )*(line \d+: )?\S+: )?command not found|\S+: \d+: \S+: not found",
+     "the shell's line for a program it could not find, so the tests failed before they could show anything"),
+)
+
+
 def _quoted(failure: str, ran: Any, why: str) -> Any:
     quote = failure.strip()
     if all(w in STATUS for w in re.findall(r"[a-z]+", quote.lower())):
         return Fail(f"{quote} names no reason; quote the line that says why the tests fail {why}, such as the "
                     f"assertion message. The end of what it printed (exit {ran.code}):\n{ran.output}")
+    whose = next((says for line, says in RUNNER_LINES if re.fullmatch(line, quote)), None)
+    if whose:
+        return Fail(f"{quote} is {whose}, and names no reason; quote the line that says why the tests fail {why}, "
+                    f"such as the assertion message. The end of what it printed (exit {ran.code}):\n{ran.output}")
     if quote not in ran.printed:
         return Fail(f"{quote} is not in what the command printed; quote a line it prints {why}. The end of what it "
                     f"printed (exit {ran.code}):\n{ran.output}")
@@ -246,12 +329,14 @@ def tests_fail_for_the_bug(call: Call, params: Params) -> Any:
     reasons = [f"{name} is empty; a reproduced bug needs it" for name in ("tests", "failure") if not out.get(name)]
     if reasons:
         return Fail(*reasons)
-    tests = [str(t) for t in out.get("tests") or []]
+    named = [str(t) for t in out.get("tests") or []]
     project = Path(call.get("project") or ".")
     write = list(params.get("write") or [])
-    reasons = [f"{t} is not a file this step may write; tests go in paths such as tests/ or *_test.*" for t in tests
-               if not _allowed(t, write)]
-    reasons += [f"{t} does not exist in the project" for t in tests if not (project / t).is_file()]
+    reasons = [f"{why}; tests go in paths such as tests/ or *_test.*" for why in (_not_within(t, write, "write") for t in named) if why]
+    if reasons:
+        return Fail(*reasons)
+    tests = [in_project(t) or t for t in named]
+    reasons = [f"{t} does not exist in the project" for t in tests if not (project / t).is_file()]
     if reasons:
         return Fail(*reasons)
     runner = _suite(call, params)
@@ -266,18 +351,48 @@ def tests_fail_for_the_bug(call: Call, params: Params) -> Any:
     return _quoted(str(out.get("failure") or ""), ran, "because of the bug") or Pass()
 
 
+def _alone(call: Call, tests: list[str], command: str) -> bool:
+    """Whether ``command``, which runs ``tests`` alone, passes in a folder that holds those tests and none of the
+    project's other files. A test that passes there passes whatever the code does. One that cannot be run so, or
+    that the box refused, did not pass."""
+    project = Path(call["project"])
+    with tempfile.TemporaryDirectory(prefix="jaynes-alone-") as folder:
+        for t in tests:
+            if (project / t).is_file():
+                (Path(folder) / t).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(project / t, Path(folder) / t)
+        ran = _box({**call, "project": folder}, command)
+    return not isinstance(ran, Blocked) and ran.code == 0
+
+
 def tests_pass(call: Call, params: Params) -> Any:
-    """The tests an earlier step named in its ``tests`` pass, and then the whole suite."""
+    """The tests an earlier step named in its ``tests`` pass, and then the whole suite. No test named is no test
+    passing. A test that passes beside none of the project's other files, run alone where the runner can pick it,
+    passes whatever the code does, and shows no fix."""
     runner = _suite(call, params)
     if not runner.get("suite"):
         return Blocked("the check was not given how the project's tests run")
-    tests = [str(t) for t in (_given(call).get(str(params["tests_from"])) or {}).get("tests") or []]
-    for what, command in (("the tests still fail", _for_files(runner, tests)), ("the suite fails", runner["suite"])):
+    step = str(params["tests_from"])
+    tests = [in_project(str(t)) or str(t) for t in (_given(call).get(step) or {}).get("tests") or []]
+    if not tests:
+        return Fail(f"{step} named no test, so there is no test of the bug to pass; the whole suite passing does not "
+                    "show the bug is fixed")
+    emptied = _emptied(call, runner)
+    if emptied:
+        return emptied
+    picked = _for_files(runner, tests)
+    for what, command in (("the tests still fail", picked), ("the suite fails", runner["suite"])):
         ran = _box(call, command)
         if isinstance(ran, Blocked):
             return ran
-        if ran.code != 0:
-            return Fail(f"{what}: {command} exited with {ran.code}. The end of what it printed:\n{ran.output}")
+        failed = _ran_clean(command, ran, what)
+        if failed:
+            return failed
+        if command == picked and picked != runner["suite"] and _alone(call, tests, picked):
+            return Fail(f"{', '.join(tests)} {'passes' if len(tests) == 1 else 'pass'} with none of the project's "
+                        f"other files beside {'it' if len(tests) == 1 else 'them'} ({picked}), so "
+                        f"{'it passes' if len(tests) == 1 else 'they pass'} whatever the code does and cannot show "
+                        "the bug is fixed; the tests that showed the bug are to run the code they test")
     return Pass()
 
 
@@ -293,7 +408,7 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
     detail: list[str] = []
     for case in cases:
         says, command = str(case.get("says", "")), str(case.get("run", ""))
-        if re.search(rf"\${{?{URL}\b", command):
+        if expands(command, URL):
             detail.append(f"Not run, the run serves no app: {says}")
             continue
         ran = _box(call, command, timeout=CASE_SECONDS)
@@ -304,7 +419,70 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
             failed.append(f"A check you cannot see found that this does not hold: {says}")
     if failed:
         return Fail(*failed, detail="\n".join(detail))
+    if cases and not any(d.startswith(("Passes", "Fails")) for d in detail):
+        # cases written and none run: nothing was checked, and nothing checked is not passing
+        return Fail(f"A check you cannot see could run none of its cases: each needs the app at {URL}, and this run "
+                    "serves no app", detail="\n".join(detail))
     return Pass()
+
+
+def expands(command: str, name: str) -> bool:
+    """Whether the shell expands the variable ``name`` in ``command``: written $name or ${name...}, outside single
+    quotes, a backslash's reach and comments."""
+    quote, start, i = "", True, 0
+    while i < len(command):
+        c = command[i]
+        if quote == "'":
+            quote = "" if c == "'" else quote
+        elif c == "\\":
+            i += 1
+        elif c in "'\"" and (not quote or quote == c):
+            quote = "" if quote else c
+        elif c == "#" and start and not quote:
+            i, c = command.find("\n", i), "\n"
+            if i < 0:
+                return False
+        elif c == "$" and re.match(rf"\$(\{{[#!]?)?{name}(?![A-Za-z0-9_])", command[i:]):
+            return True
+        start = not quote and c in " \t\n;|&()<>"
+        i += 1
+    return False
+
+
+# --- what is blank ---------------------------------------------------------------------------------------------
+
+# The characters Unicode says a reader does not show (Default_Ignorable_Code_Point), and the blank braille cell,
+# which looks like a space: with white space and the controls, what shows nothing where a person reads it.
+UNSEEN = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+          (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F),
+          (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+
+
+def _unseen(c: str) -> bool:
+    n = ord(c)
+    return c.isspace() or unicodedata.category(c) == "Cc" or any(a <= n <= b for a, b in UNSEEN)
+
+
+def blank(value: Any) -> bool:
+    """Whether ``value`` shows nothing to whoever reads it: nothing, text of characters that show nothing, or a list
+    or an object whose every item is blank. False and zero are values. A field a role requires is filled only when
+    it is not blank, for field-required and output-follows-schema alike."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return all(_unseen(c) for c in value)
+    if isinstance(value, list):
+        return all(blank(v) for v in value)
+    if isinstance(value, dict):
+        return all(blank(v) for v in value.values())
+    return False
+
+
+def nothing_written(value: Any) -> bool:
+    """Whether nothing at all was written: no value, text of spaces and line breaks alone, an empty list or object.
+    A field that must stay empty fails on anything more, an invisible character or a list of one blank item
+    included, as a required field fails on anything less than what shows: each errs toward failing."""
+    return value in (None, "", [], {}) or (isinstance(value, str) and not value.strip())
 
 
 TYPES = {"string": str, "boolean": bool, "array": list, "object": dict}
@@ -328,13 +506,21 @@ def _against(value: Any, schema: dict[str, Any], at: str, out: list[str]) -> Non
             _against(item, schema.get("items") or {}, f"{at}, item {n},", out)
     if isinstance(value, dict):
         props = schema.get("properties") or {}
-        for name in schema.get("required") or []:
-            v = value.get(name)
-            if v is None or (isinstance(v, str) and not v.strip()):
+        required = schema.get("required") or []
+        for name in required:
+            if blank(value.get(name)):
                 out.append(f"{at} has no {name}" if at != "the output" else f"the output has no {name}")
         for name, v in value.items():
-            if name in props and v is not None:
-                _against(v, props[name], f"{name}" if at == "the output" else f"{at} {name}", out)
+            if name not in props:
+                continue
+            where = f"{name}" if at == "the output" else f"{at} {name}"
+            if v is None:
+                # a field the schema does not require may be left out, never set to nothing
+                if name not in required:
+                    kind = str((props[name] or {}).get("type") or "value")
+                    out.append(f"{where} is null: leave it out, or give {'an' if kind[0] in 'aeiou' else 'a'} {kind}")
+                continue
+            _against(v, props[name], where, out)
 
 
 def output_follows_schema(call: Call, params: Params) -> Any:
@@ -347,7 +533,7 @@ def field_empty(call: Call, params: Params) -> Any:
     """A field the agent fills only to put a matter before the person, such as a test it may not change that stands
     in its way: while it is filled the check fails, with the role's sentence and what the agent wrote."""
     value = _field(call, params)
-    if value not in (None, "", [], {}) and not (isinstance(value, str) and not value.strip()):
+    if not nothing_written(value):
         return Fail(f"{params['says']}: {value if isinstance(value, str) else json.dumps(value)}")
     return Pass()
 
@@ -357,8 +543,7 @@ def _field(call: Call, params: Params) -> Any:
 
 
 def field_required(call: Call, params: Params) -> Any:
-    value = _field(call, params)
-    if value is None or (isinstance(value, (str, list, dict)) and not (value.strip() if isinstance(value, str) else value)):
+    if blank(_field(call, params)):
         return Fail(f"the output has no {params['field']}")
     return Pass()
 
@@ -1539,6 +1724,13 @@ def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
                 "project": folder if files else None, "source": None}
         if use == "script":
             return script(call, params)
+        if use in STEP_CASES:
+            # a step's case: a reject is a refusal, told as a failure in the step's words; a step that goes on passes
+            try:
+                did = STEPS[use](call, {**params, **(case.get("with") or {})})
+            except Exception as e:
+                return Blocked(f"{use} could not read the case: {type(e).__name__}: {e}")
+            return Fail(did.reason) if isinstance(did, Refused) else did if isinstance(did, Blocked) else Pass()
         if use not in CHECKS:
             return Blocked(f"the menu has no check {use}")
         try:
@@ -1550,6 +1742,8 @@ def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
 STEPS: dict[str, Callable[[Call, Params], Any]] = {"find-suite": find_suite, "refuse-when-false": refuse_when_false,
                                                        "fetch-pages": fetch_pages, "quote-windows": quote_windows,
                                                        "script": script_step}
+# The steps whose cases judge_case runs, as it runs a check's: those whose input is a project and what they are given
+STEP_CASES = ("find-suite", "refuse-when-false")
 CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "suite-passes": suite_passes,
     "tests-fail-for-the-bug": tests_fail_for_the_bug,

@@ -1,0 +1,70 @@
+[
+ {
+  "id": "make-target",
+  "expect": "accept",
+  "keeps": "a Makefile test target that runs the tests",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "make-double-colon",
+  "expect": "accept",
+  "keeps": "a test target written as a double-colon rule is a target all the same",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "Makefile": "test::\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "make-target-of-targets",
+  "expect": "accept",
+  "keeps": "a test target that only names other targets runs what they run",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "Makefile": "test: unit\nunit:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "make-target-beside-a-variable",
+  "expect": "accept",
+  "keeps": "a variable beside the test target does not hide it",
+  "with": {
+   "required": true
+  },
+  "output": {},
+  "project": {
+   "Makefile": "TESTS := tests/says_hi.sh\ntest:\n\t@echo running\n\tsh $(TESTS)\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt\n",
+   "greeting.txt": "hi\n"
+  }
+ },
+ {
+  "id": "none-and-not-required",
+  "expect": "accept",
+  "keeps": "a role that does not require tests goes on in a project with none",
+  "with": {
+   "required": false
+  },
+  "output": {},
+  "project": {
+   "README.md": "a project\n"
+  }
+ }
+]

@@ -102,7 +102,7 @@ fn page(name: &str) -> (Page, u16, std::path::PathBuf) {
     // it changes, whose diff the stop shows, and into the name of a new file, with quotes
     let output = r#"printf '{"summary":"hi","files":["greeting.txt"]}' > .jaynes/output.json"#;
     let agent = format!(
-        "command:printf 'hi <script>document.title=1</script><img src=x onerror=alert(2)>\\n' > greeting.txt && printf 'x\\n' > 'q\"><img src=y onerror=alert(3)>.txt' && printf 'test:\\n\\ttrue\\n' > Makefile && {output}"
+        "command:printf 'hi <script>document.title=1</script><img src=x onerror=alert(2)>\\n' > greeting.txt && printf 'x\\n' > 'q\"><img src=y onerror=alert(3)>.txt' && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {output}"
     );
     let started = Command::new(BIN)
         .args(["start", "--run", "marked", "--role", role.to_str().expect("path"), "--project", project.to_str().expect("path"), "--request", "<b>say hi</b>", "--agent", &agent])

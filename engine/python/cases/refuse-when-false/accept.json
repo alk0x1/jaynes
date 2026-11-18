@@ -1,0 +1,40 @@
+[
+ {
+  "id": "true",
+  "expect": "accept",
+  "keeps": "an earlier step that says true goes on",
+  "with": {
+   "field": "reproduce.reproduced",
+   "says": "the bug could not be shown: {{reproduce.why}}"
+  },
+  "given": [
+   {
+    "step": "reproduce",
+    "output": {
+     "reproduced": true
+    }
+   }
+  ],
+  "output": {}
+ },
+ {
+  "id": "left-out",
+  "expect": "accept",
+  "keeps": "an earlier step that left the field out did not say false",
+  "with": {
+   "field": "reproduce.reproduced",
+   "says": "the bug could not be shown: {{reproduce.why}}"
+  },
+  "given": [
+   {
+    "step": "reproduce",
+    "output": {
+     "tests": [
+      "tests/says_hi.sh"
+     ]
+    }
+   }
+  ],
+  "output": {}
+ }
+]
