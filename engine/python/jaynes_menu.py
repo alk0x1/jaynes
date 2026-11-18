@@ -389,6 +389,10 @@ _WRAPPED = re.compile(r"(?<=\w)-[ \t]*\r?\n[ \t]*(?=\w)")
 # where, in a page read with its hyphens left hanging, a line break was: a quote may not start just after it, since
 # "non-" then "compliant" may be one word
 _BREAK = "\x00"
+# where a page groups the digits of a number with a no-break or thin space (12 500): kept as a mark, read as a space
+# when searching, so the quote "12 500" is found and "12" is not
+_GROUP = "\x03"
+_GROUPED = re.compile("(?<=\\d)[\u00a0\u202f\u2009](?=\\d{3}(?!\\d))")
 
 
 class Unread(Exception):
@@ -427,6 +431,7 @@ def same_words(text: str, hanging: bool = False, notes: bool = True) -> str:
     import unicodedata
     if _NOTE_OPEN in text:
         text = text.replace(_NOTE_OPEN, "").replace(_NOTE_CLOSE, "") if notes else _NOTE.sub("", text)
+    text = _GROUPED.sub(_GROUP, text)
     text = _RAISED_AFTER_DIGIT.sub(r" \1", text)
     text = unicodedata.normalize("NFKC", text).translate(_FOLD)
     text = _WRAPPED.sub("-" + _BREAK if hanging else "-", text)
@@ -435,8 +440,9 @@ def same_words(text: str, hanging: bool = False, notes: bool = True) -> str:
 
 def _joined(block: str, at: int, step: int) -> bool:
     """Whether the character at ``at`` of ``block`` joins the quote beside it to more of a word or number, looking
-    away from the quote by ``step``: a letter or digit; a hyphen with a letter or digit beyond it, since a
-    hyphenated word is one word, and a minus sign before a number; a comma or point between digits, since 12,500
+    away from the quote by ``step``: a letter or digit; a hyphen or an underscore with a letter or digit beyond it,
+    since a hyphenated word or a name like no_cache is one word, and a minus sign before a number; a no-break or
+    thin space that groups the digits of a number; a comma or point between digits, since 12,500
     and 1.5 are one number; a percent sign after a number; an apostrophe inside a word, since can't is not can;
     or a line break a hyphen hung on."""
     if not 0 <= at < len(block):
@@ -444,10 +450,12 @@ def _joined(block: str, at: int, step: int) -> bool:
     c = block[at]
     beyond = block[at + step] if 0 <= at + step < len(block) else ""
     near = block[at - step] if 0 <= at - step < len(block) else ""
-    if c.isalnum() or c == _BREAK:
+    if c.isalnum() or c in (_BREAK, _GROUP):
         return True
     if c == "-":
         return beyond.isalnum() or (step < 0 and near.isdigit())
+    if c == "_":
+        return beyond.isalnum()
     if c in ",.":
         return beyond.isdigit() and near.isdigit()
     if c in "%\u2030":
@@ -457,11 +465,16 @@ def _joined(block: str, at: int, step: int) -> bool:
     return False
 
 
+def _searchable(text: str) -> str:
+    """A compared text with its marks read as spaces: a line break a hyphen hung on, a space that groups digits."""
+    return text.replace(_BREAK, " ").replace(_GROUP, " ")
+
+
 def _bounded_at(words: str, block: str, search: str | None = None) -> int:
     """Where ``words`` stands in ``block`` with nothing of a word or number joined to it on either side, or -1. In a
     block read with its hyphens left hanging, a line break counts as a space, except just before the quote;
     ``search`` is the block with those breaks made spaces, when it was made already."""
-    search = search if search is not None else block.replace(_BREAK, " ")
+    search = search if search is not None else _searchable(block)
     start = 0
     while (at := search.find(words, start)) >= 0:
         end = at + len(words)
@@ -489,16 +502,17 @@ class Prepared:
         self.blocks: list[tuple[str, str]] = []
         self.plain: list[str] = []
         for block in _GAP.split(text):
-            self.plain.append(same_words(block))
+            compared = same_words(block)
+            self.plain.append(_searchable(compared))
             for notes in ((True, False) if _NOTE_OPEN in block else (True,)):
-                compared = self.plain[-1] if notes else same_words(block, notes=False)
-                self.blocks.append((compared, compared))
+                marked = compared if notes else same_words(block, notes=False)
+                self.blocks.append((marked, _searchable(marked)))
                 if _WRAPPED.search(block):
                     hanging = same_words(block, hanging=True, notes=notes)
-                    self.blocks.append((hanging, hanging.replace(_BREAK, " ")))
+                    self.blocks.append((hanging, _searchable(hanging)))
 
     def holds(self, quote: str) -> bool:
-        words = same_words(quote)
+        words = _searchable(same_words(quote))
         return bool(words) and any(_bounded_in(words, b, search) for b, search in self.blocks)
 
     def nearest(self, quote: str) -> str:
@@ -631,7 +645,8 @@ def _reader() -> Any:
 
         def handle_data(self, data: str) -> None:
             if self.hidden_at is None:
-                self.parts.append(data if "pre" in self.open else re.sub(r"\s+", " ", data))
+                # spaces and line breaks of the markup are one space; a no-break or thin space is the page's own
+                self.parts.append(data if "pre" in self.open else re.sub(r"[ \t\r\n\f\v]+", " ", data))
 
     return Reader
 

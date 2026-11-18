@@ -349,5 +349,59 @@
   "page": "<p>FILL</p><p><strike>The vendor guarantees one hundred percent uptime forever.</strike> The vendor makes no promise.</p>",
   "quote": "The vendor guarantees one hundred percent uptime forever.",
   "expect": "reject"
+ },
+ {
+  "id": "thousands-with-nbsp",
+  "hole": "12 500 written with a no-break space is one number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>In total the cache served 12 500 requests that day.</p>",
+  "quote": "In total the cache served 12",
+  "expect": "reject"
+ },
+ {
+  "id": "thousands-with-narrow-nbsp",
+  "hole": "12 500 written with a narrow no-break space is one number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>In total the cache served 12 500 requests that day.</p>",
+  "quote": "In total the cache served 12",
+  "expect": "reject"
+ },
+ {
+  "id": "underscore-identifier",
+  "hole": "no_cache is one name",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>In this build the flag no_cache is honoured by every proxy.</p>",
+  "quote": "cache is honoured by every proxy.",
+  "expect": "reject"
+ },
+ {
+  "id": "nb-hyphen-negation",
+  "hole": "a non-breaking hyphen joins a word like a hyphen",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Only non‑compliant caches are allowed to store nothing.</p>",
+  "quote": "compliant caches are allowed to store nothing.",
+  "expect": "reject"
+ },
+ {
+  "id": "re-enable",
+  "hole": "re-enable is one word",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Operators must not re-enable caching for all responses here.</p>",
+  "quote": "enable caching for all responses here.",
+  "expect": "reject"
+ },
+ {
+  "id": "version-number",
+  "hole": "1.1 is one number",
+  "url": "https://example.org/a",
+  "type": "text/html",
+  "page": "<p>FILL</p><p>Today HTTP/1.1 is supported by every server we tested.</p>",
+  "quote": "1 is supported by every server we tested.",
+  "expect": "reject"
  }
 ]
