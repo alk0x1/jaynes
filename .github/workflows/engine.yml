@@ -83,11 +83,18 @@ jobs:
         run: |
           uname -srm
           echo "unprivileged user namespaces restricted by AppArmor: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo unknown)"
+      # Ubuntu 24.04 holds back the user namespaces a process makes without privilege (AppArmor), and the box makes
+      # its own network in one: without it, local servers are refused where the network has a way out, as here.
+      # A person's machine allows it the same way; the tests then require that network (JAYNES_TEST_NET)
+      - name: A network of the box's own
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo build --locked -p jaynes-shell
       - name: The box on this kernel
         run: target/debug/jaynes box --check
       - run: cargo test --locked
+        env:
+          JAYNES_TEST_NET: own
       # a process 1 that collects nobody, as in a container run without --init: an agent that ended and waits to be
       # collected must not count as running
       - name: The shell's own tests in a container without init
