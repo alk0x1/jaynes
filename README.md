@@ -186,7 +186,7 @@ jaynes show RUN | runs | summary RUN | log RUN | cost | verify | page [--port N]
 jaynes answer RUN QUESTION [ITEM=keep|change:TEXT|redo:TEXT|drop|skip] [--context TEXT] --send
 jaynes halt RUN | resume RUN | continue RUN | abandon RUN | raise RUN high|--seconds N|--tokens N
 jaynes undo RUN [--note TEXT] | correct RUN --note TEXT [--step STEP]
-jaynes add SOURCE | remove NAME | roles | update | guide
+jaynes add SOURCE | remove NAME | roles | update | uninstall | guide
 jaynes new NAME | check DIR | conformance DIR | schema
 ```
 
@@ -246,10 +246,11 @@ Nothing of yours is locked in a format only Jaynes reads.
   (also `jaynes schema`).
 - **What a run delivered** is a branch or a merge in your own repository, with
   its summary in Markdown.
-- **To remove Jaynes:** `claude plugin uninstall jaynes@jaynes`; then delete
-  `Jaynes.app` from `/Applications` (or `~/Applications`), `~/.local/bin/jaynes`,
-  and `~/.jaynes` if you want the record gone too. herdr-core, if the installer
-  put it in `~/.local/bin`, is Herdr's and stays useful on its own.
+- **To remove Jaynes:** `jaynes uninstall` shows everything it would take away, then removes it on your yes: the
+  Claude Code plugin first, then the app, herdr-core only when Jaynes installed it and nothing changed it, the
+  record only when you ask (`--delete-data`; `--keep-data` keeps it), and the program last. It removes nothing
+  while the app is open or a run's agent works, and it never touches your repositories: it lists what runs left
+  there (their `jaynes/*` branches) with the command that removes it.
 
 ## From a clone
 
