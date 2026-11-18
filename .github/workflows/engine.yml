@@ -37,10 +37,19 @@ jobs:
         run: |
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      # the photographs take a test browser, pinned, and never a Chrome of the machine's own
+      - name: A test browser
+        run: |
+          npx -y playwright@1.50.1 install chromium-headless-shell
+          shell=$(ls -d ~/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell | head -1)
+          test -x "$shell"
+          echo "JAYNES_CHROME=$shell" >> "$GITHUB_ENV"
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
         env:
           JAYNES_REQUIRE_LEAN: "1"
+          # the next step proves the Lean model against the records the end-to-end runs leave
+          JAYNES_KEEP_TEST_RUNS: "1"
       # the model against every state of the records the end-to-end tests just made with real roles
       - name: Lean model against real records
         env:

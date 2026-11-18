@@ -445,11 +445,14 @@ CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-b
 
 
 def chrome() -> str | None:
-    """The Chrome Jaynes photographs with: ``JAYNES_CHROME``, one installed where macOS keeps apps, or one on the
-    PATH under the names Linux gives it."""
+    """The Chrome Jaynes photographs with: ``JAYNES_CHROME``, the only one looked at when it is set; else one
+    installed where macOS keeps apps, or one on the PATH under the names Linux gives it."""
     named = os.environ.get("JAYNES_CHROME", "")
-    for path in ([named] if named else []) + [*CHROMES, *(str(Path.home()) + p for p in CHROMES)]:
-        if path and os.access(path, os.X_OK):
+    # a browser named is the only one: when it is not there, none is, and no other is looked for
+    if named:
+        return named if os.access(named, os.X_OK) else None
+    for path in [*CHROMES, *(str(Path.home()) + p for p in CHROMES)]:
+        if os.access(path, os.X_OK):
             return path
     return next((found for name in CHROME_NAMES if (found := shutil.which(name))), None)
 

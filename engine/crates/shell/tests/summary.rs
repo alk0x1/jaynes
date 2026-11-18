@@ -8,8 +8,19 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_jaynes");
 
 struct Scratch {
+    base: PathBuf,
     home: PathBuf,
     project: PathBuf,
+}
+
+/// A test's folders go when it passes; a failed one keeps them for whoever reads why, and JAYNES_KEEP_TEST_RUNS=1
+/// keeps every one, for the step of the CI that proves the Lean model against the records the runs left.
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() && std::env::var("JAYNES_KEEP_TEST_RUNS").as_deref() != Ok("1") {
+            let _gone = std::fs::remove_dir_all(&self.base);
+        }
+    }
 }
 
 fn scratch(name: &str) -> Scratch {
@@ -22,7 +33,7 @@ fn scratch(name: &str) -> Scratch {
     for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "start"]] {
         assert!(Command::new("git").arg("-C").arg(&project).args(&args).status().expect("git").success(), "git {args:?}");
     }
-    Scratch { home: base.join("home"), project }
+    Scratch { home: base.join("home"), project, base }
 }
 
 fn engine(s: &Scratch, args: &[&str]) -> (bool, String) {

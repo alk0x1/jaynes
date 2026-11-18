@@ -37,17 +37,105 @@ sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
 
 fn tty() -> Command {
     let mut c = Command::new(python());
-    c.args(["-c", TTY]);
+    c.args(["-c", TTY]).env("JAYNES_CHROME", test_browser().unwrap_or_else(|| PathBuf::from(NO_BROWSER)));
     c
 }
 
+/// The engine as the tests run it: it photographs only with a test browser, never the person's own Chrome. Without
+/// a test browser it is named one that is not there, so it photographs with none.
+fn jaynes() -> Command {
+    let mut c = Command::new(BIN);
+    c.env("JAYNES_CHROME", test_browser().unwrap_or_else(|| PathBuf::from(NO_BROWSER)));
+    c
+}
+
+const NO_BROWSER: &str = "/nonexistent/jaynes-test-browser";
+
+/// The test browser the photographs take: JAYNES_CHROME when the one running the tests names one, else Playwright's
+/// headless shell, else its Chrome for Testing, the newest first. Never a browser where macOS keeps the person's
+/// apps, whatever names it.
+fn test_browser() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let mut roots: Vec<PathBuf> = std::env::var("PLAYWRIGHT_BROWSERS_PATH").map(PathBuf::from).into_iter().collect();
+    roots.extend([home.join("Library/Caches/ms-playwright"), home.join(".cache/ms-playwright")]);
+    test_browser_in(std::env::var("JAYNES_CHROME").ok().filter(|n| !n.is_empty()), &home, &roots)
+}
+
+fn test_browser_in(named: Option<String>, home: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    let the_person_s = |p: &Path| {
+        let real = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        [Path::new("/Applications"), &home.join("Applications")].iter().any(|apps| p.starts_with(apps) || real.starts_with(apps))
+    };
+    if let Some(named) = named {
+        let p = PathBuf::from(named);
+        return (p.is_file() && !the_person_s(&p)).then_some(p);
+    }
+    // (headless shell first, newest version first) among what Playwright installed
+    let mut found: Vec<(u8, u32, PathBuf)> = Vec::new();
+    for root in roots {
+        for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let version = name.rsplit('-').next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+            let (kind, inside): (u8, &[&str]) = if name.starts_with("chromium_headless_shell-") {
+                (0, &["chrome-headless-shell-mac-arm64/chrome-headless-shell", "chrome-headless-shell-mac-x64/chrome-headless-shell",
+                      "chrome-headless-shell-linux64/chrome-headless-shell", "chrome-linux/headless_shell"])
+            } else if name.starts_with("chromium-") {
+                (1, &["chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                      "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                      "chrome-linux64/chrome", "chrome-linux/chrome"])
+            } else {
+                continue;
+            };
+            found.extend(inside.iter().map(|i| e.path().join(i)).filter(|p| p.is_file()).map(|p| (kind, u32::MAX - version, p)));
+        }
+    }
+    found.sort();
+    found.into_iter().map(|(_, _, p)| p).find(|p| !the_person_s(p))
+}
+
+#[test]
+fn the_tests_photograph_with_a_test_browser_and_never_the_person_s_chrome() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    // the person's Chrome is never taken, even named
+    for apps in [PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"), home.join("Applications/Google Chrome.app/Contents/MacOS/Google Chrome")] {
+        assert_eq!(test_browser_in(Some(apps.display().to_string()), &home, &[]), None, "{}", apps.display());
+    }
+    // what these tests take, here, is a test browser or none
+    let chosen = test_browser();
+    if let Some(b) = &chosen {
+        assert!(!b.starts_with("/Applications") && !b.starts_with(home.join("Applications")), "{}", b.display());
+    }
+    eprintln!("the test browser here: {}", chosen.map(|b| b.display().to_string()).unwrap_or_else(|| "none, so the photographs are skipped".into()));
+}
+
+/// Without a test browser, a test that photographs says it skipped, and is not run on the person's Chrome.
+fn skipped_without_a_test_browser() -> bool {
+    let none = test_browser().is_none();
+    if none {
+        eprintln!("skipped: no test browser (JAYNES_CHROME, or Playwright's headless shell or Chrome for Testing: npx playwright install chromium-headless-shell)");
+    }
+    none
+}
+
 struct Scratch {
+    base: PathBuf,
     home: PathBuf,
     project: PathBuf,
 }
 
-/// Each run of these tests leaves its folders behind, since the Lean model reads their records after the run. What an
-/// earlier run left more than an hour ago is swept here, so a machine that runs the tests often does not fill up.
+/// A test's folders go when it passes; a failed one keeps them for whoever reads why, and JAYNES_KEEP_TEST_RUNS=1
+/// keeps every one, for the step of the CI that proves the Lean model against the records the runs left.
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() && std::env::var("JAYNES_KEEP_TEST_RUNS").as_deref() != Ok("1") {
+            let _gone = std::fs::remove_dir_all(&self.base);
+        }
+    }
+}
+
+/// A run of these tests that was stopped before its folders went (killed, or kept for the Lean model) leaves them
+/// behind: what an earlier run left more than an hour ago is swept here, so a machine that runs the tests often does
+/// not fill up.
 fn sweep() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -78,11 +166,11 @@ fn scratch(name: &str) -> Scratch {
         let ok = Command::new("git").arg("-C").arg(&project).args(&args).status().expect("git").success();
         assert!(ok, "git {args:?}");
     }
-    Scratch { home: base.join("home"), project }
+    Scratch { home: base.join("home"), project, base }
 }
 
 fn engine(s: &Scratch, args: &[&str]) -> (bool, String) {
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(args)
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -232,7 +320,7 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     let s = scratch("inbox");
     let role = root().join("crates/shell/tests/roles/small-change");
     let agent = format!("sleep 4 && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
-    let child = Command::new(BIN)
+    let child = jaynes()
         .args(["start", "--run", "inbox", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -263,7 +351,7 @@ fn without_a_box_a_run_stops_at_once_and_nothing_of_the_project_runs() {
     let ran = s.home.parent().expect("base").join("agent-ran");
     let role = root().join("crates/shell/tests/roles/small-change");
     let started = std::time::Instant::now();
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", "no-box", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:touch {} && sleep 60", ran.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -295,7 +383,7 @@ fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
     // the first turn would work for a minute; the one after the resume is quick
     let once = s.home.parent().expect("base").join("once");
     let agent = format!("if [ -e {o} ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else touch {o}; sleep 60; fi", o = once.display());
-    let child = Command::new(BIN)
+    let child = jaynes()
         .args(["start", "--run", "halt-now", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -358,7 +446,7 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
     let role = root().join("crates/shell/tests/roles/fix-bug");
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", "fixbug", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -417,7 +505,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
     let port = 18750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -480,7 +568,7 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let env = |c: &mut Command| {
         c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
     };
-    let mut c = Command::new(BIN);
+    let mut c = jaynes();
     c.args(["start", "--run", "redo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
             "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
     env(&mut c);
@@ -522,7 +610,7 @@ fn a_crash_in_the_middle_of_a_turn_stops_the_agent_left_running_and_spends_no_at
         m = mark.display()
     );
     let role = root().join("crates/shell/tests/roles/small-change");
-    let mut engine_process = Command::new(BIN)
+    let mut engine_process = jaynes()
         .args(["start", "--run", "crash", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
@@ -588,7 +676,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     start(&s, "acts", &agent);
     let port = 19750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -664,7 +752,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     // the agent works for a while: the leave server is asked while its turn runs
     let agent = format!("touch {}/started; sleep 8; perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}", mark.display());
     let role = root().join("crates/shell/tests/roles/small-change");
-    let run = Command::new(BIN)
+    let run = jaynes()
         .args(["start", "--run", "leave", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
@@ -676,7 +764,7 @@ fn a_leave_the_agent_asks_mid_turn_is_granted_by_a_rule_or_by_the_person() {
     }
     let attempt = events(&s, "leave").iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == "change").count();
     let cwd = s.home.join("runs/leave/project");
-    let mut child = Command::new(BIN)
+    let mut child = jaynes()
         .args(["permit", "--run", "leave", "--step", "change", "--attempt", &attempt.to_string(), "--cwd", cwd.to_str().expect("path")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
@@ -736,7 +824,7 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
     let prompts = s.home.join("prompts");
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", run, "--role", root().join("crates/shell/tests/roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
@@ -790,7 +878,7 @@ fn the_page_shows_each_item_with_its_sentence_and_picture() {
                                  "--request", "make looks", "--agent", &format!("command:{agent}")]);
     assert!(ok && out.contains("Which looks go on?"), "{out}");
     let port = 20750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PAGE_KEY", "k3y")
@@ -838,7 +926,7 @@ fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\ttrue\\n' > Makefile && {OUTPUT}");
     // the agent program of the run is a command; the MCP start uses Claude by default, so start here and read through MCP
     start(&s, "viamcp", &agent);
-    let child = Command::new(BIN)
+    let child = jaynes()
         .arg("mcp")
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python())
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
@@ -897,7 +985,7 @@ fn abandoning_a_run_stops_its_agent_at_once() {
     std::fs::create_dir_all(&mark).expect("dir");
     let agent = format!("touch {m}/started; sleep 30; touch {m}/finished", m = mark.display());
     let role = root().join("crates/shell/tests/roles/small-change");
-    let mut run = Command::new(BIN)
+    let mut run = jaynes()
         .args(["start", "--run", "abandon", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
@@ -936,7 +1024,7 @@ fn the_person_starts_a_run_from_the_page() {
     let s = scratch("new");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let port = 17750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -983,7 +1071,7 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
     };
     installed(&"a".repeat(40));
     let port = 16750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_HOME", &settings)
@@ -1072,7 +1160,7 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
         let envs = |c: &mut Command| {
             c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
         };
-        let mut first = Command::new(BIN);
+        let mut first = jaynes();
         first.args(["start", "--run", &run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                     "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
         envs(&mut first);
@@ -1084,7 +1172,7 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
         let _waited = p.wait();
         if events(&s, &run).is_empty() {
             // killed before the run was recorded: it never started, and starting it again works
-            let mut again = Command::new(BIN);
+            let mut again = jaynes();
             again.args(["start", "--run", &run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                         "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())]);
             envs(&mut again);
@@ -1143,7 +1231,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     assert!(s.home.join("runs/old/project/.git").exists());
     // the next start clears the copies of runs finished longer ago than the time kept (none kept here)
     let role = root().join("crates/shell/tests/roles/small-change");
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", "new", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
@@ -1154,7 +1242,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
     assert!(s.home.join("runs/new/project/.git").exists(), "the run just started keeps its copy");
     // the page still shows what the old run changed
     let port = 15750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k3y").env("JAYNES_NO_UPDATE_CHECK", "1")
         .stderr(std::process::Stdio::null())
@@ -1198,7 +1286,7 @@ exit 0
     let verdict = |said: &str| -> Value {
         let call = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "say", "check": "odd", "request": "r",
             "output": {"word": said}, "given": [], "project": s.project, "source": s.project});
-        let mut child = Command::new(BIN)
+        let mut child = jaynes()
             .args(["role-serve", role.to_str().expect("path")])
             .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
@@ -1243,7 +1331,7 @@ fn a_step_done_in_the_record_keeps_its_change_when_the_process_dies_before_commi
     let s = scratch("diedone");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     let role = root().join("crates/shell/tests/roles/small-change");
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", "diedone", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
@@ -1264,7 +1352,7 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     let prompts = s.home.join("prompts");
     std::fs::create_dir_all(&prompts).expect("dir");
     let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(["start", "--run", "diemerge", "--role", root().join("crates/shell/tests/roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
@@ -1273,7 +1361,7 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
     assert_eq!(out.status.code(), Some(9), "{}", String::from_utf8_lossy(&out.stderr));
     // the delivery made again a second later is made of new commits, with the same change
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    let mut c = Command::new(BIN);
+    let mut c = jaynes();
     c.args(["continue", "diemerge"]).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts);
     let said = String::from_utf8_lossy(&c.output().expect("continue").stdout).to_string();
     assert!(said.contains("delivered"), "{said}");
@@ -1308,7 +1396,7 @@ fn an_index(s: &Scratch) -> PathBuf {
 }
 
 fn engine_with_index(s: &Scratch, index: &str, args: &[&str]) -> (bool, String) {
-    let out = Command::new(BIN)
+    let out = jaynes()
         .args(args)
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
         .env("JAYNES_INDEX", index)
@@ -1377,6 +1465,9 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
+    if skipped_without_a_test_browser() {
+        return;
+    }
     let s = scratch("photo");
     let role = root().join("crates/shell/tests/roles/directions");
     let (ok, out) = engine(&s, &["start", "--run", "photo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
@@ -1393,7 +1484,7 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     assert_eq!(&photo[1..4], b"PNG");
     // on the page the photograph opens the page, served apart: sandboxed, so what an agent wrote cannot answer
     let port = 21750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PAGE_KEY", "k3y")
@@ -1432,6 +1523,9 @@ fn question_of(s: &Scratch, run: &str, n: usize) -> Value {
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
+    if skipped_without_a_test_browser() {
+        return;
+    }
     let s = scratch("choose");
     let calls = s.home.parent().expect("base").join("calls.txt");
     let agent = format!("echo x >> {} && {DRAW}", calls.display());
@@ -1455,6 +1549,9 @@ fn choosing_a_direction_keeps_it_alone_without_the_agent_and_the_run_goes_on() {
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() {
+    if skipped_without_a_test_browser() {
+        return;
+    }
     let s = scratch("adjust");
     // the second time it draws, the agent gives Sun alone with Ink's colour
     let agent = format!(
@@ -1479,6 +1576,9 @@ fn choosing_with_a_note_has_the_agent_combine_and_asks_about_the_result_alone() 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
 fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
+    if skipped_without_a_test_browser() {
+        return;
+    }
     let s = scratch("again");
     // sent back, the agent gives Ink alone, changed
     let agent = format!(
@@ -1493,7 +1593,7 @@ fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
     let q = question_of(&s, "again", 0);
     let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
     let port = 22750 + (std::process::id() % 1000) as u16;
-    let _page = Command::new(BIN)
+    let _page = jaynes()
         .args(["page", "--port", &port.to_string()])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
         .env("JAYNES_PYTHON", python())
@@ -1527,7 +1627,7 @@ fn an_answer_from_the_page_that_sends_a_step_back_starts_it_once() {
 
 /// Run a role's script check through `role-serve`, as the engine does, with `call` and extra environment.
 fn serve_check(s: &Scratch, role: &Path, call: Value, env: &[(&str, &str)]) -> Value {
-    let mut c = Command::new(BIN);
+    let mut c = jaynes();
     c.args(["role-serve", role.to_str().expect("path")])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());

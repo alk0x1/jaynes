@@ -52,8 +52,19 @@ unless = "check quotes-found of note passed"
 "#;
 
 struct Scratch {
+    base: PathBuf,
     home: PathBuf,
     role: PathBuf,
+}
+
+/// A test's folders go when it passes; a failed one keeps them for whoever reads why, and JAYNES_KEEP_TEST_RUNS=1
+/// keeps every one, for the step of the CI that proves the Lean model against the records the runs left.
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() && std::env::var("JAYNES_KEEP_TEST_RUNS").as_deref() != Ok("1") {
+            let _gone = std::fs::remove_dir_all(&self.base);
+        }
+    }
 }
 
 fn scratch(name: &str) -> Scratch {
@@ -62,7 +73,7 @@ fn scratch(name: &str) -> Scratch {
     let role = base.join("cites");
     std::fs::create_dir_all(&role).expect("dir");
     std::fs::write(role.join("role.toml"), ROLE).expect("write");
-    Scratch { home: base.join("home"), role }
+    Scratch { home: base.join("home"), role, base }
 }
 
 fn engine(s: &Scratch, args: &[&str]) -> (bool, String) {
