@@ -2641,7 +2641,6 @@ try_("escape: read another run", lambda: open(os.path.join(a["engine"], "runs", 
 try_("escape: write its own folder", lambda: open(os.path.join(a["role_dir"], "x"), "w").write("x") and "wrote")
 try_("escape: write the project", lambda: open(os.path.join(a["project"], "greeting.txt"), "w").write("x") and "wrote")
 try_("escape: run a program it did not declare", lambda: subprocess.run(["/bin/ls", "/"], capture_output=True) and "ran")
-try_("escape: open an app", lambda: subprocess.run(["/usr/bin/open", "-a", "Calculator"], capture_output=True) and "ran")
 o = socket.socket(socket.AF_UNIX)
 try_("escape: another socket", lambda: o.connect(a["other_sock"]) or "reached")
 for name, p in (("escape: an undeclared port", a["other_port"]), ("escape: the page's port, declared", 8750)):
@@ -2685,7 +2684,12 @@ print(json.dumps(got))
             assert!(v == "PermissionError" || v == "does not know" || v == "gaierror", "{k} got through: {v}: {got}");
         }
     }
-    assert_eq!(got.as_object().expect("got").len(), 25, "{got}");
+    assert_eq!(got.as_object().expect("got").len(), 24, "{got}");
+    // opening an app or sending Apple events is never tried for real, which would open it on the person's screen if
+    // the box failed: the profile as written is read for both, as the program's proof does
+    for rule in ["(deny lsopen)", "(deny appleevent-send)"] {
+        assert!(profile.lines().any(|l| l.trim() == rule), "the profile lacks {rule}:\n{profile}");
+    }
     drop((service, undeclared));
     let _gone = std::fs::remove_dir_all(&base);
 }
