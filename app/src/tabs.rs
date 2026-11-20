@@ -305,7 +305,8 @@ impl Tabs {
         }
         let runs = self.runs.read(cx);
         let who = runs.snap.halted.get(open).cloned().unwrap_or_else(|| "halted".into());
-        let step = runs.snap.details.get(open).and_then(|d| d.stages.iter().find(|s| s.class == "halted").map(|s| s.name.clone()));
+        // the step under way when it was halted, or else the last one its agent spoke in
+        let step = runs.snap.details.get(open).and_then(|d| d.stages.iter().find(|s| s.class == "halted").map(|s| s.name.clone())).or_else(|| self.story.last().map(|(s, _)| s.clone()));
         Some(halted_said(&who, step.as_deref()))
     }
 
