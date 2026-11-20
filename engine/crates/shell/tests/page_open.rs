@@ -287,7 +287,8 @@ fn what_only_the_person_does_tells_them_to_open_the_page_from_the_app_or_with_ja
     let h = home("refusals");
     let p = port();
     let _up = up(&h, p);
-    let hint = "Open it from the Jaynes app (Open the page), or run `jaynes open`";
+    // shown by the page as text: no backtick, which the screen would show raw
+    let hint = "Open it from the Jaynes app (Open the page), or run jaynes open";
     for (path, body, start) in [
         ("/api/setup", r#"{"guard":"off"}"#, "only you change the setup: "),
         ("/api/start", r#"{"role":"small-change","project":"/tmp","request":"x"}"#, "only you start a run from the page: "),
@@ -295,11 +296,11 @@ fn what_only_the_person_does_tells_them_to_open_the_page_from_the_app_or_with_ja
     ] {
         let said = post(p, path, None, true, body);
         assert!(said.contains(&format!("{start}{hint}")), "{path}: {said}");
-        assert!(!said.contains("the page printed"), "{path}: {said}");
+        assert!(!said.contains("the page printed") && !said.contains('`'), "{path}: {said}");
     }
-    // the page's own notice for a tab without the key says the same
+    // the page's own notice for a tab without the key says the same, the command as code (tests/key_js.rs)
     let script = get(p, "/key.js");
-    assert!(script.contains(hint) && !script.contains("the page printed"), "{script}");
+    assert!(script.contains("Open it from the Jaynes app (Open the page), or run ") && !script.contains("the page printed") && !script.contains("`jaynes open`"), "{script}");
 }
 
 #[test]

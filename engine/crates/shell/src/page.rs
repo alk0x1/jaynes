@@ -606,7 +606,7 @@ impl Page {
     fn setup(&self, body: &Value, by: By) -> Result<Value, String> {
         use crate::install::{guard, guard_notes_path, guard_off_in, set_guard, set_guard_off_in, set_guard_watch};
         if by != By::Person {
-            return Err("only you change the setup: Open it from the Jaynes app (Open the page), or run `jaynes open`".into());
+            return Err("only you change the setup: Open it from the Jaynes app (Open the page), or run jaynes open".into());
         }
         let (on, mut owners) = guard();
         let owner = body["owner"].as_str().unwrap_or("").trim().to_string();
@@ -703,7 +703,7 @@ impl Page {
     /// Start a run of a role on a project; only the person does it here. An agent starts one with the start tool.
     fn start(&self, body: &Value, by: By) -> Result<Value, String> {
         if by != By::Person {
-            return Err("only you start a run from the page: Open it from the Jaynes app (Open the page), or run `jaynes open`".into());
+            return Err("only you start a run from the page: Open it from the Jaynes app (Open the page), or run jaynes open".into());
         }
         let text = |k: &str| body[k].as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("{k} is needed"));
         let (role, project, request) = (text("role")?, text("project")?, text("request")?);
@@ -1585,7 +1585,7 @@ fn reminders_html(due: &[drive::Reminder], runs: &[Run], on: Option<(&str, &str)
 /// counts, and only a reminder due now is marked: a name the request brings is never a path to write.
 pub fn reminded_in(home: &std::path::Path, body: &Value, by: &By, now: u64) -> Result<Value, String> {
     if !by.person() {
-        return Err("only the person is reminded: Open it from the Jaynes app (Open the page), or run `jaynes open`".into());
+        return Err("only the person is reminded: Open it from the Jaynes app (Open the page), or run jaynes open".into());
     }
     let store = Store::open(&home.join("record.sqlite3"))?;
     let due = drive::reminders_due(home, &store, now)?;
@@ -1720,7 +1720,10 @@ window.jaynesKey = (async () => {
   if (!person) {
     const n = document.createElement("div");
     n.className = "notice";
-    n.textContent = "You opened the page without its key: answers from here count as an agent's. Open it from the Jaynes app (Open the page), or run `jaynes open`.";
+    // the command as code, never a raw backtick on the screen
+    const command = document.createElement("code");
+    command.textContent = "jaynes open";
+    n.append("You opened the page without its key: answers from here count as an agent's. Open it from the Jaynes app (Open the page), or run ", command, ".");
     const box = document.getElementById("nokey");
     if (box) box.replaceWith(n);
   }

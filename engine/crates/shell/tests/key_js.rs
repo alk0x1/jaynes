@@ -22,6 +22,12 @@ const sent = [];
 let address = {path} + {hash};
 const ORIGIN = "http://localhost:8750";
 let notice = false;
+// what the notice shows on the screen, as text, and the text of each <code> in it
+let shown = null;
+const codes = [];
+const element = tag => ({{ tag, className: "", textContent: "", children: [], append(...xs) {{ this.children.push(...xs); }} }});
+const visible = n => typeof n === "string" ? n : n.textContent + n.children.map(visible).join("");
+const findCodes = n => {{ if (typeof n !== "string") {{ if (n.tag === "code") codes.push(visible(n)); n.children.forEach(findCodes); }} }};
 globalThis.window = globalThis;
 globalThis.localStorage = store;
 globalThis.sessionStorage = store;
@@ -37,7 +43,7 @@ globalThis.history = {{ replaceState: (_s, _t, url) => {{
   if (url.startsWith("//")) throw new Error("SecurityError: " + url);
   address = url;
 }} }};
-globalThis.document = {{ getElementById: id => id === "nokey" ? {{ replaceWith: () => {{ notice = true; }} }} : null, createElement: () => ({{}}) }};
+globalThis.document = {{ getElementById: id => id === "nokey" ? {{ replaceWith: n => {{ notice = true; shown = visible(n); findCodes(n); }} }} : null, createElement: element }};
 globalThis.fetch = async (url, opts = {{}}) => {{
   const key = (opts.headers || {{}})["X-Jaynes-Key"] || "";
   sent.push([url, opts.method || "GET", key]);
@@ -48,7 +54,7 @@ globalThis.fetch = async (url, opts = {{}}) => {{
   await window.jaynesKey;
   await fetch("/api/answer", {{ method: "POST", headers: {{ "Content-Type": "application/json" }}, body: "{{}}" }});
   await fetch("/api/version");
-  console.log(JSON.stringify({{ kept: kept.get("jaynes_key") || null, address, notice, sent }}));
+  console.log(JSON.stringify({{ kept: kept.get("jaynes_key") || null, address, notice, shown, codes, sent }}));
 }})();
 "##,
         stored = if stored.is_empty() { "[]".to_string() } else { format!("[[\"jaynes_key\", {stored:?}]]") },
@@ -99,4 +105,14 @@ fn a_page_whose_path_starts_with_two_slashes_still_takes_its_key() {
     let r = run_at("//q/r1", "#key=good", "");
     assert_eq!(r["kept"], "good", "{r}");
     assert_eq!(r["address"], "//q/r1", "the address loses the key, and stays on the page: {r}");
+}
+
+#[test]
+fn the_notice_of_a_tab_without_the_key_says_where_to_open_it_with_no_backtick_on_the_screen() {
+    let r = run("", "");
+    assert_eq!(r["notice"], true, "{r}");
+    let shown = r["shown"].as_str().expect("shown");
+    assert!(shown.contains("Open it from the Jaynes app (Open the page), or run jaynes open."), "{shown}");
+    assert!(!shown.contains('`'), "a raw backtick on the screen: {shown}");
+    assert_eq!(r["codes"], serde_json::json!(["jaynes open"]), "the command is shown as code: {r}");
 }
