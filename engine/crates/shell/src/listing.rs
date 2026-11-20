@@ -106,7 +106,8 @@ pub fn in_words(reason: &str) -> String {
         let Some((code, rest)) = after.split_once(')').filter(|(c, _)| c.parse::<i32>().is_ok()) else { break };
         out = format!("{}exited with code {code}{rest}", &out[..at]);
     }
-    out
+    // a program that said nothing after how it ended left ": " at the end
+    out.trim_end().trim_end_matches(':').trim_end().to_string()
 }
 
 fn standing(e: &Entry) -> (Mark, String) {
@@ -419,7 +420,9 @@ mod tests {
         let mut r = run("b", "Rename the footer link");
         r.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "change spent its 3 attempts: the agent exited with Some(1):".into() };
         let row = arrange(&[entry(r, "/p/site", 1)]).projects[0].1[0].clone();
-        assert_eq!(row.line, "step 1 of 2, blocked: change spent its 3 attempts: the agent exited with code 1:");
+        // nothing the agent said after it: no colon left hanging
+        assert_eq!(row.line, "step 1 of 2, blocked: change spent its 3 attempts: the agent exited with code 1");
+        assert_eq!(in_words("change spent its 3 attempts: the agent exited with Some(1):   "), "change spent its 3 attempts: the agent exited with code 1");
     }
 
     #[test]

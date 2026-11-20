@@ -288,6 +288,12 @@ fn tools_at_work(line: &str) -> i64 {
     }
 }
 
+/// How a program ended, then what it said, when it said something: no colon left hanging after nothing.
+fn with_said(ended: &str, said: &str) -> String {
+    let said = said.trim();
+    if said.is_empty() { ended.to_string() } else { format!("{ended}: {said}") }
+}
+
 /// How an agent program ended, in words the person reads: "exited with code 1", or that a signal stopped it.
 fn exited(code: Option<i32>) -> String {
     match code {
@@ -338,7 +344,7 @@ impl Agent for Shell {
                     Some(0) => Ended::Ran { usage, session, model: "command".to_string() },
                     Some(75) => Ended::Interrupted { reason: "quota".to_string() },
                     Some(3) => Ended::Fault { reason: err.trim().chars().take(300).collect() },
-                    _ => Ended::Failed { reason: format!("the agent {}: {}", exited(code), err.trim().chars().take(300).collect::<String>()), usage },
+                    _ => Ended::Failed { reason: with_said(&format!("the agent {}", exited(code)), &err.chars().take(300).collect::<String>()), usage },
                 }
             }
         };
@@ -799,7 +805,7 @@ impl CodexTurn {
             return Ended::Failed { reason: format!("the Codex turn failed: {}", said.chars().take(300).collect::<String>()), usage };
         }
         if code != Some(0) {
-            return Ended::Failed { reason: format!("Codex {}: {}", exited(code), err.trim().chars().take(300).collect::<String>()), usage };
+            return Ended::Failed { reason: with_said(&format!("Codex {}", exited(code)), &err.chars().take(300).collect::<String>()), usage };
         }
         Ended::Ran { usage, session: self.session, model: String::new() }
     }
@@ -938,6 +944,11 @@ mod tests {
         for code in [Some(1), None] {
             assert!(!super::exited(code).contains("Some(") && !super::exited(code).contains("None"), "{code:?}");
         }
+        // what the program said after it, when it said something; nothing hangs when it said nothing
+        assert_eq!(super::with_said("the agent exited with code 1", "  boom 
+"), "the agent exited with code 1: boom");
+        assert_eq!(super::with_said("the agent exited with code 1", " 
+ "), "the agent exited with code 1");
     }
 
     use super::*;

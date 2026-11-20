@@ -37,7 +37,7 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
     };
     // a record keeps a reason as the engine said it then ("exited with Some(1)"): read as it says it now
     let reason = &jaynes_shell::listing::in_words(reason);
-    let spent = step.and_then(|s| reason.strip_prefix(&format!("{s} spent its ")).and_then(|rest| rest.split_once(" attempts:")).map(|(n, failures)| (s, n, failures)));
+    let spent = step.and_then(|s| reason.strip_prefix(&format!("{s} spent its ")).and_then(|rest| rest.split_once(" attempts")).map(|(n, failures)| (s, n, failures.trim_start_matches(':'))));
     let why = match spent {
         Some((s, n, failures)) => {
             // the first failure's own words, before its detail: "the agent exited with code 1"
