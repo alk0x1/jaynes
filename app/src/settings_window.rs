@@ -7,7 +7,7 @@ use crate::prefs::{self, Prefs};
 use crate::settings::OptionAsAlt;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_base::input::{Input, InputEvent, InputState};
+use gpui_base::input::{InputEvent, InputState};
 use std::cell::RefCell;
 
 actions!(jaynes_settings, [CloseSettings]);
@@ -155,7 +155,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    fn rows(&self, p: &Prefs, cx: &mut Context<Self>) -> Vec<Div> {
+    fn rows(&self, p: &Prefs, window: &Window, cx: &mut Context<Self>) -> Vec<Div> {
         match self.section {
             Section::General => vec![row("Appearance", Some(appearance_hint(p.appearance)), self.appearance(p, cx))],
             Section::Terminal => vec![
@@ -171,8 +171,8 @@ impl SettingsView {
                 toggle("notifications", p.notifications, "notifications", cx),
             )],
             Section::Agents => vec![
-                row("New agent command", Some("What Command-T starts, in the open agent's folder".into()), field(&self.new_agent)),
-                row("Editor", Some("Opens files from Changes (key e). Empty: your shell's $VISUAL or $EDITOR".into()), field(&self.editor)),
+                row("New agent command", Some("What Command-T starts, in the open agent's folder".into()), field("settings-new-agent", &self.new_agent, window, cx)),
+                row("Editor", Some("Opens files from Changes (key e). Empty: your shell's $VISUAL or $EDITOR".into()), field("settings-editor", &self.editor, window, cx)),
             ],
         }
     }
@@ -401,12 +401,14 @@ fn stepper(id: &'static str, shown: String, name: &'static str, value: f32, step
         .child(button("more", "+", value + step, cx))
 }
 
-fn field(input: &Entity<InputState>) -> Div {
-    div().w(px(220.)).h(px(30.)).px(px(10.)).flex().items_center().rounded(px(7.)).bg(rgb(look::panel_2())).border_1().border_color(rgb(look::line_2())).font_family(look::MONO_FONT).text_size(px(12.)).child(Input::new(input))
+/// A Settings field: the app's field that shows when it has the keys (island::focus_field), its blue ring and caret,
+/// at Settings' width and in its mono type.
+fn field(id: &'static str, input: &Entity<InputState>, window: &Window, cx: &mut App) -> Stateful<Div> {
+    crate::island::focus_field(id, input, window, cx).w(px(220.)).h(px(30.)).font_family(look::MONO_FONT).text_size(px(12.))
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = prefs::get();
         let mut bar = div().flex().items_end().justify_center().gap(px(4.)).px(px(14.)).pb(px(10.)).border_b_1().border_color(rgb(look::line()));
         for s in Section::ALL {
@@ -431,7 +433,7 @@ impl Render for SettingsView {
                     .on_click(cx.listener(move |this, _, _, cx| this.show(s, cx))),
             );
         }
-        let rows = self.rows(&p, cx);
+        let rows = self.rows(&p, window, cx);
         let n = rows.len();
         div()
             .size_full()

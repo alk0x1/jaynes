@@ -6,7 +6,7 @@ use crate::agents::{Agent, Space};
 use crate::look;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_base::input::{Input, InputEvent, InputState};
+use gpui_base::input::{InputEvent, InputState};
 use jaynes_shell::listing::{Listing, Mark};
 
 /// Where an entry goes.
@@ -187,7 +187,7 @@ fn run_dot(m: Mark) -> AnyElement {
 }
 
 impl Render for PaletteView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = self.shown(cx);
         // every match, the list scrolling past what the box holds
         let mut list = div().id("palette-list").track_scroll(&self.scroll).max_h(px(420.)).overflow_y_scroll().flex().flex_col().py(px(4.));
@@ -278,7 +278,8 @@ impl Render for PaletteView {
                             .border_color(rgb(look::line_2()))
                             .text_color(rgb(look::faint()))
                             .child("⌕")
-                            .child(div().flex_1().text_color(rgb(look::text())).child(Input::new(&self.input))),
+                            // the app's field that shows it has the keys: a blue ring and a blue caret (island::focus_field)
+                            .child(crate::island::focus_field("palette-search", &self.input, window, cx).flex_1()),
                     )
                     .child(list),
             )
