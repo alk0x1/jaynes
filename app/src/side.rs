@@ -47,7 +47,7 @@ impl EventEmitter<Cleared> for Side {}
 /// The column in the order the person chose ("Needs you first"): what waits for them, runs and agents in one list;
 /// then the runs at work; then the finished runs, folded to a count; then the spaces with the agents that do not
 /// wait for them. Each label says what is expected of the person, or nothing: an agent done is "done · 5m", grey,
-/// and out of the Inbox's number; a blocked run waits for them ("continue or abandon").
+/// and out of the Inbox's number; a blocked run waits for them ("blocked · open it").
 #[derive(Debug, Default, PartialEq)]
 struct Order {
     /// The runs whose question is open, then the blocked ones; then the agents that ask or failed, with their
@@ -135,13 +135,10 @@ fn at_work_tag(row: &Row, halted: Option<&String>) -> String {
     }
 }
 
-/// What a run in "Needs you" says at the right of its name: a blocked one, what the person can do; one that asks,
-/// that it is a run (its question is under it).
-fn needs_tag(row: &Row) -> (String, u32) {
-    match row.mark {
-        Mark::Blocked => ("continue or abandon".into(), look::red()),
-        _ => ("run".into(), look::faint()),
-    }
+/// What a run in "Needs you" says at the right of its name: a blocked one, what the person can do, as an agent that
+/// failed says it; one that asks, nothing (its question is under it).
+fn needs_tag(row: &Row) -> Option<(String, u32)> {
+    (row.mark == Mark::Blocked).then(|| ("blocked · open it".to_string(), look::red()))
 }
 
 /// The line under a run in "Needs you": its question, or, for one already delivered, that the person can still
@@ -705,7 +702,7 @@ impl Render for Side {
             if !self.folded.contains("§needs") {
                 for row in &o.needs {
                     let row = &Row { line: needs_line(row, delivered.contains(&row.id)), ..row.clone() };
-                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(needs_tag(row)), true, None, cx));
+                    list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), needs_tag(row), true, None, cx));
                 }
                 for (space, a) in &o.asking {
                     list = list.child(self.asking(space, a, open.as_deref() == Some(a.address.as_str()), now, cx));
@@ -867,8 +864,9 @@ mod tests {
         let o = order(&listing, &[], &HashSet::new());
         assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q", "e"]);
         assert_eq!(o.at_work.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a"]);
-        assert_eq!(needs_tag(&o.needs[0]).0, "run");
-        assert_eq!(needs_tag(&o.needs[1]).0, "continue or abandon");
+        // a run that asks needs no tag: its question is under it; a blocked one says what to do, as "failed · open it"
+        assert_eq!(needs_tag(&o.needs[0]), None);
+        assert_eq!(needs_tag(&o.needs[1]).map(|t| t.0), Some("blocked · open it".to_string()));
         // the Inbox counts what needs the person, the blocked run too, and never what is done
         let spaces = vec![agents::Space {
             id: "w1".into(),

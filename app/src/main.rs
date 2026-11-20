@@ -710,6 +710,7 @@ impl Root {
                     .cursor_pointer()
                     .hover(|d| d.border_color(rgb(look::dim())))
                     .child(label)
+                    .when_some(act.tip(), |d, tip| d.tooltip(look::tip(tip)))
                     .on_click(cx.listener(move |this, _, _, cx| this.press(run.clone(), act, cx))),
             );
         }

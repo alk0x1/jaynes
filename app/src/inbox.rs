@@ -50,7 +50,7 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
         key: Key::Run(r.id.clone()),
         title: r.title.clone(),
         place: format!("Jaynes run · {}", r.line),
-        what: "continue or abandon".into(),
+        what: "blocked · open it".into(),
         state: State::Error,
         since_ms: 0,
     }));
@@ -155,7 +155,7 @@ mod tests {
             needs.iter().map(|i| i.key.clone()).collect::<Vec<_>>(),
             [Key::Agent("t2".into()), Key::Agent("t4".into()), Key::Run("r1".into()), Key::Run("r2".into())]
         );
-        assert_eq!(needs[3].what, "continue or abandon");
+        assert_eq!(needs[3].what, "blocked · open it");
         assert_eq!(needs[3].place, "Jaynes run · step 2 of 3, blocked: no room");
         assert_eq!(needs[0].what, "wants to approve Bash: ls");
         assert_eq!(needs[0].place, "jaynes");

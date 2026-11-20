@@ -1,5 +1,5 @@
 //! What the person may do to a run from its tab, the page's own controls: Halt one at work, Resume a halted run,
-//! Continue one Jaynes stopped, Raise the risk, Raise the ceiling near or at it, Abandon one not finished. Each shows only when it can do
+//! Continue one Jaynes stopped, Ask me at more steps (raise the risk), Raise the ceiling near or at it, Abandon one not finished. Each shows only when it can do
 //! something, as on the page. They are sent as the person's through `send`, the one place that sends them.
 
 use jaynes_core::question::By;
@@ -35,9 +35,18 @@ impl Act {
             Act::Halt => "Halt",
             Act::Resume => "Resume",
             Act::Continue => "Continue",
-            Act::RaiseRisk => "Raise the risk",
+            Act::RaiseRisk => "Ask me at more steps",
             Act::RaiseCeiling => "Raise the ceiling by 30 min",
             Act::Abandon => "Abandon",
+        }
+    }
+
+    /// What its button says on hovering, when its label does not say it all: raising the risk takes the run on the full
+    /// path, with more stops and the higher limit (core risk.rs and decide.rs).
+    pub fn tip(self) -> Option<&'static str> {
+        match self {
+            Act::RaiseRisk => Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."),
+            _ => None,
         }
     }
 
@@ -163,6 +172,10 @@ mod tests {
         // what cannot be taken back asks twice; a halt is resumed
         assert!(Act::Abandon.asks_twice() && !Act::Resume.asks_twice() && !Act::Halt.asks_twice());
         assert_eq!(Act::Halt.label(), "Halt");
+        // raising the risk asks the person at more steps; its hint says what else it changes (core risk.rs, decide.rs)
+        assert_eq!(Act::RaiseRisk.label(), "Ask me at more steps");
+        assert_eq!(Act::RaiseRisk.tip(), Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."));
+        assert_eq!(Act::Abandon.tip(), None);
     }
 
     #[test]

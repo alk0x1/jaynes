@@ -14,16 +14,19 @@ actions!(jaynes_settings, [CloseSettings]);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
+    /// What is the whole app's: its appearance, and its version at the foot.
+    General,
     Terminal,
     Notifications,
     Agents,
 }
 
 impl Section {
-    const ALL: [Section; 3] = [Section::Terminal, Section::Notifications, Section::Agents];
+    const ALL: [Section; 4] = [Section::General, Section::Terminal, Section::Notifications, Section::Agents];
 
     fn name(self) -> &'static str {
         match self {
+            Section::General => "General",
             Section::Terminal => "Terminal",
             Section::Notifications => "Notifications",
             Section::Agents => "Agents",
@@ -32,6 +35,7 @@ impl Section {
 
     fn icon(self) -> &'static str {
         match self {
+            Section::General => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>"##,
             Section::Terminal => look::Icon::Terminal.svg(),
             Section::Notifications => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>"##,
             Section::Agents => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>"##,
@@ -116,10 +120,10 @@ impl SettingsView {
         new_agent.update(cx, |i, cx| i.set_value(p.new_agent.clone(), window, cx));
         let editor = cx.new(|cx| InputState::new(window, cx).placeholder("$VISUAL, else $EDITOR"));
         editor.update(cx, |i, cx| i.set_value(p.editor.clone(), window, cx));
-        // a field's words count once the person is done with them: Return, or leaving the field
+        // a field's words are kept as they are typed, so closing the window just after loses none
         for (input, name) in [(&new_agent, "new_agent"), (&editor, "editor")] {
             cx.subscribe_in(input, window, move |this, input, e: &InputEvent, _, cx| {
-                if matches!(e, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                if keeps_on(e) {
                     let value = input.read(cx).value().to_string();
                     this.pick(name, &value, cx);
                 }
@@ -128,7 +132,7 @@ impl SettingsView {
         }
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        SettingsView { section: Section::Terminal, font_open: false, fonts_closed_at: None, new_agent, editor, focus, note: None }
+        SettingsView { section: Section::General, font_open: false, fonts_closed_at: None, new_agent, editor, focus, note: None }
     }
 
     /// What a click on a control does: the setting changes, at once, and is kept.
@@ -153,8 +157,8 @@ impl SettingsView {
 
     fn rows(&self, p: &Prefs, cx: &mut Context<Self>) -> Vec<Div> {
         match self.section {
+            Section::General => vec![row("Appearance", Some(appearance_hint(p.appearance)), self.appearance(p, cx))],
             Section::Terminal => vec![
-                row("Appearance", Some(appearance_hint(p.appearance)), self.appearance(p, cx)),
                 row("Colors", Some("The terminal's in the dark; in the light, Linen".into()), self.colors(p, cx)),
                 row("Font", None, div().flex().items_center().gap(px(8.)).child(self.font(p, cx)).child(stepper("font-size", format!("{}", p.terminal_font_size), "terminal_font_size", p.terminal_font_size, 1.0, cx))),
                 row("Option key", Some(option_hint(p.option_key)), self.option_key(p, cx)),
@@ -167,8 +171,8 @@ impl SettingsView {
                 toggle("notifications", p.notifications, "notifications", cx),
             )],
             Section::Agents => vec![
-                row("New agent runs", Some("What Command-T starts, in the open agent's folder".into()), field(&self.new_agent)),
-                row("Editor", Some("What e opens in Changes; empty: your shell's $VISUAL or $EDITOR".into()), field(&self.editor)),
+                row("New agent command", Some("What Command-T starts, in the open agent's folder".into()), field(&self.new_agent)),
+                row("Editor", Some("Opens files from Changes (key e). Empty: your shell's $VISUAL or $EDITOR".into()), field(&self.editor)),
             ],
         }
     }
@@ -310,15 +314,20 @@ fn segmented(name: &'static str, choices: &[(&'static str, &'static str, bool)],
     seg
 }
 
-/// What the appearance picked does, said under its name.
+/// What the appearance picked does, said under its name: it is the whole window's, the terminal's too.
 fn appearance_hint(a: crate::prefs::Appearance) -> String {
     use crate::prefs::Appearance;
     match a {
-        Appearance::Dark => "Dark, as the window has always been",
-        Appearance::Light => "Linen, a warm off-white",
-        Appearance::System => "Light or dark as macOS is, changing with it",
+        Appearance::Dark => "The whole window, the terminal included",
+        Appearance::Light => "The whole window, the terminal included, in Linen, a warm off-white",
+        Appearance::System => "The whole window, the terminal included, light or dark as macOS is",
     }
     .into()
+}
+
+/// Whether a field's words are kept on this event: every change, so none is lost, and Return or leaving it.
+fn keeps_on(e: &InputEvent) -> bool {
+    matches!(e, InputEvent::Change | InputEvent::PressEnter { .. } | InputEvent::Blur)
 }
 
 /// What the Option key does, said under its name.
@@ -455,14 +464,35 @@ impl Render for SettingsView {
             .child(bar)
             .child(div().flex_1().px(px(24.)).py(px(8.)).flex().flex_col().children(rows.into_iter().enumerate().map(|(i, r)| if i + 1 == n { r.border_b_0() } else { r })))
             .when_some(self.note.clone(), |d, n| d.child(div().px(px(24.)).pb(px(12.)).text_size(px(11.5)).text_color(rgb(look::red())).child(n)))
-            // the app's version, at the foot of every section
-            .child(div().id("settings-version").px(px(24.)).pb(px(12.)).text_size(px(11.)).text_color(rgb(look::dim())).child(crate::open_page::version()))
+            // the app's version, at the foot of General
+            .when(self.section == Section::General, |d| {
+                d.child(div().id("settings-version").px(px(24.)).pb(px(12.)).text_size(px(11.)).text_color(rgb(look::dim())).child(crate::open_page::version()))
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Section, fonts_offered, times};
+    use super::{Section, appearance_hint, fonts_offered, keeps_on, times};
+    use gpui_base::input::InputEvent;
+
+    #[test]
+    fn general_comes_first_with_the_appearance_of_the_whole_window() {
+        assert_eq!(Section::ALL[0], Section::General);
+        assert_eq!(Section::named("general"), Some(Section::General));
+        // the appearance is the whole window's, the terminal's too: said so wherever it stands
+        for a in [crate::prefs::Appearance::Dark, crate::prefs::Appearance::Light, crate::prefs::Appearance::System] {
+            assert!(appearance_hint(a).starts_with("The whole window, the terminal included"), "{a:?}: {}", appearance_hint(a));
+        }
+    }
+
+    #[test]
+    fn a_field_keeps_each_letter_as_it_is_typed() {
+        // Command-W just after typing loses nothing: every change is kept, not only Return or leaving the field
+        assert!(keeps_on(&InputEvent::Change));
+        assert!(keeps_on(&InputEvent::PressEnter { secondary: false, shift: false }) && keeps_on(&InputEvent::Blur));
+        assert!(!keeps_on(&InputEvent::Focus));
+    }
 
     #[test]
     fn a_multiplier_reads_as_one() {
