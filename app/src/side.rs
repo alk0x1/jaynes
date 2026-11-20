@@ -145,7 +145,7 @@ fn needs_tag(row: &Row) -> Option<(String, u32)> {
 /// The line under a run in "Needs you": a halted one, who halted it (`halted`, from the record: "halted by you" only
 /// when the person did) and where it is; one already delivered, that the person can still correct it; the others,
 /// their own line (the question, or why it is blocked).
-fn needs_line(row: &Row, delivered: bool, halted: Option<&String>) -> String {
+pub(crate) fn needs_line(row: &Row, delivered: bool, halted: Option<&String>) -> String {
     match row.mark {
         Mark::Halted => format!("{} · {}", halted.map(String::as_str).unwrap_or("halted"), at_work_tag(row)),
         _ if delivered => "delivered · you can still correct it".into(),
@@ -156,7 +156,7 @@ fn needs_line(row: &Row, delivered: bool, halted: Option<&String>) -> String {
 
 /// A blocked run's line: one whose step spent its attempts says where, as its tab does ("at “change”: used its 3
 /// attempts"); another cause keeps its own line.
-pub(crate) fn blocked_line(line: &str) -> String {
+fn blocked_line(line: &str) -> String {
     let reason = line.split_once("blocked: ").map(|(_, r)| r).unwrap_or(line);
     let spent = reason.split_once(" spent its ").and_then(|(step, rest)| rest.split_once(" attempts").map(|(n, _)| (step, n)));
     match spent {

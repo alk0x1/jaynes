@@ -1527,7 +1527,7 @@ impl Root {
     /// What the Inbox lists: what needs the person, then what finished unseen.
     fn inbox_items(&self, cx: &App) -> (Vec<inbox::Item>, Vec<inbox::Item>) {
         let snap = &self.runs.read(cx).snap;
-        let (needs, mut finished) = inbox::gather(&self.agents.read(cx).spaces, &snap.listing);
+        let (needs, mut finished) = inbox::gather(&self.agents.read(cx).spaces, &snap.listing, &snap.halted);
         // and the runs delivered that the person has not seen
         finished.extend(inbox::unseen_runs(&snap.listing, self.side.read(cx).seen(), &snap.files));
         (needs, finished)
@@ -1712,7 +1712,9 @@ impl Root {
         let more = inbox::more_below(f32::from(self.inbox_scroll.max_offset().y), f32::from(-self.inbox_scroll.offset().y));
         // 32 px: over the gap between two rows, the card's 16 did not show
         let fade = div().absolute().left_0().right_0().bottom_0().h(px(32.)).bg(linear_gradient(180., linear_color_stop(rgba(look::panel() << 8), 0.), linear_color_stop(rgb(look::panel()), 1.)));
-        div().relative().size_full().child(page).when(more, |d| d.child(fade)).into_any_element()
+        // and a line of 1 px at its very foot, the stop card's sign, which shows over the gap between two rows too
+        let foot = div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(rgb(look::line()));
+        div().relative().size_full().child(page).when(more, |d| d.child(fade).child(foot)).into_any_element()
     }
 
     /// A run that waits, its tab at the step that waits and its question open.

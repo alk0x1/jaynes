@@ -28,7 +28,7 @@ pub struct Item {
 
 /// What needs the person, then what finished unseen. A blocked run needs them, to continue it or abandon it, and a
 /// halted one, to resume it or abandon it.
-pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
+pub fn gather(spaces: &[Space], runs: &Listing, halted: &HashMap<String, String>) -> (Vec<Item>, Vec<Item>) {
     let agents = || spaces.iter().flat_map(|s| s.agents.iter().map(move |a| (s, a)));
     let item = |s: &Space, a: &crate::agents::Agent, what: String| Item {
         key: Key::Agent(a.address.clone()),
@@ -51,8 +51,8 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
     needs.extend(stopped(Mark::Blocked).chain(stopped(Mark::Halted)).map(|r| Item {
         key: Key::Run(r.id.clone()),
         title: r.title.clone(),
-        // in the column's words: one that spent its attempts says where
-        place: format!("Jaynes run · {}", if r.mark == Mark::Blocked { crate::side::blocked_line(&r.line) } else { r.line.clone() }),
+        // in the column's words: one that spent its attempts says where, a halted one who halted it (`halted`, from the record)
+        place: format!("Jaynes run · {}", crate::side::needs_line(r, false, halted.get(&r.id))),
         what: if r.mark == Mark::Halted { "halted · open it" } else { "blocked · open it" }.into(),
         state: if r.mark == Mark::Halted { State::Waiting } else { State::Error },
         since_ms: 0,
@@ -125,8 +125,18 @@ mod tests {
     fn a_run_that_spent_its_attempts_says_where_in_the_inbox_as_the_column_does() {
         let row = Row { id: "b".into(), title: "Rename the footer link".into(), line: "step 2 of 2, blocked: change spent its 3 attempts: the agent exited with code 1".into(), mark: Mark::Blocked };
         let runs = Listing { needs: vec![], projects: vec![("site".into(), vec![row])] };
-        let (needs, _) = gather(&[], &runs);
+        let (needs, _) = gather(&[], &runs, &HashMap::new());
         assert_eq!(needs[0].place, "Jaynes run · at “change”: used its 3 attempts");
+    }
+
+    #[test]
+    fn a_halted_run_says_who_halted_it_in_the_inbox_as_the_column_does() {
+        let row = Row { id: "h".into(), title: "Landing page".into(), line: "step 1 of 2, halted".into(), mark: Mark::Halted };
+        let runs = Listing { needs: vec![], projects: vec![("site".into(), vec![row])] };
+        let who = HashMap::from([("h".to_string(), "halted by an agent".to_string())]);
+        assert_eq!(gather(&[], &runs, &who).0[0].place, "Jaynes run · halted by an agent · step 1 of 2");
+        // nobody named: halted, where
+        assert_eq!(gather(&[], &runs, &HashMap::new()).0[0].place, "Jaynes run · halted · step 1 of 2");
     }
 
     #[test]
@@ -199,7 +209,7 @@ mod tests {
                 ],
             )],
         };
-        let (needs, review) = gather(&spaces, &runs);
+        let (needs, review) = gather(&spaces, &runs, &HashMap::new());
         assert_eq!(
             needs.iter().map(|i| i.key.clone()).collect::<Vec<_>>(),
             [Key::Agent("t2".into()), Key::Agent("t4".into()), Key::Run("r1".into()), Key::Run("r2".into()), Key::Run("r4".into())]
@@ -207,7 +217,7 @@ mod tests {
         assert_eq!(needs[3].what, "blocked · open it");
         assert_eq!(needs[3].place, "Jaynes run · step 2 of 3, blocked: no room");
         assert_eq!(needs[4].what, "halted · open it");
-        assert_eq!(needs[4].place, "Jaynes run · step 1 of 3, halted");
+        assert_eq!(needs[4].place, "Jaynes run · halted · step 1 of 3");
         assert_eq!(needs[0].what, "asks you to approve Bash: ls");
         assert_eq!(needs[0].place, "jaynes");
         // a failed agent with its words says them; without, that it stopped (agent() gives every one words)
