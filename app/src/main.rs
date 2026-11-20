@@ -230,7 +230,7 @@ impl Render for Root {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .when(self.tabs.read(cx).changes.is_none(), |d| d.children(self.ask_bar(cx)))
+                            .when(self.tabs.read(cx).changes.is_none(), |d| d.children(self.ask_bar(cx)).children(self.failed_bar(cx)))
                             // a run that waits, said over the agent open: it tells, it does not cover the agent
                             .when(self.agent_view.is_some() && self.tabs.read(cx).changes.is_none() && !self.tabs.read(cx).inbox, |d| d.children(self.run_waits_line(cx)))
                             .child(div().flex_1().min_h_0().child(match (&self.agent_view, self.tabs.read(cx).body(cx)) {
@@ -1147,6 +1147,35 @@ impl Root {
         }
     }
 
+    /// The bar over an agent that failed, opened: its name and "failed: its words", red at the left, as the column
+    /// says "failed · open it".
+    fn failed_bar(&self, cx: &App) -> Option<AnyElement> {
+        let (open, _) = self.agent_view.as_ref()?;
+        let a = self.agents.read(cx).spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == *open && a.state == agents::State::Error)?.clone();
+        Some(
+            div()
+                .flex_none()
+                .relative()
+                .px(px(18.))
+                .py(px(12.))
+                .border_b_1()
+                .border_color(rgb(look::line()))
+                .bg(rgba((look::red() << 8) | 0x0c))
+                .child(div().absolute().left_0().top_0().bottom_0().w(px(3.)).bg(rgb(look::red())))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .gap(px(6.))
+                        .text_size(px(13.))
+                        .line_height(px(19.5))
+                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(a.title))
+                        .child(div().min_w_0().truncate().text_color(rgb(look::red())).child(ask::failed(&a.msg))),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The bar over a waiting agent's terminal, in the familiar look: what it asks, then its choices as buttons
     /// with their keys, the first in amber (Command-Return), and Deny (Command-Backspace).
     fn ask_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1174,15 +1203,18 @@ impl Root {
                 .child(div().flex_none().text_size(px(11.)).opacity(0.6).child(key))
         };
         let mut acts = div().flex().flex_wrap().items_center().gap(px(8.));
-        acts = acts.child(
-            button("ask-deny".into(), "Deny".into(), "⌘⌫".into(), false)
-                .border_color(rgba(0))
-                .bg(rgba(0))
-                .text_color(rgb(look::dim()))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.answer(Answer::Deny, cx);
-                })),
-        );
+        // a question is answered with its choices, never denied: Esc would only interrupt it
+        if ask::offers_deny(ask.kind.as_deref(), &ask.choices) {
+            acts = acts.child(
+                button("ask-deny".into(), "Deny".into(), "⌘⌫".into(), false)
+                    .border_color(rgba(0))
+                    .bg(rgba(0))
+                    .text_color(rgb(look::dim()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.answer(Answer::Deny, cx);
+                    })),
+            );
+        }
         for (i, choice) in ask.choices.iter().enumerate().take(9) {
             let n = i + 1;
             let key = if n == 1 { "⌘↩".to_string() } else { format!("⌥{n}") };

@@ -90,7 +90,7 @@ impl Agents {
                 // still open and still waiting when the screen came back
                 let waits = this.spaces.iter().flat_map(|s| &s.agents).any(|x| x.address == a.address && x.state == State::Waiting);
                 if this.open.as_deref() == Some(a.address.as_str()) && waits {
-                    let ask = Some(Ask { address: a.address.clone(), title: a.title.clone(), what: crate::ask::what(a.kind.as_deref(), &a.msg), choices });
+                    let ask = Some(Ask { address: a.address.clone(), title: a.title.clone(), what: crate::ask::what(a.kind.as_deref(), &a.msg), kind: a.kind.clone(), choices });
                     if this.ask != ask {
                         this.ask = ask;
                         cx.notify();
@@ -318,6 +318,8 @@ pub struct Ask {
     pub title: String,
     /// "wants to approve Bash: touch x"
     pub what: String,
+    /// What kind of thing it asks: permission, question, auth, or none said.
+    pub kind: Option<String>,
     /// Its numbered choices, as its screen shows them; the first is the one Command-Return takes.
     pub choices: Vec<String>,
 }

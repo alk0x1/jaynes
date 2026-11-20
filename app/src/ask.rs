@@ -28,6 +28,19 @@ fn short(text: &str) -> String {
     text.split(" · ").next().unwrap_or(text).trim().to_owned()
 }
 
+/// Whether the bar offers Deny (Esc) for what an agent asks: a permission or anything else, yes; a question, no, since
+/// Esc only interrupts it: it is answered with its choices, or in the terminal under the bar.
+pub fn offers_deny(kind: Option<&str>, _choices: &[String]) -> bool {
+    kind != Some("question")
+}
+
+/// What the bar over an agent that failed says after its name: "failed: the tests failed", or "failed" without words,
+/// as the column says "failed · open it".
+pub fn failed(msg: &str) -> String {
+    let msg = msg.trim();
+    if msg.is_empty() { "failed".into() } else { format!("failed: {msg}") }
+}
+
 /// What it asks, as the bar says it after the agent's name: "wants to approve Bash: touch x". An agent that says
 /// what kind of thing it asks but not its words still gets a whole sentence.
 pub fn what(kind: Option<&str>, msg: &str) -> String {
@@ -46,7 +59,25 @@ pub fn what(kind: Option<&str>, msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{choices, what};
+    use super::{choices, failed, offers_deny, what};
+
+    #[test]
+    fn a_question_is_answered_with_its_choices_and_a_permission_can_be_denied() {
+        let some = vec!["Yes".to_string(), "No".to_string()];
+        assert!(offers_deny(Some("permission"), &some));
+        assert!(offers_deny(Some("permission"), &[]));
+        assert!(offers_deny(None, &[]));
+        // a question is not denied: Esc would only interrupt it; it is answered with its choices, or in the terminal
+        assert!(!offers_deny(Some("question"), &some));
+        assert!(!offers_deny(Some("question"), &[]));
+    }
+
+    #[test]
+    fn an_agent_that_failed_says_so_over_its_terminal_with_its_words() {
+        assert_eq!(failed("the tests failed"), "failed: the tests failed");
+        assert_eq!(failed("  the tests failed \n"), "failed: the tests failed");
+        assert_eq!(failed(" "), "failed");
+    }
 
     #[test]
     fn the_choices_are_the_last_numbered_list_on_the_screen() {
