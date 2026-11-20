@@ -66,8 +66,13 @@ fn the_page_draws_itself_with_fonts_of_its_own_and_reaches_no_other_host() {
         // nothing on the page, and nothing its policy allows, leaves this machine
         assert!(!body.contains("googleapis") && !body.contains("gstatic"), "{path}: {body}");
         // what the browser fetches to draw the page (not a link the person may follow) is the page's own
-        for fetched in ["<link", "src=\"http", "src='http", "url(http", "@import"] {
+        for fetched in ["src=\"http", "src='http", "url(http", "@import"] {
             assert!(!body.contains(fetched), "{path}: {fetched} in {body}");
+        }
+        // a link the browser fetches (the page's icon) is to a path of the page's own, never to another host
+        for link in body.split("<link").skip(1) {
+            let href = link.split("href=\"").nth(1).and_then(|h| h.split('"').next()).unwrap_or("");
+            assert!(href.starts_with('/') && !href.starts_with("//"), "{path}: <link{}", link.split('>').next().unwrap_or(""));
         }
         let policy = head.lines().find_map(|l| l.strip_prefix("Content-Security-Policy: ")).expect("policy");
         assert!(!policy.contains("http"), "{path}: {policy}");
