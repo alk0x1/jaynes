@@ -20,7 +20,7 @@ pub struct Item {
     pub title: String,
     /// The space it is in, or the run's project.
     pub place: String,
-    /// What it asks or did, after its title: "wants to approve Bash: …", "finished".
+    /// What it asks or did, after its title: "asks you to approve Bash: …", "finished".
     pub what: String,
     pub state: State,
     pub since_ms: u64,
@@ -41,7 +41,7 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
     let mut needs: Vec<Item> = agents()
         .filter(|(_, a)| matches!(a.state, State::Waiting | State::Error))
         .map(|(s, a)| {
-            let what = if a.state == State::Error { "stopped with an error".to_string() } else { crate::ask::what(a.kind.as_deref(), &a.msg) };
+            let what = if a.state == State::Error { failed_what(&a.msg) } else { crate::ask::what(a.kind.as_deref(), &a.msg) };
             item(s, a, what)
         })
         .collect();
@@ -91,6 +91,16 @@ pub fn moved(len: usize, at: Option<usize>, by: isize) -> Option<usize> {
     })
 }
 
+/// What a failed agent says after its name in the Inbox: what it said, "failed: the tests failed", or that it stopped.
+pub fn failed_what(msg: &str) -> String {
+    if msg.trim().is_empty() { "stopped with an error".into() } else { crate::ask::failed(msg) }
+}
+
+/// Whether a list scrolled `offset` down of its `max` has more below it: its foot then fades, as the stop's card does.
+pub fn more_below(max: f32, offset: f32) -> bool {
+    max > 1. && offset < max - 1.
+}
+
 /// Command-O: the thing after the one open, round the end; the first when none of them is open.
 pub fn next(order: &[Key], open: Option<&Key>) -> Option<Key> {
     if order.is_empty() {
@@ -108,7 +118,23 @@ pub fn subtitle(spaces: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Key, gather, moved, next, subtitle, unseen_runs};
+    use super::{Key, failed_what, gather, more_below, moved, next, subtitle, unseen_runs};
+
+    #[test]
+    fn a_failed_agent_in_the_inbox_says_what_it_said_or_that_it_stopped() {
+        assert_eq!(failed_what("the tests failed"), "failed: the tests failed");
+        assert_eq!(failed_what("  "), "stopped with an error");
+    }
+
+    #[test]
+    fn the_inbox_fades_at_its_foot_only_while_there_is_more_below() {
+        // nothing to scroll: no fade
+        assert!(!more_below(0., 0.));
+        // more below: the list is at its top, or partway
+        assert!(more_below(400., 0.) && more_below(400., 200.));
+        // at the bottom: no more
+        assert!(!more_below(400., 400.) && !more_below(400., 399.5));
+    }
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
     use std::collections::{HashMap, HashSet};
@@ -173,9 +199,10 @@ mod tests {
         assert_eq!(needs[3].place, "Jaynes run · step 2 of 3, blocked: no room");
         assert_eq!(needs[4].what, "halted · open it");
         assert_eq!(needs[4].place, "Jaynes run · step 1 of 3, halted");
-        assert_eq!(needs[0].what, "wants to approve Bash: ls");
+        assert_eq!(needs[0].what, "asks you to approve Bash: ls");
         assert_eq!(needs[0].place, "jaynes");
-        assert_eq!(needs[1].what, "stopped with an error");
+        // a failed agent with its words says them; without, that it stopped (agent() gives every one words)
+        assert_eq!(needs[1].what, "failed: approve Bash: ls");
         assert_eq!(review.iter().map(|i| i.key.clone()).collect::<Vec<_>>(), [Key::Agent("t1".into())]);
     }
 

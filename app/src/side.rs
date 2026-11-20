@@ -149,7 +149,19 @@ fn needs_line(row: &Row, delivered: bool, halted: Option<&String>) -> String {
     match row.mark {
         Mark::Halted => format!("{} · {}", halted.map(String::as_str).unwrap_or("halted"), at_work_tag(row)),
         _ if delivered => "delivered · you can still correct it".into(),
+        Mark::Blocked => blocked_line(&row.line),
         _ => row.line.clone(),
+    }
+}
+
+/// A blocked run's line: one whose step spent its attempts says where, as its tab does ("at “change”: used its 3
+/// attempts"); another cause keeps its own line.
+fn blocked_line(line: &str) -> String {
+    let reason = line.split_once("blocked: ").map(|(_, r)| r).unwrap_or(line);
+    let spent = reason.split_once(" spent its ").and_then(|(step, rest)| rest.split_once(" attempts").map(|(n, _)| (step, n)));
+    match spent {
+        Some((step, n)) if !step.contains(' ') && n.parse::<u32>().is_ok() => format!("at “{step}”: used its {n} attempts"),
+        _ => line.to_string(),
     }
 }
 
@@ -180,6 +192,8 @@ fn agent_word(a: &Agent, now: u64) -> (String, u32) {
 fn asking_line(a: &Agent) -> Option<String> {
     match a.state {
         State::Waiting => Some(crate::ask::what(a.kind.as_deref(), &a.msg)),
+        // failed: what it said, or that it stopped
+        State::Error => Some(if a.msg.trim().is_empty() { "it stopped with an error".to_string() } else { a.msg.trim().to_string() }),
         _ => (!a.msg.trim().is_empty()).then(|| a.msg.trim().to_string()),
     }
 }
@@ -825,7 +839,7 @@ mod tests {
             address: "t1".into(), title: "claude".into(), state, since_ms: 0, shell: false, turn: 0, kind: kind.map(str::to_string), msg: msg.into(), cwd: String::new(),
         };
         let waiting = |kind: Option<&str>, msg: &str| agent(State::Waiting, kind, msg);
-        assert_eq!(asking_line(&waiting(Some("permission"), "approve Bash: npm run build")).as_deref(), Some("wants to approve Bash: npm run build"));
+        assert_eq!(asking_line(&waiting(Some("permission"), "approve Bash: npm run build")).as_deref(), Some("asks you to approve Bash: npm run build"));
         // without its words, a whole sentence still: never two agents that read the same, "waiting"
         assert_eq!(asking_line(&waiting(Some("permission"), "")).as_deref(), Some("wants your permission"));
         assert_eq!(asking_line(&waiting(Some("question"), "  ")).as_deref(), Some("asks you something"));
@@ -834,7 +848,7 @@ mod tests {
         // one that failed keeps what it said, or nothing
         let failed = |msg: &str| agent(State::Error, None, msg);
         assert_eq!(asking_line(&failed("exited 1")).as_deref(), Some("exited 1"));
-        assert_eq!(asking_line(&failed("")), None);
+        assert_eq!(asking_line(&failed("")).as_deref(), Some("it stopped with an error"));
     }
 
     #[test]
@@ -916,6 +930,9 @@ mod tests {
         assert_eq!(needs_line(&o.needs[0], false, Some(&"halted by an agent".to_string())), "halted by an agent · step 1 of 3");
         assert_eq!(needs_line(&o.needs[0], false, None), "halted · step 1 of 3");
         assert_eq!(needs_line(&o.needs[1], false, None), "step 3 of 3, blocked: no room");
+        // one that spent its attempts says where, as its tab does
+        let spent = Row { line: "step 2 of 2, blocked: change spent its 3 attempts: the agent exited with code 1".into(), ..o.needs[1].clone() };
+        assert_eq!(needs_line(&spent, false, None), "at “change”: used its 3 attempts");
     }
 
     #[test]

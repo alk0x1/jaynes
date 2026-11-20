@@ -165,6 +165,8 @@ pub(crate) struct Root {
     halt_all_at: Option<std::time::Instant>,
     /// The Inbox's item the arrows are on, counted over "Needs you" then "Finished".
     inbox_at: Option<usize>,
+    /// Where the Inbox is scrolled: its foot fades while there is more below.
+    inbox_scroll: ScrollHandle,
     act_said: Option<String>,
     /// Why the page did not open, on the line over the status bar until a click on it or the next try (open_page.rs);
     /// and whether it is being opened, when a second click does nothing: two would start two pages, and the one that
@@ -1563,6 +1565,8 @@ impl Root {
         let now = agents::now_ms();
         let mut page = div()
             .id("inbox")
+            .track_scroll(&self.inbox_scroll)
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .size_full()
             .overflow_y_scroll()
             .px(px(34.))
@@ -1704,7 +1708,10 @@ impl Root {
             let words = [(working, "working"), (idle, "idle")].iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect::<Vec<_>>().join(" · ");
             page = page.child(div().mt(px(26.)).text_size(px(12.5)).text_color(rgb(look::faint())).child(format!("{words}. They show up here when they need you.")));
         }
-        page.into_any_element()
+        // more below: its foot fades into the window, as the stop's card does, so the list is seen to go on
+        let more = inbox::more_below(f32::from(self.inbox_scroll.max_offset().y), f32::from(-self.inbox_scroll.offset().y));
+        let fade = div().absolute().left_0().right_0().bottom_0().h(px(16.)).bg(linear_gradient(180., linear_color_stop(rgba(look::panel() << 8), 0.), linear_color_stop(rgb(look::panel()), 1.)));
+        div().relative().size_full().child(page).when(more, |d| d.child(fade)).into_any_element()
     }
 
     /// A run that waits, its tab at the step that waits and its question open.
@@ -2342,7 +2349,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             for why in why {
                 tracing::warn!("{why}");
             }
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, inbox_at: None, act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, inbox_at: None, inbox_scroll: ScrollHandle::new(), act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {

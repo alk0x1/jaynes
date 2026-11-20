@@ -41,7 +41,7 @@ pub fn failed(msg: &str) -> String {
     if msg.is_empty() { "failed".into() } else { format!("failed: {msg}") }
 }
 
-/// What it asks, as the bar says it after the agent's name: "wants to approve Bash: touch x". An agent that says
+/// What it asks, as the bar says it after the agent's name: "asks you to approve Bash: touch x". An agent that says
 /// what kind of thing it asks but not its words still gets a whole sentence.
 pub fn what(kind: Option<&str>, msg: &str) -> String {
     let msg = msg.trim();
@@ -49,7 +49,7 @@ pub fn what(kind: Option<&str>, msg: &str) -> String {
         Some("permission") if msg.is_empty() => "wants your permission".into(),
         Some("question") if msg.is_empty() => "asks you something".into(),
         Some("auth") if msg.is_empty() => "needs you to sign in".into(),
-        Some("permission") => format!("wants to {msg}"),
+        Some("permission") => format!("asks you to {msg}"),
         Some("question") => format!("asks: {msg}"),
         Some("auth") => format!("needs you to sign in: {msg}"),
         _ if msg.is_empty() => "waits for you".into(),
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn the_bar_says_what_it_asks() {
-        assert_eq!(what(Some("permission"), "approve Bash: touch x"), "wants to approve Bash: touch x");
+        assert_eq!(what(Some("permission"), "approve Bash: touch x"), "asks you to approve Bash: touch x");
         assert_eq!(what(Some("question"), "which one?"), "asks: which one?");
         assert_eq!(what(None, ""), "waits for you");
         // the kind without its words: a whole sentence, never "wants to" with nothing after it

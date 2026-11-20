@@ -316,7 +316,7 @@ impl State {
 pub struct Ask {
     pub address: String,
     pub title: String,
-    /// "wants to approve Bash: touch x"
+    /// "asks you to approve Bash: touch x"
     pub what: String,
     /// What kind of thing it asks: permission, question, auth, or none said.
     pub kind: Option<String>,
@@ -643,7 +643,7 @@ mod tests {
         // in the order the column shows them (the space's tabs: t2 first)
         assert_eq!(told.iter().map(|n| n.run.as_str()).collect::<Vec<_>>(), ["t2", "t1"]);
         assert_eq!(told[1].title, "title t1 needs you");
-        assert_eq!(told[1].body, "jaynes/tenure · wants to approve Bash: ls");
+        assert_eq!(told[1].body, "jaynes/tenure · asks you to approve Bash: ls");
         assert_eq!(told[0].title, "title t2 finished");
         // the agent the person looks at is not news; what stood at the first reading is not news either
         assert_eq!(news(&before, &now, Some("t1")).iter().map(|n| n.run.as_str()).collect::<Vec<_>>(), ["t2"]);
