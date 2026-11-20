@@ -1,8 +1,9 @@
 //! The stop, risen over the terminal as an island: the question the picked run waits at, a verdict per item, the
 //! person's words where they send something back, what they dropped earlier and may bring back, what the answer will
 //! do in the engine's own sentences (G11), and Send. The person may also answer in their own words: Jaynes reads them
-//! into the answer they mean and shows what it does; nothing goes until they send it. Esc · later shrinks it to a pill.
-//! A stop that chooses among designs opens the compare mode instead, over the whole window.
+//! into the answer they mean and shows what it does; nothing goes until they send it. Esc · later folds it to a pill,
+//! and over Claude Code's terminal only the pill shows, which opens the run's tab. A stop that chooses among designs
+//! opens the compare mode instead, over the whole window. Every button of a stop is in the Tab order.
 
 use crate::answer::{self, Reckoned, Understood};
 use crate::compare::Compare;
@@ -18,6 +19,7 @@ use jaynes_shell::stop::{self, Stop};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub struct Island {
     runs: Entity<Runs>,
@@ -39,6 +41,10 @@ pub struct Island {
     shrunk: HashSet<String>,
     sending: bool,
     said: Option<String>,
+    /// The answer just sent, and to which question: the foot of its run's tab says so for a few seconds.
+    sent: Option<(Sent, String)>,
+    /// The card's middle, which scrolls under its fixed foot.
+    scroll: ScrollHandle,
     /// The tabs over the middle, so a test can open one (`tab <run>`, `tab main`).
     pub tabs: Option<Entity<crate::tabs::Tabs>>,
     /// The Changes panel, for a test that clicks a file in it.
@@ -60,19 +66,37 @@ fn word(v: VerdictKind) -> &'static str {
     }
 }
 
-/// A text field in a box of its own height: the field fills whatever holds it.
-pub fn field(input: &Entity<InputState>) -> Div {
-    div().h(px(34.)).px(px(10.)).flex().items_center().rounded(px(8.)).bg(rgb(look::panel())).border_1().border_color(rgb(look::line())).text_size(px(13.)).text_color(rgb(look::text())).child(Input::new(input))
+/// The soft blue ring round what has the keys: a field, or a control Tab reached.
+fn focus_ring() -> Vec<BoxShadow> {
+    let ring = rgba((look::blue() << 8) | if look::frame() == look::LINEN { 0x38 } else { 0x47 });
+    vec![BoxShadow { color: ring.into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }]
 }
 
-/// A text field that shows when it has the keys, as the compare mode's: the border blue with a soft blue ring round
-/// it and a blue caret (the kit's own caret took the kit's light theme's near-black, which hid it on the dark), the
-/// I-beam over the whole box, and a press anywhere in the box gives it the keys with the caret after the text; a press
-/// on the text itself puts the caret there, as any field does.
-pub fn focus_field(id: &'static str, input: &Entity<InputState>, window: &Window, cx: &mut App) -> Stateful<Div> {
+/// A control in a stop's Tab order: Tab and Shift-Tab reach it, Enter or Space press it, and the blue ring says it has
+/// the keys. A press of the pointer leaves the keys where they are, so an Enter after a click is still the screen's.
+/// The ring is a shadow, painted under the control: one without a fill of its own takes `fill` while it has the keys.
+pub fn tabbed_with(d: Stateful<Div>, fill: Option<u32>) -> Stateful<Div> {
+    d.tab_index(0).on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default()).focus_visible(move |s| {
+        let s = s.border_color(rgb(look::blue())).shadow(focus_ring());
+        match fill {
+            Some(f) => s.bg(rgb(f)),
+            None => s,
+        }
+    })
+}
+
+/// A control with a fill of its own in a stop's Tab order (`tabbed_with`).
+pub fn tabbed(d: Stateful<Div>) -> Stateful<Div> {
+    tabbed_with(d, None)
+}
+
+/// A text field that shows when it has the keys, in every field of the app: the border blue with a soft blue ring
+/// round it and a blue caret (the kit's own caret took the kit's light theme's near-black, which hid it on the dark),
+/// the I-beam over the whole box, and a press anywhere in the box gives it the keys with the caret after the text; a
+/// press on the text itself puts the caret there, as any field does.
+pub fn focus_field(id: impl Into<ElementId>, input: &Entity<InputState>, window: &Window, cx: &mut App) -> Stateful<Div> {
     input.update(cx, |s, _| s.set_editor_style(InputEditorStyle { caret: rgb(look::blue()).into(), ..InputEditorStyle::default() }));
     let focused = input.read(cx).focus_handle(cx).is_focused(window);
-    let ring = rgba((look::blue() << 8) | if look::frame() == look::LINEN { 0x38 } else { 0x47 });
     let take = input.clone();
     div()
         .id(id)
@@ -84,7 +108,7 @@ pub fn focus_field(id: &'static str, input: &Entity<InputState>, window: &Window
         .bg(rgb(look::panel()))
         .border_1()
         .border_color(rgb(if focused { look::blue() } else { look::line() }))
-        .when(focused, |d| d.shadow(vec![BoxShadow { color: ring.into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }]))
+        .when(focused, |d| d.shadow(focus_ring()))
         .cursor(CursorStyle::IBeam)
         .text_size(px(13.))
         .text_color(rgb(look::text()))
@@ -102,8 +126,8 @@ pub fn focus_field(id: &'static str, input: &Entity<InputState>, window: &Window
 }
 
 pub fn button(id: String, text: &str, on: bool, color: u32) -> Stateful<Div> {
-    div()
-        .id(SharedString::from(id))
+    // one that is on has its colour's fill; one that is off is clear, and takes the window's while it has the keys
+    tabbed_with(div().id(SharedString::from(id)), (!on).then(look::panel))
         .px(px(10.))
         .py(px(4.))
         .rounded(px(7.))
@@ -117,8 +141,9 @@ pub fn button(id: String, text: &str, on: bool, color: u32) -> Stateful<Div> {
 }
 
 pub fn primary(id: &str, text: String, can: bool) -> Stateful<Div> {
-    div()
-        .id(SharedString::from(id.to_string()))
+    let d = div().id(SharedString::from(id.to_string()));
+    // only a button that can go is in the Tab order
+    if can { tabbed(d) } else { d }
         .px(px(14.))
         .py(px(7.))
         .rounded(px(8.))
@@ -146,6 +171,78 @@ pub fn sentences(list: &[String]) -> Div {
     d
 }
 
+/// How the stop shows over what the middle shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shows {
+    Card,
+    Pill,
+}
+
+/// The stop on a run's tab: its card, or its pill when the person folded it.
+///
+/// Over Claude Code's terminal, only the pill: the card never covers where the person types.
+pub fn shows(on_run_tab: bool, folded: bool) -> Shows {
+    if on_run_tab && !folded { Shows::Card } else { Shows::Pill }
+}
+
+/// Whether Esc folds the stop: the card open takes it before the terminal under it ever sees it, unless something
+/// over it (the diff, Command-K, the shortcuts) is there to close first; a pill lets it go on.
+pub fn takes_esc(shows: Shows, over: bool) -> bool {
+    shows == Shows::Card && !over
+}
+
+/// The card's first line, the run's name, and the one after it: where it waits.
+pub fn card_head(run: &str, project: &str, step: &str, round: u32) -> (String, String) {
+    let at = if round > 0 { format!("at {step} · round {round}") } else { format!("at {step}") };
+    if run.is_empty() {
+        return (project.to_string(), at);
+    }
+    let under = if project.is_empty() { at } else { format!("{project} · {at}") };
+    (run.to_string(), under)
+}
+
+/// The stop folded to one line: which run asks, and what.
+pub fn pill(run: &str, question: &str) -> String {
+    if run.is_empty() { format!("◆ {question} · open") } else { format!("◆ {run}: {question} · open") }
+}
+
+/// The invitation to compare: how many options and the question.
+pub fn invite_line(count: &str, question: &str) -> String {
+    format!("{count} · {question}")
+}
+
+/// Under the card's title, for a run already delivered.
+pub const DELIVERED: &str = "Already delivered. Your answer can still correct it.";
+
+/// The title over the change a step made.
+pub fn diff_title(step: &str) -> String {
+    format!("Changes made at {step}")
+}
+
+/// What the foot of the card says once the answer went.
+pub const SENT: &str = "Sent as yours. The run goes on.";
+/// How long the foot of the run's tab says it after the stop closed.
+pub const SENT_FOR: Duration = Duration::from_secs(4);
+
+/// The answer just sent to a run's stop, and when.
+#[derive(Clone, Debug)]
+pub struct Sent {
+    pub run: String,
+    pub at: Instant,
+}
+
+impl Sent {
+    /// Whether the foot of the tab showing `run` says it at `now`.
+    pub fn shows(&self, run: Option<&str>, now: Instant) -> bool {
+        run == Some(self.run.as_str()) && now.saturating_duration_since(self.at) < SENT_FOR
+    }
+}
+
+/// Whether what a field said reads the person's words.
+pub fn reads_on(e: &InputEvent) -> bool {
+    matches!(e, InputEvent::PressEnter { secondary: false, .. })
+}
+
 impl Island {
     pub fn new(runs: Entity<Runs>, key: Option<Arc<Key>>, lightbox: Entity<Lightbox>, compare: Entity<Compare>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |this, _, cx| {
@@ -154,6 +251,12 @@ impl Island {
         })
         .detach();
         cx.observe(&compare, |_, _, cx| cx.notify()).detach();
+        // an answer the compare mode sent: its run's tab says so after the mode closes
+        cx.subscribe(&compare, |this, _, e: &crate::compare::SentFrom, cx| {
+            let question = this.stop(cx).filter(|s| s.run == e.0).map(|s| s.question).unwrap_or_default();
+            this.said_sent(e.0.clone(), question, cx);
+        })
+        .detach();
         // only in a build for tests: the driver acts as the person (testing.rs)
         #[cfg(feature = "test-driver")]
         if let Some(file) = crate::testing::var("JAYNES_APP_TEST_DO") {
@@ -177,6 +280,8 @@ impl Island {
             shrunk: HashSet::new(),
             sending: false,
             said: None,
+            sent: None,
+            scroll: ScrollHandle::new(),
             tabs: None,
             changes: None,
         }
@@ -204,8 +309,63 @@ impl Island {
         let Some(stop) = self.stop(cx) else { return };
         self.shrunk.remove(&stop.question);
         if stop.choose {
-            self.compare.update(cx, |c, cx| c.open(stop, window, cx));
+            self.compare_open(stop, window, cx);
         }
+        cx.notify();
+    }
+
+    /// The compare mode on `stop`, with its run's name.
+    fn compare_open(&self, stop: Stop, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.run_name(&stop.run, cx);
+        self.compare.update(cx, |c, cx| c.open(stop, name, window, cx));
+    }
+
+    /// A run's name, as the column says it; empty before the record is read.
+    fn run_name(&self, run: &str, cx: &App) -> String {
+        self.runs.read(cx).snap.details.get(run).map(|d| d.title.clone()).unwrap_or_default()
+    }
+
+    /// The run whose tab shows in the middle, if a run's does.
+    fn tab_run(&self, cx: &App) -> Option<String> {
+        self.tabs.as_ref().and_then(|t| t.read(cx).middle().run().map(str::to_string))
+    }
+
+    /// How the picked run's stop shows now: the card on its run's tab, else its pill; none while the compare mode
+    /// shows it, or with no stop.
+    pub fn showing(&self, cx: &App) -> Option<Shows> {
+        let stop = self.stop(cx)?;
+        if self.compare.read(cx).is_open() {
+            return None;
+        }
+        Some(shows(self.tab_run(cx).as_deref() == Some(stop.run.as_str()), self.shrunk.contains(&stop.question)))
+    }
+
+    /// Esc with the card open and nothing over it: the card folds to its pill, and the terminal never sees the key.
+    pub fn takes_esc_now(&self, over: bool, cx: &App) -> bool {
+        self.showing(cx).is_some_and(|s| takes_esc(s, over))
+    }
+
+    pub fn fold(&mut self, cx: &mut Context<Self>) {
+        if let Some(stop) = self.stop(cx) {
+            self.shrunk.insert(stop.question);
+            cx.notify();
+        }
+    }
+
+    /// Whether Tab goes round a stop's buttons now: the card's, or the compare mode's while no picture shows large.
+    pub fn takes_tab(&self, cx: &App) -> bool {
+        let compare = self.compare.read(cx);
+        (compare.is_open() && !compare.viewing()) || self.showing(cx) == Some(Shows::Card)
+    }
+
+    /// The answer just went to `run`'s `question`: the foot of its tab says so, for a few seconds.
+    fn said_sent(&mut self, run: String, question: String, cx: &mut Context<Self>) {
+        self.sent = Some((Sent { run, at: Instant::now() }, question));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SENT_FOR + Duration::from_millis(50)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
         cx.notify();
     }
 
@@ -233,10 +393,16 @@ impl Island {
 
     fn input(&self, placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
+        cx.subscribe(&input, |this, field, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
                 this.reckon(cx);
             }
+            // Enter in the person's words reads them, as "Read my words" does
+            if reads_on(e) && this.words.as_ref() == Some(&field) {
+                this.read_words(cx);
+            }
+            // the field took or let go the keys: its ring follows
+            cx.notify();
         })
         .detach();
         input
@@ -294,10 +460,13 @@ impl Island {
             let sent = sent.await;
             let _ = this.update(cx, |this, cx| {
                 this.sending = false;
-                this.said = Some(match sent {
-                    Ok(()) => "Sent as yours. The run goes on.".into(),
-                    Err(e) => format!("Not sent: {e}"),
-                });
+                match sent {
+                    Ok(()) => {
+                        this.said = Some(SENT.into());
+                        this.said_sent(stop.run.clone(), stop.question.clone(), cx);
+                    }
+                    Err(e) => this.said = Some(format!("Not sent: {e}")),
+                }
                 cx.notify();
             });
         })
@@ -311,15 +480,15 @@ impl Island {
         (judged == stop.items.len() || !self.bring.is_empty()) && !self.sending && self.reckoned.refused.is_none()
     }
 
-    /// The stop the island shows open (not folded away): its run and question.
+    /// The stop the island shows open as its card (not folded away, not only a pill): its run and question.
     pub fn stop_shown(&self, cx: &App) -> Option<(String, String)> {
-        self.stop(cx).filter(|s| !self.shrunk.contains(&s.question)).map(|s| (s.run, s.question))
+        self.stop(cx).filter(|_| self.showing(cx) == Some(Shows::Card)).map(|s| (s.run, s.question))
     }
 
     /// Command-Return: sends the answer, when the question shows open and the answer may go.
     pub fn send_if_ready(&mut self, cx: &mut Context<Self>) {
         let Some(stop) = self.stop(cx) else { return };
-        if stop.choose || self.compare.read(cx).is_open() || self.shrunk.contains(&stop.question) || !self.can_send(&stop) {
+        if stop.choose || self.showing(cx) != Some(Shows::Card) || !self.can_send(&stop) {
             return;
         }
         self.send(cx);
@@ -348,11 +517,11 @@ impl Island {
     fn diff(&self, stop: &Stop, window: &mut Window, cx: &mut Context<Self>) {
         let text = jaynes_shell::drive::step_diff(&jaynes_shell::home(), &stop.run, &stop.step).unwrap_or_default();
         let text = if text.trim().is_empty() { "This step changed nothing in the project.".to_string() } else { text };
-        let title = format!("What {} changed", stop.step);
+        let title = diff_title(&stop.step);
         self.lightbox.update(cx, |l, cx| l.show(Shown::Diff { title, text }, window, cx));
     }
 
-    fn item_view(&self, it: &stop::Item, stop: &Stop, back: bool, cx: &mut Context<Self>) -> Div {
+    fn item_view(&self, it: &stop::Item, stop: &Stop, back: bool, window: &Window, cx: &mut Context<Self>) -> Div {
         let mut body = div().flex().flex_col().gap(px(4.)).min_w_0().flex_1().child(div().text_size(px(14.)).text_color(rgb(look::text())).child(it.label.clone()));
         if !it.detail.is_empty() {
             body = body.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(it.detail.clone()));
@@ -365,8 +534,7 @@ impl Island {
             for (n, p) in it.pictures.iter().take(4).enumerate() {
                 let (path, title) = (p.clone(), it.label.clone());
                 pics = pics.child(
-                    div()
-                        .id(SharedString::from(format!("pic-{}-{n}", it.id)))
+                    tabbed(div().id(SharedString::from(format!("pic-{}-{n}", it.id))))
                         .cursor_pointer()
                         .rounded(px(6.))
                         .overflow_hidden()
@@ -404,16 +572,17 @@ impl Island {
             .border_1()
             .border_color(rgb(look::line()))
             .child(div().flex().gap(px(12.)).items_start().child(body).child(controls))
-            .when_some(words, |d, w| d.child(field(&w)))
+            .when_some(words, |d, w| d.child(focus_field(SharedString::from(format!("{}-{}", if back { "bring-words" } else { "note" }, it.id)), &w, window, cx)))
     }
 
-    /// A stop that chooses among designs: an invitation to compare them over the whole window.
+    /// A stop that chooses among designs: an invitation to compare them over the whole window, with its run's name.
     fn invite(&self, stop: &Stop, cx: &mut Context<Self>) -> Div {
         let open = {
-            let (compare, stop) = (self.compare.clone(), stop.clone());
-            cx.listener(move |_, _, window, cx| compare.update(cx, |c, cx| c.open(stop.clone(), window, cx)))
+            let stop = stop.clone();
+            cx.listener(move |this, _, window, cx| this.compare_open(stop.clone(), window, cx))
         };
         let q = stop.question.clone();
+        let name = self.run_name(&stop.run, cx);
         // one option is opened, not compared
         let (count, open_word) = crate::compare::invite(stop.items.len());
         div()
@@ -426,8 +595,17 @@ impl Island {
             .bg(rgb(look::panel_2()))
             .border_1()
             .border_color(rgba((look::amber() << 8) | 0x73))
-            .child(div().text_size(px(14.)).text_color(rgb(look::amber())).flex_none().child(count))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(stop.title.clone()))
+            .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(look::amber())))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(invite_line(&count, &stop.title)))
+                    .when(!name.is_empty(), |d| d.child(div().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(name))),
+            )
             .child(primary("compare", open_word.into(), true).on_click(open))
             .child(button("later".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
                 this.shrunk.insert(q.clone());
@@ -438,7 +616,7 @@ impl Island {
 
 #[cfg(feature = "test-driver")]
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `focus-words`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -470,7 +648,8 @@ impl Island {
     fn driven(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
         // the pointer, as macOS sends it to the window, at a point of it: `pointer move|down|up|click x y`,
-        // `pointer drag x y x2 y2`, `pointer pinch x y <delta>`, `pointer zoom-scroll x y <dy>` (Command and the wheel)
+        // `pointer drag x y x2 y2`, `pointer pinch x y <delta>`, `pointer zoom-scroll x y <dy>` (Command and the wheel),
+        // `pointer scroll x y <dy>` (the wheel alone)
         if verb == "pointer" {
             let w: Vec<&str> = rest.split_whitespace().collect();
             let n = |i: usize| w.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.);
@@ -498,6 +677,7 @@ impl Island {
                 }
                 "pinch" => vec![PlatformInput::Pinch(PinchEvent { position: at, delta: n(3), modifiers: Modifiers::default(), phase: TouchPhase::Moved })],
                 "zoom-scroll" => vec![PlatformInput::ScrollWheel(ScrollWheelEvent { position: at, delta: ScrollDelta::Pixels(point(px(0.), px(n(3)))), modifiers: Modifiers { platform: true, ..Modifiers::default() }, touch_phase: TouchPhase::Moved })],
+                "scroll" => vec![PlatformInput::ScrollWheel(ScrollWheelEvent { position: at, delta: ScrollDelta::Pixels(point(px(0.), px(n(3)))), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved })],
                 other => {
                     tracing::warn!("no pointer {other}");
                     vec![]
@@ -687,7 +867,16 @@ impl Island {
             "send-read" => self.send_understood(cx),
             "compare" => {
                 if let Some(stop) = self.stop(cx) {
-                    self.compare.update(cx, |c, cx| c.open(stop, window, cx));
+                    self.compare_open(stop, window, cx);
+                }
+            }
+            // a press on the card's words box, as the pointer gives it the keys
+            "focus-words" => {
+                if let Some(w) = self.words.clone() {
+                    w.update(cx, |s, cx| {
+                        s.set_cursor_position(Position::new(0, u32::MAX), window, cx);
+                        s.focus(window, cx);
+                    });
                 }
             }
             _ => {
@@ -700,19 +889,38 @@ impl Island {
 
 impl Render for Island {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(stop) = self.stop(cx) else { return div().into_any_element() };
+        // docked under the terminal, which shrinks to make room: the stop never covers the line where the person types
+        let wrap = div().w_full().flex_none().px(px(14.)).pb(px(12.)).pt(px(4.)).flex().justify_center().font_family(look::UI_FONT);
+        let tab_run = self.tab_run(cx);
+        let now = Instant::now();
+        // the answer just sent, at the foot of its run's tab, once its question is gone or while the record catches up
+        let sent_foot = |q: Option<&str>, this: &Self| {
+            this.sent.as_ref().filter(|(s, question)| s.shows(tab_run.as_deref(), now) && q.is_none_or(|q| q == question)).map(|_| {
+                div().w_full().px(px(16.)).py(px(10.)).rounded(px(12.)).bg(rgb(look::panel_2())).border_1().border_color(rgb(look::line())).text_size(px(12.)).text_color(rgb(look::faint())).child(SENT)
+            })
+        };
+        let Some(stop) = self.stop(cx) else {
+            return match sent_foot(None, self) {
+                Some(foot) => wrap.child(foot).into_any_element(),
+                None => div().into_any_element(),
+            };
+        };
         if self.compare.read(cx).is_open() {
             return div().into_any_element();
         }
-        let project = self.runs.read(cx).chosen().map(|d| d.project.clone()).unwrap_or_default();
-        // docked under the terminal, which shrinks to make room: the stop never covers the line where the person types
-        let wrap = div().w_full().flex_none().px(px(14.)).pb(px(12.)).pt(px(4.)).flex().justify_center().font_family(look::UI_FONT);
-        if self.shrunk.contains(&stop.question) {
-            let q = stop.question.clone();
+        let on_tab = tab_run.as_deref() == Some(stop.run.as_str());
+        if stop.choose && on_tab {
+            // the compare mode sent it and closed: the tab says so until the record moves on
+            if let Some(foot) = sent_foot(Some(&stop.question), self) {
+                return wrap.child(foot).into_any_element();
+            }
+        }
+        let name = self.run_name(&stop.run, cx);
+        if shows(on_tab, self.shrunk.contains(&stop.question)) == Shows::Pill {
+            let (q, run, step) = (stop.question.clone(), stop.run.clone(), stop.step.clone());
             return wrap
                 .child(
-                    div()
-                        .id("pill")
+                    tabbed(div().id("pill"))
                         .px(px(14.))
                         .py(px(8.))
                         .rounded(px(999.))
@@ -722,17 +930,25 @@ impl Render for Island {
                         .text_size(px(13.))
                         .text_color(rgb(look::text()))
                         .cursor_pointer()
+                        .truncate()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.shrunk.remove(&q);
+                            // over Claude Code's terminal: the run's tab, where the card opens at its step
+                            if !on_tab && let Some(tabs) = this.tabs.clone() {
+                                let (run, step) = (run.clone(), step.clone());
+                                tabs.update(cx, |t, cx| t.show_at(run, crate::tabs::Place::Step(step), cx));
+                            }
                             cx.notify();
                         }))
-                        .child(format!("◆ {} · open", stop.title)),
+                        .child(pill(&name, &stop.title)),
                 )
                 .into_any_element();
         }
         if stop.choose {
             return wrap.child(div().w_full().child(self.invite(&stop, cx))).into_any_element();
         }
+        let delivered = self.runs.read(cx).snap.details.get(&stop.run).is_some_and(|d| d.delivered);
+        let project = self.runs.read(cx).snap.details.get(&stop.run).map(|d| d.project.clone()).unwrap_or_default();
         if self.words.is_none() {
             self.words = Some(self.input("Your words: say what you think, in any language (or answer with the buttons)", window, cx));
         }
@@ -741,14 +957,16 @@ impl Render for Island {
         let can = self.can_send(&stop);
         let mut items = div().flex().flex_col().gap(px(10.));
         for it in &stop.items {
-            items = items.child(self.item_view(it, &stop, false, cx));
+            items = items.child(self.item_view(it, &stop, false, window, cx));
         }
         let mut back = div().flex().flex_col().gap(px(8.));
         if !stop.back.is_empty() {
             let open = self.show_back;
             back = back.child(
-                div()
-                    .id("back")
+                tabbed_with(div().id("back"), Some(look::panel_2()))
+                    .self_start()
+                    .px(px(4.))
+                    .rounded(px(5.))
                     .cursor_pointer()
                     .text_size(px(12.5))
                     .text_color(rgb(look::dim()))
@@ -760,7 +978,7 @@ impl Render for Island {
             );
             if open {
                 for it in &stop.back {
-                    back = back.child(self.item_view(it, &stop, true, cx));
+                    back = back.child(self.item_view(it, &stop, true, window, cx));
                 }
             }
         }
@@ -805,59 +1023,134 @@ impl Render for Island {
         };
         let q = stop.question.clone();
         let diff_stop = stop.clone();
+        let (first, second) = card_head(&name, &project, &stop.step, stop.round);
+        let head = div()
+            .flex()
+            .gap(px(10.))
+            .items_center()
+            .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(look::amber())))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(first))
+                    .child(div().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(second)),
+            )
+            .child(button("diff".into(), "See the diff", false, look::blue()).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx))))
+            .child(button("shrink".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
+                this.shrunk.insert(q.clone());
+                cx.notify();
+            })));
+        // the middle scrolls under the fixed foot; while there is more below, its bottom edge fades
+        let max = self.scroll.max_offset().y;
+        let more_below = f32::from(max) > 1. && f32::from(-self.scroll.offset().y) < f32::from(max) - 1.;
+        let middle = div()
+            .id("island-scroll")
+            .track_scroll(&self.scroll)
+            .min_h_0()
+            .flex_shrink(1.)
+            .overflow_y_scroll()
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+            .px(px(16.))
+            .pt(px(16.))
+            .pb(px(12.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(head)
+            .child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED))))
+            .child(items)
+            .child(back)
+            .child(div().flex().gap(px(8.)).items_center().child(div().flex_1().child(focus_field("words", &words, window, cx))).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
+            .children(understood)
+            .when(!self.reckoned.sentences.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint())).child(sentences(&self.reckoned.sentences))))
+            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))))
+            .when_some(self.reckoned.refused.clone().filter(|_| judged > 0), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(format!("Jaynes would refuse this: {r}"))));
+        let transparent = rgba(look::panel_2() << 8);
+        let fade = div().absolute().left_0().right_0().bottom_0().h(px(16.)).bg(linear_gradient(180., linear_color_stop(transparent, 0.), linear_color_stop(rgb(look::panel_2()), 1.)));
+        let foot = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(16.))
+            .py(px(10.))
+            .border_t_1()
+            .border_color(rgb(look::line()))
+            .child(div().flex_1().text_size(px(12.)).text_color(rgb(look::faint())).child(match &self.said {
+                Some(s) => s.clone(),
+                None => format!("{judged} of {} judged", stop.items.len()),
+            }))
+            .child(primary("send", send_label, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.send(cx)))));
         let card = div()
             .id("island")
             .w_full()
             .max_h(px(460.))
-            .overflow_y_scroll()
-            .p(px(16.))
+            .overflow_hidden()
             .rounded(px(12.))
             .bg(rgb(look::panel_2()))
             .border_1()
             .border_color(rgba((look::amber() << 8) | 0x73))
             .flex()
             .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(10.))
-                    .items_center()
-                    .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
-                    .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(project))
-                    .child(div().flex_1().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(if stop.round > 0 { format!("at {} · round {}", stop.step, stop.round) } else { format!("at {}", stop.step) }))
-                    .child(button("diff".into(), "See the diff", false, look::blue()).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx))))
-                    .child(button("shrink".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
-                        this.shrunk.insert(q.clone());
-                        cx.notify();
-                    }))),
-            )
-            .child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone()))
-            .child(items)
-            .child(back)
-            .child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .items_center()
-                    .child(div().flex_1().child(field(&words)))
-                    .child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))),
-            )
-            .children(understood)
-            .when(!self.reckoned.sentences.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint())).child(sentences(&self.reckoned.sentences))))
-            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))))
-            .when_some(self.reckoned.refused.clone().filter(|_| judged > 0), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(format!("Jaynes would refuse this: {r}"))))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(div().flex_1().text_size(px(12.)).text_color(rgb(look::faint())).child(match &self.said {
-                        Some(s) => s.clone(),
-                        None => format!("{judged} of {} judged", stop.items.len()),
-                    }))
-                    .child(primary("send", send_label, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.send(cx))))),
-            );
+            .child(div().relative().min_h_0().flex_shrink(1.).flex().flex_col().child(middle).when(more_below, |d| d.child(fade)))
+            .child(foot);
         wrap.child(card).into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
+    use super::{DELIVERED, SENT, Sent, Shows, card_head, diff_title, invite_line, pill, reads_on, shows, takes_esc};
+    use gpui_base::input::InputEvent;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn over_claude_codes_terminal_the_stop_is_only_its_pill_and_esc_goes_on_to_it() {
+        // a run's tab: the card, open until the person folds it
+        assert_eq!(shows(true, false), Shows::Card);
+        assert_eq!(shows(true, true), Shows::Pill);
+        // Claude Code's tab: the pill only, never over where the person types
+        assert_eq!(shows(false, false), Shows::Pill);
+        // Esc folds the card open, before the terminal under it ever sees it
+        assert!(takes_esc(Shows::Card, false));
+        // not with something over it (the diff, Command-K, the shortcuts), which close first; nor a pill
+        assert!(!takes_esc(Shows::Card, true));
+        assert!(!takes_esc(Shows::Pill, false));
+    }
+
+    #[test]
+    fn the_card_the_pill_and_the_invitation_say_which_run_waits() {
+        assert_eq!(card_head("Tighten the site's copy", "site", "copy", 1), ("Tighten the site's copy".to_string(), "site · at copy · round 1".to_string()));
+        assert_eq!(card_head("Tighten the site's copy", "site", "copy", 0).1, "site · at copy");
+        // no name read yet: the project leads, as before
+        assert_eq!(card_head("", "site", "copy", 1), ("site".to_string(), "at copy · round 1".to_string()));
+        assert_eq!(pill("Tighten the site's copy", "Which of these copy changes go in?"), "◆ Tighten the site's copy: Which of these copy changes go in? · open");
+        assert_eq!(pill("", "Which of these copy changes go in?"), "◆ Which of these copy changes go in? · open");
+        assert_eq!(invite_line("◆ 3 options", "Which direction goes on?"), "◆ 3 options · Which direction goes on?");
+        assert_eq!(DELIVERED, "Already delivered. Your answer can still correct it.");
+        assert_eq!(diff_title("copy"), "Changes made at copy");
+    }
+
+    #[test]
+    fn the_answer_sent_is_said_at_its_runs_foot_for_four_seconds() {
+        let at = Instant::now();
+        let sent = Sent { run: "r".into(), at };
+        assert_eq!(SENT, "Sent as yours. The run goes on.");
+        assert!(sent.shows(Some("r"), at + Duration::from_millis(3900)));
+        assert!(!sent.shows(Some("r"), at + Duration::from_millis(4100)));
+        // on its run's tab only: not another run's, nor Claude Code's
+        assert!(!sent.shows(Some("other"), at + Duration::from_secs(1)));
+        assert!(!sent.shows(None, at + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn enter_in_your_words_reads_them() {
+        assert!(reads_on(&InputEvent::PressEnter { secondary: false, shift: false }));
+        assert!(!reads_on(&InputEvent::Change));
     }
 }

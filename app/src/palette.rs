@@ -308,12 +308,12 @@ mod tests {
         // a run is its title alone: its dot says it is a run, and "run X" reads as running X again
         assert_eq!(
             labels,
-            ["Inbox", "T1", "T2", "Run r1", "Run r2", "New run", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Settings", "Keyboard shortcuts"]
+            ["Inbox", "T1", "T2", "Run r1", "Run r2", "New run", "New agent in helm", "Open the next thing that needs you", "Open the web page ↗", "Show or hide Changes", "Settings", "Keyboard shortcuts"]
         );
         assert_eq!(all[8].go, Go::OpenPage);
         // every command is drawn as one, with › on its left, a key or not; the places are not commands
         let commands: Vec<&str> = all.iter().filter(|e| e.go.is_command()).map(|e| e.label.as_str()).collect();
-        assert_eq!(commands, ["New run", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Settings", "Keyboard shortcuts"]);
+        assert_eq!(commands, ["New run", "New agent in helm", "Open the next thing that needs you", "Open the web page ↗", "Show or hide Changes", "Settings", "Keyboard shortcuts"]);
         assert_eq!(all[1].space, "helm");
         assert_eq!((all[5].go.clone(), all[5].key), (Go::NewRun, Some("⌘N")));
         assert_eq!((all[10].go.clone(), all[10].key), (Go::OpenSettings, Some("⌘,")));

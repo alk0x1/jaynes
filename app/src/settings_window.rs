@@ -89,8 +89,8 @@ pub fn open(cx: &mut App) {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some("Settings".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         is_resizable: false,
-        focus: crate::testing::var("JAYNES_APP_SHOT").is_none(),
-        show: !crate::unseen::on(),
+        focus: !crate::unseen::hidden(),
+        show: !crate::unseen::hidden(),
         ..Default::default()
     };
     let opened = cx.open_window(options, |window, cx| cx.new(|cx| SettingsView::new(window, cx)));

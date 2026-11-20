@@ -9,6 +9,7 @@ pub const VARIABLES: &[&str] = &[
     "JAYNES_APP_TEST_DO",
     "JAYNES_APP_SHOT",
     "JAYNES_APP_SHOT_MS",
+    "JAYNES_APP_SEEN",
     "JAYNES_APP_TEST_NOTES",
     "JAYNES_APP_TEST_KEY",
     "JAYNES_APP_CHANGES",
@@ -27,13 +28,13 @@ pub fn var(name: &str) -> Option<std::ffi::OsString> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILT_FOR_TESTS, VARIABLES, var};
+    use super::{BUILT_FOR_TESTS, var};
 
     #[test]
     #[cfg(not(feature = "test-driver"))]
     fn a_build_for_people_reads_no_test_variable() {
         assert!(!BUILT_FOR_TESTS);
-        for name in VARIABLES {
+        for name in super::VARIABLES {
             // SAFETY: tests in this module read and set only their own variables, and nothing else reads them here.
             unsafe { std::env::set_var(name, "/tmp/anything") };
             assert!(var(name).is_none(), "{name} is read by a build for people");

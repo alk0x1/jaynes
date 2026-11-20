@@ -7,12 +7,56 @@
 //! the windows on a screen (the system's window list, read by process alone: no window's name, which would take the
 //! screen recording permission), the app not in front, and nothing asked. If anything fails, it takes no picture, says
 //! why, and ends.
+//!
+//! With JAYNES_APP_SEEN too, a test sees the app as the person would: its window on the screen, in front and with the
+//! keys, so real keys and clicks reach it (a caret blinks only in a window that has them). The pictures are still drawn
+//! the same way, with no screen recording, and it still asks nothing of the system: no keychain, Touch ID, notice or
+//! menu bar item.
 
 use std::sync::Mutex;
 
-/// Whether this app draws its windows into pictures, unseen.
+/// Whether this app draws its windows into pictures, asking nothing of the system.
 pub fn on() -> bool {
     crate::testing::var("JAYNES_APP_SHOT").is_some()
+}
+
+/// What a test build drawing pictures may do on the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Not drawing pictures.
+    Off,
+    /// Off every screen: no window shown, never in front, no keys taken.
+    Hidden,
+    /// Its window on the screen, in front and with the keys.
+    Seen,
+}
+
+/// The mode from the two variables: JAYNES_APP_SHOT draws pictures, JAYNES_APP_SEEN lets the window show.
+pub fn mode_of(shot: bool, seen: bool) -> Mode {
+    match (shot, seen) {
+        (false, _) => Mode::Off,
+        (true, false) => Mode::Hidden,
+        (true, true) => Mode::Seen,
+    }
+}
+
+/// This app's mode, from its variables.
+pub fn mode() -> Mode {
+    mode_of(crate::testing::var("JAYNES_APP_SHOT").is_some(), crate::testing::var("JAYNES_APP_SEEN").is_some())
+}
+
+/// Whether this app keeps off every screen: a test drawing pictures that was not told it may be seen.
+pub fn hidden() -> bool {
+    mode() == Mode::Hidden
+}
+
+/// Why the app may not take a picture now: what it tried to ask of the system, or in `Hidden`, a window of its own
+/// on a screen or the app in front (`window`, read only then).
+pub fn breach_of(asked: Option<&str>, mode: Mode, window: impl FnOnce() -> Option<String>) -> Option<String> {
+    if let Some(what) = asked {
+        return Some(format!("it tried to ask the system for {what}"));
+    }
+    if mode == Mode::Hidden { window() } else { None }
 }
 
 static ASKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -23,12 +67,10 @@ pub fn refused(what: &str) {
     ASKED.lock().unwrap_or_else(|e| e.into_inner()).push(what.to_owned());
 }
 
-/// Why the app is not unseen now, if it is not.
+/// Why the app may not take a picture now, if it may not.
 pub fn breach() -> Option<String> {
-    if let Some(what) = ASKED.lock().unwrap_or_else(|e| e.into_inner()).first() {
-        return Some(format!("it tried to ask the system for {what}"));
-    }
-    platform::breach()
+    let asked = ASKED.lock().unwrap_or_else(|e| e.into_inner()).first().cloned();
+    breach_of(asked.as_deref(), mode(), platform::breach)
 }
 
 #[cfg(target_os = "macos")]
@@ -89,6 +131,24 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
+    use super::{Mode, breach_of, mode_of};
+
+    #[test]
+    fn seen_the_window_may_show_and_take_the_keys_but_the_app_still_asks_nothing() {
+        assert!(crate::testing::VARIABLES.contains(&"JAYNES_APP_SEEN"), "a test's variable, read by no build for people");
+        assert_eq!(mode_of(false, false), Mode::Off);
+        // SEEN alone draws nothing
+        assert_eq!(mode_of(false, true), Mode::Off);
+        assert_eq!(mode_of(true, false), Mode::Hidden);
+        assert_eq!(mode_of(true, true), Mode::Seen);
+        // a window on the screen, in front: no breach when seen
+        assert_eq!(breach_of(None, Mode::Seen, || Some("1 of its windows are visible".into())), None);
+        // asking the keychain still ends it
+        assert_eq!(breach_of(Some("a keychain item"), Mode::Seen, || None).as_deref(), Some("it tried to ask the system for a keychain item"));
+        // hidden, as before: a window on a screen ends it
+        assert_eq!(breach_of(None, Mode::Hidden, || Some("1 of its windows are visible".into())).as_deref(), Some("1 of its windows are visible"));
+    }
+
     #[test]
     fn what_the_app_tried_to_ask_is_a_breach() {
         // this test alone asks; the list lives as long as the process

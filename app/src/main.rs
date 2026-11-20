@@ -411,6 +411,29 @@ impl Render for Root {
                 this.help = !this.help;
                 cx.notify();
             }))
+            // a stop's card open on its run's tab: Esc folds it before the terminal under it sees the key, and Tab goes
+            // round the stop's buttons (the compare mode's too), not into the terminal (island.rs)
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                let over = this.help || this.palette.is_some() || this.lightbox.read(cx).shown.is_some();
+                let m = e.keystroke.modifiers;
+                match e.keystroke.key.as_str() {
+                    "escape" if !m.modified() && this.island.read(cx).takes_esc_now(over, cx) => {
+                        this.island.update(cx, |i, cx| i.fold(cx));
+                        let to = this.keys_home(cx);
+                        window.focus(&to, cx);
+                        cx.stop_propagation();
+                    }
+                    "tab" if !(m.platform || m.control || m.alt) && !over && this.island.read(cx).takes_tab(cx) => {
+                        if m.shift {
+                            window.focus_prev(cx);
+                        } else {
+                            window.focus_next(cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
             // Esc puts the list of shortcuts away before the terminal sees it
             .when(self.help, |d| {
                 d.capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
@@ -609,7 +632,7 @@ impl Root {
         })
     }
 
-    /// "Open the page": the engine starts the page when it does not run and opens it in the browser with its key, away
+    /// "Open the web page ↗": the engine starts the page when it does not run and opens it in the browser with its key, away
     /// from the window's thread, since a page that starts takes a few seconds; why not goes on the line over the status
     /// bar.
     fn open_page(&mut self, cx: &mut Context<Self>) {
@@ -1897,7 +1920,7 @@ impl Root {
                     .cursor_pointer()
                     .hover(|d| d.text_color(rgb(look::text())))
                     .on_click(cx.listener(|this, _, _, cx| this.open_page(cx)))
-                    .child(look::icon(look::Icon::Open, 12., look::dim()))
+                    // its words end in ↗, which says it opens outside the app: no icon before them too
                     .child(if self.page_opening { open_page::OPENING } else { open_page::LABEL }),
             )
             .child(div().id("version").child(open_page::version()))
@@ -2112,8 +2135,8 @@ fn main() {
         notify::listen();
         prefs::start(cx);
         open(core.clone(), cx);
-        // A test that draws the window into a picture leaves the person's keyboard where it is.
-        if crate::testing::var("JAYNES_APP_SHOT").is_none() {
+        // A test that draws the window into a picture leaves the person's keyboard where it is, unless it may be seen.
+        if !unseen::hidden() {
             cx.activate(true);
         }
     });
@@ -2143,9 +2166,9 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         // the window draws its own top bar, the macOS buttons inside it
         titlebar: Some(TitlebarOptions { title: Some("Jaynes".into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         app_id: Some("jaynes-app".into()),
-        focus: crate::testing::var("JAYNES_APP_SHOT").is_none(),
-        // drawn into pictures, never onto a screen
-        show: !unseen::on(),
+        focus: !unseen::hidden(),
+        // drawn into pictures, never onto a screen, unless the test may see it (JAYNES_APP_SEEN)
+        show: !unseen::hidden(),
         // the top bar is the app's own: a tab dragged there moves the tab, not the window, which the bar's empty
         // parts move themselves (start_window_move); otherwise AppKit drags the window from the whole titlebar strip
         app_owns_titlebar_drag: true,
@@ -2470,8 +2493,8 @@ pub(crate) fn hide_main(window: &mut Window) {
 
 /// Brings the main window back as it was, in front: a click on the Dock, on the menu bar item or on a notice.
 pub(crate) fn show_main(cx: &mut App) {
-    // a test drawing pictures never puts its window on a screen
-    if unseen::on() {
+    // a test drawing pictures never puts its window on a screen, unless it may be seen
+    if unseen::hidden() {
         return tracing::info!("unseen: the main window stays off every screen");
     }
     if let Some(main) = MAIN.with(|m| m.get()) {
@@ -2483,8 +2506,8 @@ pub(crate) fn show_main(cx: &mut App) {
             }
         });
     }
-    // a test that draws the window into a picture leaves the person's keyboard where it is
-    if crate::testing::var("JAYNES_APP_SHOT").is_none() {
+    // a test that draws the window into a picture leaves the person's keyboard where it is, unless it may be seen
+    if !unseen::hidden() {
         cx.activate(true);
     }
 }
@@ -2574,7 +2597,11 @@ pub(crate) fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut 
                 cx.update(|cx| cx.quit());
                 break;
             }
-            tracing::info!("unseen before picture {n}: no window on a screen, not in front, nothing asked");
+            if unseen::hidden() {
+                tracing::info!("unseen before picture {n}: no window on a screen, not in front, nothing asked");
+            } else {
+                tracing::info!("seen before picture {n}: the window may show and take the keys, nothing asked");
+            }
             cx.update(terminal::flush_output_clock);
             let path = std::path::PathBuf::from(path.to_string_lossy().replace("{n}", &format!("{n:05}")));
             // a window closed since (Settings): its pictures end with it

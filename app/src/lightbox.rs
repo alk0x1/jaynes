@@ -1,4 +1,5 @@
-//! A picture of proof at full size, or the change a step made, over the whole window. A click or Esc closes it.
+//! A picture of proof at full size, or the change a step made, over the whole window. A press outside its box or Esc
+//! closes it; a press in the box never does, so the diff can be scrolled and read.
 
 use crate::look;
 use gpui::*;
@@ -76,11 +77,13 @@ impl Render for Lightbox {
             .track_focus(&self.focus)
             .absolute()
             .inset_0()
+            // over the terminal, which would otherwise take the press under it
+            .occlude()
             .bg(rgba(look::scrim()))
             .p(px(28.))
             .flex()
             .font_family(look::UI_FONT)
-            .on_click(cx.listener(|this, _, _, cx| this.close(cx)))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close(cx)))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape" {
                     this.close(cx);
@@ -89,6 +92,7 @@ impl Render for Lightbox {
             }))
             .child(
                 div()
+                    .id("lightbox-box")
                     .flex()
                     .flex_col()
                     .size_full()
@@ -97,6 +101,7 @@ impl Render for Lightbox {
                     .border_1()
                     .border_color(rgb(look::line_2()))
                     .overflow_hidden()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         div()
                             .flex()

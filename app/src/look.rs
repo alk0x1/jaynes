@@ -253,12 +253,19 @@ pub fn breathing(id: impl Into<ElementId>, size: f32, color: u32) -> impl IntoEl
         })
 }
 
-/// The app's mark in the top bar: the giraffe of its icon, whose neck is the J (assets/mark.svg, drawn into mark.png
-/// by assets/make-icon.sh at four times this size).
+/// The app's mark in the top bar: the favicon's giraffe without its tile, one file a look, its ink the look's text and
+/// the cut of its eye the column's colour (assets/mark-bar-dark.svg and mark-bar-light.svg, the design-lead's, sized at
+/// four times the 27 points of their box so the picture GPUI draws from them stays sharp at this height).
 pub fn mark_icon(height: f32) -> Img {
-    static MARK: std::sync::OnceLock<std::sync::Arc<Image>> = std::sync::OnceLock::new();
-    let mark = MARK.get_or_init(|| std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, include_bytes!("../assets/mark.png").to_vec())));
-    img(mark.clone()).h(px(height)).w(px(height * 67. / 88.)).flex_none()
+    use std::sync::{Arc, OnceLock};
+    static DARK: OnceLock<Arc<Image>> = OnceLock::new();
+    static LIGHT: OnceLock<Arc<Image>> = OnceLock::new();
+    let mark = if frame() == LINEN {
+        LIGHT.get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Svg, include_bytes!("../assets/mark-bar-light.svg").to_vec())))
+    } else {
+        DARK.get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Svg, include_bytes!("../assets/mark-bar-dark.svg").to_vec())))
+    };
+    img(mark.clone()).h(px(height)).w(px(height * 21.6 / 27.)).flex_none()
 }
 
 /// A quiet button with its key, as the top bar shows them.

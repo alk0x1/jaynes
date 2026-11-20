@@ -303,7 +303,7 @@ fn row(path: &str, shown: bool, cx: &mut Context<Changes>) -> Stateful<Div> {
 }
 
 impl Render for Changes {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let frame = div()
             .id("changes")
             // its zoom keys (main.rs): with the commit message in hand too
@@ -333,7 +333,7 @@ impl Render for Changes {
                 .gap(px(8.))
                 .px(px(16.))
                 .pb(px(6.))
-                .child(div().flex_1().min_w_0().child(crate::island::field(&self.message)))
+                .child(div().flex_1().min_w_0().child(crate::island::focus_field("commit-message", &self.message, window, cx)))
                 .child(
                     div()
                         .id("commit")

@@ -1,4 +1,4 @@
-//! "Open the page": one click, in the status bar or in Command-K, opens the page in the person's browser with its
+//! "Open the web page ↗": one click, in the status bar or in Command-K, opens the page in the person's browser with its
 //! key, starting it first when it does not run. The page is a process of the engine's own, started from the installed
 //! `jaynes`, so it outlives the app. The app never reads the key: the engine puts it in the link it opens, and says why
 //! without it when it cannot. And the app's version, as the person reads it.
@@ -6,9 +6,11 @@
 use std::path::Path;
 
 /// The command's words, in the status bar and in Command-K.
-pub const LABEL: &str = "Open the page";
+pub const LABEL: &str = "Open the web page ↗";
 /// Its words while the engine starts the page and opens it.
-pub const OPENING: &str = "Opening the page…";
+pub const OPENING: &str = "Opening the web page…";
+/// What the notice over the status bar says first when it did not open.
+pub const DID_NOT_OPEN: &str = "The web page did not open";
 
 /// The app's version as the status bar and Settings show it.
 pub fn version() -> String {
@@ -16,9 +18,12 @@ pub fn version() -> String {
 }
 
 /// The page of `home` at `port`, started from `exe` when it does not run and its link opened in the browser when
-/// `browser`, by `ensure`; why not, on one line.
+/// `browser`, by `ensure`; why not, on one line, after which page did not open.
 pub fn open_with(home: &Path, port: u16, exe: &Path, browser: bool, ensure: impl FnOnce(&Path, u16, &Path, bool) -> Result<String, String>) -> Result<(), String> {
-    ensure(home, port, exe, browser).map(|_address| ()).map_err(|why| one_line(&why))
+    ensure(home, port, exe, browser).map(|_address| ()).map_err(|why| {
+        let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+        if why.is_empty() { DID_NOT_OPEN.to_string() } else { format!("{DID_NOT_OPEN}: {why}") }
+    })
 }
 
 /// A stop's live version: the page a role kept of a direction, `page` by its name, opened by `ensure_at` through the
@@ -29,7 +34,7 @@ pub fn live_with(home: &Path, port: u16, exe: &Path, page: &str, ensure_at: impl
 }
 
 /// What a click on "Open live version" does: the page of the engine home the app reads, from the installed `jaynes`,
-/// as "Open the page" does; the key goes in the link the engine opens, never through the app.
+/// as "Open the web page ↗" does; the key goes in the link the engine opens, never through the app.
 pub fn live(page: &str) -> Result<(), String> {
     live_with(&jaynes_shell::home(), jaynes_shell::install::PORT, &crate::answer::engine_program(), page, jaynes_shell::install::ensure_page_at)
 }
@@ -92,7 +97,10 @@ mod tests {
         assert_eq!(asked.into_inner(), Some((PathBuf::from("/h/.jaynes/engine"), 8750, PathBuf::from("/h/.local/bin/jaynes"), true)));
         // why the engine could not, on one line, as the line over the status bar shows it
         let said = open_with(Path::new("/h"), 8750, Path::new("/j"), true, |_, _, _, _| Err("another program answers on [::1]:8750,\n  where the browser may go".into()));
-        assert_eq!(said, Err("Another program answers on [::1]:8750, where the browser may go".into()));
+        // the notice says which page did not open, then why
+        assert_eq!(said, Err("The web page did not open: another program answers on [::1]:8750, where the browser may go".into()));
+        assert_eq!(super::LABEL, "Open the web page ↗");
+        assert_eq!(super::OPENING, "Opening the web page…");
     }
 
     #[test]

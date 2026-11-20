@@ -7,7 +7,7 @@
 //! one layer at a time: the picture shown large, the list of what the answer does, the field with the keys, the mode.
 
 use crate::answer::{self, Reckoned, Understood};
-use crate::island::{button, focus_field, primary, sentences};
+use crate::island::{button, focus_field, primary, sentences, tabbed};
 use crate::key::Key;
 use crate::look;
 use crate::viewer::{self, Does, Sizes, View};
@@ -45,6 +45,61 @@ pub struct Marks {
     pub keep: Vec<usize>,
     pub none: bool,
     pub bring: Option<String>,
+    /// The person chose something here (another option, a shortlist, a part kept, none, what comes back): only then
+    /// does Enter send.
+    pub touched: bool,
+}
+
+/// What a press on a direction's star did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Starred {
+    On,
+    Off,
+    /// Two are shortlisted already: the third is refused, never one taken off silently.
+    Full,
+}
+
+/// What Enter does in the mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Enter {
+    /// The main button.
+    Go,
+    /// Nothing chosen yet: the main button pulses once and nothing goes.
+    Pulse,
+}
+
+/// The title over a direction's parts.
+pub const PARTS: &str = "Its parts · keep one to carry it on; parts from two make a mix";
+/// The hint beside the strip of directions.
+pub const HINT: &str = "← → flip · shortlist two to develop both";
+/// The hint, for a while, after a third shortlist was refused.
+pub const FULL: &str = "Two at most: unshortlist one first";
+/// How long that hint shows.
+pub const FULL_FOR: Duration = Duration::from_secs(3);
+
+/// A part's button: keep it, or kept.
+pub fn keep_word(kept: bool) -> &'static str {
+    if kept { "Kept ✓" } else { "Keep this part" }
+}
+
+/// A direction's star with its word.
+pub fn star_word(on: bool) -> &'static str {
+    if on { "★ Shortlisted" } else { "☆ Shortlist" }
+}
+
+/// What a direction's card says under its picture: its number, its name and how many of its parts are kept.
+pub fn card_label(i: usize, name: &str, kept: usize) -> String {
+    if kept > 0 { format!("{} · {name} · {kept} kept", i + 1) } else { format!("{} · {name}", i + 1) }
+}
+
+/// The line under the question: which run asks, at which step, and what the step does.
+pub fn under_title(run: &str, step: &str, about: &str) -> Option<String> {
+    match (run.is_empty(), about.is_empty()) {
+        (false, false) => Some(format!("{run} · at {step}: {about}")),
+        (false, true) => Some(format!("{run} · at {step}")),
+        (true, false) => Some(format!("At {step}: {about}")),
+        (true, true) => None,
+    }
 }
 
 /// What one Esc closes: only the layer on top.
@@ -90,7 +145,7 @@ pub fn none_word(n: usize) -> &'static str {
 
 /// The button at the top: what Esc does from where the keys are.
 pub fn chip(field: bool) -> &'static str {
-    if field { "Esc · leave the field" } else { "Esc · back to the terminal" }
+    if field { "Esc · leave the field" } else { "Esc · back" }
 }
 
 /// The line over the main button: the first sentence of what the answer does and, when there are more, the switch
@@ -111,9 +166,10 @@ pub fn said_panel(said: &[String], all: bool) -> Option<Vec<String>> {
 }
 
 /// Whether `b` is the stop `a` was: what the person marked and wrote there stays only for it. A question's id is its
-/// step's in every run of a role, so two runs that wait at the same step ask questions of the same id.
+/// step's in every run of a role, so two runs that wait at the same step ask questions of the same id; and a new round
+/// of the same question shows other options, with a fingerprint of its own (`shown`).
 pub fn same_stop(a: &Stop, b: &Stop) -> bool {
-    a.run == b.run && a.question == b.question
+    a.run == b.run && a.question == b.question && a.shown == b.shown
 }
 
 /// A direction's short name: its label before the colon.
@@ -127,6 +183,62 @@ fn idea(label: &str) -> String {
 }
 
 impl Marks {
+    /// The next or previous direction, round the strip of `n`; with one option there is nowhere to flip.
+    pub fn flip(&mut self, by: isize, n: usize) {
+        if n < 2 {
+            return;
+        }
+        self.dir = (self.dir as isize + by).rem_euclid(n as isize) as usize;
+        self.pic = 0;
+        self.touched = true;
+    }
+
+    /// A click on a direction's card: it shows, and it is what the person chose to look at.
+    pub fn pick(&mut self, d: usize) {
+        self.dir = d;
+        self.pic = 0;
+        self.touched = true;
+    }
+
+    /// Shortlists `d`, or takes it off the shortlist; two at most, so a third is refused and nothing is taken off.
+    pub fn star(&mut self, d: usize) -> Starred {
+        if let Some(i) = self.keep.iter().position(|k| *k == d) {
+            self.keep.remove(i);
+            self.touched = true;
+            return Starred::Off;
+        }
+        if self.keep.len() == 2 {
+            return Starred::Full;
+        }
+        self.keep.push(d);
+        self.touched = true;
+        Starred::On
+    }
+
+    /// Keeps a part of direction `d`, or lets it go.
+    pub fn pin(&mut self, d: usize, label: String) {
+        if !self.pins.remove(&(d, label.clone())) {
+            self.pins.insert((d, label));
+        }
+        self.touched = true;
+    }
+
+    /// What Enter does: the main button once the person chose something here; before, it only pulses, so an Enter
+    /// as the mode opens never chooses the first option for them.
+    pub fn enter(&self) -> Enter {
+        if self.touched { Enter::Go } else { Enter::Pulse }
+    }
+
+    /// The marks within a stop of `n` options: nothing that points past its options, from marks kept before.
+    pub fn fit(&mut self, n: usize) {
+        if self.dir >= n {
+            self.dir = 0;
+            self.pic = 0;
+        }
+        self.pins.retain(|(d, _)| *d < n);
+        self.keep.retain(|d| *d < n);
+    }
+
     /// The direction the main button chooses when it chooses one alone: the one with parts pinned, else the one shown.
     /// None when it does something else (a mix, two finalists, none, or what comes back).
     pub fn chosen(&self, stop: &Stop) -> Option<usize> {
@@ -189,7 +301,7 @@ impl Marks {
         verdicts.insert(stop.items[target].id.clone(), "keep".into());
         // the option's name is on its card, ringed while the pointer is on the button: a name in the button read as
         // something else ("Go on with Go")
-        let label = if target == self.dir { "Choose this one" } else { "Choose the pinned one" };
+        let label = if target == self.dir { "Choose this one" } else { "Choose the one with kept parts" };
         Some((label.to_string(), answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)))
     }
 }
@@ -231,8 +343,23 @@ pub struct Compare {
     live_opening: bool,
     /// The pointer on the main button: the card it chooses shows a ring.
     go_hover: bool,
-    /// What the person marked and wrote at the other stops they opened, by run and question.
-    kept: HashMap<(String, String), Kept>,
+    /// What the person marked and wrote at the other stops they opened, by run, question and what it showed.
+    kept: HashMap<(String, String, String), Kept>,
+    /// The name of the run whose stop shows, as the column says it.
+    name: String,
+    /// How many times Enter pulsed the main button with nothing chosen yet: each a pulse of its own.
+    pulse: usize,
+    /// When a third shortlist was refused: the hint says why for a while.
+    full_at: Option<Instant>,
+}
+
+/// The answer the mode sent, for the run's tab to say so after the mode closes.
+pub struct SentFrom(pub String);
+
+impl EventEmitter<SentFrom> for Compare {}
+
+fn kept_key(s: &Stop) -> (String, String, String) {
+    (s.run.clone(), s.question.clone(), s.shown.clone())
 }
 
 /// A stop's marks and words while another stop shows.
@@ -265,6 +392,9 @@ impl Compare {
             live_opening: false,
             go_hover: false,
             kept: HashMap::new(),
+            name: String::new(),
+            pulse: 0,
+            full_at: None,
         }
     }
 
@@ -277,16 +407,18 @@ impl Compare {
         self.open
     }
 
-    /// Opens on a stop: what the person marked and wrote there comes back as they left it, and what they marked at
-    /// the stop shown before stays with that one, for when they come back to it.
-    pub fn open(&mut self, stop: Stop, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens on a stop of the run named `name`: what the person marked and wrote there comes back as they left it,
+    /// and what they marked at the stop shown before stays with that one, for when they come back to it.
+    pub fn open(&mut self, stop: Stop, name: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.stop.as_ref().is_some_and(|s| same_stop(s, &stop)) {
             if let Some(was) = self.stop.as_ref() {
                 let left = Kept { marks: std::mem::take(&mut self.marks), words: Self::text(self.words.as_ref(), cx), why: self.why.as_ref().map(|w| w.read(cx).value().to_string()) };
-                self.kept.insert((was.run.clone(), was.question.clone()), left);
+                self.kept.insert(kept_key(was), left);
             }
-            let back = self.kept.remove(&(stop.run.clone(), stop.question.clone())).unwrap_or_default();
+            let back = self.kept.remove(&kept_key(&stop)).unwrap_or_default();
             self.marks = back.marks;
+            self.marks.fit(stop.items.len());
+            self.full_at = None;
             self.words = None;
             self.why = back.why.map(|text| {
                 let why = self.input("what was missing in all of them?", window, cx);
@@ -304,6 +436,7 @@ impl Compare {
             self.all_said = false;
         }
         self.stop = Some(stop);
+        self.name = name;
         self.open = true;
         self.viewer = None;
         if self.words.is_none() {
@@ -322,9 +455,13 @@ impl Compare {
 
     fn input(&self, placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
+        cx.subscribe(&input, move |this, field, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
                 this.reckon(cx);
+            }
+            // Enter in the person's words reads them, as "Read my words" does
+            if crate::island::reads_on(e) && this.words.as_ref() == Some(&field) {
+                this.read_words(cx);
             }
             // the field took or let go the keys: the ring and the chip at the top follow
             cx.notify();
@@ -342,30 +479,43 @@ impl Compare {
     }
 
     fn flip(&mut self, by: isize, cx: &mut Context<Self>) {
-        let Some(n) = self.stop.as_ref().map(|s| s.items.len()).filter(|n| *n > 1) else { return };
-        self.marks.dir = (self.marks.dir as isize + by).rem_euclid(n as isize) as usize;
-        self.marks.pic = 0;
+        let n = self.stop.as_ref().map(|s| s.items.len()).unwrap_or(0);
+        self.marks.flip(by, n);
         self.reckon(cx);
     }
 
+    /// A press on a direction's star; a third is refused, and the hint says why for a while.
     fn star(&mut self, d: usize, cx: &mut Context<Self>) {
-        let keep = &mut self.marks.keep;
-        if let Some(i) = keep.iter().position(|k| *k == d) {
-            keep.remove(i);
-        } else {
-            if keep.len() == 2 {
-                keep.remove(0);
-            }
-            keep.push(d);
+        if self.marks.star(d) == Starred::Full {
+            self.full_at = Some(Instant::now());
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(FULL_FOR).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
         }
         self.reckon(cx);
     }
 
     fn pin(&mut self, d: usize, label: String, cx: &mut Context<Self>) {
-        if !self.marks.pins.remove(&(d, label.clone())) {
-            self.marks.pins.insert((d, label));
-        }
+        self.marks.pin(d, label);
         self.reckon(cx);
+    }
+
+    /// Enter on the mode: the main button once the person chose something here, else one pulse of it.
+    fn enter(&mut self, cx: &mut Context<Self>) {
+        match self.marks.enter() {
+            Enter::Go => self.go(cx),
+            Enter::Pulse => {
+                self.pulse += 1;
+                cx.notify();
+            }
+        }
+    }
+
+    /// Whether the picture shows large, over the mode.
+    pub fn viewing(&self) -> bool {
+        self.viewer.is_some()
     }
 
     /// What the main button does, in words, and the answer it sends.
@@ -394,9 +544,11 @@ impl Compare {
                 this.sending = false;
                 match sent {
                     Ok(()) => {
-                        this.said = Some("Sent as yours. The run goes on.".into());
+                        this.said = Some(crate::island::SENT.into());
                         this.open = false;
                         this.viewer = None;
+                        // the run's tab says it for a while, where the person is back
+                        cx.emit(SentFrom(stop.run.clone()));
                     }
                     Err(e) => this.said = Some(format!("Not sent: {e}")),
                 }
@@ -670,17 +822,19 @@ impl Compare {
         if field || cmd {
             return;
         }
+        // a control Tab gave the keys to: Enter and Space are its own press
+        let on_control = !self.focus.is_focused(window);
         match key {
             "left" => self.flip(-1, cx),
             "right" => self.flip(1, cx),
-            "space" => self.open_viewer(window, cx),
-            "enter" => self.go(cx),
+            "space" if !on_control => self.open_viewer(window, cx),
+            "enter" if !on_control => self.enter(cx),
             _ => return,
         }
         cx.stop_propagation();
     }
 
-    /// A test's line: `next`, `prev`, `star`, `pin <part>`, `none <why>`, `bring <item>`, `go`, `close`, `view`,
+    /// A test's line: `next`, `prev`, `star`, `pin <part>`, `none <why>`, `bring <item>`, `go`, `enter`, `close`, `view`,
     /// `viewer in|out|fit|actual|screen <n>|dir <n>|close`, `more`, `focus`, `type <text>`, `hover-go`, `live`, and
     /// `key <keystroke>` through the window's keys.
     pub fn driven(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -692,6 +846,7 @@ impl Compare {
             "pin" => self.pin(self.marks.dir, rest.to_string(), cx),
             "none" => {
                 self.marks.none = true;
+                self.marks.touched = true;
                 let why = self.input("what was missing in all of them?", window, cx);
                 let text = rest.to_string();
                 why.update(cx, |s, cx| s.set_value(text, window, cx));
@@ -700,9 +855,12 @@ impl Compare {
             }
             "bring" => {
                 self.marks.bring = Some(rest.to_string());
+                self.marks.touched = true;
                 self.reckon(cx);
             }
             "go" => self.go(cx),
+            // Enter on the mode, as the keyboard's reaches it with the keys on the mode
+            "enter" => self.enter(cx),
             "close" => self.close(cx),
             "view" => self.open_viewer(window, cx),
             "viewer" => {
@@ -766,8 +924,7 @@ fn ease(t: f32) -> f32 {
 
 /// A quiet button that says what it does in the text's colour, with its icon: the two over the stage.
 fn strong(id: &'static str, icon: look::Icon, text: &str) -> Stateful<Div> {
-    div()
-        .id(id)
+    tabbed(div().id(id))
         .flex()
         .items_center()
         .gap(px(6.))
@@ -780,6 +937,7 @@ fn strong(id: &'static str, icon: look::Icon, text: &str) -> Stateful<Div> {
         .text_size(px(12.5))
         .text_color(rgb(look::text()))
         .cursor_pointer()
+        .bg(rgb(look::panel()))
         .hover(|d| d.bg(rgb(look::selected())))
         .child(look::icon(icon, 13., look::text()))
         .child(text.to_string())
@@ -802,9 +960,11 @@ impl Compare {
             .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(first))
             .when_some(toggle, |d, t| {
                 d.child(
-                    div()
-                        .id("more-said")
+                    tabbed(div().id("more-said"))
                         .flex_none()
+                        .px(px(4.))
+                        .rounded(px(5.))
+                        .bg(rgb(look::panel()))
                         .cursor_pointer()
                         .text_size(px(12.))
                         .text_color(rgb(if self.all_said { look::text() } else { look::faint() }))
@@ -1034,8 +1194,7 @@ impl Render for Compare {
             let pins = self.marks.pins.iter().filter(|(d, _)| *d == i).count();
             let ringed = self.go_hover && chosen == Some(i);
             strip_row = strip_row.child(
-                div()
-                    .id(SharedString::from(format!("dir-{i}")))
+                tabbed(div().id(SharedString::from(format!("dir-{i}"))))
                     .w(px(208.))
                     .flex_none()
                     .flex()
@@ -1051,8 +1210,7 @@ impl Render for Compare {
                     .cursor_pointer()
                     .hover(|d| d.bg(rgb(look::panel_2())))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.marks.dir = i;
-                        this.marks.pic = 0;
+                        this.marks.pick(i);
                         this.reckon(cx);
                     }))
                     .child(match it.pictures.first() {
@@ -1064,24 +1222,29 @@ impl Render for Compare {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(if on { look::text() } else { look::dim() })).child(if pins > 0 { format!("{} · {} · {pins} pinned", i + 1, names[i]) } else { format!("{} · {}", i + 1, names[i]) }))
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(if on { look::text() } else { look::dim() })).child(card_label(i, &names[i], pins)))
                             .child(
-                                div()
-                                    .id(SharedString::from(format!("star-{i}")))
-                                    .px(px(2.))
-                                    .text_size(px(15.))
+                                tabbed(div().id(SharedString::from(format!("star-{i}"))))
+                                    .flex_none()
+                                    .px(px(4.))
+                                    .rounded(px(5.))
+                                    .bg(rgb(look::panel()))
+                                    .text_size(px(12.))
                                     .text_color(rgb(if starred { look::amber() } else { look::faint() }))
+                                    .hover(|d| d.text_color(rgb(look::text())))
                                     .cursor_pointer()
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
                                         this.star(i, cx);
                                     }))
-                                    .child(if starred { "★" } else { "☆" }),
+                                    .child(star_word(starred)),
                             ),
                     ),
             );
         }
-        strip_row = strip_row.child(div().pb(px(10.)).pl(px(4.)).text_size(px(12.)).text_color(rgb(look::faint())).child("← → flip · ☆ keep two to develop both"));
+        // after a third shortlist, why it did not mark, in the hint's place for a while
+        let full = self.full_at.is_some_and(|t| t.elapsed() < FULL_FOR);
+        strip_row = strip_row.child(div().pb(px(10.)).pl(px(4.)).text_size(px(12.)).text_color(rgb(if full { look::amber() } else { look::faint() })).child(if full { FULL } else { HINT }));
         let left = div()
             .flex_1()
             .min_w_0()
@@ -1108,7 +1271,7 @@ impl Render for Compare {
                     .rounded(px(8.))
                     .border_1()
                     .border_color(rgb(if on { look::amber() } else { look::line() }))
-                    .child(div().flex().items_center().child(div().flex_1().text_size(px(12.5)).text_color(rgb(look::text())).child(label.clone())).child(button(format!("pin-{label}"), if on { "Stays" } else { "Pin" }, on, look::amber()).on_click(cx.listener(move |this, _, _, cx| this.pin(d, l.clone(), cx)))))
+                    .child(div().flex().items_center().child(div().flex_1().text_size(px(12.5)).text_color(rgb(look::text())).child(label.clone())).child(button(format!("pin-{label}"), keep_word(on), on, look::amber()).on_click(cx.listener(move |this, _, _, cx| this.pin(d, l.clone(), cx)))))
                     .child(div().text_size(px(12.)).text_color(rgb(look::dim())).child(text.clone())),
             );
         }
@@ -1125,6 +1288,7 @@ impl Render for Compare {
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(name(&b.label)))
                     .child(button(format!("bring-{}", b.id), if on { "Comes back" } else { "Bring back" }, on, look::amber()).on_click(cx.listener(move |this, _, _, cx| {
                         this.marks.bring = if this.marks.bring.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
+                        this.marks.touched = true;
                         this.reckon(cx);
                     }))),
             );
@@ -1142,7 +1306,7 @@ impl Render for Compare {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .when(!item.aspects.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("Its parts", look::faint())).child(parts)))
+            .when(!item.aspects.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label(PARTS, look::faint())).child(parts)))
             .when(!stop.back.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("You dropped earlier · only you bring it back", look::faint())).child(back)))
             .when(!item.detail.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("What was said of it", look::faint())).child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(item.detail.clone()))));
         // the bar: none, the person's words, what the answer does, and the button that sends it
@@ -1183,6 +1347,7 @@ impl Render for Compare {
         } else {
             div().child(button("none".into(), none_word(n), false, look::red()).on_click(cx.listener(|this, _, window, cx| {
                 this.marks.none = true;
+                this.marks.touched = true;
                 if this.why.is_none() {
                     this.why = Some(this.input("what was missing in all of them?", window, cx));
                 }
@@ -1216,6 +1381,16 @@ impl Render for Compare {
                 cx.notify();
             }))
             .when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.go(cx))));
+        // Enter with nothing chosen yet: one pulse of the button, and nothing goes
+        let go = if self.pulse > 0 {
+            go.with_animation(("go-pulse", self.pulse), Animation::new(Duration::from_millis(480)), |d, t| {
+                let alpha = ((1. - t) * 0.6 * 255.) as u32;
+                d.shadow(vec![BoxShadow { color: rgba((look::blue() << 8) | alpha).into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(8. * t), inset: false }])
+            })
+            .into_any_element()
+        } else {
+            go.into_any_element()
+        };
         let bar = div()
             .relative()
             .flex()
@@ -1250,7 +1425,7 @@ impl Render for Compare {
             .bg(rgb(look::panel()))
             .pl(px(84.))
             .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
-            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(!stop.about.is_empty(), |d| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(format!("At {}: {}", stop.step, stop.about)))))
+            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, &stop.about), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under))))
             .when(stop.round > 0, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("round {}", stop.round))))
             // as wide as its longer words, so "round" does not move when they change; a press on it keeps the keys
             // where they are, so it does what it says
@@ -1298,7 +1473,7 @@ impl Render for Compare {
 
 #[cfg(test)]
 mod tests {
-    use super::{Esc, Marks, chip, esc, invite, none_word, said_panel, said_row, same_stop, strip};
+    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, card_label, chip, esc, invite, keep_word, none_word, said_panel, said_row, same_stop, star_word, strip, under_title};
     use jaynes_core::question::QuestionKind;
     use jaynes_shell::stop::{Item, Stop};
 
@@ -1331,6 +1506,75 @@ mod tests {
     }
 
     #[test]
+    fn enter_sends_only_after_the_person_chose_something_here() {
+        // the mode just opened on the first option: Enter pulses the button and sends nothing
+        assert_eq!(Marks::default().enter(), Enter::Pulse);
+        let mut flipped = Marks::default();
+        flipped.flip(1, 3);
+        assert_eq!((flipped.dir, flipped.enter()), (1, Enter::Go));
+        // one option: nowhere to flip, so nothing chosen yet
+        let mut one = Marks::default();
+        one.flip(1, 1);
+        assert_eq!((one.dir, one.enter()), (0, Enter::Pulse));
+        let mut picked = Marks::default();
+        picked.pick(0);
+        assert_eq!(picked.enter(), Enter::Go);
+        let mut starred = Marks::default();
+        starred.star(2);
+        assert_eq!(starred.enter(), Enter::Go);
+        let mut kept = Marks::default();
+        kept.pin(0, "Palette".into());
+        assert_eq!(kept.enter(), Enter::Go);
+    }
+
+    #[test]
+    fn a_third_shortlist_is_refused_and_says_so_without_taking_one_off() {
+        let mut m = Marks::default();
+        assert_eq!(m.star(0), Starred::On);
+        assert_eq!(m.star(2), Starred::On);
+        assert_eq!(m.star(1), Starred::Full);
+        assert_eq!(m.keep, vec![0, 2]);
+        assert_eq!(FULL, "Two at most: unshortlist one first");
+        assert_eq!(m.star(0), Starred::Off);
+        assert_eq!(m.star(1), Starred::On);
+        assert_eq!(m.keep, vec![2, 1]);
+    }
+
+    #[test]
+    fn parts_and_stars_say_what_they_do() {
+        assert_eq!(keep_word(false), "Keep this part");
+        assert_eq!(keep_word(true), "Kept ✓");
+        assert_eq!(PARTS, "Its parts · keep one to carry it on; parts from two make a mix");
+        assert_eq!(star_word(false), "☆ Shortlist");
+        assert_eq!(star_word(true), "★ Shortlisted");
+        assert_eq!(HINT, "← → flip · shortlist two to develop both");
+        assert_eq!(card_label(1, "Night", 1), "2 · Night · 1 kept");
+        assert_eq!(card_label(0, "Harbor", 0), "1 · Harbor");
+    }
+
+    #[test]
+    fn the_line_under_the_question_says_which_run_asks() {
+        assert_eq!(under_title("Three directions for the look", "directions", "the look of the site").as_deref(), Some("Three directions for the look · at directions: the look of the site"));
+        assert_eq!(under_title("Three directions for the look", "directions", "").as_deref(), Some("Three directions for the look · at directions"));
+        // a run with no name read yet: the step and what it does, as before
+        assert_eq!(under_title("", "directions", "the look of the site").as_deref(), Some("At directions: the look of the site"));
+        assert_eq!(under_title("", "directions", ""), None);
+    }
+
+    #[test]
+    fn marks_kept_from_another_round_never_point_past_its_options() {
+        let look = choosing(&["Harbor", "Night", "Ledger"]);
+        // a new round of the same question shows something else: what was marked for the last one does not come back
+        assert!(!same_stop(&look, &Stop { shown: "s2".into(), ..look.clone() }));
+        // and marks that come back fit the options there are
+        let mut m = Marks { dir: 2, pic: 1, pins: [(2, "Palette".to_string()), (0, "Fonts".to_string())].into(), keep: vec![0, 2], ..Marks::default() };
+        m.fit(2);
+        assert_eq!((m.dir, m.pic), (0, 0));
+        assert_eq!(m.pins, [(0, "Fonts".to_string())].into());
+        assert_eq!(m.keep, vec![0]);
+    }
+
+    #[test]
     fn marks_stay_only_for_the_same_question_of_the_same_run() {
         let look = choosing(&["Harbor", "Night", "Ledger"]);
         let icon = Stop { run: "another run".into(), items: look.items[..1].to_vec(), ..look.clone() };
@@ -1348,7 +1592,8 @@ mod tests {
         assert_eq!(esc(false, false, false), Esc::Screen);
         // the field with the keys: a first Esc leaves it, and the chip at the top says so; then the mode closes
         assert_eq!(chip(true), "Esc · leave the field");
-        assert_eq!(chip(false), "Esc · back to the terminal");
+        // from a run's tab or the Inbox too, not only from the terminal: back where the person was
+        assert_eq!(chip(false), "Esc · back");
     }
 
     #[test]
@@ -1372,7 +1617,7 @@ mod tests {
         assert_eq!(shown.chosen(&stop), Some(0));
         // a part pinned in Night while Ledger shows: the button chooses Night, says so, and rings Night's card
         let pinned = Marks { dir: 2, pins: [(1, "Palette".to_string())].into(), ..Marks::default() };
-        assert_eq!(label(&pinned, &stop), "Choose the pinned one");
+        assert_eq!(label(&pinned, &stop), "Choose the one with kept parts");
         assert_eq!(pinned.chosen(&stop), Some(1));
         // the other buttons say what they do, as before
         let two = Marks { keep: vec![0, 2], ..Marks::default() };
