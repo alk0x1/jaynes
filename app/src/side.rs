@@ -168,6 +168,15 @@ fn agent_word(a: &Agent, now: u64) -> (String, u32) {
     }
 }
 
+/// The line under an agent in "Needs you": what it asks, in the Inbox's words (ask::what), a whole sentence even
+/// without its words, so two that wait never read the same; one that failed, what it said, if anything.
+fn asking_line(a: &Agent) -> Option<String> {
+    match a.state {
+        State::Waiting => Some(crate::ask::what(a.kind.as_deref(), &a.msg)),
+        _ => (!a.msg.trim().is_empty()).then(|| a.msg.trim().to_string()),
+    }
+}
+
 /// What a run's dot on the narrow rail says on hovering: its name and what it waits for, in the column's words.
 fn rail_tip(row: &Row, halted: Option<&String>) -> String {
     let what = match row.mark {
@@ -452,7 +461,7 @@ impl Side {
                             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(format!("{space} · {}", a.title)))
                             .child(div().flex_none().text_size(px(11.5)).text_color(rgb(c)).child(word)),
                     )
-                    .when(!a.msg.trim().is_empty(), |d| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(look::amber())).child(a.msg.clone()))),
+                    .when_some(asking_line(a), |d, line| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(look::amber())).child(line))),
             )
     }
 
@@ -801,7 +810,25 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agent_word, agents, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, rail_tip, seen_from};
+    use super::{Agent, Mark, Order, Row, State, agent_word, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, rail_tip, seen_from};
+
+    #[test]
+    fn an_agent_that_waits_says_in_the_column_what_it_asks_in_the_inbox_s_words() {
+        let agent = |state: State, kind: Option<&str>, msg: &str| Agent {
+            address: "t1".into(), title: "claude".into(), state, since_ms: 0, shell: false, turn: 0, kind: kind.map(str::to_string), msg: msg.into(), cwd: String::new(),
+        };
+        let waiting = |kind: Option<&str>, msg: &str| agent(State::Waiting, kind, msg);
+        assert_eq!(asking_line(&waiting(Some("permission"), "approve Bash: npm run build")).as_deref(), Some("wants to approve Bash: npm run build"));
+        // without its words, a whole sentence still: never two agents that read the same, "waiting"
+        assert_eq!(asking_line(&waiting(Some("permission"), "")).as_deref(), Some("wants your permission"));
+        assert_eq!(asking_line(&waiting(Some("question"), "  ")).as_deref(), Some("asks you something"));
+        assert_eq!(asking_line(&waiting(Some("auth"), "")).as_deref(), Some("needs you to sign in"));
+        assert_eq!(asking_line(&waiting(None, "")).as_deref(), Some("waits for you"));
+        // one that failed keeps what it said, or nothing
+        let failed = |msg: &str| agent(State::Error, None, msg);
+        assert_eq!(asking_line(&failed("exited 1")).as_deref(), Some("exited 1"));
+        assert_eq!(asking_line(&failed("")), None);
+    }
 
     #[test]
     fn a_dot_on_the_narrow_rail_says_its_run_and_what_it_waits_for() {
