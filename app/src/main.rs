@@ -1712,8 +1712,8 @@ impl Root {
         let more = inbox::more_below(f32::from(self.inbox_scroll.max_offset().y), f32::from(-self.inbox_scroll.offset().y));
         // 32 px: over the gap between two rows, the card's 16 did not show
         let fade = div().absolute().left_0().right_0().bottom_0().h(px(32.)).bg(linear_gradient(180., linear_color_stop(rgba(look::panel() << 8), 0.), linear_color_stop(rgb(look::panel()), 1.)));
-        // and a line of 1 px at its very foot, the stop card's sign, which shows over the gap between two rows too
-        let foot = div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(rgb(look::line()));
+        // and a line of 1 px 8 px above its foot, apart from the status bar's edge (gpui_base's scrollbar drew nothing here)
+        let foot = div().absolute().left_0().right_0().bottom(px(8.)).h(px(1.)).bg(rgb(look::line()));
         div().relative().size_full().child(page).when(more, |d| d.child(fade).child(foot)).into_any_element()
     }
 
