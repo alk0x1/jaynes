@@ -288,6 +288,14 @@ fn tools_at_work(line: &str) -> i64 {
     }
 }
 
+/// How an agent program ended, in words the person reads: "exited with code 1", or that a signal stopped it.
+fn exited(code: Option<i32>) -> String {
+    match code {
+        Some(c) => format!("exited with code {c}"),
+        None => "was stopped by a signal, with no exit code".to_string(),
+    }
+}
+
 // --- a command of the person's: for tests and for agent programs without an adapter --------------------------
 
 /// Runs `sh -c <command>` in the step's folder with the prompt on standard input. Exit 0 ran, 75 is a quota,
@@ -330,7 +338,7 @@ impl Agent for Shell {
                     Some(0) => Ended::Ran { usage, session, model: "command".to_string() },
                     Some(75) => Ended::Interrupted { reason: "quota".to_string() },
                     Some(3) => Ended::Fault { reason: err.trim().chars().take(300).collect() },
-                    _ => Ended::Failed { reason: format!("the agent exited with {code:?}: {}", err.trim().chars().take(300).collect::<String>()), usage },
+                    _ => Ended::Failed { reason: format!("the agent {}: {}", exited(code), err.trim().chars().take(300).collect::<String>()), usage },
                 }
             }
         };
@@ -785,13 +793,13 @@ impl CodexTurn {
         }
         if self.usage.is_none() && self.failures.is_empty() {
             let tail: String = err.trim().chars().take(300).collect();
-            return Ended::Fault { reason: format!("Codex ended with no completed turn ({code:?}), {} lines not its events: {tail}", self.other) };
+            return Ended::Fault { reason: format!("Codex ended with no completed turn (it {}), {} lines not its events: {tail}", exited(code), self.other) };
         }
         if !self.failures.is_empty() {
             return Ended::Failed { reason: format!("the Codex turn failed: {}", said.chars().take(300).collect::<String>()), usage };
         }
         if code != Some(0) {
-            return Ended::Failed { reason: format!("Codex exited with {code:?}: {}", err.trim().chars().take(300).collect::<String>()), usage };
+            return Ended::Failed { reason: format!("Codex {}: {}", exited(code), err.trim().chars().take(300).collect::<String>()), usage };
         }
         Ended::Ran { usage, session: self.session, model: String::new() }
     }
@@ -871,7 +879,7 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
         if lower.contains("limit") || lower.contains("quota") {
             return Ended::Interrupted { reason: "quota".to_string() };
         }
-        return Ended::Fault { reason: format!("Claude Code ended with no result ({code:?}): {}", text.trim().chars().take(300).collect::<String>()) };
+        return Ended::Fault { reason: format!("Claude Code ended with no result (it {}): {}", exited(code), text.trim().chars().take(300).collect::<String>()) };
     }
     if result["is_error"].as_bool().unwrap_or(false) || code != Some(0) {
         let subtype = result["subtype"].as_str().unwrap_or("");
@@ -922,6 +930,16 @@ fn answered_by(model: &str, out: &str, result: &Value) -> Result<String, String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn how_an_agent_program_ended_is_said_in_words_never_as_debug_text() {
+        assert_eq!(super::exited(Some(1)), "exited with code 1");
+        assert_eq!(super::exited(Some(2)), "exited with code 2");
+        assert_eq!(super::exited(None), "was stopped by a signal, with no exit code");
+        for code in [Some(1), None] {
+            assert!(!super::exited(code).contains("Some(") && !super::exited(code).contains("None"), "{code:?}");
+        }
+    }
+
     use super::*;
 
     #[test]
