@@ -24,6 +24,14 @@ pub enum Go {
     Shortcuts,
 }
 
+impl Go {
+    /// Whether it is one of the app's commands, drawn with › whether it has a key or not; the Inbox, an agent and a
+    /// run are places.
+    pub fn is_command(&self) -> bool {
+        !matches!(self, Go::Inbox | Go::Agent(_) | Go::Run(_))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub label: String,
@@ -161,7 +169,7 @@ impl Render for PaletteView {
         let mut list = div().flex().flex_col().py(px(4.));
         for (k, e) in shown.iter().enumerate() {
             let on = k == self.at;
-            let mark: AnyElement = if e.key.is_some() && e.go != Go::Inbox {
+            let mark: AnyElement = if e.go.is_command() {
                 div().w(px(12.)).text_color(rgb(look::faint())).child("›").into_any_element()
             } else if let Some(a) = &e.agent {
                 crate::side::agent_icon(a, "palette")
@@ -171,7 +179,7 @@ impl Render for PaletteView {
                 look::icon(look::Icon::Inbox, 13., look::faint()).into_any_element()
             };
             let right = match e.key {
-                Some(key) if e.go != Go::Inbox => look::kbd(key).into_any_element(),
+                Some(key) if e.go.is_command() => look::kbd(key).into_any_element(),
                 _ => div().text_color(rgb(look::faint())).child(e.space.clone()).into_any_element(),
             };
             let go = e.go.clone();
@@ -274,6 +282,9 @@ mod tests {
         let labels: Vec<&str> = all.iter().map(|e| e.label.as_str()).collect();
         assert_eq!(labels, ["Inbox", "T1", "T2", "run Run r1", "run Run r2", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Keyboard shortcuts"]);
         assert_eq!(all[7].go, Go::OpenPage);
+        // every command is drawn as one, with › on its left, a key or not; the places are not commands
+        let commands: Vec<&str> = all.iter().filter(|e| e.go.is_command()).map(|e| e.label.as_str()).collect();
+        assert_eq!(commands, ["New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Keyboard shortcuts"]);
         assert_eq!(all[1].space, "helm");
         assert_eq!(all[5].key, Some("⌘T"));
         assert_eq!(super::entries(&spaces, &runs, None)[5].label, "New agent");
