@@ -51,6 +51,9 @@ pub struct Prefs {
     pub new_agent: String,
     /// What e in Changes opens; empty: $VISUAL, else $EDITOR, else vi.
     pub editor: String,
+    /// How big Changes draws its text, the panel and the tab with the diffs (1 = as designed): Command-plus and
+    /// Command-minus with the keys there.
+    pub changes_zoom: f32,
 }
 
 impl Default for Prefs {
@@ -67,12 +70,36 @@ impl Default for Prefs {
             notifications: true,
             new_agent: "claude".into(),
             editor: String::new(),
+            changes_zoom: 1.0,
         }
     }
 }
 
 const FONT_SIZE: (f32, f32) = (6.0, 72.0);
 const SCROLL_SPEED: (f32, f32) = (0.1, 5.0);
+const CHANGES_ZOOM: (f32, f32) = (0.7, 2.0);
+
+/// A view of the app the zoom keys change, each keeping its own level: Changes, or the terminals' font.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Changes,
+    Terminal,
+}
+
+/// The setting the zoom keys change in `view`, and its new value: `steps` up or down (a tenth of Changes' size, a
+/// point of the terminal's font), held in reach; 0 brings the view's own size back.
+pub fn zoomed(view: View, p: &Prefs, steps: i32) -> (&'static str, String) {
+    match view {
+        View::Changes => {
+            let z = if steps == 0 { 1.0 } else { ((p.changes_zoom * 10.0).round() + steps as f32).clamp(CHANGES_ZOOM.0 * 10.0, CHANGES_ZOOM.1 * 10.0) / 10.0 };
+            ("changes_zoom", z.to_string())
+        }
+        View::Terminal => {
+            let size = if steps == 0 { Prefs::default().terminal_font_size } else { (p.terminal_font_size.round() + steps as f32).clamp(FONT_SIZE.0, FONT_SIZE.1) };
+            ("terminal_font_size", size.to_string())
+        }
+    }
+}
 
 impl Prefs {
     /// Values out of reach come back inside it; an unknown color or an empty program is the default.
@@ -86,6 +113,7 @@ impl Prefs {
         }
         self.terminal_font_size = if self.terminal_font_size.is_finite() { self.terminal_font_size.clamp(FONT_SIZE.0, FONT_SIZE.1) } else { d.terminal_font_size };
         self.scroll_speed = if self.scroll_speed.is_finite() { self.scroll_speed.clamp(SCROLL_SPEED.0, SCROLL_SPEED.1) } else { d.scroll_speed };
+        self.changes_zoom = if self.changes_zoom.is_finite() { self.changes_zoom.clamp(CHANGES_ZOOM.0, CHANGES_ZOOM.1) } else { d.changes_zoom };
         if self.new_agent.trim().is_empty() {
             self.new_agent = d.new_agent;
         }
@@ -166,6 +194,7 @@ pub fn set(p: &mut Prefs, name: &str, value: &str) -> Result<(), String> {
         }
         "copy_on_select" => p.copy_on_select = switch()?,
         "scroll_speed" => p.scroll_speed = number(SCROLL_SPEED)?,
+        "changes_zoom" => p.changes_zoom = number(CHANGES_ZOOM)?,
         "notifications" => p.notifications = switch()?,
         "new_agent" if !value.is_empty() => p.new_agent = value.into(),
         "editor" => p.editor = value.into(),
@@ -250,7 +279,29 @@ pub fn change(name: &str, value: &str, cx: &mut gpui::App) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
-    use super::{Prefs, load, new_agent_argv, onto, save, set};
+    use super::{Prefs, View, load, new_agent_argv, onto, save, set, zoomed};
+
+    #[test]
+    fn each_view_keeps_its_own_zoom_a_step_at_a_time_and_command_0_brings_it_back() {
+        let mut p = Prefs::default();
+        assert_eq!(p.changes_zoom, 1.0);
+        // Changes: a tenth a step, between 0.7 and 2
+        assert_eq!(zoomed(View::Changes, &p, 1), ("changes_zoom", "1.1".to_string()));
+        set(&mut p, "changes_zoom", "1.9").unwrap();
+        assert_eq!(zoomed(View::Changes, &p, 1), ("changes_zoom", "2".to_string()));
+        assert_eq!(zoomed(View::Changes, &{ let mut q = p.clone(); q.changes_zoom = 2.0; q }, 1), ("changes_zoom", "2".to_string()), "held at its top");
+        assert_eq!(zoomed(View::Changes, &p, 0), ("changes_zoom", "1".to_string()));
+        // a number out of reach is held in it, as the others are
+        let mut big = p.clone();
+        set(&mut big, "changes_zoom", "9").unwrap();
+        assert_eq!(big.changes_zoom, 2.0);
+        // the terminal: a point a step of its font, the same one Settings shows; Command-0 its own size back
+        p.terminal_font_size = 15.0;
+        assert_eq!(zoomed(View::Terminal, &p, -1), ("terminal_font_size", "14".to_string()));
+        assert_eq!(zoomed(View::Terminal, &p, 0), ("terminal_font_size", Prefs::default().terminal_font_size.to_string()));
+        // each view its own: a step of one leaves the other
+        assert_eq!(p.changes_zoom, 1.9);
+    }
     use crate::settings::{OptionAsAlt, Settings};
 
     fn dir() -> std::path::PathBuf {

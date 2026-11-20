@@ -65,7 +65,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette, OpenPage, HaltAll
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette, OpenPage, HaltAll, ZoomIn, ZoomOut, ZoomReset
     ]
 );
 
@@ -327,6 +327,10 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &OpenPage, _, cx| this.open_page(cx)))
             // "Halt all runs" in the status bar
             .on_action(cx.listener(|this, _: &HaltAll, _, cx| this.halt_all(cx)))
+            // the zoom keys, bound only where the keys are in Changes or a terminal: each view keeps its own level
+            .on_action(cx.listener(|this, _: &ZoomIn, window, cx| this.zoom(1, window, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, window, cx| this.zoom(-1, window, cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, window, cx| this.zoom(0, window, cx)))
             // the button under a finished run's story
             .on_action(cx.listener(|this, _: &CopySummary, _, cx| this.tabs.update(cx, |t, cx| t.copy_summary(cx))))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
@@ -1215,6 +1219,18 @@ impl Root {
         )
     }
 
+    /// Command-plus, Command-minus or Command-0 where the keys are: Changes (its tab, or its commit message), else the
+    /// terminal that has them, whose font all the terminals share. Kept, as Settings keeps its font.
+    fn zoom(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>) {
+        let in_changes = self.stack.read(cx).focus.is_focused(window) || self.changes.read(cx).message_focused(window, cx);
+        let view = if in_changes { prefs::View::Changes } else { prefs::View::Terminal };
+        let (name, value) = prefs::zoomed(view, &prefs::get(), steps);
+        if let Err(e) = prefs::change(name, &value, cx) {
+            tracing::warn!("{e}");
+        }
+        cx.notify();
+    }
+
     /// "Halt all runs": the first press arms it for a few seconds, the second halts every run at work.
     fn halt_all(&mut self, cx: &mut Context<Self>) {
         if self.halt_all_at.is_some_and(|at| at.elapsed() < run_actions::ARMED_FOR) {
@@ -1954,6 +1970,15 @@ fn main() {
             KeyBinding::new("cmd-e", ToggleSteps, Some("Jaynes")),
             KeyBinding::new("cmd-n", NewRun, Some("Jaynes")),
             KeyBinding::new("cmd-0", ToggleRuns, Some("Jaynes")),
+            // the zoom where the keys are: in Changes, in a terminal; elsewhere Command-0 is the runs column's
+            KeyBinding::new("cmd-=", ZoomIn, Some("Changes")),
+            KeyBinding::new("cmd-+", ZoomIn, Some("Changes")),
+            KeyBinding::new("cmd--", ZoomOut, Some("Changes")),
+            KeyBinding::new("cmd-0", ZoomReset, Some("Changes")),
+            KeyBinding::new("cmd-=", ZoomIn, Some("Terminal")),
+            KeyBinding::new("cmd-+", ZoomIn, Some("Terminal")),
+            KeyBinding::new("cmd--", ZoomOut, Some("Terminal")),
+            KeyBinding::new("cmd-0", ZoomReset, Some("Terminal")),
             KeyBinding::new("cmd-1", Tab1, Some("Jaynes")),
             KeyBinding::new("cmd-2", Tab2, Some("Jaynes")),
             KeyBinding::new("cmd-3", Tab3, Some("Jaynes")),

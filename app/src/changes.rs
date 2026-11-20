@@ -218,6 +218,11 @@ impl Changes {
         self.act(move |root| git::commit(root, &text, staged), cx);
     }
 
+    /// Whether the commit message has the keys.
+    pub fn message_focused(&self, window: &Window, cx: &App) -> bool {
+        self.message.read(cx).focus_handle(cx).is_focused(window)
+    }
+
     /// How many files differ, for the switch in the tabs bar.
     pub fn count(&self) -> usize {
         self.status.as_ref().map_or(0, Status::count)
@@ -226,7 +231,7 @@ impl Changes {
 
 /// The lines a file gained and lost, as "+118 −34"; "binary" when git does not count it in lines.
 fn counts(e: &Entry) -> Div {
-    let mono = div().flex_none().flex().gap(px(5.)).font_family(look::MONO_FONT).text_size(px(11.5));
+    let mono = div().flex_none().flex().gap(px(5.)).font_family(look::MONO_FONT).text_size(z(11.5));
     match (e.add, e.del) {
         (Some(a), Some(d)) => mono.child(div().text_color(rgb(look::green())).child(format!("+{a}"))).child(div().text_color(rgb(look::red())).child(format!("−{d}"))),
         _ => mono.text_color(rgb(look::faint())).child("binary"),
@@ -267,12 +272,12 @@ fn heading(text: &str, right: String) -> Div {
         .px(px(16.))
         .pt(px(4.))
         .pb(px(8.))
-        .child(div().flex_none().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(text.to_string()))
-        .child(div().min_w_0().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(right))
+        .child(div().flex_none().text_size(z(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(text.to_string()))
+        .child(div().min_w_0().truncate().text_size(z(12.)).text_color(rgb(look::faint())).child(right))
 }
 
 fn section(text: &str) -> Div {
-    div().px(px(16.)).pt(px(10.)).pb(px(4.)).text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::faint())).child(text.to_string())
+    div().px(px(16.)).pt(px(10.)).pb(px(4.)).text_size(z(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::faint())).child(text.to_string())
 }
 
 /// A file's row: a click stacks its changes in the Changes tab; a blue dot while they show there.
@@ -292,15 +297,17 @@ fn row(path: &str, shown: bool, cx: &mut Context<Changes>) -> Stateful<Div> {
         .pl(px(16.))
         .pr(px(10.))
         .py(px(3.))
-        .text_size(px(12.5))
+        .text_size(z(12.5))
         .child(div().flex_none().max_w(px(200.)).truncate().text_color(rgb(look::text())).child(name))
-        .child(div().min_w_0().flex_1().truncate().text_size(px(11.5)).text_color(rgb(look::faint())).child(dir))
+        .child(div().min_w_0().flex_1().truncate().text_size(z(11.5)).text_color(rgb(look::faint())).child(dir))
 }
 
 impl Render for Changes {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let frame = div()
             .id("changes")
+            // its zoom keys (main.rs): with the commit message in hand too
+            .key_context("Changes")
             .w_full()
             .h_full()
             .flex_none()
@@ -315,7 +322,7 @@ impl Render for Changes {
         let home = std::env::var("HOME").unwrap_or_default();
         let place = crate::home_short(&self.folder, &home);
         let Some(status) = self.status.clone() else {
-            return frame.child(heading("Changes", place)).child(div().px(px(16.)).text_size(px(12.5)).text_color(rgb(look::faint())).child("Not a git folder."));
+            return frame.child(heading("Changes", place)).child(div().px(px(16.)).text_size(z(12.5)).text_color(rgb(look::faint())).child("Not a git folder."));
         };
         let (add, del) = status.staged.iter().chain(status.changed.iter()).fold((0, 0), |(a, d), e| (a + e.add.unwrap_or(0), d + e.del.unwrap_or(0)));
         let n = status.count();
@@ -338,7 +345,7 @@ impl Render for Changes {
                         .border_1()
                         .border_color(rgb(look::line_2()))
                         .bg(rgb(look::panel_2()))
-                        .text_size(px(12.5))
+                        .text_size(z(12.5))
                         .text_color(rgb(look::text()))
                         .cursor_pointer()
                         .hover(|d| d.bg(rgb(look::selected())))
@@ -347,10 +354,10 @@ impl Render for Changes {
                 ),
         );
         if let Some(e) = &self.error {
-            panel = panel.child(div().px(px(16.)).pb(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(e.clone()));
+            panel = panel.child(div().px(px(16.)).pb(px(6.)).text_size(z(12.)).text_color(rgb(look::red())).child(e.clone()));
         }
         if let Some(n) = &self.note {
-            panel = panel.child(div().px(px(16.)).pb(px(6.)).text_size(px(12.)).text_color(rgb(look::green())).child(n.clone()));
+            panel = panel.child(div().px(px(16.)).pb(px(6.)).text_size(z(12.)).text_color(rgb(look::green())).child(n.clone()));
         }
         if !status.staged.is_empty() {
             panel = panel.child(section("Staged"));
@@ -382,7 +389,7 @@ impl Render for Changes {
             panel = panel.child(section("New files, not in git yet"));
             for p in &status.new {
                 let path = p.clone();
-                panel = panel.child(row(p, self.shown.contains(p), cx).child(div().flex_none().text_size(px(11.5)).text_color(rgb(look::amber())).child("new")).child(
+                panel = panel.child(row(p, self.shown.contains(p), cx).child(div().flex_none().text_size(z(11.5)).text_color(rgb(look::amber())).child("new")).child(
                     act_icon(SharedString::from(format!("add-{p}")), look::Icon::Plus).on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         let path = path.clone();
@@ -404,8 +411,8 @@ impl Render for Changes {
                     .gap(px(10.))
                     .px(px(16.))
                     .py(px(3.))
-                    .text_size(px(12.))
-                    .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(11.5)).text_color(rgb(look::faint())).child(hash.clone()))
+                    .text_size(z(12.))
+                    .child(div().flex_none().font_family(look::MONO_FONT).text_size(z(11.5)).text_color(rgb(look::faint())).child(hash.clone()))
                     .child(div().min_w_0().truncate().text_color(rgb(look::dim())).child(subject.clone())),
             );
         }
@@ -491,7 +498,7 @@ fn line_text(parts: &[(String, bool)], colour: u32) -> StyledText {
 
 /// One side of a piece: its label, then its lines with their numbers; "(nothing here)" for a side with none.
 fn side(label: &'static str, lines: &[diff::Line], colour: u32) -> Div {
-    let mut col = div().flex_1().min_w_0().py(px(4.)).flex().flex_col().child(div().px(px(10.)).pb(px(2.)).font_family(look::UI_FONT).text_size(px(10.5)).text_color(rgb(look::faint())).child(label));
+    let mut col = div().flex_1().min_w_0().py(px(4.)).flex().flex_col().child(div().px(px(10.)).pb(px(2.)).font_family(look::UI_FONT).text_size(z(10.5)).text_color(rgb(look::faint())).child(label));
     if lines.is_empty() {
         col = col.child(div().pl(px(44.)).text_color(rgb(look::faint())).child("(nothing here)"));
     }
@@ -520,7 +527,7 @@ fn keys_line() -> Div {
         .py(px(8.))
         .border_t_1()
         .border_color(rgb(look::line()))
-        .text_size(px(11.5))
+        .text_size(z(11.5))
         .text_color(rgb(look::faint()))
         .child(key("s", "stage"))
         .child(key("u", "unstage"))
@@ -556,10 +563,10 @@ impl Render for Stack {
                     .gap(px(8.))
                     .pt(px(12.))
                     .pb(px(4.))
-                    .text_size(px(12.5))
+                    .text_size(z(12.5))
                     .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(name))
-                    .child(div().flex_none().text_size(px(11.5)).text_color(rgb(look::faint())).child(dir))
-                    .child(div().ml(px(6.)).min_w_0().flex_1().truncate().text_size(px(12.)).text_color(rgb(look::dim())).child(place))
+                    .child(div().flex_none().text_size(z(11.5)).text_color(rgb(look::faint())).child(dir))
+                    .child(div().ml(px(6.)).min_w_0().flex_1().truncate().text_size(z(12.)).text_color(rgb(look::dim())).child(place))
                     .children(changes.entry(path).map(|e| counts(&e)))
                     .child(act_icon(SharedString::from(format!("edit-{path}")), look::Icon::Open).on_click(cx.listener({
                         let path = path.clone();
@@ -571,15 +578,15 @@ impl Render for Stack {
                     .child(act_icon(SharedString::from(format!("close-{path}")), look::Icon::Close).on_click(close)),
             );
             let Some(d) = d else {
-                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("Reading…"));
+                page = page.child(div().py(px(6.)).text_size(z(12.)).text_color(rgb(look::faint())).child("Reading…"));
                 continue;
             };
             if d.binary {
-                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("A binary file: git does not show its lines."));
+                page = page.child(div().py(px(6.)).text_size(z(12.)).text_color(rgb(look::faint())).child("A binary file: git does not show its lines."));
                 continue;
             }
             if d.pieces.is_empty() {
-                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child(if d.new { "A new folder: add it with + to see its files." } else { "No changes left." }));
+                page = page.child(div().py(px(6.)).text_size(z(12.)).text_color(rgb(look::faint())).child(if d.new { "A new folder: add it with + to see its files." } else { "No changes left." }));
                 continue;
             }
             for (i, p) in d.pieces.iter().enumerate() {
@@ -602,8 +609,8 @@ impl Render for Stack {
                         .border_1()
                         .border_color(rgb(if here { look::blue() } else { look::line_2() }))
                         .font_family(look::MONO_FONT)
-                        .text_size(px(12.))
-                        .line_height(px(19.5))
+                        .text_size(z(12.))
+                        .line_height(z(19.5))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.cursor = at;
                             window.focus(&this.focus, cx);
@@ -617,12 +624,13 @@ impl Render for Stack {
                 );
             }
             if d.cut > 0 {
-                page = page.child(div().py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child(format!("… {} more lines", d.cut)));
+                page = page.child(div().py(px(6.)).text_size(z(12.)).text_color(rgb(look::faint())).child(format!("… {} more lines", d.cut)));
             }
         }
         div()
             .id("changes-tab")
             .track_focus(&self.focus)
+            .key_context("Changes")
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| this.key(e, window, cx)))
             .size_full()
             .flex()
@@ -631,6 +639,11 @@ impl Render for Stack {
             .child(page.child(div().h(px(24.))))
             .child(keys_line())
     }
+}
+
+/// A size of Changes' text at the zoom the person left it (prefs changes_zoom, Command-plus and Command-minus there).
+fn z(v: f32) -> Pixels {
+    px(v * crate::prefs::get().changes_zoom)
 }
 
 /// What the commit button says: how many files the commit takes, the staged ones or, with none staged, every changed
