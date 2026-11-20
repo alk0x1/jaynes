@@ -10,6 +10,12 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::{Mark, Stage};
 
+/// Whether the panel shows the run picked: only while a run's tab is in the middle; with the Inbox, Claude Code, an
+/// agent or Changes there, it asks to pick one, rather than show the last run picked out of sight.
+pub fn shows_run(middle: &crate::tabs::Middle) -> bool {
+    matches!(middle, crate::tabs::Middle::Run(_))
+}
+
 /// What the panel says over the question of a run that waits: one already delivered says so, and that the answer
 /// still corrects it (the core: "delivered; your answers can still correct it").
 pub fn waits_words(delivered: bool) -> (&'static str, Option<&'static str>) {
@@ -18,7 +24,17 @@ pub fn waits_words(delivered: bool) -> (&'static str, Option<&'static str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::waits_words;
+    use super::{shows_run, waits_words};
+    use crate::tabs::Middle;
+
+    #[test]
+    fn the_steps_panel_shows_the_run_only_while_a_run_s_tab_is_in_the_middle() {
+        assert!(shows_run(&Middle::Run("r1".into())));
+        // the Inbox or Claude Code in the middle: "Pick a run to see its steps.", not the last run picked
+        for m in [Middle::Inbox, Middle::Terminal, Middle::Agent, Middle::Changes] {
+            assert!(!shows_run(&m), "{m:?}");
+        }
+    }
 
     #[test]
     fn a_run_delivered_while_its_stop_is_open_says_the_answer_still_corrects_it() {
@@ -164,8 +180,8 @@ fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<cra
 
 impl Render for Rail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let chosen = self.runs.read(cx).chosen().cloned();
         let tabs = self.tabs.read(cx);
+        let chosen = self.runs.read(cx).chosen().cloned().filter(|_| shows_run(&tabs.middle()));
         // lit only while the story shown is this run's
         let lit = chosen.as_ref().filter(|d| tabs.open.as_deref() == Some(d.id.as_str())).and(tabs.lit.clone());
         let frame = div()

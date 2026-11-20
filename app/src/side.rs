@@ -168,6 +168,18 @@ fn agent_word(a: &Agent, now: u64) -> (String, u32) {
     }
 }
 
+/// What a run's dot on the narrow rail says on hovering: its name and what it waits for, in the column's words.
+fn rail_tip(row: &Row, halted: Option<&String>) -> String {
+    let what = match row.mark {
+        Mark::Needs => "asks you".to_string(),
+        Mark::Blocked => "blocked · open it".to_string(),
+        Mark::Working => format!("working, {}", row.line.split(", ").next().unwrap_or_default()),
+        Mark::Halted => halted.cloned().unwrap_or_else(|| "halted".into()),
+        _ => row.line.clone(),
+    };
+    format!("{} · {what}", row.title)
+}
+
 /// A thing on the rail: centred, its name on a tooltip.
 fn rail_item(id: SharedString, on: bool, tip: String) -> Stateful<Div> {
     div()
@@ -583,11 +595,11 @@ impl Side {
     /// numbered, the agents of an open one under it; and the » that gives the names back.
     fn rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let runs = self.runs.read(cx);
-        let (listing, selected) = (runs.snap.listing.clone(), runs.selected.clone());
+        let (listing, selected, halted) = (runs.snap.listing.clone(), runs.selected.clone(), runs.snap.halted.clone());
         let agents = self.agents.read(cx);
         let o = order(&listing, &agents.spaces, &self.cleared);
         let tabs = self.tabs.read(cx);
-        let (open, inbox_on) = (tabs.agent.as_ref().map(|(a, _)| a.clone()), tabs.inbox);
+        let (open, inbox_on, open_run) = (tabs.agent.as_ref().map(|(a, _)| a.clone()), tabs.inbox, tabs.middle().run().map(str::to_string));
         let mut list = div().id("rail-list").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().pt(px(8.)).pb(px(8.)).gap(px(2.));
 
         let need = inbox_count(&o);
@@ -617,9 +629,11 @@ impl Side {
 
         let run = |row: &Row| {
             let (tabs, id) = (self.tabs.clone(), row.id.clone());
-            rail_item(SharedString::from(format!("rail-run-{}", row.id)), selected.as_deref() == Some(row.id.as_str()), format!("{} · {}", row.title, row.line))
+            // the open run's dot has a ring, so four amber dots tell which one shows
+            let ring = open_run.as_deref() == Some(row.id.as_str());
+            rail_item(SharedString::from(format!("rail-run-{}", row.id)), selected.as_deref() == Some(row.id.as_str()), rail_tip(row, halted.get(&row.id)))
                 .on_click(move |_, _, cx| tabs.update(cx, |t, cx| t.show(Some(id.clone()), cx)))
-                .child(run_icon(row, "rail-spin"))
+                .child(div().p(px(2.)).rounded_full().border(px(1.5)).border_color(if ring { rgb(look::text()) } else { rgba(0) }).child(run_icon(row, "rail-spin")))
         };
         let agent = |a: &Agent, tip: String| {
             let (tabs, address, title) = (self.tabs.clone(), a.address.clone(), a.title.clone());
@@ -787,7 +801,17 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agent_word, agents, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, seen_from};
+    use super::{Agent, Mark, Order, Row, State, agent_word, agents, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, rail_tip, seen_from};
+
+    #[test]
+    fn a_dot_on_the_narrow_rail_says_its_run_and_what_it_waits_for() {
+        let row = |mark: Mark, line: &str| Row { id: "r".into(), title: "Tighten the site's copy".into(), line: line.into(), mark };
+        assert_eq!(rail_tip(&row(Mark::Needs, "Which of these copy changes go in?"), None), "Tighten the site's copy · asks you");
+        assert_eq!(rail_tip(&row(Mark::Blocked, "step 2 of 2, blocked: no room"), None), "Tighten the site's copy · blocked · open it");
+        assert_eq!(rail_tip(&row(Mark::Working, "step 1 of 2, running"), None), "Tighten the site's copy · working, step 1 of 2");
+        assert_eq!(rail_tip(&row(Mark::Halted, "step 1 of 2, halted"), Some(&"halted by you".to_string())), "Tighten the site's copy · halted by you");
+        assert_eq!(rail_tip(&row(Mark::Delivered, "delivered"), None), "Tighten the site's copy · delivered");
+    }
     use std::collections::HashSet;
     use jaynes_shell::listing::Listing;
 
