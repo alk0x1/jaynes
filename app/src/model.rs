@@ -23,6 +23,8 @@ pub struct Detail {
     pub stages: Vec<Stage>,
     /// What its agent does now, while it works.
     pub now: Option<String>,
+    /// Already delivered while a stop of it is still open: the person's answer can still correct it.
+    pub delivered: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -201,6 +203,7 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
                 minutes: until.saturating_sub(e.started) / 60,
                 stages: listing::stages(&e.run),
                 now: if row.mark == Mark::Working { listing::now(home, &e.run.id) } else { None },
+                delivered: !e.run.finished() && e.run.delivered.is_some(),
             },
         );
     }

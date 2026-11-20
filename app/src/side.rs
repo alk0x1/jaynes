@@ -26,6 +26,9 @@ pub struct Side {
     show_finished: bool,
     /// The finished runs the person cleared from the column (by id), and whether they show, faint, to bring back.
     cleared: HashSet<String>,
+    /// The finished runs the person has seen, once the record is read; until then, what the window kept.
+    seen: Option<HashSet<String>>,
+    seen_kept: Option<Vec<String>>,
     show_cleared: bool,
     /// Whether the column is the rail (bars.rs): the window says so, as the person drags its edge.
     pub rail: bool,
@@ -81,6 +84,16 @@ fn finished(m: Mark) -> bool {
     matches!(m, Mark::Delivered | Mark::Merged | Mark::Undone | Mark::Abandoned)
 }
 
+/// The finished runs the person has seen: those the window kept that are still in the record; the first time, with
+/// none kept, every run finished then, so the runs of before do not fill the Inbox's "Finished".
+fn seen_from(kept: Option<Vec<String>>, listing: &jaynes_shell::listing::Listing) -> HashSet<String> {
+    let rows = || listing.projects.iter().flat_map(|(_, rows)| rows);
+    match kept {
+        None => rows().filter(|r| finished(r.mark)).map(|r| r.id.clone()).collect(),
+        Some(kept) => kept.into_iter().filter(|id| rows().any(|r| &r.id == id)).collect(),
+    }
+}
+
 fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space], cleared: &HashSet<String>) -> Order {
     let mut o = Order { needs: listing.needs.clone(), ..Order::default() };
     for (project, rows) in &listing.projects {
@@ -129,6 +142,12 @@ fn needs_tag(row: &Row) -> (String, u32) {
         Mark::Blocked => ("continue or abandon".into(), look::red()),
         _ => ("run".into(), look::faint()),
     }
+}
+
+/// The line under a run in "Needs you": its question, or, for one already delivered, that the person can still
+/// correct it.
+fn needs_line(row: &Row, delivered: bool) -> String {
+    if delivered { "delivered · you can still correct it".into() } else { row.line.clone() }
 }
 
 /// What a finished run says at the right of its name: a delivered or merged one, how many files it changed, as the
@@ -192,11 +211,41 @@ fn dot(color: u32) -> Div {
 }
 
 impl Side {
-    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cleared: Vec<String>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&runs, |_, _, cx| cx.notify()).detach();
+    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cleared: Vec<String>, seen: Option<Vec<String>>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&runs, |this: &mut Self, runs, cx| {
+            // what was seen is known once the record is read: kept, or every run finished then
+            if this.seen.is_none() && runs.read(cx).read_once && runs.read(cx).trouble.is_none() {
+                this.seen = Some(seen_from(this.seen_kept.take(), &runs.read(cx).snap.listing));
+                cx.emit(Cleared);
+            }
+            cx.notify();
+        })
+        .detach();
         cx.observe(&agents, |_, _, cx| cx.notify()).detach();
         cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
-        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), show_cleared: false, rail: false }
+        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), seen: None, seen_kept: seen, show_cleared: false, rail: false }
+    }
+
+    /// The finished runs the person has seen, once the record is read.
+    pub fn seen(&self) -> Option<&HashSet<String>> {
+        self.seen.as_ref()
+    }
+
+    /// The seen runs, as the window keeps them: what was kept until the record is read.
+    pub fn seen_to_keep(&self) -> Option<Vec<String>> {
+        self.seen.as_ref().map(|s| s.iter().cloned().collect()).or_else(|| self.seen_kept.clone())
+    }
+
+    /// A finished run the person saw, by opening its tab or with Seen in the Inbox: out of "Finished" there. A run
+    /// not finished is not marked, or it would never come to the Inbox once it is.
+    pub fn mark_seen(&mut self, id: &str, cx: &mut Context<Self>) {
+        let done = self.runs.read(cx).snap.listing.projects.iter().flat_map(|(_, rows)| rows).any(|r| r.id == id && finished(r.mark));
+        if done && let Some(seen) = &mut self.seen
+            && seen.insert(id.to_owned())
+        {
+            cx.emit(Cleared);
+            cx.notify();
+        }
     }
 
     /// The cleared runs, as the window keeps them.
@@ -246,7 +295,9 @@ impl Side {
     }
 
     fn fold(&mut self, key: &str, cx: &mut Context<Self>) {
-        if !self.folded.remove(key) {
+        if key == "§finished" {
+            self.show_finished = !self.show_finished;
+        } else if !self.folded.remove(key) {
             self.folded.insert(key.to_owned());
         }
         cx.notify();
@@ -290,7 +341,8 @@ impl Side {
 
     /// A section's name that folds it, with its count.
     fn section(&self, key: &'static str, name: &str, count: Option<usize>, color: u32, cx: &mut Context<Self>) -> impl IntoElement {
-        let folded = self.folded.contains(key);
+        // "Finished" is folded until the person shows it
+        let folded = if key == "§finished" { !self.show_finished } else { self.folded.contains(key) };
         div()
             .id(key)
             .flex()
@@ -431,43 +483,23 @@ impl Side {
             .children(end)
     }
 
-    /// The finished runs' count, that shows or hides them.
-    fn finished_line(&self, n: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = self.show_finished;
-        div()
-            .id("finished")
-            .mx(px(8.))
-            .px(px(10.))
-            .py(px(5.))
-            .flex()
-            .gap(px(6.))
-            .cursor_pointer()
-            .text_size(px(11.5))
-            .text_color(rgb(look::faint()))
-            .hover(|d| d.text_color(rgb(look::dim())))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.show_finished = !this.show_finished;
-                cx.notify();
-            }))
-            .child(div().w(px(10.)).child(if shown { "▾" } else { "▸" }))
-            .child(format!("{n} finished · {}", if shown { "Hide" } else { "Show" }))
-            .child(div().flex_1())
-            .when(shown, |d| {
-                d.child(
-                    div()
-                        .id("clear-finished")
-                        .px(px(4.))
-                        .rounded(px(4.))
-                        .hover(|d| d.bg(rgb(look::line())).text_color(rgb(look::text())))
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            let ids = this.finished_ids(cx);
-                            this.clear(ids, cx);
-                        }))
-                        .child("Clear finished"),
-                )
-            })
+    /// In the shown "Finished": Clear finished, which takes every finished run off the column.
+    fn clear_finished_line(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().mx(px(8.)).px(px(10.)).py(px(3.)).flex().child(div().flex_1()).child(
+            div()
+                .id("clear-finished")
+                .px(px(4.))
+                .rounded(px(4.))
+                .text_size(px(11.5))
+                .text_color(rgb(look::faint()))
+                .hover(|d| d.bg(rgb(look::line())).text_color(rgb(look::text())))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let ids = this.finished_ids(cx);
+                    this.clear(ids, cx);
+                }))
+                .child("Clear finished"),
+        )
     }
 
     /// The cleared runs' count, that shows them faint, each with ↺ to bring it back.
@@ -660,6 +692,7 @@ impl Render for Side {
         let o = order(&listing, &agents.spaces, &self.cleared);
         let now = agents::now_ms();
         let (files, halted) = (runs.snap.files.clone(), runs.snap.halted.clone());
+        let delivered: HashSet<String> = runs.snap.details.values().filter(|d| d.delivered).map(|d| d.id.clone()).collect();
         let open = self.tabs.read(cx).agent.as_ref().map(|(a, _)| a.clone());
         let inbox_on = self.tabs.read(cx).inbox;
         let mut list = div().id("side-list").flex().flex_col().flex_1().overflow_y_scroll().pb(px(12.));
@@ -671,6 +704,7 @@ impl Render for Side {
             list = list.child(self.section("§needs", "Needs you", Some(needs), look::amber(), cx));
             if !self.folded.contains("§needs") {
                 for row in &o.needs {
+                    let row = &Row { line: needs_line(row, delivered.contains(&row.id)), ..row.clone() };
                     list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(needs_tag(row)), true, None, cx));
                 }
                 for (space, a) in &o.asking {
@@ -686,16 +720,24 @@ impl Render for Side {
         } else if listing.needs.is_empty() && listing.projects.is_empty() {
             list = list.child(heading("Runs", look::faint()));
             list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No runs yet."));
-        } else if !o.at_work.is_empty() || o.finished_count() > 0 || !o.cleared.is_empty() {
-            list = list.child(self.section("§work", "Runs at work", Some(o.at_work.len()), look::faint(), cx));
+        } else {
+            if !o.at_work.is_empty() {
+                list = list.child(self.section("§work", "Runs at work", Some(o.at_work.len()), look::faint(), cx));
+            }
             if !self.folded.contains("§work") {
                 for row in &o.at_work {
                     let tag = (at_work_tag(row, halted.get(&row.id)), if row.mark == Mark::Working { look::blue() } else { look::faint() });
                     list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), Some(tag), false, None, cx));
                 }
+            }
+            // the finished runs: a section of their own, folded by default, the cleared ones in it
+            if o.finished_count() > 0 || !o.cleared.is_empty() {
+                list = list.child(self.section("§finished", "Finished", Some(o.finished_count()), look::faint(), cx));
+            }
+            if self.show_finished {
                 if o.finished_count() > 0 {
-                    list = list.child(self.finished_line(o.finished_count(), cx));
-                    if self.show_finished {
+                    list = list.child(self.clear_finished_line(cx));
+                    {
                         for (project, rows) in &o.finished {
                             list = list.child(heading(project, look::faint()));
                             for row in rows {
@@ -748,9 +790,28 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agent_word, agents, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_tag, order};
+    use super::{Agent, Mark, Order, Row, State, agent_word, agents, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, seen_from};
     use std::collections::HashSet;
     use jaynes_shell::listing::Listing;
+
+    #[test]
+    fn what_was_seen_starts_from_every_run_finished_when_the_app_first_reads_the_record() {
+        let row = |id: &str, mark: Mark| Row { id: id.into(), title: id.into(), line: String::new(), mark };
+        let listing = Listing { needs: vec![], projects: vec![("p".into(), vec![row("d1", Mark::Delivered), row("w1", Mark::Working), row("a1", Mark::Abandoned)])] };
+        // first time: everything finished is taken as seen, so no old run floods the Inbox
+        let first = seen_from(None, &listing);
+        assert_eq!(first, HashSet::from(["d1".to_string(), "a1".to_string()]));
+        // after: what was kept, without runs gone from the record
+        let kept = seen_from(Some(vec!["d1".into(), "gone".into()]), &listing);
+        assert_eq!(kept, HashSet::from(["d1".to_string()]));
+    }
+
+    #[test]
+    fn a_run_delivered_while_its_stop_is_open_says_in_the_column_it_can_still_be_corrected() {
+        let row = Row { id: "r".into(), title: "Tighten the site's copy".into(), line: "Which of these copy changes go in?".into(), mark: Mark::Needs };
+        assert_eq!(needs_line(&row, false), "Which of these copy changes go in?");
+        assert_eq!(needs_line(&row, true), "delivered · you can still correct it");
+    }
 
     fn agent(address: &str, state: State) -> Agent {
         Agent { address: address.into(), title: address.into(), state, since_ms: 0, shell: false, turn: 0, kind: None, msg: String::new(), cwd: String::new() }

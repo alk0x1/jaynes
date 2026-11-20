@@ -5,6 +5,7 @@
 
 use crate::agents::{Space, State};
 use jaynes_shell::listing::{Listing, Mark};
+use std::collections::{HashMap, HashSet};
 
 /// A thing in the Inbox: one of the person's agents, or a Jaynes run.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +58,25 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
     (needs, review)
 }
 
+/// The runs delivered or merged that the person has not seen (`seen`), for "Finished", each with what it delivered:
+/// "delivered · 1 file". None before the app knows what was seen.
+pub fn unseen_runs(runs: &Listing, seen: Option<&HashSet<String>>, files: &HashMap<String, usize>) -> Vec<Item> {
+    let Some(seen) = seen else { return Vec::new() };
+    runs.projects
+        .iter()
+        .flat_map(|(project, rows)| rows.iter().map(move |r| (project, r)))
+        .filter(|(_, r)| matches!(r.mark, Mark::Delivered | Mark::Merged) && !seen.contains(&r.id))
+        .map(|(project, r)| {
+            let word = if r.mark == Mark::Merged { "merged" } else { "delivered" };
+            let what = match files.get(&r.id) {
+                Some(n) => format!("{word} · {n} {}", if *n == 1 { "file" } else { "files" }),
+                None => word.to_string(),
+            };
+            Item { key: Key::Run(r.id.clone()), title: r.title.clone(), place: format!("Jaynes run · {project}"), what, state: State::ToReview, since_ms: 0 }
+        })
+        .collect()
+}
+
 /// Command-O: the thing after the one open, round the end; the first when none of them is open.
 pub fn next(order: &[Key], open: Option<&Key>) -> Option<Key> {
     if order.is_empty() {
@@ -74,9 +94,33 @@ pub fn subtitle(spaces: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Key, gather, next, subtitle};
+    use super::{Key, gather, next, subtitle, unseen_runs};
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn a_run_delivered_and_not_seen_is_in_finished_with_what_it_delivered() {
+        let row = |id: &str, title: &str, mark: Mark| Row { id: id.into(), title: title.into(), line: String::new(), mark };
+        let runs = Listing {
+            needs: vec![],
+            projects: vec![("site".into(), vec![
+                row("d1", "Say quietly in the hero", Mark::Delivered),
+                row("d2", "Rename the footer", Mark::Merged),
+                row("d3", "Old one", Mark::Delivered),
+                row("a1", "Dropped", Mark::Abandoned),
+                row("w1", "Going", Mark::Working),
+            ])],
+        };
+        let files: HashMap<String, usize> = [("d1".to_string(), 1), ("d2".to_string(), 3)].into();
+        let seen: HashSet<String> = ["d3".to_string()].into();
+        let got = unseen_runs(&runs, Some(&seen), &files);
+        assert_eq!(got.iter().map(|i| i.key.clone()).collect::<Vec<_>>(), [Key::Run("d1".into()), Key::Run("d2".into())]);
+        assert_eq!((got[0].title.as_str(), got[0].what.as_str(), got[0].state), ("Say quietly in the hero", "delivered · 1 file", State::ToReview));
+        assert_eq!(got[1].what, "merged · 3 files");
+        // before the app knows what was seen (the record not read yet), nothing is said unseen
+        assert!(unseen_runs(&runs, None, &files).is_empty());
+    }
 
     fn agent(address: &str, state: State) -> Agent {
         Agent { address: address.into(), title: address.to_uppercase(), state, since_ms: 0, shell: false, turn: 0, kind: Some("permission".into()), msg: "approve Bash: ls".into(), cwd: String::new() }

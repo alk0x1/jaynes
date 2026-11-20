@@ -97,6 +97,18 @@ pub fn arrange(entries: &[Entry]) -> Listing {
 }
 
 /// The mark and the line of a run nothing waits on.
+/// A reason as the engine says it now: before 0.2.4 it said how a program ended as Rust's debug text ("exited with
+/// Some(1)", "exited with None"), and a record keeps a reason as it was said.
+pub fn in_words(reason: &str) -> String {
+    let mut out = reason.replace("exited with None", "was stopped by a signal, with no exit code");
+    while let Some(at) = out.find("exited with Some(") {
+        let after = &out[at + "exited with Some(".len()..];
+        let Some((code, rest)) = after.split_once(')').filter(|(c, _)| c.parse::<i32>().is_ok()) else { break };
+        out = format!("{}exited with code {code}{rest}", &out[..at]);
+    }
+    out
+}
+
 fn standing(e: &Entry) -> (Mark, String) {
     let r = &e.run;
     match &r.phase {
@@ -105,7 +117,7 @@ fn standing(e: &Entry) -> (Mark, String) {
         Phase::Finished { outcome: Outcome::Delivered } if e.merged => (Mark::Merged, "merged".into()),
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
         _ if r.halted => (Mark::Halted, format!("{}, halted", where_in(r))),
-        Phase::Blocked { reason, .. } => (Mark::Blocked, format!("{}, blocked: {reason}", where_in(r))),
+        Phase::Blocked { reason, .. } => (Mark::Blocked, format!("{}, blocked: {}", where_in(r), in_words(reason))),
         Phase::Waiting { step: None, .. } => (Mark::Delivered, "delivered, answers open".into()),
         Phase::Waiting { why, .. } => (Mark::Working, format!("{}, {why}", where_in(r))),
         Phase::Running => (Mark::Working, format!("{}, running", where_in(r))),
@@ -154,9 +166,9 @@ pub fn stages(r: &Run) -> Vec<Stage> {
     use jaynes_core::question::By;
     use jaynes_core::run::Status;
     let path = r.path();
-    let blocked = match &r.phase {
-        Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
-        _ => None,
+    let (blocked, spent_all) = match &r.phase {
+        Phase::Blocked { step: Some(s), fault, .. } => (Some(s.as_str()), *fault == jaynes_core::event::Fault::Agent),
+        _ => (None, false),
     };
     // a question a step asked and the person has not answered: that step is the one that waits, and the step the
     // engine names as waiting is only the next to run, once the answer comes; once the run is over, nothing waits
@@ -174,7 +186,8 @@ pub fn stages(r: &Run) -> Vec<Stage> {
             let (class, detail) = if !path.contains(&i) {
                 ("todo", "left out at this risk".to_string())
             } else if blocked == Some(d.name.as_str()) {
-                ("blocked", format!("blocked, {tries}"))
+                // the agent spent every attempt it had: said so, as the run's tab says it
+                ("blocked", if spent_all { format!("blocked: used its {tries}") } else { format!("blocked, {tries}") })
             } else {
                 match &s.status {
                     Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() && r.halted => ("halted", format!("halted, attempt {attempt}{round}")),
@@ -394,6 +407,30 @@ mod tests {
             let first = &super::stages(&r)[0];
             assert_eq!((first.class, first.detail.as_str()), ("halted", detail));
         }
+    }
+
+    #[test]
+    fn a_reason_said_before_codes_were_words_reads_as_they_are_said_now() {
+        assert_eq!(in_words("change spent its 3 attempts: the agent exited with Some(1): boom"), "change spent its 3 attempts: the agent exited with code 1: boom");
+        assert_eq!(in_words("Codex exited with None: x"), "Codex was stopped by a signal, with no exit code: x");
+        assert_eq!(in_words("the agent exited with code 1"), "the agent exited with code 1");
+        assert_eq!(in_words("a role said Some(thing) else"), "a role said Some(thing) else");
+        // the line of a blocked run in the list says it so
+        let mut r = run("b", "Rename the footer link");
+        r.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "change spent its 3 attempts: the agent exited with Some(1):".into() };
+        let row = arrange(&[entry(r, "/p/site", 1)]).projects[0].1[0].clone();
+        assert_eq!(row.line, "step 1 of 2, blocked: change spent its 3 attempts: the agent exited with code 1:");
+    }
+
+    #[test]
+    fn a_step_blocked_by_its_attempts_says_it_used_them_and_another_cause_says_its_attempts() {
+        let mut r = run("b", "x");
+        r.steps[1].attempt = 3;
+        r.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "change spent its 3 attempts: the agent exited with code 1".into() };
+        let blocked = &stages(&r)[1];
+        assert_eq!((blocked.class, blocked.detail.as_str()), ("blocked", "blocked: used its 3 attempts"));
+        r.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Jaynes, reason: "no box".into() };
+        assert_eq!(stages(&r)[1].detail, "blocked, 3 attempts");
     }
 
     #[test]

@@ -13,6 +13,93 @@ use jaynes_shell::listing::{Listing, Mark, Row};
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// What a blocked run's tab says at its top: where it stopped, why in words, and what Continue does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockedSaid {
+    /// The step it stopped at, when one did.
+    pub step: Option<String>,
+    pub title: String,
+    pub why: String,
+    pub continue_does: String,
+}
+
+/// A blocked run's words, from the core's (`Phase::Blocked`): the step's name always in curly quotes, since a role's
+/// "change" or "fix" reads as a verb; "change spent its 3 attempts: the agent exited with code 1: …" becomes
+/// "“change” used its 3 attempts. The agent exited with code 1."; any other reason is the engine's, as a sentence.
+/// Continue gives an agent's attempts back (the core's Continued sets them to 0 for Fault::Agent), else goes on.
+pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> BlockedSaid {
+    let quoted = |s: &str| format!("“{s}”");
+    let sentence = |t: &str| {
+        let t = t.trim();
+        let mut c = t.chars();
+        let up = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+        if up.is_empty() || up.ends_with(['.', '!', '?']) { up } else { format!("{up}.") }
+    };
+    // a record keeps a reason as the engine said it then ("exited with Some(1)"): read as it says it now
+    let reason = &jaynes_shell::listing::in_words(reason);
+    let spent = step.and_then(|s| reason.strip_prefix(&format!("{s} spent its ")).and_then(|rest| rest.split_once(" attempts:")).map(|(n, failures)| (s, n, failures)));
+    let why = match spent {
+        Some((s, n, failures)) => {
+            // the first failure's own words, before its detail: "the agent exited with code 1"
+            let head = failures.split("; ").next().unwrap_or("").split(": ").next().unwrap_or("").trim();
+            if head.is_empty() { format!("{} used its {n} attempts.", quoted(s)) } else { format!("{} used its {n} attempts. {}", quoted(s), sentence(head)) }
+        }
+        None => sentence(reason),
+    };
+    BlockedSaid {
+        step: step.map(str::to_string),
+        title: step.map(|s| format!("Blocked at {}", quoted(s))).unwrap_or_else(|| "Blocked".into()),
+        why,
+        continue_does: match step {
+            Some(s) if fault == jaynes_core::event::Fault::Agent => format!("tries {} again, with its attempts back", quoted(s)),
+            Some(s) => format!("goes on from {}", quoted(s)),
+            None => "goes on".into(),
+        },
+    }
+}
+
+/// The last lines the agent said at `step`, where it was blocked: at most six, from the story's latest time there.
+pub fn last_said(story: &[(String, Vec<String>)], step: Option<&str>) -> Vec<String> {
+    let Some(step) = step else { return Vec::new() };
+    let said = story.iter().rev().find(|(s, _)| s == step).map(|(_, said)| said.as_slice()).unwrap_or_default();
+    said[said.len().saturating_sub(6)..].to_vec()
+}
+
+/// The note on a run's tab, while its agent can still work: none once the run is finished.
+pub fn note_for(finished: bool) -> Option<&'static str> {
+    (!finished).then_some("The agent works on its own and reports to Jaynes. You answer at its stops.")
+}
+
+/// The red block at the top of a blocked run's tab: where and why, the agent's last lines, and the run's controls.
+pub fn blocked_block(said: &BlockedSaid, last: &[String], controls: Option<Div>) -> Div {
+    let mut b = div()
+        .mx(px(14.))
+        .mt(px(12.))
+        .mb(px(4.))
+        .px(px(14.))
+        .py(px(12.))
+        .rounded(px(9.))
+        .border_1()
+        .border_color(rgb(look::red()))
+        .bg(rgb(look::panel_2()))
+        .font_family(look::UI_FONT)
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(said.title.clone()))
+        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(said.why.clone()));
+    if !last.is_empty() {
+        let mut lines = div().flex().flex_col().font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(18.)).text_color(rgb(look::story()));
+        for l in last {
+            lines = lines.child(div().child(l.clone()));
+        }
+        b = b.child(div().pt(px(4.)).text_size(px(11.5)).text_color(rgb(look::faint())).child("Last thing the agent said")).child(lines);
+    }
+    // the controls, Continue first, and under them what Continue does
+    b.when_some(controls, |d, c| d.child(div().pt(px(6.)).child(c)))
+        .child(div().text_size(px(11.5)).text_color(rgb(look::faint())).child(format!("Continue {}", said.continue_does)))
+}
+
 /// What shows in the middle of the window, over the rest: what the keys follow, and the one place a run's own keys
 /// (Command-period, Command-Return) reach a run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +161,8 @@ pub struct Tabs {
     summary: Option<String>,
     /// What the open run's controls are decided from, read with its story.
     pub facts: Option<crate::run_actions::Facts>,
+    /// Where and why the open run is blocked, read with its story; None when it is not.
+    pub blocked: Option<BlockedSaid>,
     /// When the summary was last copied: its button says Copied for a moment.
     copied_at: Option<std::time::Instant>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
@@ -104,7 +193,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -116,16 +205,22 @@ impl Tabs {
             .background_executor()
             .spawn(async move {
                 let home = jaynes_shell::home();
-                let facts = crate::run_actions::read(&at).map(|r| crate::run_actions::Facts::of(&r));
-                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()), facts)
+                let run = crate::run_actions::read(&at);
+                let facts = run.as_ref().map(crate::run_actions::Facts::of);
+                let blocked = run.as_ref().and_then(|r| match &r.phase {
+                    jaynes_core::run::Phase::Blocked { step, fault, reason } => Some(blocked_said(step.as_deref(), *fault, reason)),
+                    _ => None,
+                });
+                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()), facts, blocked)
             })
             .await;
-        let (told, summary, facts) = (told.0, told.1, told.2);
+        let (told, summary, facts, blocked) = told;
         this.update(cx, |t, cx| {
-            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary || t.facts != facts) {
+            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary || t.facts != facts || t.blocked != blocked) {
                 t.story = told;
                 t.summary = summary;
                 t.facts = facts;
+                t.blocked = blocked;
                 t.go_to_seek();
                 cx.notify();
             }
@@ -159,6 +254,13 @@ impl Tabs {
                 None => self.scroll.set_offset(top()),
             },
         }
+    }
+
+    /// The open run's block when it is blocked: its words and the agent's last lines at that step.
+    pub fn blocked(&self) -> Option<(BlockedSaid, Vec<String>)> {
+        let said = self.blocked.clone()?;
+        let last = last_said(&self.story, said.step.as_deref());
+        Some((said, last))
     }
 
     /// What shows in the middle now.
@@ -206,6 +308,7 @@ impl Tabs {
             self.summary = None;
             self.copied_at = None;
             self.facts = None;
+            self.blocked = None;
             self.seek = None;
             self.lit = None;
             self.scroll.set_offset(point(px(0.), px(0.)));
@@ -400,20 +503,10 @@ impl Tabs {
                 .flex()
                 .flex_col()
                 .child(lines)
-                .child(
-                    div()
-                        .mx(px(14.))
-                        .mb(px(12.))
-                        .px(px(12.))
-                        .py(px(8.))
-                        .rounded(px(9.))
-                        .border_1()
-                        .border_color(rgb(look::line()))
-                        .font_family(look::UI_FONT)
-                        .text_size(px(12.5))
-                        .text_color(rgb(look::faint()))
-                        .child("This run's agent works on its own and answers to Jaynes; you answer it at its stops."),
-                )
+                // plain words, not a box that reads as a field; none once no agent works in the run
+                .when_some(note_for(self.facts.is_some_and(|f| f.finished)), |d, note| {
+                    d.child(div().mx(px(20.)).mb(px(10.)).font_family(look::UI_FONT).text_size(px(12.)).text_color(rgb(look::faint())).child(note))
+                })
                 .into_any_element(),
         )
     }
@@ -755,6 +848,47 @@ fn moved(order: &[Option<String>], key: &Option<String>, to: usize) -> Vec<Optio
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_blocked_run_says_at_which_step_why_in_words_and_what_continue_does() {
+        let reason = "change spent its 3 attempts: the agent exited with code 1: boom; the agent exited with code 1: boom";
+        let b = blocked_said(Some("change"), Fault::Agent, reason);
+        // the step's name in curly quotes, always: "change" reads as a verb
+        assert_eq!(b.title, "Blocked at “change”");
+        assert_eq!(b.why, "“change” used its 3 attempts. The agent exited with code 1.");
+        // the agent's attempts come back with Continue (core: Fault::Agent sets spent to 0)
+        assert_eq!(b.continue_does, "tries “change” again, with its attempts back");
+        // any other cause: the engine's words, as a sentence, and Continue goes on from there
+        let j = blocked_said(Some("change"), Fault::Jaynes, "the role program could not answer: no box here");
+        assert_eq!(j.why, "The role program could not answer: no box here.");
+        assert_eq!(j.continue_does, "goes on from “change”");
+        let r = blocked_said(None, Fault::Role, "nothing to deliver.");
+        assert_eq!((r.title.as_str(), r.why.as_str(), r.continue_does.as_str()), ("Blocked", "Nothing to deliver.", "goes on"));
+        // a run blocked before the engine said codes in words keeps "Some(1)" in its record: said as a code too
+        let old = blocked_said(Some("change"), Fault::Agent, "change spent its 3 attempts: the agent exited with Some(1):   ");
+        assert_eq!(old.why, "“change” used its 3 attempts. The agent exited with code 1.");
+        assert_eq!(blocked_said(Some("x"), Fault::Agent, "x spent its 3 attempts: Codex exited with None: ").why, "“x” used its 3 attempts. Codex was stopped by a signal, with no exit code.");
+        // an attempts reason with no failure said is still a sentence
+        assert_eq!(blocked_said(Some("fix"), Fault::Agent, "fix spent its 2 attempts: ").why, "“fix” used its 2 attempts.");
+    }
+
+    #[test]
+    fn the_last_lines_the_agent_said_at_the_blocked_step_are_at_most_six() {
+        let story = vec![
+            ("copy".to_string(), vec!["a".to_string()]),
+            ("change".to_string(), (1..=9).map(|i| format!("line {i}")).collect()),
+            ("other".to_string(), vec!["z".to_string()]),
+        ];
+        assert_eq!(last_said(&story, Some("change")), ["line 4", "line 5", "line 6", "line 7", "line 8", "line 9"]);
+        assert_eq!(last_said(&story, Some("copy")), ["a"]);
+        assert!(last_said(&story, Some("never")).is_empty() && last_said(&story, None).is_empty());
+    }
+
+    #[test]
+    fn the_note_on_a_run_s_tab_shows_only_while_its_agent_can_still_work() {
+        assert_eq!(note_for(false), Some("The agent works on its own and reports to Jaynes. You answer at its stops."));
+        assert_eq!(note_for(true), None, "a finished run has no agent at work");
+    }
+
+    #[test]
     fn the_middle_is_what_shows_over_the_rest_and_a_run_only_on_its_own_tab() {
         // Claude Code's tab: no run, even one picked before
         assert_eq!(middle_of(None, false, false, false), Middle::Terminal);
@@ -771,7 +905,8 @@ mod tests {
         }
     }
 
-    use super::{Middle, arrange, at, middle_of, moved, space_tabs, tabbed};
+    use super::{Middle, arrange, at, blocked_said, last_said, middle_of, moved, note_for, space_tabs, tabbed};
+    use jaynes_core::event::Fault;
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
     use std::collections::HashMap;

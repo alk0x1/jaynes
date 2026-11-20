@@ -10,6 +10,23 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use jaynes_shell::listing::{Mark, Stage};
 
+/// What the panel says over the question of a run that waits: one already delivered says so, and that the answer
+/// still corrects it (the core: "delivered; your answers can still correct it").
+pub fn waits_words(delivered: bool) -> (&'static str, Option<&'static str>) {
+    if delivered { ("Delivered", Some(" · your answer can still correct it")) } else { ("Waits for you", None) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::waits_words;
+
+    #[test]
+    fn a_run_delivered_while_its_stop_is_open_says_the_answer_still_corrects_it() {
+        assert_eq!(waits_words(false), ("Waits for you", None));
+        assert_eq!(waits_words(true), ("Delivered", Some(" · your answer can still correct it")));
+    }
+}
+
 pub struct Rail {
     runs: Entity<Runs>,
     tabs: Entity<Tabs>,
@@ -129,7 +146,11 @@ fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<cra
                 .flex()
                 .flex_col()
                 .gap(px(6.))
-                .child(look::label("Waits for you", look::amber()))
+                .child({
+                    // "Delivered" in green, what the answer still does in amber
+                    let (first, rest) = waits_words(d.delivered);
+                    div().flex().child(look::label(first, if rest.is_some() { look::green() } else { look::amber() })).children(rest.map(|r| look::label(r, look::amber())))
+                })
                 .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(d.line.clone())),
         );
     }

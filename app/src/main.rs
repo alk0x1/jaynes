@@ -237,7 +237,11 @@ impl Render for Root {
                                     let body = self.agent_body(cx);
                                     self.covered(body, cx)
                                 }
-                                (None, Some(story)) => story,
+                                (None, Some(story)) => match self.blocked_head(cx) {
+                                    // a blocked run says why at its top, with its controls, above its story
+                                    Some(head) => div().size_full().flex().flex_col().child(head).child(div().flex_1().min_h_0().child(story)).into_any_element(),
+                                    None => story,
+                                },
                                 (None, None) => self.terminal.clone().into_any_element(),
                             }))
                             // a run's own controls, under its story: Resume, Continue, Raise, Abandon
@@ -648,14 +652,30 @@ impl Root {
         self.palette.as_ref().map(|(p, _)| p.clone())
     }
 
-    /// The open run's controls, as the page shows them: each only when it can do something.
+    /// The open run's controls under its story, as the page shows them: each only when it can do something. A blocked
+    /// run has them in the block at its top instead (blocked_head).
     fn run_controls(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.tabs.read(cx).blocked.is_some() {
+            return None;
+        }
+        self.controls_row(cx).map(|bar| bar.mx(px(14.)).mb(px(8.)))
+    }
+
+    /// The block at the top of a blocked run's tab, with its controls in it and, under Continue, what it does.
+    fn blocked_head(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let (said, last) = self.tabs.read(cx).blocked()?;
+        let controls = self.controls_row(cx);
+        Some(tabs::blocked_block(&said, &last, controls))
+    }
+
+    /// The open run's controls in a row.
+    fn controls_row(&self, cx: &mut Context<Self>) -> Option<Div> {
         let run = self.tabs.read(cx).open.clone()?;
         let acts = run_actions::acts(&self.tabs.read(cx).facts?);
         if acts.is_empty() {
             return None;
         }
-        let mut bar = div().flex().items_center().gap(px(8.)).mx(px(14.)).mb(px(8.)).flex_wrap();
+        let mut bar = div().flex().items_center().gap(px(8.)).flex_wrap();
         for act in acts {
             let armed = self.armed.as_ref().is_some_and(|a| a.holds(Some(&run), act, std::time::Instant::now()));
             let label = if armed { format!("{}: press again", act.label()) } else { act.label().to_string() };
@@ -814,7 +834,7 @@ impl Root {
             (None, false, None) => app_state::Open::Main,
         };
         let frame = Some(app_state::frame_of(window.window_bounds().get_bounds(), window.display(cx).map(|d| d.id().into())));
-        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept(), cleared: self.side.read(cx).cleared_kept(cx) }
+        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept(), cleared: self.side.read(cx).cleared_kept(cx), seen: self.side.read(cx).seen_to_keep() }
     }
 
     /// Keeps what the window shows when it changed, once what stood was shown again.
@@ -1365,7 +1385,11 @@ impl Root {
 
     /// What the Inbox lists: what needs the person, then what finished unseen.
     fn inbox_items(&self, cx: &App) -> (Vec<inbox::Item>, Vec<inbox::Item>) {
-        inbox::gather(&self.agents.read(cx).spaces, &self.runs.read(cx).snap.listing)
+        let snap = &self.runs.read(cx).snap;
+        let (needs, mut finished) = inbox::gather(&self.agents.read(cx).spaces, &snap.listing);
+        // and the runs delivered that the person has not seen
+        finished.extend(inbox::unseen_runs(&snap.listing, self.side.read(cx).seen(), &snap.files));
+        (needs, finished)
     }
 
     /// Command-O: the next thing that needs the person after the one open, round the end. What is only done, the
@@ -1459,6 +1483,14 @@ impl Root {
                         button(SharedString::from(format!("{id}-seen")), "Seen").on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             agents.update(cx, |a, cx| a.mark_reviewed(&address, cx));
+                        })
+                    }
+                    // a run delivered, unseen: Seen takes it out of "Finished"
+                    inbox::Key::Run(run) if item.state == agents::State::ToReview => {
+                        let (side, run) = (self.side.clone(), run.clone());
+                        button(SharedString::from(format!("{id}-seen")), "Seen").on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            side.update(cx, |s, cx| s.mark_seen(&run, cx));
                         })
                     }
                     _ => {
@@ -2021,7 +2053,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let runs = cx.new(model::Runs::new);
         let agents = cx.new(|cx| agents::Agents::new(core.clone(), cx));
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), agents.clone(), cx));
-        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), state.cleared.clone(), cx));
+        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), state.cleared.clone(), state.seen.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
         let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));
@@ -2072,6 +2104,13 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
                     this.was_changes = changes;
                     this.follow_agent(agent, cx);
                     this.cover_until_painted(before, cx);
+                    // another tab: a control pressed once is no longer armed, even back on its run within seconds
+                    this.armed = None;
+                    this.halt_all_at = None;
+                    // a finished run's tab opened: the person saw it
+                    if let Some(run) = &open {
+                        this.side.update(cx, |s, cx| s.mark_seen(run, cx));
+                    }
                     let to = match (&this.agent_view, &open) {
                         _ if changes => this.stack.read(cx).focus.clone(),
                         _ if inbox => this.focus.clone(),

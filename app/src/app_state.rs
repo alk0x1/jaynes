@@ -66,6 +66,9 @@ pub struct State {
     pub widths: Widths,
     /// The finished runs the person cleared from the column, by id: still in the record and in `jaynes runs`.
     pub cleared: Vec<String>,
+    /// The finished runs the person has seen, by id: the others delivered are in the Inbox's "Finished". None until
+    /// the app first kept them, when every run finished then counts as seen.
+    pub seen: Option<Vec<String>>,
 }
 
 /// How wide the person left each bar.
@@ -79,7 +82,7 @@ pub struct Widths {
 
 impl Default for State {
     fn default() -> Self {
-        State { open: Open::Main, column: true, steps: true, changes: false, closed: Vec::new(), frame: None, widths: Widths::default(), cleared: Vec::new() }
+        State { open: Open::Main, column: true, steps: true, changes: false, closed: Vec::new(), frame: None, widths: Widths::default(), cleared: Vec::new(), seen: None }
     }
 }
 
@@ -198,6 +201,7 @@ mod tests {
             frame: Some(Frame { x: 10., y: 20., width: 1200., height: 800., screen: Some(2) }),
             widths: Widths { column: Some(52.), steps: Some(410.), changes: None },
             cleared: vec!["r7".into(), "r8".into()],
+            seen: Some(vec!["r9".into()]),
         };
         save(&p, &s).unwrap();
         assert_eq!(load(&p), (s, None));
