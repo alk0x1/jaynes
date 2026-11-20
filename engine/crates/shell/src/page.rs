@@ -1963,7 +1963,8 @@ const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'u
 
 /// The page's fonts and their licences, served from /fonts/ by these names only: the page fetches nothing from the
 /// internet to draw itself. Both are under the SIL Open Font License, whose text goes with them.
-/// The page's icon, the app's giraffe (app/assets/AppIcon.icon/Assets), for a light and a dark browser.
+/// The page's icon, the app's giraffe (app/assets/AppIcon.icon/Assets), for a light and a dark browser: the same
+/// drawing seen through a square that leaves out the margin macOS fills with its tile, so it is larger in a tab.
 const ICONS: &[(&str, &str)] = &[
     ("/favicon-light.svg", include_str!("../assets/icon/giraffe-light.svg")),
     ("/favicon-dark.svg", include_str!("../assets/icon/giraffe-dark.svg")),

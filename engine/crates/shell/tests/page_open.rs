@@ -323,7 +323,7 @@ fn the_page_names_its_version_and_shows_the_app_s_giraffe_as_its_icon_without_th
         assert!(got.contains("Content-Type: image/svg+xml"), "{name}: {got}");
         let body = got.split("\r\n\r\n").nth(1).unwrap_or_default();
         let theirs = std::fs::read_to_string(app.join(format!("giraffe-{name}.svg"))).expect("the app's icon");
-        assert_eq!(body, theirs, "the page's {name} icon is not the app's");
+        the_app_s_drawing_cropped(name, body, &theirs);
     }
     // and nothing else is a file: any other name is not found
     for other in ["/favicon.svg", "/favicon-light.svg/", "/favicon-../page.key", "/favicon-light.svg%00", "/favicon.ico"] {
@@ -331,6 +331,27 @@ fn the_page_names_its_version_and_shows_the_app_s_giraffe_as_its_icon_without_th
         assert!(got.starts_with("HTTP/1.1 404") || !got.contains("<svg"), "{other}: {got}");
         assert!(!got.contains(KEY), "{other}: {got}");
     }
+}
+
+/// The page's icon is the app's drawing, byte for byte, but for the frame it is seen through: only the svg's viewBox,
+/// width and height differ, its viewBox a square inside the app's 1024 that leaves out the margin macOS fills with
+/// its tile.
+fn the_app_s_drawing_cropped(name: &str, page: &str, app: &str) {
+    let split = |svg: &str| -> (Vec<(String, String)>, String) {
+        let (open, rest) = svg.split_once('>').expect("an svg");
+        let attrs = open.trim_start_matches("<svg").split('"').collect::<Vec<_>>().chunks(2).filter(|c| c.len() == 2).map(|c| (c[0].trim().trim_end_matches('=').to_string(), c[1].to_string())).collect();
+        (attrs, rest.to_string())
+    };
+    let ((page_attrs, page_rest), (app_attrs, app_rest)) = (split(page), split(app));
+    assert_eq!(page_rest, app_rest, "the {name} drawing is not the app's: only the frame may differ");
+    let framed = |k: &str| matches!(k, "viewBox" | "width" | "height");
+    let others = |a: &[(String, String)]| a.iter().filter(|(k, _)| !framed(k)).cloned().collect::<Vec<_>>();
+    assert_eq!(others(&page_attrs), others(&app_attrs), "{name}: the svg differs beyond its frame");
+    let get = |a: &[(String, String)], k: &str| a.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    assert_eq!(get(&app_attrs, "viewBox"), "0 0 1024 1024", "the app's icon changed its frame: measure the crop again");
+    let b: Vec<f64> = get(&page_attrs, "viewBox").split_whitespace().filter_map(|n| n.parse().ok()).collect();
+    assert!(b.len() == 4 && b[2] == b[3] && b[0] >= 0.0 && b[1] >= 0.0 && b[0] + b[2] <= 1024.0 && b[2] < 1024.0, "{name}: the viewBox is not a square inside the app's, smaller: {b:?}");
+    assert_eq!((get(&page_attrs, "width"), get(&page_attrs, "height")), (format!("{}", b[2]), format!("{}", b[3])), "{name}: width and height are the viewBox's");
 }
 
 #[test]
