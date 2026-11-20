@@ -311,15 +311,17 @@ fn owner_only(file: &Path) {
 pub const PORT: u16 = 8750;
 
 /// Start the page in a process of its own if it is not running, and open it in the browser with its key, which is
-/// never printed where an agent reads it. The page's address without the key; why the link was not opened, when it
-/// was not, goes to standard error.
+/// never printed where an agent reads it, unless a tab of the page that holds the key asked it lately: a start shows
+/// in the tab already open. The page's address without the key; why the link was not opened, when it was not, goes
+/// to standard error.
 pub fn ensure_page(home: &Path) -> String {
     let address = format!("http://localhost:{PORT}/");
     if std::env::var("JAYNES_NO_PAGE").is_ok() {
         return address;
     }
     let Ok(exe) = std::env::current_exe() else { return address };
-    match ensure_page_on(home, PORT, &exe, std::env::var("JAYNES_NO_BROWSER").is_err()) {
+    let open = if std::env::var("JAYNES_NO_BROWSER").is_err() { Open::UnlessATabIsOpen } else { Open::Never };
+    match ensure_page_with(home, PORT, &exe, open) {
         Ok(a) => a,
         Err(why) => {
             eprintln!("{why}");
@@ -330,8 +332,9 @@ pub fn ensure_page(home: &Path) -> String {
 
 /// How the page's two addresses answer.
 enum Standing {
-    /// The page answers as itself on 127.0.0.1, and on ::1 or nothing does.
-    Ours,
+    /// The page answers as itself on 127.0.0.1, and on ::1 or nothing does; whether a tab of it that holds the key
+    /// asked it lately, as the page says.
+    Ours { tab: bool },
     /// Nothing answers.
     Nothing,
     /// Another program answers, on the address said.
@@ -341,7 +344,8 @@ enum Standing {
 /// Whether the page at `port` runs, proving it holds `key` on each of its addresses: localhost may reach either, so
 /// another program on one of them would be given the link.
 fn standing(port: u16, key: &str) -> Standing {
-    let ask = |address: &str| -> Option<bool> {
+    // whether the page proved it holds the key, and whether it says a tab with the key is open
+    let ask = |address: &str| -> Option<(bool, bool)> {
         let at: std::net::SocketAddr = format!("{}:{port}", if address.contains(':') { format!("[{address}]") } else { address.to_string() }).parse().ok()?;
         let mut s = std::net::TcpStream::connect_timeout(&at, std::time::Duration::from_millis(500)).ok()?;
         let nonce = crate::page::key().unwrap_or_default();
@@ -349,29 +353,74 @@ fn standing(port: u16, key: &str) -> Standing {
         let said = std::io::Write::write_all(&mut s, format!("GET /api/knows?nonce={nonce} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n").as_bytes());
         let mut reply = String::new();
         let _read = said.ok().map(|()| std::io::Read::read_to_string(&mut s, &mut reply));
-        Some(!nonce.is_empty() && reply.contains(&format!("\"proof\":\"{}\"", crate::page::proof(key, &nonce))))
+        let ours = !nonce.is_empty() && reply.contains(&format!("\"proof\":\"{}\"", crate::page::proof(key, &nonce)));
+        Some((ours, ours && reply.contains("\"tab\":true")))
     };
     match (ask("127.0.0.1"), ask("::1")) {
-        (_, Some(false)) => Standing::Other(format!("another program answers on [::1]:{port}, where the browser may go for localhost")),
-        (Some(false), _) => Standing::Other(format!("something that does not prove it holds the page's key answers on 127.0.0.1:{port}: an older page still running, or another program. Stop it and start again")),
-        (Some(true), _) => Standing::Ours,
+        (_, Some((false, _))) => Standing::Other(format!("another program answers on [::1]:{port}, where the browser may go for localhost")),
+        (Some((false, _)), _) => Standing::Other(format!("something that does not prove it holds the page's key answers on 127.0.0.1:{port}: an older page still running, or another program. Stop it and start again")),
+        (Some((true, tab)), _) => Standing::Ours { tab },
         (None, _) => Standing::Nothing,
     }
 }
 
 /// Whether the page at `port` is this engine's: it proves on its addresses that it holds `key`.
 pub fn page_is_ours(port: u16, key: &str) -> bool {
-    matches!(standing(port, key), Standing::Ours)
+    matches!(standing(port, key), Standing::Ours { .. })
 }
 
-/// The page at `port`, started with `exe` when it is not running, and its link opened with `open` only once the
-/// page answers as itself on both of its addresses: the address, or why the link was not opened.
+/// When the page's link, with its key, is opened in the browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Open {
+    /// Never: the page is only started.
+    Never,
+    /// Whether the page was up or not, as the app's "Open the page" and `jaynes open` ask.
+    Always,
+    /// Unless a tab of the page that holds the key asked it lately, as a start asks: a new run then shows there.
+    UnlessATabIsOpen,
+}
+
+/// The page at `port`, started with `exe` when it is not running, and its link opened with `open` true whether it
+/// was running or not, only once the page answers as itself on both of its addresses: the address, or why the link
+/// was not opened, which never holds the key. The app's "Open the page" calls it so.
 pub fn ensure_page_on(home: &Path, port: u16, exe: &Path, open: bool) -> Result<String, String> {
+    if open { ensure_page_at(home, port, exe, "/").map(|_| format!("http://localhost:{port}/")) } else { ensure_page_with(home, port, exe, Open::Never) }
+}
+
+/// The page at `port`, started with `exe` when it is not running, and opened at `path` with its key whether it was
+/// running or not, as the app opens a stop's live picture: the address at `path`, or why it was not opened, which
+/// never holds the key. A path is the page's own: it starts with one "/", and holds no "#" or "?", which would carry
+/// another key or a query beside it, and no space or control character; another is refused, and nothing opens.
+pub fn ensure_page_at(home: &Path, port: u16, exe: &Path, path: &str) -> Result<String, String> {
+    let fits = path.starts_with('/') && !path.starts_with("//") && !path.chars().any(|c| matches!(c, '#' | '?' | '\\') || c.is_whitespace() || c.is_control());
+    if !fits {
+        return Err(format!("{path:?} is not a path of the page (one \"/\" first, no \"#\", \"?\", \"\\\\\" or space): the page's link was not opened"));
+    }
+    opened(home, port, exe, Open::Always, path)?;
+    Ok(format!("http://localhost:{port}{path}"))
+}
+
+/// The page at `port`, started with `exe` when it is not running, and its link opened as `open` says, only once the
+/// page answers as itself on both of its addresses: the address, or why the link was not opened, which never holds
+/// the key.
+pub fn ensure_page_with(home: &Path, port: u16, exe: &Path, open: Open) -> Result<String, String> {
+    opened(home, port, exe, open, "/")
+}
+
+/// The page at `port`, started with `exe` when it is not running, and its link at `path`, a path of its own, opened
+/// as `open` says: the page's address, or why the link was not opened.
+fn opened(home: &Path, port: u16, exe: &Path, open: Open, path: &str) -> Result<String, String> {
     let address = format!("http://localhost:{port}/");
+    let at = format!("http://localhost:{port}{path}");
     let key = page_key(home)?;
     let not_opened = |why: String| format!("{why}: the page's link was not opened");
     match standing(port, &key) {
-        Standing::Ours => return Ok(address),
+        Standing::Ours { tab } => {
+            if open == Open::Always || (open == Open::UnlessATabIsOpen && !tab) {
+                open_link(&at, &key).map_err(not_opened)?;
+            }
+            return Ok(address);
+        }
         Standing::Other(why) => return Err(not_opened(why)),
         Standing::Nothing => {}
     }
@@ -395,18 +444,31 @@ pub fn ensure_page_on(home: &Path, port: u16, exe: &Path, open: bool) -> Result<
     loop {
         let ended = child.try_wait().ok().flatten();
         match standing(port, &key) {
-            Standing::Ours if ended.is_none() => break,
+            Standing::Ours { .. } if ended.is_none() => break,
             Standing::Other(why) if ended.is_some() => return Err(not_opened(why)),
             _ if ended.is_some() => return Err(not_opened(format!("the page did not start ({}): see {}", ended.map(|e| e.to_string()).unwrap_or_default(), home.join("page.log").display()))),
             _ if std::time::Instant::now() > until => return Err(not_opened("the page did not answer as itself in time".into())),
             _ => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
-    if open {
-        // the key in the fragment, which the browser keeps for the page and never sends to any server
-        let _opened = Command::new("open").arg(format!("{address}#key={key}")).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    // a page just started has no tab
+    if open != Open::Never {
+        open_link(&at, &key).map_err(not_opened)?;
     }
     Ok(address)
+}
+
+/// Open the page at `address` in the browser with `key`, waiting for the system's opener to say it did: why it did
+/// not, without the key, when it did not.
+fn open_link(address: &str, key: &str) -> Result<(), String> {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    // the key in the fragment, which the browser keeps for the page and never sends to any server
+    let done = Command::new(opener).arg(format!("{address}#key={key}")).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    match done {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("the browser did not open the page ({opener} ended with {s})")),
+        Err(e) => Err(format!("the browser could not be asked to open the page ({opener}: {})", e.kind())),
+    }
 }
 
 /// What an agent reads to carry out a change through Jaynes.
@@ -457,22 +519,38 @@ fn cargo_installed_commit() -> Option<String> {
 }
 
 /// What the program on disk says it was built from, for one cargo did not install (a release, a build by hand):
-/// after an update it is the new one, whatever runs now. It is asked again only when the file changed, since the
-/// page asks on every request.
+/// after an update it is the new one, whatever runs now.
 fn program_commit() -> Option<String> {
+    commit_of(&program_said()?)
+}
+
+/// The version of Jaynes installed now, as the program on disk says it (`jaynes --version`): after an update it is
+/// the new one, whatever runs now. None when that program does not say one.
+pub fn installed_version() -> Option<String> {
+    version_of(&program_said()?)
+}
+
+/// What the program on disk says with `--version`. It is asked again only when the file changed, since the page
+/// asks on every request.
+fn program_said() -> Option<String> {
     static ASKED: std::sync::Mutex<Option<(std::time::SystemTime, Option<String>)>> = std::sync::Mutex::new(None);
     let exe = std::env::current_exe().ok()?;
     let changed = std::fs::metadata(&exe).and_then(|m| m.modified()).ok()?;
     let mut asked = ASKED.lock().ok()?;
-    if let Some((at, commit)) = asked.as_ref()
+    if let Some((at, said)) = asked.as_ref()
         && *at == changed
     {
-        return commit.clone();
+        return said.clone();
     }
     let said = Command::new(&exe).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-    let commit = said.and_then(|s| commit_of(&s));
-    *asked = Some((changed, commit.clone()));
-    commit
+    *asked = Some((changed, said.clone()));
+    said
+}
+
+/// The version `jaynes --version` names ("jaynes 0.2.4 (commit ..."), or None when it names none.
+pub fn version_of(said: &str) -> Option<String> {
+    let v = said.trim_start().strip_prefix("jaynes ")?.split_whitespace().next()?;
+    (v.split('.').count() == 3 && v.split('.').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then(|| v.to_string())
 }
 
 /// The commit this program is built from, with "+changes" when its source had changes not committed, or
@@ -776,6 +854,16 @@ mod tests {
         assert!(commit_of(&v).is_some() || BUILD_COMMIT == "unknown", "{v}");
         assert_eq!(commit_of("jaynes 0.2.0 (commit 3bf0783abc+changes, engine e)").as_deref(), Some("3bf0783abc"));
         assert_eq!(commit_of("jaynes 0.2.0 (commit unknown, engine e)"), None);
+    }
+
+    #[test]
+    fn the_version_said_is_read_back_as_the_installed_one() {
+        assert_eq!(version_of(&version()).as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(version_of("jaynes 0.2.4 (commit 3bf0783abc, engine e)").as_deref(), Some("0.2.4"));
+        // an older program that said something else, or nothing, names no version
+        for said in ["", "jaynes", "jaynes the engine", "jaynes 0.2 (commit a)", "jaynes 0.2.x (commit a)", "jaynes-shell 0.2.4"] {
+            assert_eq!(version_of(said), None, "{said}");
+        }
     }
 
     #[test]

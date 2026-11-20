@@ -64,6 +64,22 @@ static RUNNING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new()
 static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Connections the page serves at once, on both of its addresses.
 const MOST_AT_ONCE: usize = 64;
+/// When a request of the person's last came: a tab of the page that holds the key asks every 3 s while it is open,
+/// and a browser asks from a hidden tab about once a minute.
+static TAB_ASKED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// How long after the person's last request a tab of the page still counts as open: three of a hidden tab's minutes,
+/// so a start does not open a second tab beside one the browser only slowed down.
+const TAB_OPEN_FOR: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Whether a tab of the page that holds the key is open at `now`, its last request having come at `last`.
+fn tab_open_at(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_some_and(|l| now.saturating_duration_since(l) < TAB_OPEN_FOR)
+}
+
+/// Whether a tab of the page that holds the key asked it lately.
+fn tab_open() -> bool {
+    tab_open_at(TAB_ASKED.lock().ok().and_then(|t| *t), std::time::Instant::now())
+}
 
 /// A connection being served: when it came, a handle to close it, and whether it is kept from being closed to make
 /// way, as a reading of the person's words is.
@@ -258,6 +274,16 @@ impl Page {
             );
             return send(&stream, came + WHOLE_DEADLINE, &[head.as_bytes(), bytes]);
         }
+        // the app's giraffe, as the page's icon: two names, each bytes built in, asking no key
+        if req.method == "GET" && self.host(&req) == Host::Name
+            && let Some((_, bytes)) = ICONS.iter().find(|(n, _)| *n == req.path)
+        {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            return send(&stream, came + WHOLE_DEADLINE, &[head.as_bytes(), bytes.as_bytes()]);
+        }
         // Reading the person's words takes a model's time, and the person's tokens: only the person starts it, at most
         // MOST_READINGS run at once, and each is answered on a thread of its own that keeps this connection's turn
         // until the reply is sent, so the page goes on and its limit of connections still counts it.
@@ -364,7 +390,8 @@ impl Page {
                 // the nonce is the asker's: hex, short, so the answer says nothing but the proof
                 let nonce = req.query.get("nonce").filter(|n| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_hexdigit()));
                 return match nonce {
-                    Some(n) => ("200 OK", "application/json", json!({"proof": proof(&self.key, n)}).to_string(), vec![]),
+                    // and whether a tab with the key is open, so a start opens none beside it: never when it asked
+                    Some(n) => ("200 OK", "application/json", json!({"proof": proof(&self.key, n), "tab": tab_open()}).to_string(), vec![]),
                     None => ("400 Bad Request", "text/plain", "a nonce, in hex".into(), vec![]),
                 };
             }
@@ -429,8 +456,15 @@ impl Page {
             }
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             let by = if self.person(req) { By::Person } else { By::Agent { who: "a client without the page's key".into() } };
+            if by == By::Person
+                && let Ok(mut t) = TAB_ASKED.lock()
+            {
+                *t = Some(std::time::Instant::now());
+            }
             let asked_by = by.clone();
             let out = match req.path.as_str() {
+                // the page's poll, which with the key also says its tab is open
+                "/api/version" => Ok(json!({"ok": true, "seq": self.store().and_then(|s| s.last_seq()).unwrap_or(0)})),
                 "/api/effects" => self.effects(&body, by),
                 "/api/answer" => self.answer(&body, by),
                 "/api/act" => self.act(&body, by),
@@ -572,7 +606,7 @@ impl Page {
     fn setup(&self, body: &Value, by: By) -> Result<Value, String> {
         use crate::install::{guard, guard_notes_path, guard_off_in, set_guard, set_guard_off_in, set_guard_watch};
         if by != By::Person {
-            return Err("only you change the setup: open the link the page printed".into());
+            return Err("only you change the setup: Open it from the Jaynes app (Open the page), or run `jaynes open`".into());
         }
         let (on, mut owners) = guard();
         let owner = body["owner"].as_str().unwrap_or("").trim().to_string();
@@ -669,7 +703,7 @@ impl Page {
     /// Start a run of a role on a project; only the person does it here. An agent starts one with the start tool.
     fn start(&self, body: &Value, by: By) -> Result<Value, String> {
         if by != By::Person {
-            return Err("only you start a run from the page: open the link the page printed".into());
+            return Err("only you start a run from the page: Open it from the Jaynes app (Open the page), or run `jaynes open`".into());
         }
         let text = |k: &str| body[k].as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("{k} is needed"));
         let (role, project, request) = (text("role")?, text("project")?, text("request")?);
@@ -863,7 +897,7 @@ impl Page {
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
-        Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", &format!("{}<div id=\"nokey\"></div>", banner())))
+        Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", &format!("{}<div id=\"nokey\"></div>", banner())).replace("{{version}}", env!("CARGO_PKG_VERSION")))
     }
 }
 
@@ -1297,7 +1331,7 @@ fn banner() -> String {
     } else if let (Some(r), Some(i)) = (&running, &installed)
         && r != i
     {
-        (format!("Jaynes was updated to {}.", &i[..7]), "restart", "Restart the page")
+        (updated_to(crate::install::installed_version().as_deref(), env!("CARGO_PKG_VERSION"), i), "restart", "Restart the page")
     } else if let (Some(l), Some(i)) = (&latest, &installed)
         && l != i
     {
@@ -1306,6 +1340,15 @@ fn banner() -> String {
         return String::new();
     };
     format!("<div class=\"notice new\"><span>{text}</span><button class=\"act\" data-setup=\"{act}\">{label}</button></div>")
+}
+
+/// What the notice says of a Jaynes installed since the page started: its version, read from the program installed
+/// (`installed`), when it says one other than the page's own (`running`); otherwise its commit, which always differs.
+fn updated_to(installed: Option<&str>, running: &str, commit: &str) -> String {
+    match installed {
+        Some(v) if v != running => format!("Jaynes was updated to {v}."),
+        _ => format!("Jaynes was updated to {}.", commit.get(..7).unwrap_or(commit)),
+    }
 }
 
 /// Whether a name has the shape of a GitHub owner, as Free owners takes one: letters, digits and dashes.
@@ -1542,7 +1585,7 @@ fn reminders_html(due: &[drive::Reminder], runs: &[Run], on: Option<(&str, &str)
 /// counts, and only a reminder due now is marked: a name the request brings is never a path to write.
 pub fn reminded_in(home: &std::path::Path, body: &Value, by: &By, now: u64) -> Result<Value, String> {
     if !by.person() {
-        return Err("only the person is reminded: open the link the page printed".into());
+        return Err("only the person is reminded: Open it from the Jaynes app (Open the page), or run `jaynes open`".into());
     }
     let store = Store::open(&home.join("record.sqlite3"))?;
     let due = drive::reminders_due(home, &store, now)?;
@@ -1677,7 +1720,7 @@ window.jaynesKey = (async () => {
   if (!person) {
     const n = document.createElement("div");
     n.className = "notice";
-    n.textContent = "You opened the page without its key: answers from here count as an agent's. Open the link the page printed.";
+    n.textContent = "You opened the page without its key: answers from here count as an agent's. Open it from the Jaynes app (Open the page), or run `jaynes open`.";
     const box = document.getElementById("nokey");
     if (box) box.replaceWith(n);
   }
@@ -1892,7 +1935,7 @@ let seen = null;
 const busy = () => Object.keys(verdicts).length || [...document.querySelectorAll("input")].some(i => i.value) || document.activeElement.tagName === "INPUT";
 setInterval(async () => {
   try {
-    const v = (await (await fetch("/api/version")).json()).seq;
+    const v = (await (await fetch("/api/version", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).seq;
     if (seen !== null && v !== seen && !busy()) location.reload();
     seen = v;
   } catch (_) {}
@@ -1917,6 +1960,12 @@ const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'u
 
 /// The page's fonts and their licences, served from /fonts/ by these names only: the page fetches nothing from the
 /// internet to draw itself. Both are under the SIL Open Font License, whose text goes with them.
+/// The page's icon, the app's giraffe (app/assets/AppIcon.icon/Assets), for a light and a dark browser.
+const ICONS: &[(&str, &str)] = &[
+    ("/favicon-light.svg", include_str!("../assets/icon/giraffe-light.svg")),
+    ("/favicon-dark.svg", include_str!("../assets/icon/giraffe-dark.svg")),
+];
+
 const FONTS: &[(&str, &str, &[u8])] = &[
     ("InstrumentSans-Variable.ttf", "font/ttf", include_bytes!("../assets/fonts/InstrumentSans-Variable.ttf")),
     ("IBMPlexMono-Regular.ttf", "font/ttf", include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf")),
@@ -1940,6 +1989,8 @@ const CLEAR: &str = "jaynes_key=; Path=/; Max-Age=0";
 const PAGE: &str = r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jaynes</title>
+<link rel="icon" type="image/svg+xml" href="/favicon-light.svg" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/svg+xml" href="/favicon-dark.svg" media="(prefers-color-scheme: dark)">
 <style>
 /* the page's own fonts, under the SIL Open Font License: /fonts/OFL-InstrumentSans.txt and /fonts/OFL-IBMPlexMono.txt */
 @font-face { font-family:"Instrument Sans"; src:url(/fonts/InstrumentSans-Variable.ttf) format("truetype"); font-weight:400 700; font-display:swap; }
@@ -1958,6 +2009,7 @@ aside { border-right:1px solid var(--line); padding:16px 0; }
 .q.on { border-left-color:var(--amber); background:var(--panel); }
 .q small { display:block; color:var(--faint); font-family:var(--mono); font-size:11px; } .goes { color:var(--green); } .holds { color:var(--amber); }
 main { padding:22px 32px 240px; max-width:900px; }
+.foot { margin-top:40px; padding-top:12px; border-top:1px solid var(--line); font-family:var(--mono); font-size:11px; color:var(--faint); }
 .where { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
 h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; } .sub { margin:0 0 20px; }
 .badge { display:inline-flex; gap:6px; align-items:center; font-size:12px; padding:3px 10px; border-radius:999px; background:var(--green-soft); color:var(--green); }
@@ -2060,7 +2112,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
 <div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a><a href="/setup">Setup</a></nav></div>
-<div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}</main></div>
+<div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}<footer class="foot">Jaynes {{version}}</footer></main></div>
 <div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
 <script src="/key.js"></script><script src="/page.js"></script></body></html>"##;
 
@@ -2068,6 +2120,26 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 mod tests {
     use super::*;
     use jaynes_core::question::QuestionKind;
+
+    #[test]
+    fn the_update_notice_names_the_version_installed_or_its_commit_when_it_cannot() {
+        assert_eq!(updated_to(Some("0.2.4"), "0.2.3", "3bf0783abcdef"), "Jaynes was updated to 0.2.4.");
+        // no version said (an older program), or the same as this page's (a build between versions): the commit
+        assert_eq!(updated_to(None, "0.2.3", "3bf0783abcdef"), "Jaynes was updated to 3bf0783.");
+        assert_eq!(updated_to(Some("0.2.3"), "0.2.3", "3bf0783abcdef"), "Jaynes was updated to 3bf0783.");
+        assert_eq!(updated_to(None, "0.2.3", "3bf07"), "Jaynes was updated to 3bf07.");
+    }
+
+    #[test]
+    fn a_tab_counts_as_open_for_three_minutes_after_its_last_request_with_the_key() {
+        let now = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        let ago = |s: u64| Some(now - std::time::Duration::from_secs(s));
+        assert!(!tab_open_at(None, now), "no request with the key: no tab");
+        assert!(tab_open_at(ago(0), now));
+        // a hidden tab, which the browser lets ask once a minute, still counts
+        assert!(tab_open_at(ago(61), now) && tab_open_at(ago(179), now));
+        assert!(!tab_open_at(ago(180), now) && !tab_open_at(ago(600), now));
+    }
 
     /// The ports a test's bind was asked for on ::1, in order.
     type Asked = std::rc::Rc<std::cell::RefCell<Vec<u16>>>;

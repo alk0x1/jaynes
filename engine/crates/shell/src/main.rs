@@ -41,6 +41,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
                           done step's change while its stop waits; nothing is delivered while it is in
   unplant RUN ID --by NAME   take a planted defect out, at a terminal: the step's change is again the one it was
   page [--port N]         the page where you answer, at http://localhost:8750 (or the port given; 0: one the system gives, said in its first line)
+  open [--port N]         start the page if it is not running and open it in your browser, with its key
   add NAME|SOURCE | remove NAME | roles   install a role (by name from the index, a folder, or URL#path), remove one, list them
   index check DIR [--write]   check an index: every role's content and promises, proved again
   guide                   how an agent carries out a change through Jaynes
@@ -416,6 +417,23 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             if failed > 0 { Err(format!("{failed} of {} cases failed", findings.len())) } else { Ok(()) }
         }
+        "open" => {
+            let port = match rest {
+                [] => install::PORT,
+                [f, p] if f == "--port" => p.parse().map_err(|_| "--port takes a number")?,
+                _ => return Err(format!("jaynes open takes only --port N, and {} was given\nusage: jaynes open [--port N]", rest.join(" "))),
+            };
+            // what keeps tests and agents from opening a browser keeps this one from it too, and says so
+            for told in ["JAYNES_NO_PAGE", "JAYNES_NO_BROWSER"] {
+                if std::env::var_os(told).is_some() {
+                    return Err(format!("{told} is set here: the page's link was not opened"));
+                }
+            }
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let address = install::ensure_page_on(&home(), port, &exe, true)?;
+            println!("the page is open in your browser: {address}");
+            Ok(())
+        }
         "page" => {
             let port = flag(rest, "--port").map(|p| p.parse().map_err(|_| "--port takes a number")).transpose()?.unwrap_or(8750);
             let key = match std::env::var("JAYNES_PAGE_KEY") {
@@ -485,6 +503,10 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "uninstall" => uninstall(rest),
         "update" => {
+            // a command that acts runs only as it is written: anything after it, --help too, is refused
+            if !rest.is_empty() {
+                return Err(format!("jaynes update takes nothing after it, and {} was given: nothing was updated\nusage: jaynes update", rest.join(" ")));
+            }
             for line in install::update(&home())? {
                 say(&line);
             }
