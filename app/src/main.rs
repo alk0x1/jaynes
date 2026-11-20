@@ -163,6 +163,8 @@ pub(crate) struct Root {
     armed: Option<run_actions::Armed>,
     /// When "Halt all runs" was pressed once: a second press within run_actions::ARMED_FOR halts them all.
     halt_all_at: Option<std::time::Instant>,
+    /// The Inbox's item the arrows are on, counted over "Needs you" then "Finished".
+    inbox_at: Option<usize>,
     act_said: Option<String>,
     /// Why the page did not open, on the line over the status bar until a click on it or the next try (open_page.rs);
     /// and whether it is being opened, when a second click does nothing: two would start two pages, and the one that
@@ -262,6 +264,36 @@ impl Render for Root {
             .font_family(look::UI_FONT)
             .track_focus(&self.focus)
             .key_context("Jaynes")
+            // the arrows, while the window itself has the keys (a run's tab or the Inbox in the middle): through the
+            // column's runs, or the Inbox's items, Return opening the one the arrows are on; a terminal keeps its own
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                let m = &e.keystroke.modifiers;
+                if !this.focus.is_focused(window) || m.platform || m.control || m.alt || m.shift {
+                    return;
+                }
+                let by = match e.keystroke.key.as_str() {
+                    "down" => 1,
+                    "up" => -1,
+                    "enter" => 0,
+                    _ => return,
+                };
+                match this.tabs.read(cx).middle() {
+                    tabs::Middle::Inbox if by == 0 => {
+                        let (needs, finished) = this.inbox_items(cx);
+                        if let Some(item) = this.inbox_at.and_then(|at| needs.iter().chain(finished.iter()).nth(at)).cloned() {
+                            this.open_item(item.key, item.title, window, cx);
+                        }
+                    }
+                    tabs::Middle::Inbox => {
+                        let (needs, finished) = this.inbox_items(cx);
+                        this.inbox_at = inbox::moved(needs.len() + finished.len(), this.inbox_at, by);
+                        cx.notify();
+                    }
+                    tabs::Middle::Run(_) if by != 0 => this.step_run(by, cx),
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
             // a hand on the window, for the person's presence at a stop: before any pane takes it
             .capture_key_down(|_, _, _| looking_at::touched())
             .capture_any_mouse_down(|_, _, _| looking_at::touched())
@@ -1485,6 +1517,8 @@ impl Root {
                 .cursor_pointer()
                 .child(text)
         };
+        // the item the arrows are on, counted over both lists
+        let mut n = 0;
         for (name, items) in [("Needs you", &needs), ("Finished", &review)] {
             if items.is_empty() {
                 continue;
@@ -1502,6 +1536,8 @@ impl Root {
                     .child(div().font_weight(FontWeight::NORMAL).text_color(rgb(look::faint())).child(items.len().to_string())),
             );
             for item in items.iter() {
+                let on = self.inbox_at == Some(n);
+                n += 1;
                 let id = match &item.key {
                     inbox::Key::Agent(a) => format!("inbox-agent-{a}"),
                     inbox::Key::Run(r) => format!("inbox-run-{r}"),
@@ -1545,6 +1581,9 @@ impl Root {
                         .px(px(14.))
                         .py(px(11.))
                         .rounded(px(9.))
+                        .border_1()
+                        .border_color(if on { rgb(look::blue()) } else { rgba(0) })
+                        .when(on, |d| d.bg(rgb(look::panel_2())))
                         .hover(|d| d.bg(rgb(look::panel_2())))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, window, cx| this.open_item(key.clone(), title.clone(), window, cx)))
@@ -2217,7 +2256,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             for why in why {
                 tracing::warn!("{why}");
             }
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, inbox_at: None, act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {

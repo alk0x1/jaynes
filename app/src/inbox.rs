@@ -77,6 +77,18 @@ pub fn unseen_runs(runs: &Listing, seen: Option<&HashSet<String>>, files: &HashM
         .collect()
 }
 
+/// Up (-1) or down (1) the Inbox's `len` items from `at`: the first down lands on the first, the ends hold, and a
+/// list shorter than the cursor brings it to its last. None with nothing to walk.
+pub fn moved(len: usize, at: Option<usize>, by: isize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    Some(match at {
+        None => 0,
+        Some(a) => (a.min(len - 1) as isize + by).clamp(0, len as isize - 1) as usize,
+    })
+}
+
 /// Command-O: the thing after the one open, round the end; the first when none of them is open.
 pub fn next(order: &[Key], open: Option<&Key>) -> Option<Key> {
     if order.is_empty() {
@@ -94,7 +106,7 @@ pub fn subtitle(spaces: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Key, gather, next, subtitle, unseen_runs};
+    use super::{Key, gather, moved, next, subtitle, unseen_runs};
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
     use std::collections::{HashMap, HashSet};
@@ -161,6 +173,18 @@ mod tests {
         assert_eq!(needs[0].place, "jaynes");
         assert_eq!(needs[1].what, "stopped with an error");
         assert_eq!(review.iter().map(|i| i.key.clone()).collect::<Vec<_>>(), [Key::Agent("t1".into())]);
+    }
+
+    #[test]
+    fn the_arrows_walk_the_inbox_and_stop_at_its_ends() {
+        assert_eq!(moved(5, None, 1), Some(0), "the first down lands on the first");
+        assert_eq!(moved(5, None, -1), Some(0));
+        assert_eq!(moved(5, Some(0), 1), Some(1));
+        assert_eq!(moved(5, Some(4), 1), Some(4), "no wrap at the end");
+        assert_eq!(moved(5, Some(0), -1), Some(0));
+        // the list got shorter under the cursor: it stays on the last
+        assert_eq!(moved(2, Some(4), 1), Some(1));
+        assert_eq!(moved(0, Some(1), 1), None, "nothing to walk");
     }
 
     #[test]
