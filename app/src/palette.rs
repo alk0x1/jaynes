@@ -18,6 +18,8 @@ pub enum Go {
     Run(String),
     NewAgent,
     OpenWaiting,
+    /// The page in the browser, with its key (open_page.rs).
+    OpenPage,
     ToggleChanges,
     Shortcuts,
 }
@@ -51,7 +53,8 @@ pub fn matching<'a>(all: &'a [Entry], q: &str) -> Vec<&'a Entry> {
     all.iter().filter(|e| fuzzy(q, &format!("{} {}", e.label, e.space))).collect()
 }
 
-/// Everything Command-K lists: the Inbox, every agent and shell of every space, every run, then the commands.
+/// Everything Command-K lists: the Inbox, every agent and shell of every space, every run, then the commands, "Open
+/// the page" among them.
 pub fn entries(spaces: &[Space], runs: &Listing, here: Option<&str>) -> Vec<Entry> {
     let mut out = vec![Entry { label: "Inbox".into(), space: String::new(), go: Go::Inbox, key: None, agent: None, run: None }];
     for s in spaces {
@@ -68,6 +71,7 @@ pub fn entries(spaces: &[Space], runs: &Listing, here: Option<&str>) -> Vec<Entr
     out.extend([
         Entry { label: new_in, space: String::new(), go: Go::NewAgent, key: Some("⌘T"), agent: None, run: None },
         Entry { label: "Open the next thing that needs you".into(), space: String::new(), go: Go::OpenWaiting, key: Some("⌘O"), agent: None, run: None },
+        Entry { label: crate::open_page::LABEL.into(), space: String::new(), go: Go::OpenPage, key: None, agent: None, run: None },
         Entry { label: "Show or hide Changes".into(), space: String::new(), go: Go::ToggleChanges, key: Some("⇧⌘G"), agent: None, run: None },
         Entry { label: "Keyboard shortcuts".into(), space: String::new(), go: Go::Shortcuts, key: Some("⌘/"), agent: None, run: None },
     ]);
@@ -268,7 +272,8 @@ mod tests {
         let runs = Listing { needs: vec![row("r1", Mark::Needs)], projects: vec![("p".into(), vec![row("r1", Mark::Needs), row("r2", Mark::Merged)])] };
         let all = super::entries(&spaces, &runs, Some("helm"));
         let labels: Vec<&str> = all.iter().map(|e| e.label.as_str()).collect();
-        assert_eq!(labels, ["Inbox", "T1", "T2", "run Run r1", "run Run r2", "New agent in helm", "Open the next thing that needs you", "Show or hide Changes", "Keyboard shortcuts"]);
+        assert_eq!(labels, ["Inbox", "T1", "T2", "run Run r1", "run Run r2", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Keyboard shortcuts"]);
+        assert_eq!(all[7].go, Go::OpenPage);
         assert_eq!(all[1].space, "helm");
         assert_eq!(all[5].key, Some("⌘T"));
         assert_eq!(super::entries(&spaces, &runs, None)[5].label, "New agent");

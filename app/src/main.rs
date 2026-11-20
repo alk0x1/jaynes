@@ -32,6 +32,7 @@ mod model;
 mod menubar;
 mod news;
 mod notify;
+mod open_page;
 mod prefs;
 mod settings_window;
 mod testing;
@@ -63,7 +64,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette, OpenPage
     ]
 );
 
@@ -160,6 +161,11 @@ pub(crate) struct Root {
     /// A control of the open run pressed once that asks to be pressed again (Abandon), and what the last one said.
     armed: Option<(String, run_actions::Act)>,
     act_said: Option<String>,
+    /// Why the page did not open, on the line over the status bar until a click on it or the next try (open_page.rs);
+    /// and whether it is being opened, when a second click does nothing: two would start two pages, and the one that
+    /// lost would say the page did not start.
+    page_trouble: Option<String>,
+    page_opening: bool,
     /// Command-K, while it shows.
     palette: Option<(Entity<palette::PaletteView>, Subscription)>,
     /// The runs' questions put off with Later on the line over an agent ("run/question").
@@ -276,6 +282,7 @@ impl Render for Root {
             }))
             .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
             .on_action(cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenPage, _, cx| this.open_page(cx)))
             // the button under a finished run's story
             .on_action(cx.listener(|this, _: &CopySummary, _, cx| this.tabs.update(cx, |t, cx| t.copy_summary(cx))))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
@@ -388,6 +395,7 @@ impl Render for Root {
                     })
                     .child(middle),
             )
+            .children(self.page_trouble_line(cx))
             .child(self.status_bar(cx))
             // over everything: the compare mode, then a picture or a diff at full size
             .child(self.compare.clone())
@@ -538,6 +546,54 @@ impl Root {
         })
     }
 
+    /// "Open the page": the engine starts the page when it does not run and opens it in the browser with its key, away
+    /// from the window's thread, since a page that starts takes a few seconds; why not goes on the line over the status
+    /// bar.
+    fn open_page(&mut self, cx: &mut Context<Self>) {
+        if self.page_opening {
+            return;
+        }
+        self.page_opening = true;
+        self.page_trouble = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let said = cx.background_executor().spawn(async move { open_page::open() }).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Err(why) = &said {
+                    tracing::warn!("the page did not open: {why}");
+                }
+                this.page_trouble = said.err();
+                this.page_opening = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Why the page did not open, on one line over the status bar; a click on it puts it away.
+    fn page_trouble_line(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let why = self.page_trouble.clone()?;
+        Some(
+            div()
+                .id("page-trouble")
+                .flex_none()
+                .px(px(14.))
+                .py(px(6.))
+                .border_t_1()
+                .border_color(rgb(look::line()))
+                .bg(rgb(look::panel_2()))
+                .text_size(px(12.5))
+                .text_color(rgb(look::red()))
+                .cursor_pointer()
+                .truncate()
+                .child(why)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.page_trouble = None;
+                    cx.notify();
+                })),
+        )
+    }
+
     /// Command-K: the palette over the window, its list read now.
     pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let here = self.agent_view.as_ref().and_then(|(a, _)| self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|x| x.address == *a)).map(|s| s.name.clone()));
@@ -570,6 +626,7 @@ impl Root {
             Go::Run(id) => self.tabs.update(cx, |t, cx| t.show(Some(id), cx)),
             Go::NewAgent => window.dispatch_action(Box::new(NewAgent), cx),
             Go::OpenWaiting => window.dispatch_action(Box::new(OpenWaiting), cx),
+            Go::OpenPage => window.dispatch_action(Box::new(OpenPage), cx),
             Go::ToggleChanges => window.dispatch_action(Box::new(ToggleChanges), cx),
             Go::Shortcuts => window.dispatch_action(Box::new(Shortcuts), cx),
         }
@@ -1514,8 +1571,8 @@ impl Root {
     }
 
     /// The status bar, in the familiar look: where the middle works (the space, its branch, its folder, and Stop
-    /// while the agent works), then how many things wait, wait for review and work, each opening the Inbox, and the
-    /// list of shortcuts; "Halt all" while Jaynes runs work.
+    /// while the agent works), then how many things wait, wait for review and work, each opening the Inbox, "Open the
+    /// page", the app's version and the list of shortcuts; "Halt all" while Jaynes runs work.
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let runs = self.runs.read(cx);
         let working_runs: Vec<String> = runs
@@ -1593,6 +1650,16 @@ impl Root {
                         .child("Halt all runs"),
                 )
             })
+            .child(
+                item()
+                    .id("open-page")
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(rgb(look::text())))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_page(cx)))
+                    .child(look::icon(look::Icon::Open, 12., look::dim()))
+                    .child(if self.page_opening { open_page::OPENING } else { open_page::LABEL }),
+            )
+            .child(div().id("version").child(open_page::version()))
             .child(
                 item()
                     .id("shortcuts-hint")
@@ -1989,7 +2056,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             for why in why {
                 tracing::warn!("{why}");
             }
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {

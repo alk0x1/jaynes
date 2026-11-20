@@ -455,6 +455,8 @@ impl Render for SettingsView {
             .child(bar)
             .child(div().flex_1().px(px(24.)).py(px(8.)).flex().flex_col().children(rows.into_iter().enumerate().map(|(i, r)| if i + 1 == n { r.border_b_0() } else { r })))
             .when_some(self.note.clone(), |d, n| d.child(div().px(px(24.)).pb(px(12.)).text_size(px(11.5)).text_color(rgb(look::red())).child(n)))
+            // the app's version, at the foot of every section
+            .child(div().id("settings-version").px(px(24.)).pb(px(12.)).text_size(px(11.)).text_color(rgb(look::dim())).child(crate::open_page::version()))
     }
 }
 
