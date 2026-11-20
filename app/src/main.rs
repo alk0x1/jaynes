@@ -64,7 +64,7 @@ actions!(
     jaynes,
     [
         Copy, Paste, Quit, ToggleSteps, NewRun, ToggleRuns, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, NextTab, PreviousTab,
-        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette, OpenPage
+        NextRun, PreviousRun, OpenWaiting, SendAnswer, HaltRun, CloseTab, Shortcuts, NewAgent, Deny, Pick1, Pick2, Pick3, Pick4, Pick5, Pick6, Pick7, Pick8, Pick9, ShowInbox, ToggleChanges, CommitBox, OpenEditor, SplitRight, SplitDown, NextPane, PreviousPane, OpenSettings, CopySummary, OpenPalette, OpenPage, HaltAll
     ]
 );
 
@@ -159,7 +159,9 @@ pub(crate) struct Root {
     /// The window is hidden and its terminals let go, to be taken up again when it shows.
     let_go: bool,
     /// A control of the open run pressed once that asks to be pressed again (Abandon), and what the last one said.
-    armed: Option<(String, run_actions::Act)>,
+    armed: Option<run_actions::Armed>,
+    /// When "Halt all runs" was pressed once: a second press within run_actions::ARMED_FOR halts them all.
+    halt_all_at: Option<std::time::Instant>,
     act_said: Option<String>,
     /// Why the page did not open, on the line over the status bar until a click on it or the next try (open_page.rs);
     /// and whether it is being opened, when a second click does nothing: two would start two pages, and the one that
@@ -178,14 +180,18 @@ pub(crate) struct Root {
     _branch: Task<()>,
 }
 
-/// Halts each run at work: the engine stops its agent where it is, and the run can be resumed.
-fn halt(runs: &[String]) {
-    for id in runs {
-        let spawned = spawn::command(answer::engine_program()).args(["halt", id]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-        if let Err(e) = spawned {
-            tracing::warn!("cannot halt {id}: {e}");
-        }
-    }
+/// Halts each run at work as the person's, as the run's Halt does (run_actions::send): the engine stops its agent
+/// where it is, and the run can be resumed. A program without a terminal would be taken for an agent.
+fn halt(runs: Vec<String>, cx: &App) {
+    cx.background_executor()
+        .spawn(async move {
+            for id in runs {
+                if let Err(e) = run_actions::send(&id, run_actions::Act::Halt) {
+                    tracing::warn!("cannot halt {id}: {e}");
+                }
+            }
+        })
+        .detach();
 }
 
 impl Render for Root {
@@ -200,7 +206,6 @@ impl Render for Root {
                 cx.notify();
             });
         }
-        let terminal = self.terminal.clone();
         let shown = self.shown_terminal();
         let middle = div()
             .flex()
@@ -280,9 +285,11 @@ impl Render for Root {
                 this.steps = !this.steps;
                 cx.notify();
             }))
-            .on_action(move |_: &NewRun, window, cx| new_run(&terminal, window, cx))
+            .on_action(cx.listener(|this, _: &NewRun, window, cx| this.new_run(window, cx)))
             .on_action(cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)))
             .on_action(cx.listener(|this, _: &OpenPage, _, cx| this.open_page(cx)))
+            // "Halt all runs" in the status bar
+            .on_action(cx.listener(|this, _: &HaltAll, _, cx| this.halt_all(cx)))
             // the button under a finished run's story
             .on_action(cx.listener(|this, _: &CopySummary, _, cx| this.tabs.update(cx, |t, cx| t.copy_summary(cx))))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
@@ -326,8 +333,9 @@ impl Render for Root {
             }))
             .on_action(cx.listener(|this, _: &ShowInbox, _, cx| this.tabs.update(cx, |t, cx| t.show_inbox(cx))))
             .on_action(cx.listener(|this, _: &SendAnswer, _, cx| {
-                // the open agent's first choice when it asks, else the run's answer
-                if !this.answer(Answer::Pick(1), cx) {
+                // the open agent's first choice when it asks, else the answer of the run whose tab shows; on Claude
+                // Code's tab it is the terminal's alone
+                if !this.answer(Answer::Pick(1), cx) && this.tabs.read(cx).middle().run().is_some() {
                     this.island.update(cx, |i, cx| i.send_if_ready(cx));
                 }
             }))
@@ -342,11 +350,13 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &Pick8, _, cx| this.answer_or_pass(Answer::Pick(8), cx)))
             .on_action(cx.listener(|this, _: &Pick9, _, cx| this.answer_or_pass(Answer::Pick(9), cx)))
             .on_action(cx.listener(|this, _: &HaltRun, _, cx| {
-                // over an agent, it stops the agent; else the picked run
-                if this.agent_view.is_some() {
-                    this.stop_agent(cx);
-                } else {
-                    this.halt_picked(cx);
+                // what shows: the agent (Changes over it too), the run of the tab that shows, or on Claude Code's tab
+                // its own terminal; never a run picked before and out of sight
+                match this.tabs.read(cx).middle() {
+                    tabs::Middle::Run(run) => this.halt_run(run, cx),
+                    tabs::Middle::Terminal => this.interrupt_terminal(cx),
+                    _ if this.agent_view.is_some() => this.stop_agent(cx),
+                    _ => {}
                 }
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
@@ -604,8 +614,8 @@ impl Root {
             if let palette::Said::Go(go) = said {
                 this.go_to(go.clone(), window, cx);
             } else {
-                // back where the keys were
-                let to = this.agent_view.as_ref().map(|(_, v)| v.read(cx).focus_handle().clone()).unwrap_or_else(|| this.terminal.read(cx).focus_handle().clone());
+                // back to what the middle shows, or the keys reach a terminal off the screen
+                let to = this.keys_home(cx);
                 window.focus(&to, cx);
             }
             cx.notify();
@@ -647,7 +657,7 @@ impl Root {
         }
         let mut bar = div().flex().items_center().gap(px(8.)).mx(px(14.)).mb(px(8.)).flex_wrap();
         for act in acts {
-            let armed = self.armed.as_ref() == Some(&(run.clone(), act));
+            let armed = self.armed.as_ref().is_some_and(|a| a.holds(Some(&run), act, std::time::Instant::now()));
             let label = if armed { format!("{}: press again", act.label()) } else { act.label().to_string() };
             let danger = act.asks_twice();
             let run = run.clone();
@@ -674,8 +684,16 @@ impl Root {
     /// A press on a run's control: one that asks twice is armed first; then it is sent as the person's.
     pub(crate) fn press(&mut self, run: String, act: run_actions::Act, cx: &mut Context<Self>) {
         self.act_said = None;
-        if act.asks_twice() && self.armed.as_ref() != Some(&(run.clone(), act)) {
-            self.armed = Some((run, act));
+        let now = std::time::Instant::now();
+        let open = self.tabs.read(cx).open.clone();
+        if act.asks_twice() && !self.armed.as_ref().is_some_and(|a| a.holds(open.as_deref(), act, now)) {
+            self.armed = Some(run_actions::Armed { run, act, at: now });
+            // drawn again when it lapses, so the button no longer says "press again"
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(run_actions::ARMED_FOR).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
             cx.notify();
             return;
         }
@@ -1129,12 +1147,41 @@ impl Root {
         )
     }
 
+    /// "Halt all runs": the first press arms it for a few seconds, the second halts every run at work.
+    fn halt_all(&mut self, cx: &mut Context<Self>) {
+        if self.halt_all_at.is_some_and(|at| at.elapsed() < run_actions::ARMED_FOR) {
+            self.halt_all_at = None;
+            let runs = self.working_runs(cx);
+            tracing::info!("halting all runs at work: {}", runs.len());
+            halt(runs, cx);
+        } else {
+            self.halt_all_at = Some(std::time::Instant::now());
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(run_actions::ARMED_FOR).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     /// Command-T or the + after a space's tabs: Claude Code in a new tab of the open agent's space, in the open agent's
-    /// folder, opened at once.
+    /// folder, opened at once; with no agent open, in the folder Claude Code works in, in the space that holds it.
     fn new_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((open, _)) = self.tabs.read(cx).agent.clone() else { return };
-        let Some(space) = self.agents.read(cx).spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).cloned() else { return };
-        let folder = agents::new_agent_folder(&space, &open);
+        let spaces = &self.agents.read(cx).spaces;
+        let (space, folder) = match self.tabs.read(cx).agent.clone() {
+            Some((open, _)) => {
+                let Some(space) = spaces.iter().find(|s| s.agents.iter().any(|a| a.address == open)).cloned() else { return };
+                let folder = agents::new_agent_folder(&space, &open);
+                (space, folder)
+            }
+            // none open: in the folder Claude Code works in, in the space that holds it
+            None => {
+                let here = folder();
+                let Some(space) = agents::space_for(spaces, &here).cloned() else { return };
+                (space, Some(here).filter(|f| std::path::Path::new(f).is_dir()))
+            }
+        };
         let (core, tabs, display, agents) = (self.core.clone(), self.tabs.clone(), terminal::initial_display(window), self.agents.clone());
         cx.spawn(async move |_, cx| {
             // its tab, read before it shows, so the tab bar has it at once
@@ -1231,7 +1278,7 @@ impl Root {
     }
 
     fn sidebar_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        own_press(look::icon_button("sidebar-switch", look::Icon::Sidebar, false)).on_click(cx.listener(|this, _, _, cx| {
+        own_press(look::icon_button("sidebar-switch", look::Icon::Sidebar, false)).tooltip(look::tip("Runs column ⌘0")).on_click(cx.listener(|this, _, _, cx| {
             this.sidebar = !this.sidebar;
             cx.notify();
         }))
@@ -1258,10 +1305,10 @@ impl Root {
                     .items_center()
                     .gap(px(4.))
                     .child(self.changes_switch(cx))
-                    .child(own_press(look::icon_button("new-run", look::Icon::Plus, false)).on_click(cx.listener(|this, _, window, cx| {
-                        new_run(&this.terminal, window, cx);
+                    .child(own_press(look::icon_button("new-run", look::Icon::Plus, false)).tooltip(look::tip("New run ⌘N")).on_click(cx.listener(|this, _, window, cx| {
+                        this.new_run(window, cx);
                     })))
-                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.steps)).on_click(cx.listener(|this, _, _, cx| {
+                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.steps)).tooltip(look::tip("Steps ⌘E")).on_click(cx.listener(|this, _, _, cx| {
                         this.steps = !this.steps;
                         cx.notify();
                     }))),
@@ -1511,10 +1558,41 @@ impl Root {
             .detach();
     }
 
-    fn halt_picked(&self, cx: &App) {
-        if let Some(d) = self.runs.read(cx).chosen().filter(|d| d.mark == jaynes_shell::listing::Mark::Working) {
-            halt(std::slice::from_ref(&d.id));
+    /// Command-period on a run's tab: the run halted, while its agent works.
+    fn halt_run(&self, run: String, cx: &App) {
+        if self.runs.read(cx).snap.details.get(&run).is_some_and(|d| d.mark == jaynes_shell::listing::Mark::Working) {
+            halt(vec![run], cx);
         }
+    }
+
+    /// Command-period on Claude Code's tab: its terminal stopped, as an agent's is (herdr-core's stop key).
+    fn interrupt_terminal(&self, cx: &App) {
+        let (core, address) = (self.core.clone(), self.terminal.read(cx).address.clone());
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(e) = core.call("terminal.interrupt", json!({"terminal": address})) {
+                    tracing::warn!("cannot stop {address}: {e:#}");
+                }
+            })
+            .detach();
+    }
+
+    /// Where the keys go for what shows in the middle: Changes, the agent, Claude Code's terminal, or the window
+    /// itself over a run's story and the Inbox, where the shortcuts reach the window.
+    fn keys_home(&self, cx: &App) -> FocusHandle {
+        match self.tabs.read(cx).middle() {
+            tabs::Middle::Changes => self.stack.read(cx).focus.clone(),
+            tabs::Middle::Terminal => self.terminal.read(cx).focus_handle().clone(),
+            tabs::Middle::Agent => self.agent_view.as_ref().map(|(_, v)| v.read(cx).focus_handle().clone()).unwrap_or_else(|| self.focus.clone()),
+            tabs::Middle::Run(_) | tabs::Middle::Inbox => self.focus.clone(),
+        }
+    }
+
+    /// "+ New run" or Command-N: Claude Code's tab first, where "/jaynes " is typed, so the person sees what they
+    /// finish.
+    fn new_run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs.update(cx, |t, cx| t.show(None, cx));
+        new_run(&self.terminal, window, cx);
     }
 
     /// The list of shortcuts over the window; a click or Esc puts it away.
@@ -1573,17 +1651,16 @@ impl Root {
     /// The status bar, in the familiar look: where the middle works (the space, its branch, its folder, and Stop
     /// while the agent works), then how many things wait, wait for review and work, each opening the Inbox, "Open the
     /// page", the app's version and the list of shortcuts; "Halt all" while Jaynes runs work.
-    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The runs at work, as the column lists them.
+    fn working_runs(&self, cx: &App) -> Vec<String> {
         let runs = self.runs.read(cx);
-        let working_runs: Vec<String> = runs
-            .snap
-            .listing
-            .projects
-            .iter()
-            .flat_map(|(_, rows)| rows.iter())
-            .filter(|r| r.mark == jaynes_shell::listing::Mark::Working)
-            .map(|r| r.id.clone())
-            .collect();
+        runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows.iter()).filter(|r| r.mark == jaynes_shell::listing::Mark::Working).map(|r| r.id.clone()).collect()
+    }
+
+    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let halt_all_armed = self.halt_all_at.is_some_and(|at| at.elapsed() < run_actions::ARMED_FOR);
+        let working_runs = self.working_runs(cx);
+        let runs = self.runs.read(cx);
         // a blocked run waits for the person too, as the column and the Inbox say
         let blocked_runs = runs.snap.listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == jaynes_shell::listing::Mark::Blocked).count();
         let waiting_runs = runs.snap.listing.needs.len() + blocked_runs;
@@ -1645,9 +1722,9 @@ impl Root {
                         .text_color(rgb(look::red()))
                         .cursor_pointer()
                         .hover(|d| d.bg(rgba((look::red() << 8) | 0x1f)))
-                        .on_click(move |_, _, _| halt(&working_runs))
+                        .on_click(|_, window, cx| window.dispatch_action(Box::new(HaltAll), cx))
                         .child(look::icon(look::Icon::Stop, 13., look::red()))
-                        .child("Halt all runs"),
+                        .child(if halt_all_armed { "Halt all runs: press again" } else { "Halt all runs" }),
                 )
             })
             .child(
@@ -2056,7 +2133,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             for why in why {
                 tracing::warn!("{why}");
             }
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {
@@ -2160,7 +2237,7 @@ pub(crate) fn later_on_line(cx: &mut App) {
 #[cfg(feature = "test-driver")]
 pub(crate) fn press_act(word: String, cx: &mut App) {
     use run_actions::Act;
-    let Some(act) = [Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon].into_iter().find(|a| a.word() == word) else { return };
+    let Some(act) = [Act::Halt, Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon].into_iter().find(|a| a.word() == word) else { return };
     let Some(main) = MAIN.with(|m| m.get()) else { return };
     let _ = main.update(cx, |_, window, cx| {
         if let Some(Some(root)) = window.root::<Root>() {

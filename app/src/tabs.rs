@@ -13,6 +13,41 @@ use jaynes_shell::listing::{Listing, Mark, Row};
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// What shows in the middle of the window, over the rest: what the keys follow, and the one place a run's own keys
+/// (Command-period, Command-Return) reach a run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Middle {
+    /// Claude Code's own terminal.
+    Terminal,
+    /// A run's tab.
+    Run(String),
+    Agent,
+    Inbox,
+    Changes,
+}
+
+impl Middle {
+    /// The run a run's keys act on: only the one whose tab shows, never one picked before.
+    pub fn run(&self) -> Option<&str> {
+        match self {
+            Middle::Run(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+/// What shows in the middle: Changes over the agent it was opened from, the Inbox or an agent over the rest, else
+/// the open run's tab, else Claude Code's.
+pub fn middle_of(open: Option<&str>, agent: bool, inbox: bool, changes: bool) -> Middle {
+    match open {
+        _ if changes => Middle::Changes,
+        _ if inbox => Middle::Inbox,
+        _ if agent => Middle::Agent,
+        Some(r) => Middle::Run(r.to_string()),
+        None => Middle::Terminal,
+    }
+}
+
 /// Where a click in the steps panel takes a run's story.
 #[derive(Clone, PartialEq)]
 pub enum Place {
@@ -124,6 +159,11 @@ impl Tabs {
                 None => self.scroll.set_offset(top()),
             },
         }
+    }
+
+    /// What shows in the middle now.
+    pub fn middle(&self) -> Middle {
+        middle_of(self.open.as_deref(), self.agent.is_some(), self.inbox, self.changes.is_some())
     }
 
     /// Shows the Inbox in the middle.
@@ -555,6 +595,7 @@ impl Tabs {
                 .hover(|d| d.text_color(rgb(look::dim())).bg(rgb(look::selected())))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .tooltip(look::tip("New agent ⌘T"))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::NewAgent), cx))
                 .child("+"),
         )
@@ -713,7 +754,24 @@ fn moved(order: &[Option<String>], key: &Option<String>, to: usize) -> Vec<Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{arrange, at, moved, space_tabs, tabbed};
+    #[test]
+    fn the_middle_is_what_shows_over_the_rest_and_a_run_only_on_its_own_tab() {
+        // Claude Code's tab: no run, even one picked before
+        assert_eq!(middle_of(None, false, false, false), Middle::Terminal);
+        assert_eq!(middle_of(Some("r1"), false, false, false), Middle::Run("r1".into()));
+        // what shows over a run's tab is not the run
+        assert_eq!(middle_of(None, true, false, false), Middle::Agent);
+        assert_eq!(middle_of(None, false, true, false), Middle::Inbox);
+        assert_eq!(middle_of(None, true, false, true), Middle::Changes);
+        assert_eq!(middle_of(Some("r1"), false, false, true), Middle::Changes);
+        // the run whose keys (Command-period, Command-Return) act: only the run's own tab has one
+        assert_eq!(Middle::Run("r1".into()).run(), Some("r1"));
+        for m in [Middle::Terminal, Middle::Agent, Middle::Inbox, Middle::Changes] {
+            assert_eq!(m.run(), None, "{m:?}");
+        }
+    }
+
+    use super::{Middle, arrange, at, middle_of, moved, space_tabs, tabbed};
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
     use std::collections::HashMap;

@@ -193,6 +193,13 @@ pub fn new_agent_folder(space: &Space, open: &str) -> Option<String> {
     cwd.into_iter().chain([space.folder.clone()]).find(|f| !f.is_empty() && std::path::Path::new(f).is_dir())
 }
 
+/// The space a new agent goes to when none is open: the one whose folder holds `folder` (the deepest), else the first
+/// space; the agent still starts in `folder`. None without spaces.
+pub fn space_for<'a>(spaces: &'a [Space], folder: &str) -> Option<&'a Space> {
+    let holds = |s: &&Space| !s.folder.is_empty() && (folder == s.folder || folder.starts_with(&format!("{}/", s.folder.trim_end_matches('/'))));
+    spaces.iter().filter(holds).max_by_key(|s| s.folder.len()).or_else(|| spaces.first())
+}
+
 /// Starts the new agent (Claude Code, unless Settings name another) in a folder, in a tab of its own at the end of the space, so Herdr shows it too; its address.
 /// The document is written only if no one wrote it since it was read, else read again: Herdr writes it too. Without
 /// the tab, the agent still shows in the space here, by its labels.
@@ -441,8 +448,23 @@ pub fn age(since_ms: u64, now_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     // not super::*: gpui's glob brings its own `test` attribute, which would shadow the standard one
-    use super::{State, Value, age, arrange, new_agent_folder, news, seen_now, with_tab};
+    use super::{State, Value, age, arrange, new_agent_folder, news, seen_now, space_for, with_tab};
     use serde_json::json;
+
+    #[test]
+    fn with_no_agent_open_a_new_agent_goes_to_the_space_of_the_folder_claude_code_works_in() {
+        let spaces = arrange(&doc(), &json!({"terminals": [term("t1", "s1", Some("done"), 1, 1)]}));
+        // the space whose folder it is
+        assert_eq!(space_for(&spaces, "/p/helm").map(|s| s.id.as_str()), Some("s2"));
+        assert_eq!(space_for(&spaces, "/p/jaynes").map(|s| s.id.as_str()), Some("s1"));
+        // a folder under a space's is that space's
+        assert_eq!(space_for(&spaces, "/p/helm/work").map(|s| s.id.as_str()), Some("s2"));
+        // one no space holds: the first space, the agent still starting in the folder
+        assert_eq!(space_for(&spaces, "/elsewhere").map(|s| s.id.as_str()), Some("s1"));
+        // "/p/helmet" is no folder under "/p/helm"
+        assert_eq!(space_for(&spaces, "/p/helmet").map(|s| s.id.as_str()), Some("s1"));
+        assert!(space_for(&[], "/p/helm").is_none(), "no space: none");
+    }
 
     #[test]
     fn a_new_agent_starts_where_the_open_one_works() {

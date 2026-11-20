@@ -1,12 +1,14 @@
-//! What the person may do to a run from its tab, the page's own controls: Resume a halted run, Continue one Jaynes
-//! stopped, Raise the risk, Raise the ceiling near or at it, Abandon one not finished. Each shows only when it can do
+//! What the person may do to a run from its tab, the page's own controls: Halt one at work, Resume a halted run,
+//! Continue one Jaynes stopped, Raise the risk, Raise the ceiling near or at it, Abandon one not finished. Each shows only when it can do
 //! something, as on the page. They are sent as the person's through `send`, the one place that sends them.
 
 use jaynes_core::question::By;
 use jaynes_core::run::{Phase, Run};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
+    Halt,
     Resume,
     Continue,
     RaiseRisk,
@@ -18,6 +20,7 @@ impl Act {
     /// The word the page sends for it.
     pub fn word(self) -> &'static str {
         match self {
+            Act::Halt => "halt",
             Act::Resume => "resume",
             Act::Continue => "continue",
             Act::RaiseRisk => "raise-risk",
@@ -29,6 +32,7 @@ impl Act {
     /// Its button, as the page says it.
     pub fn label(self) -> &'static str {
         match self {
+            Act::Halt => "Halt",
             Act::Resume => "Resume",
             Act::Continue => "Continue",
             Act::RaiseRisk => "Raise the risk",
@@ -70,12 +74,15 @@ impl Facts {
     }
 }
 
-/// The controls a run shows, in the page's order (halting is Command-period, so it is not here).
+/// The controls a run shows, in the page's order: Halt first while its agent works, as Command-period does on its tab.
 pub fn acts(f: &Facts) -> Vec<Act> {
     if f.finished {
         return Vec::new();
     }
     let mut out = Vec::new();
+    if f.running && !f.halted {
+        out.push(Act::Halt);
+    }
     if f.halted {
         out.push(Act::Resume);
     }
@@ -90,6 +97,25 @@ pub fn acts(f: &Facts) -> Vec<Act> {
     }
     out.push(Act::Abandon);
     out
+}
+
+/// How long a control pressed once stays armed for the press that sends it: a press later is a first press again.
+pub const ARMED_FOR: Duration = Duration::from_secs(4);
+
+/// A control pressed once that asks to be pressed again (Abandon): on which run, and when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Armed {
+    pub run: String,
+    pub act: Act,
+    pub at: Instant,
+}
+
+impl Armed {
+    /// Whether a press of `act` at `now`, with `open`'s tab showing, is the second press: the same control, on the
+    /// run whose tab shows, within [`ARMED_FOR`]. Another tab, Claude Code's or a lapse of time disarms it.
+    pub fn holds(&self, open: Option<&str>, act: Act, now: Instant) -> bool {
+        open == Some(self.run.as_str()) && act == self.act && now.saturating_duration_since(self.at) < ARMED_FOR
+    }
 }
 
 /// The run as the record has it now.
@@ -108,7 +134,8 @@ pub fn send(run: &str, act: Act) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Act, Facts, acts};
+    use super::{ARMED_FOR, Act, Armed, Facts, acts};
+    use std::time::{Duration, Instant};
 
     fn facts() -> Facts {
         Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, near_ceiling: false, stopped_by_ceiling: false }
@@ -116,12 +143,14 @@ mod tests {
 
     #[test]
     fn each_control_shows_only_when_it_can_do_something_as_on_the_page() {
-        // at work: it may only be abandoned (halting is Command-period)
-        assert_eq!(acts(&facts()), [Act::Abandon]);
+        // at work: halted from its tab, or abandoned
+        assert_eq!(acts(&facts()), [Act::Halt, Act::Abandon]);
         assert_eq!(acts(&Facts { halted: true, running: false, ..facts() }), [Act::Resume, Act::Abandon]);
         assert_eq!(acts(&Facts { blocked: true, running: false, ..facts() }), [Act::Continue, Act::Abandon]);
-        assert_eq!(acts(&Facts { low_risk: true, ..facts() }), [Act::RaiseRisk, Act::Abandon]);
-        assert_eq!(acts(&Facts { near_ceiling: true, ..facts() }), [Act::RaiseCeiling, Act::Abandon]);
+        assert_eq!(acts(&Facts { low_risk: true, ..facts() }), [Act::Halt, Act::RaiseRisk, Act::Abandon]);
+        assert_eq!(acts(&Facts { near_ceiling: true, ..facts() }), [Act::Halt, Act::RaiseCeiling, Act::Abandon]);
+        // halted while its phase is still at work: resumed, never halted twice
+        assert_eq!(acts(&Facts { halted: true, ..facts() }), [Act::Resume, Act::Abandon]);
         assert_eq!(acts(&Facts { stopped_by_ceiling: true, blocked: true, running: false, ..facts() }), [Act::Continue, Act::RaiseCeiling, Act::Abandon]);
         // a finished run has none
         assert!(acts(&Facts { finished: true, ..facts() }).is_empty());
@@ -129,9 +158,25 @@ mod tests {
 
     #[test]
     fn each_is_the_pages_own_action_word() {
-        let words: Vec<&str> = [Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon].iter().map(|a| a.word()).collect();
-        assert_eq!(words, ["resume", "continue", "raise-risk", "raise-ceiling", "abandon"]);
-        // what cannot be taken back asks twice
-        assert!(Act::Abandon.asks_twice() && !Act::Resume.asks_twice());
+        let words: Vec<&str> = [Act::Halt, Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon].iter().map(|a| a.word()).collect();
+        assert_eq!(words, ["halt", "resume", "continue", "raise-risk", "raise-ceiling", "abandon"]);
+        // what cannot be taken back asks twice; a halt is resumed
+        assert!(Act::Abandon.asks_twice() && !Act::Resume.asks_twice() && !Act::Halt.asks_twice());
+        assert_eq!(Act::Halt.label(), "Halt");
+    }
+
+    #[test]
+    fn a_control_pressed_once_stays_armed_a_few_seconds_and_only_on_its_run_s_tab() {
+        let at = Instant::now();
+        let armed = Armed { run: "r1".into(), act: Act::Abandon, at };
+        assert!(armed.holds(Some("r1"), Act::Abandon, at + Duration::from_secs(1)));
+        // it lapses: a press days later is a first press again
+        assert!(!armed.holds(Some("r1"), Act::Abandon, at + ARMED_FOR));
+        assert!(!armed.holds(Some("r1"), Act::Abandon, at + Duration::from_secs(86_400)));
+        // another tab, or Claude Code's, holds nothing armed; nor another control
+        assert!(!armed.holds(Some("r2"), Act::Abandon, at));
+        assert!(!armed.holds(None, Act::Abandon, at));
+        assert!(!armed.holds(Some("r1"), Act::Halt, at));
+        assert!(ARMED_FOR <= Duration::from_secs(5) && ARMED_FOR >= Duration::from_secs(3), "a few seconds: {ARMED_FOR:?}");
     }
 }
