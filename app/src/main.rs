@@ -656,6 +656,8 @@ impl Root {
             Go::OpenPage => window.dispatch_action(Box::new(OpenPage), cx),
             Go::ToggleChanges => window.dispatch_action(Box::new(ToggleChanges), cx),
             Go::Shortcuts => window.dispatch_action(Box::new(Shortcuts), cx),
+            Go::NewRun => self.new_run(window, cx),
+            Go::OpenSettings => window.dispatch_action(Box::new(OpenSettings), cx),
         }
     }
 

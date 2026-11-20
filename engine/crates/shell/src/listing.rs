@@ -96,7 +96,6 @@ pub fn arrange(entries: &[Entry]) -> Listing {
     listing
 }
 
-/// The mark and the line of a run nothing waits on.
 /// A reason as the engine says it now: before 0.2.4 it said how a program ended as Rust's debug text ("exited with
 /// Some(1)", "exited with None"), and a record keeps a reason as it was said.
 pub fn in_words(reason: &str) -> String {
@@ -110,6 +109,7 @@ pub fn in_words(reason: &str) -> String {
     out.trim_end().trim_end_matches(':').trim_end().to_string()
 }
 
+/// The mark and the line of a run nothing waits on.
 fn standing(e: &Entry) -> (Mark, String) {
     let r = &e.run;
     match &r.phase {

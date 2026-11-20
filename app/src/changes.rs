@@ -43,7 +43,14 @@ impl Changes {
         let message = cx.new(|cx| InputState::new(window, cx).placeholder("Commit message"));
         cx.subscribe_in(&message, window, |this, _, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e {
-                this.commit(window, cx);
+                // only what was staged goes with Enter: every changed file waits for a click on the button
+                match &this.status {
+                    Some(s) if !enter_commits(s) && !s.changed.is_empty() => {
+                        this.note = Some(format!("Nothing is staged: {} takes every changed file, so it waits for a click.", commit_label(s)));
+                        cx.notify();
+                    }
+                    _ => this.commit(window, cx),
+                }
             }
         })
         .detach();
@@ -336,7 +343,7 @@ impl Render for Changes {
                         .cursor_pointer()
                         .hover(|d| d.bg(rgb(look::selected())))
                         .on_click(cx.listener(|this, _, window, cx| this.commit(window, cx)))
-                        .child("Commit"),
+                        .child(self.status.as_ref().map(commit_label).unwrap_or_else(|| "Commit".into())),
                 ),
         );
         if let Some(e) = &self.error {
@@ -626,9 +633,48 @@ impl Render for Stack {
     }
 }
 
+/// What the commit button says: how many files the commit takes, the staged ones or, with none staged, every changed
+/// file git follows (as `git commit -a`).
+pub fn commit_label(s: &crate::git::Status) -> String {
+    let n = if s.staged.is_empty() { s.changed.len() } else { s.staged.len() };
+    match n {
+        0 => "Commit".into(),
+        1 => "Commit 1 file".into(),
+        n => format!("Commit {n} files"),
+    }
+}
+
+/// Whether Enter in the commit message commits: only with files staged; taking every changed file needs a click.
+pub fn enter_commits(s: &crate::git::Status) -> bool {
+    !s.staged.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::split;
+    use super::{commit_label, enter_commits, split};
+    use crate::git::{Entry, Status};
+
+    fn status(staged: &[&str], changed: &[&str]) -> Status {
+        let e = |p: &&str| Entry { path: p.to_string(), add: None, del: None };
+        Status { staged: staged.iter().map(e).collect(), changed: changed.iter().map(e).collect(), ..Status::default() }
+    }
+
+    #[test]
+    fn the_commit_button_says_how_many_files_it_takes() {
+        // staged: those
+        assert_eq!(commit_label(&status(&["a", "b"], &["c"])), "Commit 2 files");
+        assert_eq!(commit_label(&status(&["a"], &[])), "Commit 1 file");
+        // nothing staged: every changed file git follows, as git commit -a
+        assert_eq!(commit_label(&status(&[], &["c", "d", "e"])), "Commit 3 files");
+        assert_eq!(commit_label(&status(&[], &[])), "Commit");
+    }
+
+    #[test]
+    fn enter_commits_only_what_was_staged_and_taking_every_changed_file_needs_a_click() {
+        assert!(enter_commits(&status(&["a"], &["c"])));
+        assert!(!enter_commits(&status(&[], &["c", "d"])), "a commit of everything changed is never one Enter away");
+        assert!(!enter_commits(&status(&[], &[])));
+    }
 
     #[test]
     fn a_path_shows_its_name_then_its_folder() {

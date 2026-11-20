@@ -1,6 +1,6 @@
 //! Command-K: find any agent, run or command by typing, the familiar look's palette. Its list is the Inbox, every
 //! agent and shell of every space, every run, then the commands the app has, each with its key; typing keeps those
-//! whose name (and space) hold its letters in order.
+//! whose name (and space) hold its letters in order, a word that starts with them first. The list scrolls.
 
 use crate::agents::{Agent, Space};
 use crate::look;
@@ -16,11 +16,13 @@ pub enum Go {
     /// An agent or a shell, by its address.
     Agent(String),
     Run(String),
+    NewRun,
     NewAgent,
     OpenWaiting,
     /// The page in the browser, with its key (open_page.rs).
     OpenPage,
     ToggleChanges,
+    OpenSettings,
     Shortcuts,
 }
 
@@ -56,9 +58,26 @@ pub fn fuzzy(q: &str, s: &str) -> bool {
     want.peek().is_none()
 }
 
-/// The entries `q` finds, by name or space, in the list's order.
+/// How well `q` finds `s`: a word of it that starts with `q` (0), `q` inside it (1), its letters in order (2), or not.
+fn fit(q: &str, s: &str) -> Option<u8> {
+    let (q, s) = (q.to_lowercase(), s.to_lowercase());
+    if s.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&q)) {
+        Some(0)
+    } else if s.contains(&q) {
+        Some(1)
+    } else if fuzzy(&q, &s) {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// The entries `q` finds, by name or space, every one: a word that starts with `q` first, then `q` inside a name, then
+/// its letters strewn, each in the list's order.
 pub fn matching<'a>(all: &'a [Entry], q: &str) -> Vec<&'a Entry> {
-    all.iter().filter(|e| fuzzy(q, &format!("{} {}", e.label, e.space))).collect()
+    let mut found: Vec<(u8, &Entry)> = all.iter().filter_map(|e| fit(q, &format!("{} {}", e.label, e.space)).map(|f| (f, e))).collect();
+    found.sort_by_key(|(f, _)| *f);
+    found.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Everything Command-K lists: the Inbox, every agent and shell of every space, every run, then the commands, "Open
@@ -72,22 +91,22 @@ pub fn entries(spaces: &[Space], runs: &Listing, here: Option<&str>) -> Vec<Entr
     }
     for r in runs.needs.iter().chain(runs.projects.iter().flat_map(|(_, rows)| rows.iter())) {
         if !out.iter().any(|e| e.go == Go::Run(r.id.clone())) {
-            out.push(Entry { label: format!("run {}", r.title), space: String::new(), go: Go::Run(r.id.clone()), key: None, agent: None, run: Some(r.mark) });
+            // its title alone: its dot says it is a run, and "run X" would read as running X again
+            out.push(Entry { label: r.title.clone(), space: String::new(), go: Go::Run(r.id.clone()), key: None, agent: None, run: Some(r.mark) });
         }
     }
     let new_in = here.map(|s| format!("New agent in {s}")).unwrap_or_else(|| "New agent".into());
     out.extend([
+        Entry { label: "New run".into(), space: String::new(), go: Go::NewRun, key: Some("⌘N"), agent: None, run: None },
         Entry { label: new_in, space: String::new(), go: Go::NewAgent, key: Some("⌘T"), agent: None, run: None },
         Entry { label: "Open the next thing that needs you".into(), space: String::new(), go: Go::OpenWaiting, key: Some("⌘O"), agent: None, run: None },
         Entry { label: crate::open_page::LABEL.into(), space: String::new(), go: Go::OpenPage, key: None, agent: None, run: None },
         Entry { label: "Show or hide Changes".into(), space: String::new(), go: Go::ToggleChanges, key: Some("⇧⌘G"), agent: None, run: None },
+        Entry { label: "Settings".into(), space: String::new(), go: Go::OpenSettings, key: Some("⌘,"), agent: None, run: None },
         Entry { label: "Keyboard shortcuts".into(), space: String::new(), go: Go::Shortcuts, key: Some("⌘/"), agent: None, run: None },
     ]);
     out
 }
-
-/// How many entries show at once.
-const SHOWN: usize = 10;
 
 /// What the palette tells the window: go there, or close.
 pub enum Said {
@@ -103,6 +122,8 @@ pub struct PaletteView {
     /// The entry the keys are on, among those shown.
     at: usize,
     focus: FocusHandle,
+    /// Where the list is scrolled: it follows the entry the keys are on.
+    scroll: ScrollHandle,
 }
 
 impl PaletteView {
@@ -111,6 +132,7 @@ impl PaletteView {
         cx.subscribe_in(&input, window, |this, _, e: &InputEvent, _, cx| match e {
             InputEvent::Change => {
                 this.at = 0;
+                this.scroll.scroll_to_item(0);
                 cx.notify();
             }
             InputEvent::PressEnter { .. } => this.go(cx),
@@ -118,7 +140,7 @@ impl PaletteView {
         })
         .detach();
         input.update(cx, |i, cx| i.focus(window, cx));
-        PaletteView { all, input, at: 0, focus: cx.focus_handle() }
+        PaletteView { all, input, at: 0, focus: cx.focus_handle(), scroll: ScrollHandle::new() }
     }
 
     fn query(&self, cx: &App) -> String {
@@ -126,7 +148,7 @@ impl PaletteView {
     }
 
     fn shown(&self, cx: &App) -> Vec<Entry> {
-        matching(&self.all, &self.query(cx)).into_iter().take(SHOWN).cloned().collect()
+        matching(&self.all, &self.query(cx)).into_iter().cloned().collect()
     }
 
     /// The letters typed, as typing them does: for a test.
@@ -141,6 +163,7 @@ impl PaletteView {
         let n = self.shown(cx).len();
         if n > 0 {
             self.at = (self.at as isize + by).clamp(0, n as isize - 1) as usize;
+            self.scroll.scroll_to_item(self.at);
             cx.notify();
         }
     }
@@ -166,7 +189,8 @@ fn run_dot(m: Mark) -> AnyElement {
 impl Render for PaletteView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = self.shown(cx);
-        let mut list = div().flex().flex_col().py(px(4.));
+        // every match, the list scrolling past what the box holds
+        let mut list = div().id("palette-list").track_scroll(&self.scroll).max_h(px(420.)).overflow_y_scroll().flex().flex_col().py(px(4.));
         for (k, e) in shown.iter().enumerate() {
             let on = k == self.at;
             let mark: AnyElement = if e.go.is_command() {
@@ -280,14 +304,20 @@ mod tests {
         let runs = Listing { needs: vec![row("r1", Mark::Needs)], projects: vec![("p".into(), vec![row("r1", Mark::Needs), row("r2", Mark::Merged)])] };
         let all = super::entries(&spaces, &runs, Some("helm"));
         let labels: Vec<&str> = all.iter().map(|e| e.label.as_str()).collect();
-        assert_eq!(labels, ["Inbox", "T1", "T2", "run Run r1", "run Run r2", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Keyboard shortcuts"]);
-        assert_eq!(all[7].go, Go::OpenPage);
+        // a run is its title alone: its dot says it is a run, and "run X" reads as running X again
+        assert_eq!(
+            labels,
+            ["Inbox", "T1", "T2", "Run r1", "Run r2", "New run", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Settings", "Keyboard shortcuts"]
+        );
+        assert_eq!(all[8].go, Go::OpenPage);
         // every command is drawn as one, with › on its left, a key or not; the places are not commands
         let commands: Vec<&str> = all.iter().filter(|e| e.go.is_command()).map(|e| e.label.as_str()).collect();
-        assert_eq!(commands, ["New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Keyboard shortcuts"]);
+        assert_eq!(commands, ["New run", "New agent in helm", "Open the next thing that needs you", "Open the page", "Show or hide Changes", "Settings", "Keyboard shortcuts"]);
         assert_eq!(all[1].space, "helm");
-        assert_eq!(all[5].key, Some("⌘T"));
-        assert_eq!(super::entries(&spaces, &runs, None)[5].label, "New agent");
+        assert_eq!((all[5].go.clone(), all[5].key), (Go::NewRun, Some("⌘N")));
+        assert_eq!((all[10].go.clone(), all[10].key), (Go::OpenSettings, Some("⌘,")));
+        assert_eq!(all[6].key, Some("⌘T"));
+        assert_eq!(super::entries(&spaces, &runs, None)[6].label, "New agent");
     }
 
     #[test]
@@ -299,17 +329,38 @@ mod tests {
     }
 
     #[test]
+    fn a_whole_word_comes_before_letters_strewn_and_nothing_is_cut_at_ten() {
+        let mut all = vec![
+            entry("Inbox", "", Go::Inbox),
+            entry("Save the reset button", "", Go::Run("r1".into())),
+            entry("Settings", "", Go::OpenSettings),
+        ];
+        // "set" strews through "Save the reset" (s, e, t) and starts the word "Settings": Settings first
+        let names = |all: &[Entry], q: &str| matching(all, q).iter().map(|e| e.label.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&all, "set"), ["Settings", "Save the reset button"]);
+        assert_eq!(names(&all, "settings"), ["Settings"]);
+        // a word inside a name counts as a word: "reset" before letters strewn
+        all.push(entry("Rename the stats", "", Go::Run("r2".into())));
+        assert_eq!(names(&all, "reset"), ["Save the reset button"]);
+        assert_eq!(names(&all, "rst"), ["Save the reset button", "Rename the stats"]);
+        // a long list keeps every match, to scroll to
+        let many: Vec<Entry> = (0..25).map(|i| entry(&format!("Run {i}"), "", Go::Run(i.to_string()))).collect();
+        assert_eq!(matching(&many, "").len(), 25);
+        assert_eq!(matching(&many, "run").len(), 25);
+    }
+
+    #[test]
     fn typing_keeps_what_matches_by_name_or_space_in_the_lists_order() {
         let all = vec![
             entry("Inbox", "", Go::Inbox),
             entry("Handoff de jaynes", "jaynes/tenure", Go::Agent("t1".into())),
             entry("zsh", "helm", Go::Agent("t2".into())),
-            entry("run Identidade do Ballast", "", Go::Run("r1".into())),
+            entry("Identidade do Ballast", "", Go::Run("r1".into())),
         ];
         let names = |q: &str| matching(&all, q).iter().map(|e| e.label.clone()).collect::<Vec<_>>();
         assert_eq!(names("").len(), 4);
         assert_eq!(names("helm"), ["zsh"], "a space's name finds its agents");
-        assert_eq!(names("ball"), ["run Identidade do Ballast"]);
+        assert_eq!(names("ball"), ["Identidade do Ballast"]);
         assert!(names("qqq").is_empty());
     }
 }
