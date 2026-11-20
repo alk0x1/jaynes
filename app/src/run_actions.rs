@@ -47,7 +47,7 @@ impl Act {
     pub fn tip(self, f: &Facts) -> Option<&'static str> {
         match self {
             Act::RaiseRisk => Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."),
-            Act::Abandon if f.delivered => Some("Ends the run here: what it delivered stays, the answers still open are dropped."),
+            Act::Abandon if f.delivered => Some("Ends the run here. What it delivered stays as it is, and you can no longer correct it at its stops."),
             _ => None,
         }
     }
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(acts(&Facts { low_risk: true, risk_adds_steps: true, ..facts() }), [Act::Halt, Act::RaiseRisk, Act::Abandon]);
         // a run already delivered whose answers still correct it: Abandon keeps what it delivered
         let delivered = Facts { delivered: true, running: false, ..facts() };
-        assert_eq!(Act::Abandon.tip(&delivered), Some("Ends the run here: what it delivered stays, the answers still open are dropped."));
+        assert_eq!(Act::Abandon.tip(&delivered), Some("Ends the run here. What it delivered stays as it is, and you can no longer correct it at its stops."));
         assert_eq!(Act::Abandon.tip(&facts()), None);
     }
 

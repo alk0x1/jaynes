@@ -1710,7 +1710,8 @@ impl Root {
         }
         // more below: its foot fades into the window, as the stop's card does, so the list is seen to go on
         let more = inbox::more_below(f32::from(self.inbox_scroll.max_offset().y), f32::from(-self.inbox_scroll.offset().y));
-        let fade = div().absolute().left_0().right_0().bottom_0().h(px(16.)).bg(linear_gradient(180., linear_color_stop(rgba(look::panel() << 8), 0.), linear_color_stop(rgb(look::panel()), 1.)));
+        // 32 px: over the gap between two rows, the card's 16 did not show
+        let fade = div().absolute().left_0().right_0().bottom_0().h(px(32.)).bg(linear_gradient(180., linear_color_stop(rgba(look::panel() << 8), 0.), linear_color_stop(rgb(look::panel()), 1.)));
         div().relative().size_full().child(page).when(more, |d| d.child(fade)).into_any_element()
     }
 

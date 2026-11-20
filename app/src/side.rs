@@ -156,7 +156,7 @@ fn needs_line(row: &Row, delivered: bool, halted: Option<&String>) -> String {
 
 /// A blocked run's line: one whose step spent its attempts says where, as its tab does ("at “change”: used its 3
 /// attempts"); another cause keeps its own line.
-fn blocked_line(line: &str) -> String {
+pub(crate) fn blocked_line(line: &str) -> String {
     let reason = line.split_once("blocked: ").map(|(_, r)| r).unwrap_or(line);
     let spent = reason.split_once(" spent its ").and_then(|(step, rest)| rest.split_once(" attempts").map(|(n, _)| (step, n)));
     match spent {

@@ -51,7 +51,8 @@ pub fn gather(spaces: &[Space], runs: &Listing) -> (Vec<Item>, Vec<Item>) {
     needs.extend(stopped(Mark::Blocked).chain(stopped(Mark::Halted)).map(|r| Item {
         key: Key::Run(r.id.clone()),
         title: r.title.clone(),
-        place: format!("Jaynes run · {}", r.line),
+        // in the column's words: one that spent its attempts says where
+        place: format!("Jaynes run · {}", if r.mark == Mark::Blocked { crate::side::blocked_line(&r.line) } else { r.line.clone() }),
         what: if r.mark == Mark::Halted { "halted · open it" } else { "blocked · open it" }.into(),
         state: if r.mark == Mark::Halted { State::Waiting } else { State::Error },
         since_ms: 0,
@@ -119,6 +120,14 @@ pub fn subtitle(spaces: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Key, failed_what, gather, more_below, moved, next, subtitle, unseen_runs};
+
+    #[test]
+    fn a_run_that_spent_its_attempts_says_where_in_the_inbox_as_the_column_does() {
+        let row = Row { id: "b".into(), title: "Rename the footer link".into(), line: "step 2 of 2, blocked: change spent its 3 attempts: the agent exited with code 1".into(), mark: Mark::Blocked };
+        let runs = Listing { needs: vec![], projects: vec![("site".into(), vec![row])] };
+        let (needs, _) = gather(&[], &runs);
+        assert_eq!(needs[0].place, "Jaynes run · at “change”: used its 3 attempts");
+    }
 
     #[test]
     fn a_failed_agent_in_the_inbox_says_what_it_said_or_that_it_stopped() {

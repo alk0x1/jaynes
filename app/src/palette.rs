@@ -54,6 +54,9 @@ fn agent_detail(a: &Agent) -> Option<String> {
     match a.state {
         crate::agents::State::Waiting => Some(crate::ask::what(a.kind.as_deref(), &a.msg)),
         crate::agents::State::Error => Some(if a.msg.trim().is_empty() { "it stopped with an error".to_string() } else { a.msg.trim().to_string() }),
+        // at work or done, in the column's words, so no two read the same
+        crate::agents::State::Working => Some("working".to_string()),
+        crate::agents::State::ToReview => Some(format!("done · {}", crate::agents::age(a.since_ms, crate::agents::now_ms()))),
         _ => None,
     }
 }
@@ -349,14 +352,16 @@ mod tests {
             id: "s".into(),
             name: "site".into(),
             folder: String::new(),
-            agents: vec![agent("t1", State::Waiting, Some("question"), "Which font?"), agent("t2", State::Waiting, Some("permission"), ""), agent("t3", State::Working, None, "")],
+            agents: vec![agent("t1", State::Waiting, Some("question"), "Which font?"), agent("t2", State::Waiting, Some("permission"), ""), agent("t3", State::Working, None, ""), agent("t4", State::ToReview, None, "")],
             tabs: vec![],
         }];
         let all = super::entries(&spaces, &Listing::default(), None);
         let detail = |a: &str| all.iter().find(|e| e.go == Go::Agent(a.into())).and_then(|e| e.detail.clone());
         assert_eq!(detail("t1").as_deref(), Some("asks: Which font?"));
         assert_eq!(detail("t2").as_deref(), Some("wants your permission"));
-        assert_eq!(detail("t3"), None, "one at work says nothing more");
+        // one at work or done says so, in the column's words, so no two read the same
+        assert_eq!(detail("t3").as_deref(), Some("working"));
+        assert!(detail("t4").is_some_and(|d| d.starts_with("done · ")), "{:?}", detail("t4"));
     }
 
     #[test]
