@@ -45,6 +45,17 @@ pub struct Entry {
     /// The agent it opens, for its mark as the column draws it; a run's mark.
     pub agent: Option<Agent>,
     pub run: Option<Mark>,
+    /// Under its name, what an agent waits for, as the column says it, so six named "claude" tell apart.
+    pub detail: Option<String>,
+}
+
+/// What an agent's entry says under its name: what it asks, in the Inbox's words, or, failed, what it said.
+fn agent_detail(a: &Agent) -> Option<String> {
+    match a.state {
+        crate::agents::State::Waiting => Some(crate::ask::what(a.kind.as_deref(), &a.msg)),
+        crate::agents::State::Error => Some(if a.msg.trim().is_empty() { "it stopped with an error".to_string() } else { a.msg.trim().to_string() }),
+        _ => None,
+    }
 }
 
 /// Whether `q`'s letters stand in `s` in order, case aside.
@@ -83,27 +94,27 @@ pub fn matching<'a>(all: &'a [Entry], q: &str) -> Vec<&'a Entry> {
 /// Everything Command-K lists: the Inbox, every agent and shell of every space, every run, then the commands, "Open
 /// the page" among them.
 pub fn entries(spaces: &[Space], runs: &Listing, here: Option<&str>) -> Vec<Entry> {
-    let mut out = vec![Entry { label: "Inbox".into(), space: String::new(), go: Go::Inbox, key: None, agent: None, run: None }];
+    let mut out = vec![Entry { label: "Inbox".into(), space: String::new(), go: Go::Inbox, key: None, agent: None, run: None, detail: None }];
     for s in spaces {
         for a in &s.agents {
-            out.push(Entry { label: a.title.clone(), space: s.name.clone(), go: Go::Agent(a.address.clone()), key: None, agent: Some(a.clone()), run: None });
+            out.push(Entry { label: a.title.clone(), space: s.name.clone(), go: Go::Agent(a.address.clone()), key: None, agent: Some(a.clone()), run: None, detail: agent_detail(a) });
         }
     }
     for r in runs.needs.iter().chain(runs.projects.iter().flat_map(|(_, rows)| rows.iter())) {
         if !out.iter().any(|e| e.go == Go::Run(r.id.clone())) {
             // its title alone: its dot says it is a run, and "run X" would read as running X again
-            out.push(Entry { label: r.title.clone(), space: String::new(), go: Go::Run(r.id.clone()), key: None, agent: None, run: Some(r.mark) });
+            out.push(Entry { label: r.title.clone(), space: String::new(), go: Go::Run(r.id.clone()), key: None, agent: None, run: Some(r.mark), detail: None });
         }
     }
     let new_in = here.map(|s| format!("New agent in {s}")).unwrap_or_else(|| "New agent".into());
     out.extend([
-        Entry { label: "New run".into(), space: String::new(), go: Go::NewRun, key: Some("⌘N"), agent: None, run: None },
-        Entry { label: new_in, space: String::new(), go: Go::NewAgent, key: Some("⌘T"), agent: None, run: None },
-        Entry { label: "Open the next thing that needs you".into(), space: String::new(), go: Go::OpenWaiting, key: Some("⌘O"), agent: None, run: None },
-        Entry { label: crate::open_page::LABEL.into(), space: String::new(), go: Go::OpenPage, key: None, agent: None, run: None },
-        Entry { label: "Show or hide Changes".into(), space: String::new(), go: Go::ToggleChanges, key: Some("⇧⌘G"), agent: None, run: None },
-        Entry { label: "Settings".into(), space: String::new(), go: Go::OpenSettings, key: Some("⌘,"), agent: None, run: None },
-        Entry { label: "Keyboard shortcuts".into(), space: String::new(), go: Go::Shortcuts, key: Some("⌘/"), agent: None, run: None },
+        Entry { label: "New run".into(), space: String::new(), go: Go::NewRun, key: Some("⌘N"), agent: None, run: None, detail: None },
+        Entry { label: new_in, space: String::new(), go: Go::NewAgent, key: Some("⌘T"), agent: None, run: None, detail: None },
+        Entry { label: "Open the next thing that needs you".into(), space: String::new(), go: Go::OpenWaiting, key: Some("⌘O"), agent: None, run: None, detail: None },
+        Entry { label: crate::open_page::LABEL.into(), space: String::new(), go: Go::OpenPage, key: None, agent: None, run: None, detail: None },
+        Entry { label: "Show or hide Changes".into(), space: String::new(), go: Go::ToggleChanges, key: Some("⇧⌘G"), agent: None, run: None, detail: None },
+        Entry { label: "Settings".into(), space: String::new(), go: Go::OpenSettings, key: Some("⌘,"), agent: None, run: None, detail: None },
+        Entry { label: "Keyboard shortcuts".into(), space: String::new(), go: Go::Shortcuts, key: Some("⌘/"), agent: None, run: None, detail: None },
     ]);
     out
 }
@@ -219,7 +230,15 @@ impl Render for PaletteView {
                     .text_color(rgb(if on { look::text() } else { look::dim() }))
                     .when(on, |d| d.bg(rgb(look::selected())))
                     .child(div().w(px(14.)).flex_none().flex().items_center().justify_center().child(mark))
-                    .child(div().flex_1().min_w_0().truncate().child(e.label.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().truncate().child(e.label.clone()))
+                            .when_some(e.detail.clone(), |d, w| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(look::faint())).child(w))),
+                    )
                     .child(div().flex_none().text_size(px(12.)).child(right))
                     .on_click(cx.listener(move |_, _, _, cx| cx.emit(Said::Go(go.clone())))),
             );
@@ -291,7 +310,7 @@ mod tests {
     use super::{Entry, Go, fuzzy, matching};
 
     fn entry(label: &str, space: &str, go: Go) -> Entry {
-        Entry { label: label.into(), space: space.into(), go, key: None, agent: None, run: None }
+        Entry { label: label.into(), space: space.into(), go, key: None, agent: None, run: None, detail: None }
     }
 
     #[test]
@@ -319,6 +338,25 @@ mod tests {
         assert_eq!((all[10].go.clone(), all[10].key), (Go::OpenSettings, Some("⌘,")));
         assert_eq!(all[6].key, Some("⌘T"));
         assert_eq!(super::entries(&spaces, &runs, None)[6].label, "New agent");
+    }
+
+    #[test]
+    fn an_agent_in_command_k_says_what_it_waits_for_so_two_named_claude_tell_apart() {
+        use crate::agents::{Agent, Space, State};
+        use jaynes_shell::listing::Listing;
+        let agent = |a: &str, state: State, kind: Option<&str>, msg: &str| Agent { address: a.into(), title: "claude".into(), state, since_ms: 0, shell: false, turn: 0, kind: kind.map(str::to_string), msg: msg.into(), cwd: String::new() };
+        let spaces = [Space {
+            id: "s".into(),
+            name: "site".into(),
+            folder: String::new(),
+            agents: vec![agent("t1", State::Waiting, Some("question"), "Which font?"), agent("t2", State::Waiting, Some("permission"), ""), agent("t3", State::Working, None, "")],
+            tabs: vec![],
+        }];
+        let all = super::entries(&spaces, &Listing::default(), None);
+        let detail = |a: &str| all.iter().find(|e| e.go == Go::Agent(a.into())).and_then(|e| e.detail.clone());
+        assert_eq!(detail("t1").as_deref(), Some("asks: Which font?"));
+        assert_eq!(detail("t2").as_deref(), Some("wants your permission"));
+        assert_eq!(detail("t3"), None, "one at work says nothing more");
     }
 
     #[test]

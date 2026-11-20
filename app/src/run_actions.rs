@@ -42,10 +42,12 @@ impl Act {
     }
 
     /// What its button says on hovering, when its label does not say it all: raising the risk takes the run on the full
-    /// path, with more stops and the higher limit (core risk.rs and decide.rs).
-    pub fn tip(self) -> Option<&'static str> {
+    /// path, with more stops and the higher limit (core risk.rs and decide.rs); abandoning a run already delivered
+    /// keeps what it delivered (the core's Abandon finishes the run, never undoes it).
+    pub fn tip(self, f: &Facts) -> Option<&'static str> {
         match self {
             Act::RaiseRisk => Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."),
+            Act::Abandon if f.delivered => Some("Ends the run here: what it delivered stays, the answers still open are dropped."),
             _ => None,
         }
     }
@@ -64,9 +66,13 @@ pub struct Facts {
     pub running: bool,
     pub blocked: bool,
     pub low_risk: bool,
+    /// Whether the high risk takes steps the run's risk leaves out: without them, raising it changes only the limit.
+    pub risk_adds_steps: bool,
     /// Four fifths of its time or tokens spent.
     pub near_ceiling: bool,
     pub stopped_by_ceiling: bool,
+    /// Already delivered while an answer of the person's can still correct it.
+    pub delivered: bool,
 }
 
 impl Facts {
@@ -77,8 +83,10 @@ impl Facts {
             running: matches!(r.phase, Phase::Running),
             blocked: r.blocked(),
             low_risk: r.risk == jaynes_core::risk::Risk::Low,
+            risk_adds_steps: r.manifest.path(jaynes_core::risk::Risk::High).len() > r.path().len(),
             near_ceiling: r.spent.seconds * 5 >= r.ceiling.seconds * 4 || r.spent.tokens * 5 >= r.ceiling.tokens * 4,
             stopped_by_ceiling: matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }),
+            delivered: !r.finished() && r.delivered.is_some(),
         }
     }
 }
@@ -98,7 +106,8 @@ pub fn acts(f: &Facts) -> Vec<Act> {
     if f.blocked {
         out.push(Act::Continue);
     }
-    if f.low_risk {
+    // asking at more steps only where it would ask at more steps
+    if f.low_risk && f.risk_adds_steps {
         out.push(Act::RaiseRisk);
     }
     if f.near_ceiling || f.stopped_by_ceiling {
@@ -147,7 +156,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn facts() -> Facts {
-        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, near_ceiling: false, stopped_by_ceiling: false }
+        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false }
     }
 
     #[test]
@@ -174,8 +183,19 @@ mod tests {
         assert_eq!(Act::Halt.label(), "Halt");
         // raising the risk asks the person at more steps; its hint says what else it changes (core risk.rs, decide.rs)
         assert_eq!(Act::RaiseRisk.label(), "Ask me at more steps");
-        assert_eq!(Act::RaiseRisk.tip(), Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."));
-        assert_eq!(Act::Abandon.tip(), None);
+        assert_eq!(Act::RaiseRisk.tip(&facts()), Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."));
+        assert_eq!(Act::Abandon.tip(&facts()), None);
+    }
+
+    #[test]
+    fn asking_at_more_steps_shows_only_when_the_higher_risk_adds_steps_and_abandon_says_what_stays() {
+        // a role with no step for the high risk only: raising it changes nothing but the limit, so it is not offered
+        assert_eq!(acts(&Facts { low_risk: true, risk_adds_steps: false, ..facts() }), [Act::Halt, Act::Abandon]);
+        assert_eq!(acts(&Facts { low_risk: true, risk_adds_steps: true, ..facts() }), [Act::Halt, Act::RaiseRisk, Act::Abandon]);
+        // a run already delivered whose answers still correct it: Abandon keeps what it delivered
+        let delivered = Facts { delivered: true, running: false, ..facts() };
+        assert_eq!(Act::Abandon.tip(&delivered), Some("Ends the run here: what it delivered stays, the answers still open are dropped."));
+        assert_eq!(Act::Abandon.tip(&facts()), None);
     }
 
     #[test]

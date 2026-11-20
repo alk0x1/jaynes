@@ -729,7 +729,7 @@ impl Root {
     /// The open run's controls under its story, as the page shows them: each only when it can do something. A blocked
     /// run has them in the block at its top instead (blocked_head).
     fn run_controls(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.tabs.read(cx).blocked.is_some() {
+        if self.tabs.read(cx).blocked.is_some() || self.tabs.read(cx).halted(cx).is_some() {
             return None;
         }
         self.controls_row(cx).map(|bar| bar.mx(px(14.)).mb(px(8.)))
@@ -737,6 +737,11 @@ impl Root {
 
     /// The block at the top of a blocked run's tab, with its controls in it and, under Continue, what it does.
     fn blocked_head(&self, cx: &mut Context<Self>) -> Option<Div> {
+        // halted: who halted it and where, with Resume and Abandon
+        if let Some(title) = self.tabs.read(cx).halted(cx) {
+            let controls = self.controls_row(cx);
+            return Some(tabs::halted_block(&title, controls));
+        }
         let (said, last) = self.tabs.read(cx).blocked()?;
         let controls = self.controls_row(cx);
         Some(tabs::blocked_block(&said, &last, controls))
@@ -745,7 +750,8 @@ impl Root {
     /// The open run's controls in a row.
     fn controls_row(&self, cx: &mut Context<Self>) -> Option<Div> {
         let run = self.tabs.read(cx).open.clone()?;
-        let acts = run_actions::acts(&self.tabs.read(cx).facts?);
+        let facts = self.tabs.read(cx).facts?;
+        let acts = run_actions::acts(&facts);
         if acts.is_empty() {
             return None;
         }
@@ -769,7 +775,7 @@ impl Root {
                     .cursor_pointer()
                     .hover(|d| d.border_color(rgb(look::dim())))
                     .child(label)
-                    .when_some(act.tip(), |d, tip| d.tooltip(look::tip(tip)))
+                    .when_some(act.tip(&facts), |d, tip| d.tooltip(look::tip(tip)))
                     .on_click(cx.listener(move |this, _, _, cx| this.press(run.clone(), act, cx))),
             );
         }

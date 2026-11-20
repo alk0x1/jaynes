@@ -65,9 +65,47 @@ pub fn last_said(story: &[(String, Vec<String>)], step: Option<&str>) -> Vec<Str
     said[said.len().saturating_sub(6)..].to_vec()
 }
 
-/// The note on a run's tab, while its agent can still work: none once the run is finished.
-pub fn note_for(finished: bool) -> Option<&'static str> {
-    (!finished).then_some("The agent works on its own and reports to Jaynes. You answer at its stops.")
+/// The note on a run's tab, only while its agent works or the run waits for the person: none once it is finished,
+/// halted (nothing works on it until resumed) or blocked (Jaynes stopped it).
+pub fn note_for(finished: bool, halted: bool, blocked: bool) -> Option<&'static str> {
+    (!finished && !halted && !blocked).then_some("The agent works on its own and reports to Jaynes. You answer at its stops.")
+}
+
+/// The title of a halted run's block: who halted it, as the column says it ("halted by an agent"), and at which step.
+pub fn halted_said(who: &str, step: Option<&str>) -> String {
+    let mut c = who.chars();
+    let who = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+    match step {
+        Some(s) => format!("{who} at “{s}”"),
+        None => who,
+    }
+}
+
+/// The story in the role's order, the first step first, whatever times its files carry; a step the role does not
+/// name comes last.
+pub fn in_role_order(mut story: Vec<(String, Vec<String>)>, order: &[String]) -> Vec<(String, Vec<String>)> {
+    story.sort_by_key(|(s, _)| order.iter().position(|o| o == s).unwrap_or(usize::MAX));
+    story
+}
+
+/// The block at the top of a halted run's tab: who halted it and where, and its controls (Resume, Abandon).
+pub fn halted_block(title: &str, controls: Option<Div>) -> Div {
+    div()
+        .mx(px(14.))
+        .mt(px(12.))
+        .mb(px(4.))
+        .px(px(14.))
+        .py(px(12.))
+        .rounded(px(9.))
+        .border_1()
+        .border_color(rgb(look::line_2()))
+        .bg(rgb(look::panel_2()))
+        .font_family(look::UI_FONT)
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(title.to_string()))
+        .when_some(controls, |d, c| d.child(div().pt(px(4.)).child(c)))
 }
 
 /// The red block at the top of a blocked run's tab: where and why, the agent's last lines, and the run's controls.
@@ -216,6 +254,9 @@ impl Tabs {
             .await;
         let (told, summary, facts, blocked) = told;
         this.update(cx, |t, cx| {
+            // in the role's order: the files' times do not say it (a copy of a run, a step sent back)
+            let order: Vec<String> = t.runs.read(cx).snap.details.get(&id).map(|d| d.stages.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+            let told = in_role_order(told, &order);
             if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary || t.facts != facts || t.blocked != blocked) {
                 t.story = told;
                 t.summary = summary;
@@ -254,6 +295,18 @@ impl Tabs {
                 None => self.scroll.set_offset(top()),
             },
         }
+    }
+
+    /// The open run's block when it is halted: who halted it and at which step.
+    pub fn halted(&self, cx: &App) -> Option<String> {
+        let open = self.open.as_ref()?;
+        if !self.facts.is_some_and(|f| f.halted && !f.finished) {
+            return None;
+        }
+        let runs = self.runs.read(cx);
+        let who = runs.snap.halted.get(open).cloned().unwrap_or_else(|| "halted".into());
+        let step = runs.snap.details.get(open).and_then(|d| d.stages.iter().find(|s| s.class == "halted").map(|s| s.name.clone()));
+        Some(halted_said(&who, step.as_deref()))
     }
 
     /// The open run's block when it is blocked: its words and the agent's last lines at that step.
@@ -504,7 +557,7 @@ impl Tabs {
                 .flex_col()
                 .child(lines)
                 // plain words, not a box that reads as a field; none once no agent works in the run
-                .when_some(note_for(self.facts.is_some_and(|f| f.finished)), |d, note| {
+                .when_some(self.facts.and_then(|f| note_for(f.finished, f.halted, f.blocked)), |d, note| {
                     d.child(div().mx(px(20.)).mb(px(10.)).font_family(look::UI_FONT).text_size(px(12.)).text_color(rgb(look::faint())).child(note))
                 })
                 .into_any_element(),
@@ -884,8 +937,28 @@ mod tests {
 
     #[test]
     fn the_note_on_a_run_s_tab_shows_only_while_its_agent_can_still_work() {
-        assert_eq!(note_for(false), Some("The agent works on its own and reports to Jaynes. You answer at its stops."));
-        assert_eq!(note_for(true), None, "a finished run has no agent at work");
+        // while its agent works or the run waits for the person
+        assert_eq!(note_for(false, false, false), Some("The agent works on its own and reports to Jaynes. You answer at its stops."));
+        // not finished, not halted (nothing works on it until resumed), not blocked (Jaynes stopped it)
+        assert_eq!(note_for(true, false, false), None, "a finished run has no agent at work");
+        assert_eq!(note_for(false, true, false), None, "a halted run's agent does not work");
+        assert_eq!(note_for(false, false, true), None, "a blocked run's agent does not work");
+    }
+
+    #[test]
+    fn a_halted_run_says_who_halted_it_and_at_which_step() {
+        assert_eq!(halted_said("halted by an agent", Some("directions")), "Halted by an agent at “directions”");
+        assert_eq!(halted_said("halted by you", Some("copy")), "Halted by you at “copy”");
+        assert_eq!(halted_said("halted", None), "Halted");
+    }
+
+    #[test]
+    fn the_story_tells_the_steps_in_the_role_s_order_whatever_their_files_say() {
+        let story = vec![("write".to_string(), vec!["w".to_string()]), ("copy".to_string(), vec!["c".to_string()]), ("gone".to_string(), vec![])];
+        let order = vec!["copy".to_string(), "write".to_string()];
+        let names: Vec<String> = in_role_order(story, &order).into_iter().map(|(s, _)| s).collect();
+        // a step the role does not name (its files only) comes last
+        assert_eq!(names, ["copy", "write", "gone"]);
     }
 
     #[test]
@@ -905,7 +978,7 @@ mod tests {
         }
     }
 
-    use super::{Middle, arrange, at, blocked_said, last_said, middle_of, moved, note_for, space_tabs, tabbed};
+    use super::{Middle, arrange, at, blocked_said, halted_said, in_role_order, last_said, middle_of, moved, note_for, space_tabs, tabbed};
     use jaynes_core::event::Fault;
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
