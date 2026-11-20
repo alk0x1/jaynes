@@ -1,46 +1,119 @@
 //! The compare mode, over the whole window, for a stop that chooses among designs. Each direction at full size, flipped
 //! in place with the arrow keys; its parts beside, each with a pin that says "this stays"; up to two directions starred
 //! to keep as finalists; none, with what was missing; the person's own words; and one button that says what it does:
-//! go on with one, mix the parts pinned in two, develop the two starred, or redo them all. What the answer will do is
-//! the engine's sentences, and it goes signed with the person's key like every answer from the app.
+//! choose one, mix the parts pinned in two, develop the two starred, or redo them all. What the answer will do is the
+//! engine's sentences, and it goes signed with the person's key like every answer from the app. A click on the picture
+//! opens it large with zoom (viewer.rs); a stop with one option opens that option, with nothing to compare. Esc closes
+//! one layer at a time: the picture shown large, the list of what the answer does, the field with the keys, the mode.
 
 use crate::answer::{self, Reckoned, Understood};
-use crate::island::{button, field, primary, sentences};
+use crate::island::{button, focus_field, primary, sentences};
 use crate::key::Key;
 use crate::look;
+use crate::viewer::{self, Does, Sizes, View};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_base::input::{InputEvent, InputState};
 use jaynes_shell::stop::Stop;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const FINALIST: &str = "A finalist: develop it further, keeping what it is.";
 
-pub struct Compare {
-    /// Whether every sentence of what the answer does shows, or only the first.
-    all_said: bool,
-    key: Option<Arc<Key>>,
-    stop: Option<Stop>,
-    open: bool,
-    dir: usize,
-    pic: usize,
-    /// The parts that stay, by direction and the part's label.
-    pins: BTreeSet<(usize, String)>,
-    /// The directions starred to keep as finalists.
-    keep: Vec<usize>,
-    none: bool,
-    /// What the person brings back of what they dropped in an earlier round.
-    bring: Option<String>,
-    why: Option<Entity<InputState>>,
-    words: Option<Entity<InputState>>,
-    reckoned: Reckoned,
-    reading: bool,
-    understood: Option<Result<Understood, String>>,
-    sending: bool,
-    said: Option<String>,
-    focus: FocusHandle,
+/// How long a zoom made by a button or a click takes; a pinch or a wheel follows the fingers.
+const ZOOM_TIME: Duration = Duration::from_millis(180);
+
+/// The viewer's top and bottom lines, in points, so the box the picture gets is known before it is laid out.
+const VIEW_HEAD: f32 = 46.;
+const VIEW_FOOT: f32 = 34.;
+/// Its margin in the window.
+const VIEW_MARGIN: f32 = 28.;
+
+/// What the person marked at the stop: the direction shown and its screen, the parts that stay (by direction and the
+/// part's label), the directions starred to keep as finalists, none of them, and what they bring back of what they
+/// dropped in an earlier round.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Marks {
+    pub dir: usize,
+    pub pic: usize,
+    pub pins: BTreeSet<(usize, String)>,
+    pub keep: Vec<usize>,
+    pub none: bool,
+    pub bring: Option<String>,
+}
+
+/// What one Esc closes: only the layer on top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Esc {
+    /// The picture shown large.
+    Viewer,
+    /// The list of everything the answer does.
+    More,
+    /// The field with the keys: it lets them go and keeps its words.
+    Field,
+    /// The compare mode, back to the terminal, keeping what was marked and written for the same question.
+    Screen,
+}
+
+/// What one Esc closes, from the top: the viewer, the list of what the answer does, the field, the mode.
+pub fn esc(viewer: bool, more: bool, field: bool) -> Esc {
+    if viewer {
+        Esc::Viewer
+    } else if more {
+        Esc::More
+    } else if field {
+        Esc::Field
+    } else {
+        Esc::Screen
+    }
+}
+
+/// The card that invites to the mode: how many options, and its button.
+pub fn invite(n: usize) -> (String, &'static str) {
+    if n == 1 { ("◆ 1 option".into(), "Open") } else { (format!("◆ {n} options"), "Compare") }
+}
+
+/// Whether the mode shows the strip of directions to flip among: not for a stop with one option.
+pub fn strip(n: usize) -> bool {
+    n > 1
+}
+
+/// The button that rejects every option, before it is pressed.
+pub fn none_word(n: usize) -> &'static str {
+    if n == 1 { "Not this one" } else { "None of these" }
+}
+
+/// The button at the top: what Esc does from where the keys are.
+pub fn chip(field: bool) -> &'static str {
+    if field { "Esc · leave the field" } else { "Esc · back to the terminal" }
+}
+
+/// The line over the main button: the first sentence of what the answer does and, when there are more, the switch
+/// that shows them all, in the same place whether they show or not.
+pub fn said_row(said: &[String], all: bool) -> Option<(String, Option<String>)> {
+    let first = said.first()?.clone();
+    let toggle = match (said.len(), all) {
+        (1, _) => None,
+        (_, true) => Some("▾ Hide what this does".to_string()),
+        (n, false) => Some(format!("▸ {} more of what this does", n - 1)),
+    };
+    Some((first, toggle))
+}
+
+/// Everything the answer does, over the bar, while the person asks to see it.
+pub fn said_panel(said: &[String], all: bool) -> Option<Vec<String>> {
+    (all && said.len() > 1).then(|| said.to_vec())
+}
+
+/// Whether `b` is the stop `a` was: what the person marked and wrote there stays only for it. A question's id is its
+/// step's in every run of a role, so two runs that wait at the same step ask questions of the same id.
+pub fn same_stop(a: &Stop, b: &Stop) -> bool {
+    a.run == b.run && a.question == b.question
 }
 
 /// A direction's short name: its label before the colon.
@@ -53,113 +126,21 @@ fn idea(label: &str) -> String {
     label.split_once(':').map(|(_, i)| i.trim().to_string()).unwrap_or_default()
 }
 
-impl Compare {
-    pub fn new(key: Option<Arc<Key>>, cx: &mut Context<Self>) -> Self {
-        Compare {
-            all_said: false,
-            key,
-            stop: None,
-            open: false,
-            dir: 0,
-            pic: 0,
-            pins: BTreeSet::new(),
-            keep: Vec::new(),
-            none: false,
-            bring: None,
-            why: None,
-            words: None,
-            reckoned: Reckoned::default(),
-            reading: false,
-            understood: None,
-            sending: false,
-            said: None,
-            focus: cx.focus_handle(),
+impl Marks {
+    /// The direction the main button chooses when it chooses one alone: the one with parts pinned, else the one shown.
+    /// None when it does something else (a mix, two finalists, none, or what comes back).
+    pub fn chosen(&self, stop: &Stop) -> Option<usize> {
+        let dirs: BTreeSet<usize> = self.pins.iter().map(|(d, _)| *d).collect();
+        if self.bring.is_some() || self.none || self.keep.len() == 2 || dirs.len() >= 2 || stop.items.is_empty() {
+            return None;
         }
+        Some(dirs.iter().next().copied().unwrap_or(self.dir).min(stop.items.len() - 1))
     }
 
-    /// The stop the compare mode shows, while it is open: its run and question.
-    pub fn stop_shown(&self) -> Option<(String, String)> {
-        self.stop.as_ref().filter(|_| self.is_open()).map(|s| (s.run.clone(), s.question.clone()))
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    /// Opens on a stop; what the person marked stays while it is the same question.
-    pub fn open(&mut self, stop: Stop, window: &mut Window, cx: &mut Context<Self>) {
-        if self.stop.as_ref().map(|s| &s.question) != Some(&stop.question) {
-            self.dir = 0;
-            self.pic = 0;
-            self.pins.clear();
-            self.keep.clear();
-            self.none = false;
-            self.bring = None;
-            self.why = None;
-            self.words = None;
-            self.understood = None;
-            self.said = None;
-        }
-        self.stop = Some(stop);
-        self.open = true;
-        if self.words.is_none() {
-            self.words = Some(self.input("Your words: what stays, what changes, in any language", window, cx));
-        }
-        window.focus(&self.focus, cx);
-        self.reckon(cx);
-    }
-
-    fn close(&mut self, cx: &mut Context<Self>) {
-        self.open = false;
-        cx.notify();
-    }
-
-    fn input(&self, placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
-            if matches!(e, InputEvent::Change) {
-                this.reckon(cx);
-            }
-        })
-        .detach();
-        input
-    }
-
-    fn text(input: Option<&Entity<InputState>>, cx: &App) -> String {
-        input.map(|i| i.read(cx).value().to_string()).unwrap_or_default()
-    }
-
-    fn flip(&mut self, by: isize, cx: &mut Context<Self>) {
-        let Some(n) = self.stop.as_ref().map(|s| s.items.len()).filter(|n| *n > 0) else { return };
-        self.dir = (self.dir as isize + by).rem_euclid(n as isize) as usize;
-        self.pic = 0;
-        self.reckon(cx);
-    }
-
-    fn star(&mut self, d: usize, cx: &mut Context<Self>) {
-        if let Some(i) = self.keep.iter().position(|k| *k == d) {
-            self.keep.remove(i);
-        } else {
-            if self.keep.len() == 2 {
-                self.keep.remove(0);
-            }
-            self.keep.push(d);
-        }
-        self.reckon(cx);
-    }
-
-    fn pin(&mut self, d: usize, label: String, cx: &mut Context<Self>) {
-        if !self.pins.remove(&(d, label.clone())) {
-            self.pins.insert((d, label));
-        }
-        self.reckon(cx);
-    }
-
-    /// What the main button does, in words, and the answer it sends.
-    fn proposal(&self, cx: &App) -> Option<(String, Value)> {
-        let stop = self.stop.as_ref()?;
+    /// What the main button does, in words, and the answer it sends, with the person's words and, for none, what they
+    /// said was missing.
+    pub fn proposal(&self, stop: &Stop, words: &str, why: &str) -> Option<(String, Value)> {
         let names: Vec<String> = stop.items.iter().map(|i| name(&i.label)).collect();
-        let words = Self::text(self.words.as_ref(), cx);
         let mut verdicts: BTreeMap<String, String> = stop.items.iter().map(|i| (i.id.clone(), "drop".to_string())).collect();
         let mut notes = BTreeMap::new();
         let pinned = |d: usize| self.pins.iter().filter(|(p, _)| *p == d).map(|(_, l)| l.clone()).collect::<Vec<_>>();
@@ -170,9 +151,8 @@ impl Compare {
             return Some((label, answer::body(stop, &verdicts, &notes, &back, "")));
         }
         if self.none {
-            let why = Self::text(self.why.as_ref(), cx);
             let context = [why.trim(), words.trim()].iter().filter(|t| !t.is_empty()).copied().collect::<Vec<_>>().join(" ");
-            let label = format!("None of these: make {} new ones", stop.items.len());
+            let label = if stop.items.len() == 1 { "Not this one: make a new one".to_string() } else { format!("None of these: make {} new ones", stop.items.len()) };
             return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), &context)));
         }
         if self.keep.len() == 2 {
@@ -184,7 +164,7 @@ impl Compare {
                 notes.insert(item.id.clone(), note);
             }
             let label = format!("Develop {} and {}", names[self.keep[0]], names[self.keep[1]]);
-            return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), &words)));
+            return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)));
         }
         let dirs: BTreeSet<usize> = self.pins.iter().map(|(d, _)| *d).collect();
         if dirs.len() >= 2 {
@@ -203,15 +183,202 @@ impl Compare {
             verdicts.insert(item.id.clone(), "change".into());
             notes.insert(item.id.clone(), note);
             let label = format!("Mix: {} + {}", names[base], parts.join(" + "));
-            return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), &words)));
+            return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)));
         }
-        let target = dirs.iter().next().copied().unwrap_or(self.dir);
+        let target = self.chosen(stop)?;
         verdicts.insert(stop.items[target].id.clone(), "keep".into());
-        Some((format!("Go on with {}", names[target]), answer::body(stop, &verdicts, &notes, &BTreeMap::new(), &words)))
+        // the option's name is on its card, ringed while the pointer is on the button: a name in the button read as
+        // something else ("Go on with Go")
+        let label = if target == self.dir { "Choose this one" } else { "Choose the pinned one" };
+        Some((label.to_string(), answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)))
+    }
+}
+
+/// The picture of a direction shown large: how it is shown, the press the person holds on it, a zoom a button or a
+/// click is making, and the box it is shown in as the last frame laid it out.
+struct Viewer {
+    view: View,
+    /// Untouched since it opened at Fit: a box that changes size fits it again.
+    fresh: bool,
+    /// The sizes the view was made for.
+    made_for: Option<Sizes>,
+    /// A press on the picture: where it began, the view then, and whether it has moved, so a release is a click.
+    drag: Option<((f32, f32), View, bool)>,
+    anim: Option<(View, View, Instant)>,
+    body: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+pub struct Compare {
+    /// Whether every sentence of what the answer does shows, over the bar, or only the first.
+    all_said: bool,
+    key: Option<Arc<Key>>,
+    stop: Option<Stop>,
+    open: bool,
+    marks: Marks,
+    why: Option<Entity<InputState>>,
+    words: Option<Entity<InputState>>,
+    reckoned: Reckoned,
+    reading: bool,
+    understood: Option<Result<Understood, String>>,
+    sending: bool,
+    said: Option<String>,
+    focus: FocusHandle,
+    viewer: Option<Viewer>,
+    /// The pictures' own sizes, read once from their files.
+    sizes: HashMap<PathBuf, (f32, f32)>,
+    /// Why the live version did not open, beside its button; and whether it is opening.
+    live_said: Option<String>,
+    live_opening: bool,
+    /// The pointer on the main button: the card it chooses shows a ring.
+    go_hover: bool,
+    /// What the person marked and wrote at the other stops they opened, by run and question.
+    kept: HashMap<(String, String), Kept>,
+}
+
+/// A stop's marks and words while another stop shows.
+#[derive(Default)]
+struct Kept {
+    marks: Marks,
+    words: String,
+    why: Option<String>,
+}
+
+impl Compare {
+    pub fn new(key: Option<Arc<Key>>, cx: &mut Context<Self>) -> Self {
+        Compare {
+            all_said: false,
+            key,
+            stop: None,
+            open: false,
+            marks: Marks::default(),
+            why: None,
+            words: None,
+            reckoned: Reckoned::default(),
+            reading: false,
+            understood: None,
+            sending: false,
+            said: None,
+            focus: cx.focus_handle(),
+            viewer: None,
+            sizes: HashMap::new(),
+            live_said: None,
+            live_opening: false,
+            go_hover: false,
+            kept: HashMap::new(),
+        }
+    }
+
+    /// The stop the compare mode shows, while it is open: its run and question.
+    pub fn stop_shown(&self) -> Option<(String, String)> {
+        self.stop.as_ref().filter(|_| self.is_open()).map(|s| (s.run.clone(), s.question.clone()))
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Opens on a stop: what the person marked and wrote there comes back as they left it, and what they marked at
+    /// the stop shown before stays with that one, for when they come back to it.
+    pub fn open(&mut self, stop: Stop, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.stop.as_ref().is_some_and(|s| same_stop(s, &stop)) {
+            if let Some(was) = self.stop.as_ref() {
+                let left = Kept { marks: std::mem::take(&mut self.marks), words: Self::text(self.words.as_ref(), cx), why: self.why.as_ref().map(|w| w.read(cx).value().to_string()) };
+                self.kept.insert((was.run.clone(), was.question.clone()), left);
+            }
+            let back = self.kept.remove(&(stop.run.clone(), stop.question.clone())).unwrap_or_default();
+            self.marks = back.marks;
+            self.words = None;
+            self.why = back.why.map(|text| {
+                let why = self.input("what was missing in all of them?", window, cx);
+                why.update(cx, |s, cx| s.set_value(text, window, cx));
+                why
+            });
+            if !back.words.is_empty() {
+                let words = self.input("Your words: what stays, what changes, in any language", window, cx);
+                words.update(cx, |s, cx| s.set_value(back.words, window, cx));
+                self.words = Some(words);
+            }
+            self.understood = None;
+            self.said = None;
+            self.live_said = None;
+            self.all_said = false;
+        }
+        self.stop = Some(stop);
+        self.open = true;
+        self.viewer = None;
+        if self.words.is_none() {
+            self.words = Some(self.input("Your words: what stays, what changes, in any language", window, cx));
+        }
+        window.focus(&self.focus, cx);
+        self.reckon(cx);
+    }
+
+    fn close(&mut self, cx: &mut Context<Self>) {
+        self.open = false;
+        self.viewer = None;
+        self.go_hover = false;
+        cx.notify();
+    }
+
+    fn input(&self, placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::Change) {
+                this.reckon(cx);
+            }
+            // the field took or let go the keys: the ring and the chip at the top follow
+            cx.notify();
+        })
+        .detach();
+        input
+    }
+
+    fn text(input: Option<&Entity<InputState>>, cx: &App) -> String {
+        input.map(|i| i.read(cx).value().to_string()).unwrap_or_default()
+    }
+
+    fn many(&self) -> bool {
+        self.stop.as_ref().is_some_and(|s| s.items.len() > 1)
+    }
+
+    fn flip(&mut self, by: isize, cx: &mut Context<Self>) {
+        let Some(n) = self.stop.as_ref().map(|s| s.items.len()).filter(|n| *n > 1) else { return };
+        self.marks.dir = (self.marks.dir as isize + by).rem_euclid(n as isize) as usize;
+        self.marks.pic = 0;
+        self.reckon(cx);
+    }
+
+    fn star(&mut self, d: usize, cx: &mut Context<Self>) {
+        let keep = &mut self.marks.keep;
+        if let Some(i) = keep.iter().position(|k| *k == d) {
+            keep.remove(i);
+        } else {
+            if keep.len() == 2 {
+                keep.remove(0);
+            }
+            keep.push(d);
+        }
+        self.reckon(cx);
+    }
+
+    fn pin(&mut self, d: usize, label: String, cx: &mut Context<Self>) {
+        if !self.marks.pins.remove(&(d, label.clone())) {
+            self.marks.pins.insert((d, label));
+        }
+        self.reckon(cx);
+    }
+
+    /// What the main button does, in words, and the answer it sends.
+    fn proposal(&self, cx: &App) -> Option<(String, Value)> {
+        let stop = self.stop.as_ref()?;
+        self.marks.proposal(stop, &Self::text(self.words.as_ref(), cx), &Self::text(self.why.as_ref(), cx))
     }
 
     fn reckon(&mut self, cx: &mut Context<Self>) {
         self.reckoned = self.proposal(cx).map(|(_, body)| answer::reckon(&body)).unwrap_or_default();
+        if self.reckoned.sentences.len() <= 1 {
+            self.all_said = false;
+        }
         cx.notify();
     }
 
@@ -229,6 +396,7 @@ impl Compare {
                     Ok(()) => {
                         this.said = Some("Sent as yours. The run goes on.".into());
                         this.open = false;
+                        this.viewer = None;
                     }
                     Err(e) => this.said = Some(format!("Not sent: {e}")),
                 }
@@ -278,30 +446,252 @@ impl Compare {
         self.send_body(body, cx);
     }
 
+    /// The live version of a direction: a page a role kept, opened only through the page, with its key, which the
+    /// engine starts when it does not run (open_page.rs); why not, beside the button.
     fn open_live(&mut self, page: String, cx: &mut Context<Self>) {
-        // a page an agent wrote: opened only through the page's sandbox, never as a file
-        if std::net::TcpStream::connect(("127.0.0.1", jaynes_shell::install::PORT)).is_ok() {
-            cx.open_url(&format!("http://127.0.0.1:{}/page/{page}", jaynes_shell::install::PORT));
-        } else {
-            self.said = Some("The live version opens through the Jaynes page, which is not running.".into());
-            cx.notify();
+        if self.live_opening {
+            return;
         }
+        self.live_opening = true;
+        self.live_said = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let said = cx.background_executor().spawn(async move { crate::open_page::live(&page) }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.live_opening = false;
+                this.live_said = said.err();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn some_field_focused(&self, window: &Window, cx: &App) -> bool {
         [&self.words, &self.why].iter().filter_map(|f| f.as_ref()).any(|f| f.read(cx).focus_handle(cx).is_focused(window))
     }
 
-    /// A test's line: `next`, `prev`, `star`, `pin <part>`, `none <why>`, `bring <item>`, `go`, `close`.
+    /// The field lets the keys go, and keeps its words: the mode has them again.
+    fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn picture(&self) -> Option<PathBuf> {
+        let item = self.stop.as_ref()?.items.get(self.marks.dir)?;
+        item.pictures.get(self.marks.pic).or(item.pictures.first()).cloned()
+    }
+
+    /// A picture's own size, read from its file once.
+    fn size_of(&mut self, path: &PathBuf) -> (f32, f32) {
+        *self.sizes.entry(path.clone()).or_insert_with(|| image::image_dimensions(path).map(|(w, h)| (w as f32, h as f32)).unwrap_or((1600., 1000.)))
+    }
+
+    /// The box the viewer shows the picture in: as the last frame laid it out, else as the window will.
+    fn view_sizes(&mut self, window: &Window) -> Option<Sizes> {
+        let pic = self.picture()?;
+        let pic = self.size_of(&pic);
+        let body = match self.viewer.as_ref().and_then(|v| v.body.get()) {
+            Some(b) => (f32::from(b.size.width), f32::from(b.size.height)),
+            None => {
+                let w = window.viewport_size();
+                (f32::from(w.width) - 2. * VIEW_MARGIN - 2., f32::from(w.height) - 2. * VIEW_MARGIN - 2. - VIEW_HEAD - VIEW_FOOT)
+            }
+        };
+        Some(Sizes { pic, body: (body.0.max(1.), body.1.max(1.)) })
+    }
+
+    fn open_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picture().is_none() {
+            return;
+        }
+        self.viewer = Some(Viewer { view: View { z: 1., x: 0., y: 0. }, fresh: true, made_for: None, drag: None, anim: None, body: Rc::new(Cell::new(None)) });
+        // the keys go to the viewer: the field keeps its words and lets them go
+        window.focus(&self.focus, cx);
+        self.fit_viewer(window);
+        cx.notify();
+    }
+
+    fn fit_viewer(&mut self, window: &Window) {
+        let Some(s) = self.view_sizes(window) else { return };
+        if let Some(v) = self.viewer.as_mut() {
+            v.view = View::fitted(s);
+            v.made_for = Some(s);
+            v.fresh = true;
+            v.anim = None;
+        }
+    }
+
+    fn close_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.viewer = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The view moved to `to`, at once or over a short while.
+    fn view_to(&mut self, to: View, animate: bool, cx: &mut Context<Self>) {
+        if let Some(v) = self.viewer.as_mut() {
+            let from = v.anim.map(|(a, b, t0)| View::between(a, b, ease(t0.elapsed().as_secs_f32() / ZOOM_TIME.as_secs_f32()))).unwrap_or(v.view);
+            v.anim = animate.then(|| (from, to, Instant::now()));
+            v.view = to;
+            v.fresh = false;
+        }
+        cx.notify();
+    }
+
+    fn viewer_does(&mut self, does: Does, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(s) = self.view_sizes(window) else { return };
+        let Some(view) = self.viewer.as_ref().map(|v| v.view) else { return };
+        match does {
+            Does::Close => self.close_viewer(window, cx),
+            Does::In => self.view_to(view.zoomed(view.z * viewer::STEP, s.center(), s), true, cx),
+            Does::Out => self.view_to(view.zoomed(view.z / viewer::STEP, s.center(), s), true, cx),
+            Does::Fit => self.view_to(View::fitted(s), true, cx),
+            Does::Actual => self.view_to(view.zoomed(1., s.center(), s), true, cx),
+            Does::Screen(by) => {
+                let n = self.stop.as_ref().and_then(|st| st.items.get(self.marks.dir)).map(|i| i.pictures.len()).unwrap_or(0);
+                if n > 1 {
+                    self.marks.pic = (self.marks.pic as isize + by).rem_euclid(n as isize) as usize;
+                    self.keep_view(window, cx);
+                }
+            }
+            Does::Direction(by) => {
+                if self.many() {
+                    let pic = self.marks.pic;
+                    self.flip(by, cx);
+                    // the same screen of the next direction, if it has one, at the same zoom and place
+                    let n = self.stop.as_ref().and_then(|st| st.items.get(self.marks.dir)).map(|i| i.pictures.len()).unwrap_or(0);
+                    self.marks.pic = pic.min(n.saturating_sub(1));
+                    self.keep_view(window, cx);
+                }
+            }
+        }
+    }
+
+    /// Another picture in the viewer: the same zoom and place, or Fit if it was never touched.
+    fn keep_view(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(s) = self.view_sizes(window) else { return };
+        if let Some(v) = self.viewer.as_mut() {
+            v.view = if v.fresh { View::fitted(s) } else { v.view.kept(s) };
+            v.made_for = Some(s);
+            v.anim = None;
+            v.drag = None;
+        }
+        cx.notify();
+    }
+
+    /// A point of the window in the viewer's box.
+    fn in_body(&self, at: Point<Pixels>) -> Option<(f32, f32)> {
+        let b = self.viewer.as_ref()?.body.get()?;
+        Some((f32::from(at.x - b.origin.x), f32::from(at.y - b.origin.y)))
+    }
+
+    fn press(&mut self, at: Point<Pixels>) {
+        let Some(p) = self.in_body(at) else { return };
+        if let Some(v) = self.viewer.as_mut() {
+            v.drag = Some((p, v.view, false));
+        }
+    }
+
+    fn drag_to(&mut self, at: Point<Pixels>, held: bool, window: &Window, cx: &mut Context<Self>) {
+        let Some(p) = self.in_body(at) else { return };
+        let Some(s) = self.view_sizes(window) else { return };
+        let Some(v) = self.viewer.as_mut() else { return };
+        let Some((from, start, moved)) = v.drag.as_mut() else { return };
+        if !held {
+            v.drag = None;
+            return;
+        }
+        let by = (p.0 - from.0, p.1 - from.1);
+        if *moved || by.0.abs() + by.1.abs() > 3. {
+            *moved = true;
+            v.view = start.moved(by, s);
+            v.anim = None;
+            v.fresh = false;
+            cx.notify();
+        }
+    }
+
+    fn release(&mut self, at: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let Some(p) = self.in_body(at) else { return };
+        let Some(s) = self.view_sizes(window) else { return };
+        let Some((_, _, moved)) = self.viewer.as_mut().and_then(|v| v.drag.take()) else { return };
+        if !moved {
+            // a click, not a drag: between Fit and actual size at the point clicked, as Quick Look does
+            let view = self.viewer.as_ref().map(|v| v.view).expect("open");
+            self.view_to(view.clicked(p, s), true, cx);
+        }
+    }
+
+    fn wheel(&mut self, e: &ScrollWheelEvent, window: &Window, cx: &mut Context<Self>) {
+        let Some(p) = self.in_body(e.position) else { return };
+        let Some(s) = self.view_sizes(window) else { return };
+        let Some(view) = self.viewer.as_ref().map(|v| v.view) else { return };
+        let d = e.delta.pixel_delta(px(20.));
+        let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+        if e.modifiers.platform || e.modifiers.control {
+            self.view_to(view.zoomed(view.z * (dy / 200.).exp(), p, s), false, cx);
+        } else {
+            self.view_to(view.moved((dx, dy), s), false, cx);
+        }
+    }
+
+    fn pinch(&mut self, e: &PinchEvent, window: &Window, cx: &mut Context<Self>) {
+        let Some(p) = self.in_body(e.position) else { return };
+        let Some(s) = self.view_sizes(window) else { return };
+        let Some(view) = self.viewer.as_ref().map(|v| v.view) else { return };
+        self.view_to(view.zoomed(view.z * (1. + e.delta), p, s), false, cx);
+    }
+
+    fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = e.keystroke.key.as_str();
+        let cmd = e.keystroke.modifiers.platform;
+        let field = self.some_field_focused(window, cx);
+        if key == "escape" {
+            match esc(self.viewer.is_some(), self.all_said, field) {
+                Esc::Viewer => self.close_viewer(window, cx),
+                Esc::More => {
+                    self.all_said = false;
+                    cx.notify();
+                }
+                Esc::Field => self.leave_field(window, cx),
+                Esc::Screen => self.close(cx),
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if self.viewer.is_some() {
+            if let Some(does) = viewer::key(key, cmd) {
+                self.viewer_does(does, window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        // with the keys in a field, the arrows and Enter are the field's
+        if field || cmd {
+            return;
+        }
+        match key {
+            "left" => self.flip(-1, cx),
+            "right" => self.flip(1, cx),
+            "space" => self.open_viewer(window, cx),
+            "enter" => self.go(cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+
+    /// A test's line: `next`, `prev`, `star`, `pin <part>`, `none <why>`, `bring <item>`, `go`, `close`, `view`,
+    /// `viewer in|out|fit|actual|screen <n>|dir <n>|close`, `more`, `focus`, `type <text>`, `hover-go`, `live`, and
+    /// `key <keystroke>` through the window's keys.
     pub fn driven(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
         match verb {
             "next" => self.flip(1, cx),
             "prev" => self.flip(-1, cx),
-            "star" => self.star(self.dir, cx),
-            "pin" => self.pin(self.dir, rest.to_string(), cx),
+            "star" => self.star(self.marks.dir, cx),
+            "pin" => self.pin(self.marks.dir, rest.to_string(), cx),
             "none" => {
-                self.none = true;
+                self.marks.none = true;
                 let why = self.input("what was missing in all of them?", window, cx);
                 let text = rest.to_string();
                 why.update(cx, |s, cx| s.set_value(text, window, cx));
@@ -309,86 +699,341 @@ impl Compare {
                 self.reckon(cx);
             }
             "bring" => {
-                self.bring = Some(rest.to_string());
+                self.marks.bring = Some(rest.to_string());
                 self.reckon(cx);
             }
             "go" => self.go(cx),
             "close" => self.close(cx),
+            "view" => self.open_viewer(window, cx),
+            "viewer" => {
+                let (what, n) = rest.split_once(' ').unwrap_or((rest, "1"));
+                let n: isize = n.parse().unwrap_or(1);
+                let does = match what {
+                    "in" => Does::In,
+                    "out" => Does::Out,
+                    "fit" => Does::Fit,
+                    "actual" => Does::Actual,
+                    "screen" => Does::Screen(n),
+                    "dir" => Does::Direction(n),
+                    _ => Does::Close,
+                };
+                self.viewer_does(does, window, cx);
+            }
+            "more" => {
+                self.all_said = !self.all_said;
+                cx.notify();
+            }
+            // a press on the words' box, as the pointer gives it the keys
+            "focus" => {
+                if let Some(w) = self.words.clone() {
+                    w.update(cx, |s, cx| {
+                        s.set_cursor_position(gpui_base::input::Position::new(0, u32::MAX), window, cx);
+                        s.focus(window, cx);
+                    });
+                }
+            }
+            "type" => {
+                if let Some(w) = self.words.clone() {
+                    let text = rest.to_string();
+                    w.update(cx, |s, cx| s.set_value(text, window, cx));
+                }
+            }
+            "hover-go" => {
+                self.go_hover = !self.go_hover;
+                cx.notify();
+            }
+            "live" => {
+                if let Some(page) = self.stop.as_ref().and_then(|s| s.items.get(self.marks.dir)).and_then(|i| i.page.clone()) {
+                    self.open_live(page, cx);
+                }
+            }
+            "key" => match Keystroke::parse(rest) {
+                Ok(k) => window.defer(cx, move |window, cx| {
+                    window.dispatch_keystroke(k, cx);
+                }),
+                Err(e) => tracing::warn!("no key {rest}: {e}"),
+            },
             _ => {}
         }
     }
 }
 
+/// A zoom's ease: quick at first, slow at the end.
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    1. - (1. - t).powi(3)
+}
+
+/// A quiet button that says what it does in the text's colour, with its icon: the two over the stage.
+fn strong(id: &'static str, icon: look::Icon, text: &str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .flex_none()
+        .px(px(10.))
+        .py(px(4.))
+        .rounded(px(7.))
+        .border_1()
+        .border_color(rgb(look::line_2()))
+        .text_size(px(12.5))
+        .text_color(rgb(look::text()))
+        .cursor_pointer()
+        .hover(|d| d.bg(rgb(look::selected())))
+        .child(look::icon(icon, 13., look::text()))
+        .child(text.to_string())
+}
+
+/// A ring round a card, as wide as `w`, in the blue that says what the main button chooses.
+fn ring(w: f32) -> Vec<BoxShadow> {
+    vec![BoxShadow { color: rgb(look::blue()).into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(w), inset: false }]
+}
+
 impl Compare {
-    /// What the answer does: its first sentence, and the others behind a click, so the decision stays in front.
+    /// The line over the main button: the first sentence of what the answer does, and its switch beside it, which
+    /// stays where it is when the list opens over the bar.
     fn consequences(&self, cx: &mut Context<Self>) -> AnyElement {
-        let said = &self.reckoned.sentences;
-        if said.len() <= 1 || self.all_said {
-            let mut d = sentences(said);
-            if said.len() > 1 {
-                d = d.child(div().id("fewer").cursor_pointer().text_size(px(12.)).text_color(rgb(look::faint())).on_click(cx.listener(|this, _, _, cx| {
-                    this.all_said = false;
-                    cx.notify();
-                })).child("▾ fewer"));
-            }
-            return d.into_any_element();
-        }
+        let Some((first, toggle)) = said_row(&self.reckoned.sentences, self.all_said) else { return div().into_any_element() };
         div()
             .flex()
             .gap(px(10.))
             .items_center()
-            .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(said[0].clone()))
+            .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(first))
+            .when_some(toggle, |d, t| {
+                d.child(
+                    div()
+                        .id("more-said")
+                        .flex_none()
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .text_color(rgb(if self.all_said { look::text() } else { look::faint() }))
+                        .hover(|d| d.text_color(rgb(look::text())))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.all_said = !this.all_said;
+                            cx.notify();
+                        }))
+                        .child(t),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The picture large, with its zoom, over the mode: the box of lightbox.rs with its own top and bottom lines.
+    fn viewer_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let stop = self.stop.clone()?;
+        let item = stop.items.get(self.marks.dir)?.clone();
+        let path = self.picture()?;
+        let s = self.view_sizes(window)?;
+        let v = self.viewer.as_mut()?;
+        // a box that changed size: Fit again if untouched, else the same zoom kept within it
+        if v.made_for != Some(s) {
+            v.view = if v.fresh { View::fitted(s) } else { v.view.kept(s) };
+            v.made_for = Some(s);
+        }
+        let mut shown = v.view;
+        if let Some((a, b, t0)) = v.anim {
+            let t = t0.elapsed().as_secs_f32() / ZOOM_TIME.as_secs_f32();
+            if t >= 1. {
+                v.anim = None;
+            } else {
+                shown = View::between(a, b, ease(t));
+                window.request_animation_frame();
+            }
+        }
+        let zoomed = v.view.zoomed_in(s);
+        let dragging = v.drag.is_some_and(|(_, _, moved)| moved);
+        let body_cell = v.body.clone();
+        let many = stop.items.len() > 1;
+        let mut tabs = div().flex().gap(px(6.)).items_center();
+        if item.pictures.len() > 1 {
+            for (n, _) in item.pictures.iter().enumerate() {
+                tabs = tabs.child(button(format!("vtab-{n}"), &format!("Screen {}", n + 1), n == self.marks.pic, look::text()).on_click(cx.listener(move |this, _, window, cx| {
+                    this.marks.pic = n;
+                    this.keep_view(window, cx);
+                })));
+            }
+        }
+        let zoom_button = |id: &'static str, text: &str, does: Does, cx: &mut Context<Self>| button(id.into(), text, false, look::text()).on_click(cx.listener(move |this, _, window, cx| this.viewer_does(does, window, cx)));
+        let head = div()
+            .h(px(VIEW_HEAD))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(14.))
+            .border_b_1()
+            .border_color(rgb(look::line()))
+            .text_size(px(13.))
+            .text_color(rgb(look::text()))
+            .child(div().flex_none().child(format!("{} · {}", self.marks.dir + 1, name(&item.label))))
+            .child(tabs)
+            .child(div().flex_1())
             .child(
                 div()
-                    .id("more-said")
-                    .flex_none()
-                    .cursor_pointer()
-                    .text_size(px(12.))
-                    .text_color(rgb(look::faint()))
-                    .hover(|d| d.text_color(rgb(look::text())))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.all_said = true;
-                        cx.notify();
-                    }))
-                    .child(format!("▸ {} more of what this does", said.len() - 1)),
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(zoom_button("zoom-out", "−", Does::Out, cx))
+                    .child(div().w(px(48.)).flex().justify_center().text_size(px(12.5)).text_color(rgb(look::dim())).child(format!("{}%", shown.percent())))
+                    .child(zoom_button("zoom-in", "+", Does::In, cx))
+                    .child(zoom_button("zoom-fit", "Fit", Does::Fit, cx))
+                    .child(zoom_button("zoom-actual", "Actual size", Does::Actual, cx)),
             )
-            .into_any_element()
+            .when_some(item.page.clone(), |d, page| d.child(strong("view-live", look::Icon::Open, "Open live version").on_click(cx.listener(move |this, _, _, cx| this.open_live(page.clone(), cx)))))
+            .child(button("view-close".into(), "Esc · close", false, look::grey()).on_click(cx.listener(|this, _, window, cx| this.close_viewer(window, cx))));
+        let mut hint = String::from("Pinch or ⌘ scroll to zoom · drag to move · click for actual size and back");
+        if item.pictures.len() > 1 {
+            hint.push_str(" · ↑ ↓ its screens");
+        }
+        if many {
+            hint.push_str(" · ← → the other directions, same place");
+        }
+        hint.push_str(" · Esc close");
+        let (w, h) = (s.pic.0 * shown.z, s.pic.1 * shown.z);
+        let this = cx.entity().downgrade();
+        let body = div()
+            .id("view-body")
+            .flex_1()
+            .min_h_0()
+            .relative()
+            .overflow_hidden()
+            .cursor(if dragging { CursorStyle::ClosedHand } else if zoomed { CursorStyle::OpenHand } else { CursorStyle::PointingHand })
+            .child(img(path).absolute().left(px(shown.x)).top(px(shown.y)).w(px(w)).h(px(h)))
+            // the box as laid out, for the pointer's place in it; and the pointer's moves and release anywhere while a
+            // press drags the picture
+            .child(
+                canvas(
+                    move |b, _, _| {
+                        let changed = body_cell.get() != Some(b);
+                        body_cell.set(Some(b));
+                        changed
+                    },
+                    move |_, changed, window, _| {
+                        if changed {
+                            window.refresh();
+                        }
+                        let moving = this.clone();
+                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                let _ = moving.update(cx, |c, cx| c.drag_to(e.position, e.pressed_button == Some(MouseButton::Left), window, cx));
+                            }
+                        });
+                        let releasing = this.clone();
+                        window.on_mouse_event(move |e: &MouseUpEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble && e.button == MouseButton::Left {
+                                let _ = releasing.update(cx, |c, cx| c.release(e.position, window, cx));
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.press(e.position);
+            }))
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, window, cx| this.wheel(e, window, cx)))
+            .on_pinch(cx.listener(|this, e: &PinchEvent, window, cx| this.pinch(e, window, cx)));
+        let foot = div()
+            .h(px(VIEW_FOOT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .px(px(14.))
+            .border_t_1()
+            .border_color(rgb(look::line()))
+            .text_size(px(12.))
+            .text_color(rgb(look::faint()))
+            .child(div().truncate().child(hint));
+        Some(
+            div()
+                .id("viewer")
+                .absolute()
+                .inset_0()
+                .bg(rgba(look::scrim()))
+                .p(px(VIEW_MARGIN))
+                .flex()
+                // a press outside the box closes it; one on the picture never does
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_viewer(window, cx)))
+                .child(
+                    div()
+                        .id("viewer-box")
+                        .flex()
+                        .flex_col()
+                        .size_full()
+                        .rounded(px(12.))
+                        .bg(rgb(look::panel()))
+                        .border_1()
+                        .border_color(rgb(look::line_2()))
+                        .overflow_hidden()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(head)
+                        .child(body)
+                        .child(foot),
+                )
+                .into_any_element(),
+        )
     }
 }
 
 impl Render for Compare {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(stop) = self.stop.clone().filter(|_| self.open) else { return div().into_any_element() };
-        let Some(item) = stop.items.get(self.dir).cloned() else { return div().into_any_element() };
+        let Some(item) = stop.items.get(self.marks.dir).cloned() else { return div().into_any_element() };
+        let n = stop.items.len();
         let names: Vec<String> = stop.items.iter().map(|i| name(&i.label)).collect();
         let proposal = self.proposal(cx);
+        let chosen = self.marks.chosen(&stop);
         let mut label = proposal.as_ref().map(|(l, _)| l.clone()).unwrap_or_default();
         if stop.ahead.is_some() {
             label.push_str(" · Touch ID");
         }
         let can = !self.sending && self.reckoned.refused.is_none() && proposal.is_some();
-        // the stage: this direction's picture, at the size the window gives it
-        let mut tabs = div().flex().gap(px(6.)).items_center();
+        let field = self.some_field_focused(window, cx);
+        // the line over the stage: the screens, the direction's name and idea, and the two ways to see it larger
+        let mut head = div().flex().gap(px(6.)).items_center();
         if item.pictures.len() > 1 {
-            for (n, _) in item.pictures.iter().enumerate() {
-                tabs = tabs.child(button(format!("tab-{n}"), &format!("Screen {}", n + 1), n == self.pic, look::text()).on_click(cx.listener(move |this, _, _, cx| {
-                    this.pic = n;
+            for (k, _) in item.pictures.iter().enumerate() {
+                head = head.child(button(format!("tab-{k}"), &format!("Screen {}", k + 1), k == self.marks.pic, look::text()).on_click(cx.listener(move |this, _, _, cx| {
+                    this.marks.pic = k;
                     cx.notify();
                 })));
             }
         }
-        tabs = tabs.child(div().flex_1()).child(div().text_size(px(14.)).text_color(rgb(look::text())).child(format!("{} · {}", self.dir + 1, names[self.dir]))).child(div().text_size(px(12.5)).text_color(rgb(look::faint())).max_w(px(520.)).truncate().child(idea(&item.label)));
-        let stage = match item.pictures.get(self.pic).or(item.pictures.first()) {
-            Some(p) => div().flex_1().min_h_0().flex().items_center().justify_center().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain).rounded(px(10.))),
-            None => div().flex_1().flex().items_center().justify_center().text_color(rgb(look::faint())).child("This direction has no picture."),
+        head = head
+            .child(div().flex_1())
+            .child(div().flex_none().text_size(px(14.)).text_color(rgb(look::text())).child(format!("{} · {}", self.marks.dir + 1, names[self.marks.dir])))
+            .child(div().min_w_0().text_size(px(12.5)).text_color(rgb(look::faint())).max_w(px(420.)).truncate().child(idea(&item.label)))
+            .child(div().w(px(6.)).flex_none())
+            .when_some(self.live_said.clone(), |d, why| d.child(div().min_w_0().max_w(px(360.)).truncate().text_size(px(12.)).text_color(rgb(look::amber())).child(why)))
+            .when(!item.pictures.is_empty(), |d| d.child(strong("enlarge", look::Icon::Enlarge, "Enlarge").on_click(cx.listener(|this, _, window, cx| this.open_viewer(window, cx)))))
+            .when_some(item.page.clone(), |d, page| {
+                d.child(strong("live", look::Icon::Open, if self.live_opening { "Opening…" } else { "Open live version" }).on_click(cx.listener(move |this, _, _, cx| this.open_live(page.clone(), cx))))
+            });
+        // the stage: this direction's picture, at the size the window gives it; a click shows it large
+        let stage = match item.pictures.get(self.marks.pic).or(item.pictures.first()) {
+            Some(p) => div()
+                .id("stage")
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor(CursorStyle::PointingHand)
+                .on_click(cx.listener(|this, _, window, cx| this.open_viewer(window, cx)))
+                .child(img(p.clone()).size_full().object_fit(ObjectFit::Contain).rounded(px(10.))),
+            None => div().id("stage").flex_1().flex().items_center().justify_center().text_color(rgb(look::faint())).child("This direction has no picture."),
         };
-        // the directions as a strip of large pictures under the stage, each with its star
-        let mut strip = div().flex().gap(px(12.)).items_end().flex_none();
+        // the directions as a strip of large pictures under the stage, each with its star; none for one option
+        let mut strip_row = div().flex().gap(px(12.)).items_end().flex_none();
         for (i, it) in stop.items.iter().enumerate() {
-            let on = i == self.dir;
-            let starred = self.keep.contains(&i);
-            let pins = self.pins.iter().filter(|(d, _)| *d == i).count();
-            strip = strip.child(
+            let on = i == self.marks.dir;
+            let starred = self.marks.keep.contains(&i);
+            let pins = self.marks.pins.iter().filter(|(d, _)| *d == i).count();
+            let ringed = self.go_hover && chosen == Some(i);
+            strip_row = strip_row.child(
                 div()
                     .id(SharedString::from(format!("dir-{i}")))
                     .w(px(208.))
@@ -400,11 +1045,14 @@ impl Render for Compare {
                     .rounded(px(10.))
                     .border_1()
                     .border_color(rgb(if on { look::text() } else { look::line_2() }))
+                    // a fill of its own, so the ring drawn under it shows only round it
+                    .bg(rgb(look::panel()))
+                    .when(ringed, |d| d.shadow(ring(2.)))
                     .cursor_pointer()
                     .hover(|d| d.bg(rgb(look::panel_2())))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.dir = i;
-                        this.pic = 0;
+                        this.marks.dir = i;
+                        this.marks.pic = 0;
                         this.reckon(cx);
                     }))
                     .child(match it.pictures.first() {
@@ -433,7 +1081,7 @@ impl Render for Compare {
                     ),
             );
         }
-        strip = strip.child(div().pb(px(10.)).pl(px(4.)).text_size(px(12.)).text_color(rgb(look::faint())).child("← → flip · ☆ keep two to develop both"));
+        strip_row = strip_row.child(div().pb(px(10.)).pl(px(4.)).text_size(px(12.)).text_color(rgb(look::faint())).child("← → flip · ☆ keep two to develop both"));
         let left = div()
             .flex_1()
             .min_w_0()
@@ -443,14 +1091,14 @@ impl Render for Compare {
             .px(px(18.))
             .pt(px(14.))
             .pb(px(10.))
-            .child(tabs)
+            .child(head)
             .child(stage)
-            .child(strip);
+            .when(strip(n), |d| d.child(strip_row));
         // the side: this direction's parts with their pins, and what was said of it
         let mut parts = div().flex().flex_col().gap(px(8.));
         for (label, text) in &item.aspects {
-            let on = self.pins.contains(&(self.dir, label.clone()));
-            let (d, l) = (self.dir, label.clone());
+            let on = self.marks.pins.contains(&(self.marks.dir, label.clone()));
+            let (d, l) = (self.marks.dir, label.clone());
             parts = parts.child(
                 div()
                     .flex()
@@ -466,7 +1114,7 @@ impl Render for Compare {
         }
         let mut back = div().flex().flex_col().gap(px(6.));
         for b in &stop.back {
-            let on = self.bring.as_deref() == Some(b.id.as_str());
+            let on = self.marks.bring.as_deref() == Some(b.id.as_str());
             let id = b.id.clone();
             back = back.child(
                 div()
@@ -476,12 +1124,11 @@ impl Render for Compare {
                     .children(b.pictures.first().map(|p| img(p.clone()).w(px(48.)).h(px(30.)).object_fit(ObjectFit::Cover).rounded(px(4.))))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(name(&b.label)))
                     .child(button(format!("bring-{}", b.id), if on { "Comes back" } else { "Bring back" }, on, look::amber()).on_click(cx.listener(move |this, _, _, cx| {
-                        this.bring = if this.bring.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
+                        this.marks.bring = if this.marks.bring.as_deref() == Some(id.as_str()) { None } else { Some(id.clone()) };
                         this.reckon(cx);
                     }))),
             );
         }
-        let page = item.page.clone();
         let side = div()
             .id("compare-side")
             .w(px(300.))
@@ -497,8 +1144,7 @@ impl Render for Compare {
             .gap(px(14.))
             .when(!item.aspects.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("Its parts", look::faint())).child(parts)))
             .when(!stop.back.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("You dropped earlier · only you bring it back", look::faint())).child(back)))
-            .when(!item.detail.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("What was said of it", look::faint())).child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(item.detail.clone()))))
-            .when_some(page, |d, page| d.child(button("live".into(), "Open the live version ↗", false, look::blue()).on_click(cx.listener(move |this, _, _, cx| this.open_live(page.clone(), cx)))));
+            .when(!item.detail.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("What was said of it", look::faint())).child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(item.detail.clone()))));
         // the bar: none, the person's words, what the answer does, and the button that sends it
         let words = self.words.clone();
         let understood = match (&self.understood, self.reading) {
@@ -523,27 +1169,55 @@ impl Render for Compare {
             }
             _ => None,
         };
-        let none_part = if self.none {
+        let none_part = if self.marks.none {
             let why = self.why.clone();
             div()
                 .flex()
                 .gap(px(8.))
                 .items_center()
-                .children(why.map(|w| div().w(px(340.)).child(field(&w))))
+                .children(why.map(|w| div().w(px(340.)).child(focus_field("why-field", &w, window, cx))))
                 .child(button("none-cancel".into(), "cancel", false, look::grey()).on_click(cx.listener(|this, _, _, cx| {
-                    this.none = false;
+                    this.marks.none = false;
                     this.reckon(cx);
                 })))
         } else {
-            div().child(button("none".into(), "None of these", false, look::red()).on_click(cx.listener(|this, _, window, cx| {
-                this.none = true;
+            div().child(button("none".into(), none_word(n), false, look::red()).on_click(cx.listener(|this, _, window, cx| {
+                this.marks.none = true;
                 if this.why.is_none() {
                     this.why = Some(this.input("what was missing in all of them?", window, cx));
                 }
                 this.reckon(cx);
             })))
         };
+        let words_field = words.map(|w| focus_field("words-field", &w, window, cx));
+        let panel = said_panel(&self.reckoned.sentences, self.all_said).map(|all| {
+            let mut list = div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint()));
+            for s in all {
+                list = list.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(s));
+            }
+            div()
+                .id("more-panel")
+                .absolute()
+                .bottom_full()
+                .left(px(18.))
+                .max_w(px(640.))
+                .p(px(12.))
+                .rounded(px(10.))
+                .bg(rgb(look::panel_2()))
+                .border_1()
+                .border_color(rgb(look::line_2()))
+                .shadow(vec![BoxShadow { color: hsla(0., 0., 0., 0.28), offset: point(px(0.), px(6.)), blur_radius: px(18.), spread_radius: px(0.), inset: false }])
+                .child(list)
+                .with_animation("more-in", Animation::new(Duration::from_millis(140)), |d, t| d.opacity(t).mb(px(8. - 4. * (1. - t))))
+        });
+        let go = primary("go", if self.sending { "Sending…".into() } else { format!("{label} ↵") }, can)
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.go_hover = *hovered;
+                cx.notify();
+            }))
+            .when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.go(cx))));
         let bar = div()
+            .relative()
             .flex()
             .flex_col()
             .gap(px(8.))
@@ -552,7 +1226,7 @@ impl Render for Compare {
             .border_t_1()
             .border_color(rgb(look::line()))
             .bg(rgb(look::panel()))
-            .child(div().flex().gap(px(8.)).items_center().child(none_part).child(div().flex_1().children(words.map(|w| field(&w)))).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
+            .child(div().flex().gap(px(8.)).items_center().child(none_part).child(div().flex_1().children(words_field)).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
             .children(understood)
             .child(
                 div()
@@ -562,8 +1236,9 @@ impl Render for Compare {
                     .child(div().flex_1().min_w_0().child(self.consequences(cx)))
                     .when_some(self.reckoned.refused.clone(), |d, r| d.child(div().max_w(px(360.)).text_size(px(12.)).text_color(rgb(look::red())).child(r)))
                     .when_some(self.said.clone(), |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(s)))
-                    .child(primary("go", if self.sending { "Sending…".into() } else { format!("{label} ↵") }, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.go(cx))))),
-            );
+                    .child(go),
+            )
+            .children(panel);
         let top = div()
             .flex()
             .gap(px(14.))
@@ -577,33 +1252,149 @@ impl Render for Compare {
             .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
             .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(!stop.about.is_empty(), |d| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(format!("At {}: {}", stop.step, stop.about)))))
             .when(stop.round > 0, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("round {}", stop.round))))
-            .child(button("close".into(), "Esc · back to the terminal", false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.close(cx))));
-        let _ = window;
+            // as wide as its longer words, so "round" does not move when they change; a press on it keeps the keys
+            // where they are, so it does what it says
+            .child(
+                button("close".into(), chip(field), false, look::grey())
+                    .min_w(px(190.))
+                    .flex()
+                    .justify_center()
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.some_field_focused(window, cx) {
+                            this.leave_field(window, cx);
+                        } else {
+                            this.close(cx);
+                        }
+                    })),
+            );
+        let viewer = if self.viewer.is_some() { self.viewer_view(window, cx) } else { None };
+        let viewing = viewer.is_some();
         div()
             .id("compare")
             .track_focus(&self.focus)
             .absolute()
             .inset_0()
+            // over the terminal, which would otherwise take the press under it: the keys, and the release, so no
+            // click here ever reached its button and the field lost the keys as it got them
+            .occlude()
             .bg(rgb(look::panel()))
             .flex()
             .flex_col()
             .font_family(look::UI_FONT)
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                if this.some_field_focused(window, cx) {
-                    return;
-                }
-                match e.keystroke.key.as_str() {
-                    "left" => this.flip(-1, cx),
-                    "right" => this.flip(1, cx),
-                    "escape" => this.close(cx),
-                    "enter" => this.go(cx),
-                    _ => return,
-                }
-                cx.stop_propagation();
-            }))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| this.key_down(e, window, cx)))
+            // Command-0 and Command-9 are the runs column's and the ninth tab's: with the picture large, the viewer's
+            .when(viewing, |d| {
+                d.on_action(cx.listener(|this, _: &crate::ToggleRuns, window, cx| this.viewer_does(Does::Actual, window, cx)))
+                    .on_action(cx.listener(|this, _: &crate::Tab9, window, cx| this.viewer_does(Does::Fit, window, cx)))
+            })
             .child(top)
             .child(div().flex_1().min_h_0().flex().child(left).child(side))
             .child(bar)
+            .children(viewer)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Esc, Marks, chip, esc, invite, none_word, said_panel, said_row, same_stop, strip};
+    use jaynes_core::question::QuestionKind;
+    use jaynes_shell::stop::{Item, Stop};
+
+    fn item(id: &str, label: &str) -> Item {
+        Item { id: id.into(), label: label.into(), detail: String::new(), aspects: vec![("Palette".into(), "cream, ink".into()), ("Fonts".into(), "a serif".into())], pictures: vec![], page: None }
+    }
+
+    /// A stop that chooses among `names`, invented.
+    fn choosing(names: &[&str]) -> Stop {
+        Stop {
+            run: "r".into(),
+            question: "q".into(),
+            shown: "s".into(),
+            title: "Which direction goes on?".into(),
+            step: "directions".into(),
+            permission: false,
+            kind: QuestionKind::Decision,
+            choose: true,
+            offered: vec![],
+            items: names.iter().map(|n| item(&n.to_lowercase(), &format!("{n}: an idea"))).collect(),
+            back: vec![],
+            round: 1,
+            about: String::new(),
+            ahead: None,
+        }
+    }
+
+    fn label(m: &Marks, stop: &Stop) -> String {
+        m.proposal(stop, "", "").expect("a proposal").0
+    }
+
+    #[test]
+    fn marks_stay_only_for_the_same_question_of_the_same_run() {
+        let look = choosing(&["Harbor", "Night", "Ledger"]);
+        let icon = Stop { run: "another run".into(), items: look.items[..1].to_vec(), ..look.clone() };
+        assert!(same_stop(&look, &look.clone()));
+        // the same step's question in another run: what was marked for three options is not carried to one
+        assert!(!same_stop(&look, &icon));
+        assert!(!same_stop(&look, &Stop { question: "q2".into(), ..look.clone() }));
+    }
+
+    #[test]
+    fn one_esc_closes_one_layer_from_the_top() {
+        assert_eq!(esc(true, true, true), Esc::Viewer);
+        assert_eq!(esc(false, true, true), Esc::More);
+        assert_eq!(esc(false, false, true), Esc::Field);
+        assert_eq!(esc(false, false, false), Esc::Screen);
+        // the field with the keys: a first Esc leaves it, and the chip at the top says so; then the mode closes
+        assert_eq!(chip(true), "Esc · leave the field");
+        assert_eq!(chip(false), "Esc · back to the terminal");
+    }
+
+    #[test]
+    fn a_stop_with_one_option_opens_it_with_nothing_to_compare() {
+        assert_eq!(invite(1), ("◆ 1 option".to_string(), "Open"));
+        assert_eq!(invite(3), ("◆ 3 options".to_string(), "Compare"));
+        assert!(!strip(1) && strip(2));
+        assert_eq!(none_word(1), "Not this one");
+        assert_eq!(none_word(3), "None of these");
+        let one = choosing(&["Harbor"]);
+        let none = Marks { none: true, ..Marks::default() };
+        assert_eq!(label(&none, &one), "Not this one: make a new one");
+        assert_eq!(label(&none, &choosing(&["Harbor", "Night", "Ledger"])), "None of these: make 3 new ones");
+    }
+
+    #[test]
+    fn the_main_button_chooses_without_a_name_that_reads_as_something_else() {
+        let stop = choosing(&["Go", "Night", "Ledger"]);
+        let shown = Marks { dir: 0, ..Marks::default() };
+        assert_eq!(label(&shown, &stop), "Choose this one");
+        assert_eq!(shown.chosen(&stop), Some(0));
+        // a part pinned in Night while Ledger shows: the button chooses Night, says so, and rings Night's card
+        let pinned = Marks { dir: 2, pins: [(1, "Palette".to_string())].into(), ..Marks::default() };
+        assert_eq!(label(&pinned, &stop), "Choose the pinned one");
+        assert_eq!(pinned.chosen(&stop), Some(1));
+        // the other buttons say what they do, as before
+        let two = Marks { keep: vec![0, 2], ..Marks::default() };
+        assert_eq!(label(&two, &stop), "Develop Go and Ledger");
+        assert_eq!(two.chosen(&stop), None);
+        let mix = Marks { pins: [(0, "Palette".to_string()), (1, "Fonts".to_string())].into(), ..Marks::default() };
+        assert!(label(&mix, &stop).starts_with("Mix: "));
+    }
+
+    #[test]
+    fn more_of_what_the_answer_does_opens_over_the_bar_and_its_switch_stays_put() {
+        let said: Vec<String> = ["\"Harbor\" is chosen.", "\"Night\" leaves.", "\"Ledger\" leaves.", "directions keeps only what you chose."].map(String::from).to_vec();
+        let closed = said_row(&said, false).expect("a line");
+        let open = said_row(&said, true).expect("still the line, with the list open");
+        assert_eq!(closed.0, open.0, "the first sentence stays where it was");
+        assert_eq!(closed.1.as_deref(), Some("▸ 3 more of what this does"));
+        assert_eq!(open.1.as_deref(), Some("▾ Hide what this does"));
+        assert_eq!(said_panel(&said, false), None);
+        assert_eq!(said_panel(&said, true), Some(said.clone()));
+        // one sentence: no switch and no list
+        let one = vec!["\"Harbor\" is chosen.".to_string()];
+        assert_eq!(said_row(&one, true), Some((one[0].clone(), None)));
+        assert_eq!(said_panel(&one, true), None);
     }
 }

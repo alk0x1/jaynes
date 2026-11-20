@@ -305,6 +305,10 @@ pub enum Icon {
     Close,
     /// A terminal: a window with a prompt. Settings' Terminal section, and the tab of the person's own Claude Code.
     Terminal,
+    /// Settings, at the left of the status bar: a gear of eight teeth.
+    Gear,
+    /// A picture shown large: two arrows out to opposite corners.
+    Enlarge,
 }
 
 impl Icon {
@@ -320,6 +324,8 @@ impl Icon {
             Icon::Open => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>"##,
             Icon::Close => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>"##,
             Icon::Terminal => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>"##,
+            Icon::Gear => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.3" stroke-linejoin="round"><path d="M12.69 6.57L14.48 6.74L14.48 9.26L12.69 9.43L12.33 10.3L13.47 11.69L11.69 13.47L10.3 12.33L9.43 12.69L9.26 14.48L6.74 14.48L6.57 12.69L5.7 12.33L4.31 13.47L2.53 11.69L3.67 10.3L3.31 9.43L1.52 9.26L1.52 6.74L3.31 6.57L3.67 5.7L2.53 4.31L4.31 2.53L5.7 3.67L6.57 3.31L6.74 1.52L9.26 1.52L9.43 3.31L10.3 3.67L11.69 2.53L13.47 4.31L12.33 5.7Z"/><circle cx="8" cy="8" r="2.1"/></svg>"##,
+            Icon::Enlarge => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/></svg>"##,
             Icon::Stop => r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.5" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.6"/></svg>"##,
         }
     }

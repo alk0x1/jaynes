@@ -51,6 +51,7 @@ mod summary_md;
 mod tabs;
 mod sprites;
 mod terminal;
+mod viewer;
 mod vt;
 mod win32_keys;
 
@@ -448,6 +449,18 @@ struct DragBar(bars::Bar);
 
 /// The room the macOS buttons take at the top left, from the window's edge.
 const BUTTONS: f32 = 82.;
+
+/// Settings in the status bar: its word, the hint its pointer shows with the key that opens it too, and its id.
+const SETTINGS_LABEL: &str = "Settings";
+const SETTINGS_TIP: &str = "Settings ⌘,";
+const SETTINGS_ITEM: &str = "settings-item";
+
+/// The app's mark over the column, after the macOS buttons: where it starts from the window's left edge (where the
+/// compare mode's top starts too), and the giraffe's height.
+const MARK_AT: f32 = 84.;
+const MARK_HEIGHT: f32 = 16.;
+/// The column from which the name fits beside the giraffe, clear of the column's switch at the right.
+const MARK_WORD_FROM: f32 = 190.;
 
 struct Cover {
     was: Shown,
@@ -1291,9 +1304,23 @@ impl Root {
     /// On the rail it is under the macOS buttons alone, and the switch goes to the tabs bar.
     fn side_head(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rail = self.column_is_rail();
+        let word = self.bars.column >= MARK_WORD_FROM;
         title_bar("side-head").when(!rail, |d| {
-            // room for the macOS buttons, as the familiar look leaves it
-            d.pl(px(BUTTONS)).pr(px(8.)).child(div().flex_1()).child(self.sidebar_switch(cx))
+            // after the macOS buttons, the giraffe and the name: no button, so a press on them moves the window as the
+            // bar does; in a column too narrow for the name, the giraffe alone, clear of the switch
+            d.pl(px(MARK_AT))
+                .pr(px(8.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .flex_none()
+                        .child(look::mark_icon(MARK_HEIGHT))
+                        .when(word, |d| d.child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).text_color(rgb(look::text())).child("Jaynes"))),
+                )
+                .child(div().flex_1())
+                .child(self.sidebar_switch(cx))
         })
     }
 
@@ -1720,7 +1747,22 @@ impl Root {
             .border_t_1()
             .border_color(rgb(look::line()))
             .text_size(px(11.5))
-            .text_color(rgb(look::dim()));
+            .text_color(rgb(look::dim()))
+            // Settings at the window's bottom left, where the person's other apps keep it, at any width of the column;
+            // with its word, not only the gear, since what hides behind an icon goes unfound
+            .child(
+                item()
+                    .id(SETTINGS_ITEM)
+                    .group(SETTINGS_ITEM)
+                    .flex_none()
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(rgb(look::text())))
+                    .tooltip(look::tip(SETTINGS_TIP))
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx))
+                    .child(look::icon(look::Icon::Gear, 13., look::dim()).group_hover(SETTINGS_ITEM, |s| s.text_color(rgb(look::text()))))
+                    .child(SETTINGS_LABEL),
+            )
+            .child(div().w(px(1.)).h(px(12.)).flex_none().bg(rgb(look::line())));
         if inbox {
             bar = bar.child(div().font_weight(FontWeight::MEDIUM).text_color(rgb(look::text())).child("Inbox"));
         } else {

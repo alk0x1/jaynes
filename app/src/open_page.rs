@@ -21,6 +21,19 @@ pub fn open_with(home: &Path, port: u16, exe: &Path, browser: bool, ensure: impl
     ensure(home, port, exe, browser).map(|_address| ()).map_err(|why| one_line(&why))
 }
 
+/// A stop's live version: the page a role kept of a direction, `page` by its name, opened by `ensure_at` through the
+/// page of `home` at `port` (started from `exe` when it does not run) with its key, at the page's own path for it;
+/// why not, on one line.
+pub fn live_with(home: &Path, port: u16, exe: &Path, page: &str, ensure_at: impl FnOnce(&Path, u16, &Path, &str) -> Result<String, String>) -> Result<(), String> {
+    ensure_at(home, port, exe, &format!("/page/{page}")).map(|_address| ()).map_err(|why| one_line(&why))
+}
+
+/// What a click on "Open live version" does: the page of the engine home the app reads, from the installed `jaynes`,
+/// as "Open the page" does; the key goes in the link the engine opens, never through the app.
+pub fn live(page: &str) -> Result<(), String> {
+    live_with(&jaynes_shell::home(), jaynes_shell::install::PORT, &crate::answer::engine_program(), page, jaynes_shell::install::ensure_page_at)
+}
+
 /// `why` on one line, as a sentence: its lines and runs of spaces as one space, its first letter a capital.
 fn one_line(why: &str) -> String {
     let joined = why.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -41,7 +54,22 @@ pub fn open() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{open_with, version};
+    use super::{live_with, open_with, version};
+
+    #[test]
+    fn the_live_version_opens_through_the_page_at_its_own_path_with_its_key() {
+        let asked = std::cell::RefCell::new(None);
+        let page = "ab12.html";
+        let said = live_with(Path::new("/h/.jaynes/engine"), 8750, Path::new("/h/.local/bin/jaynes"), page, |home, port, exe, path| {
+            *asked.borrow_mut() = Some((home.to_path_buf(), port, exe.to_path_buf(), path.to_string()));
+            Ok(format!("http://localhost:{port}{path}"))
+        });
+        assert_eq!(said, Ok(()));
+        assert_eq!(asked.into_inner(), Some((PathBuf::from("/h/.jaynes/engine"), 8750, PathBuf::from("/h/.local/bin/jaynes"), "/page/ab12.html".into())));
+        // why it did not open, on one line, as the line beside the button shows it
+        let said = live_with(Path::new("/h"), 8750, Path::new("/j"), page, |_, _, _, _| Err("the page did not start:\n  see page.log".into()));
+        assert_eq!(said, Err("The page did not start: see page.log".into()));
+    }
     use std::path::{Path, PathBuf};
 
     #[test]

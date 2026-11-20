@@ -12,7 +12,7 @@ use crate::look;
 use crate::model::Runs;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_base::input::{Input, InputEvent, InputState};
+use gpui_base::input::{Input, InputEditorStyle, InputEvent, InputState, Position};
 use jaynes_core::question::VerdictKind;
 use jaynes_shell::stop::{self, Stop};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -63,6 +63,42 @@ fn word(v: VerdictKind) -> &'static str {
 /// A text field in a box of its own height: the field fills whatever holds it.
 pub fn field(input: &Entity<InputState>) -> Div {
     div().h(px(34.)).px(px(10.)).flex().items_center().rounded(px(8.)).bg(rgb(look::panel())).border_1().border_color(rgb(look::line())).text_size(px(13.)).text_color(rgb(look::text())).child(Input::new(input))
+}
+
+/// A text field that shows when it has the keys, as the compare mode's: the border blue with a soft blue ring round
+/// it and a blue caret (the kit's own caret took the kit's light theme's near-black, which hid it on the dark), the
+/// I-beam over the whole box, and a press anywhere in the box gives it the keys with the caret after the text; a press
+/// on the text itself puts the caret there, as any field does.
+pub fn focus_field(id: &'static str, input: &Entity<InputState>, window: &Window, cx: &mut App) -> Stateful<Div> {
+    input.update(cx, |s, _| s.set_editor_style(InputEditorStyle { caret: rgb(look::blue()).into(), ..InputEditorStyle::default() }));
+    let focused = input.read(cx).focus_handle(cx).is_focused(window);
+    let ring = rgba((look::blue() << 8) | if look::frame() == look::LINEN { 0x38 } else { 0x47 });
+    let take = input.clone();
+    div()
+        .id(id)
+        .h(px(34.))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .rounded(px(8.))
+        .bg(rgb(look::panel()))
+        .border_1()
+        .border_color(rgb(if focused { look::blue() } else { look::line() }))
+        .when(focused, |d| d.shadow(vec![BoxShadow { color: ring.into(), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }]))
+        .cursor(CursorStyle::IBeam)
+        .text_size(px(13.))
+        .text_color(rgb(look::text()))
+        // before the screen behind it takes the keys, as a press on what holds no field does
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            window.prevent_default();
+            take.update(cx, |s, cx| {
+                if !s.focus_handle(cx).is_focused(window) {
+                    s.set_cursor_position(Position::new(0, u32::MAX), window, cx);
+                    s.focus(window, cx);
+                }
+            });
+        })
+        .child(Input::new(input))
 }
 
 pub fn button(id: String, text: &str, on: bool, color: u32) -> Stateful<Div> {
@@ -378,6 +414,8 @@ impl Island {
             cx.listener(move |_, _, window, cx| compare.update(cx, |c, cx| c.open(stop.clone(), window, cx)))
         };
         let q = stop.question.clone();
+        // one option is opened, not compared
+        let (count, open_word) = crate::compare::invite(stop.items.len());
         div()
             .flex()
             .gap(px(12.))
@@ -388,9 +426,9 @@ impl Island {
             .bg(rgb(look::panel_2()))
             .border_1()
             .border_color(rgba((look::amber() << 8) | 0x73))
-            .child(div().text_size(px(14.)).text_color(rgb(look::amber())).flex_none().child(format!("◆ {} options", stop.items.len())))
+            .child(div().text_size(px(14.)).text_color(rgb(look::amber())).flex_none().child(count))
             .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(stop.title.clone()))
-            .child(primary("compare", "Compare".into(), true).on_click(open))
+            .child(primary("compare", open_word.into(), true).on_click(open))
             .child(button("later".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
                 this.shrunk.insert(q.clone());
                 cx.notify();
@@ -431,6 +469,47 @@ fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
 impl Island {
     fn driven(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
         let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
+        // the pointer, as macOS sends it to the window, at a point of it: `pointer move|down|up|click x y`,
+        // `pointer drag x y x2 y2`, `pointer pinch x y <delta>`, `pointer zoom-scroll x y <dy>` (Command and the wheel)
+        if verb == "pointer" {
+            let w: Vec<&str> = rest.split_whitespace().collect();
+            let n = |i: usize| w.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.);
+            let at = point(px(n(1)), px(n(2)));
+            let to = point(px(n(3)), px(n(4)));
+            let left = MouseButton::Left;
+            let events: Vec<PlatformInput> = match w.first().copied().unwrap_or("") {
+                "move" => vec![PlatformInput::MouseMove(MouseMoveEvent { position: at, pressed_button: None, modifiers: Modifiers::default() })],
+                "down" => vec![PlatformInput::MouseDown(MouseDownEvent { button: left, position: at, modifiers: Modifiers::default(), click_count: 1, first_mouse: false })],
+                "up" => vec![PlatformInput::MouseUp(MouseUpEvent { button: left, position: at, modifiers: Modifiers::default(), click_count: 1 })],
+                "click" => vec![
+                    PlatformInput::MouseMove(MouseMoveEvent { position: at, pressed_button: None, modifiers: Modifiers::default() }),
+                    PlatformInput::MouseDown(MouseDownEvent { button: left, position: at, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }),
+                    PlatformInput::MouseUp(MouseUpEvent { button: left, position: at, modifiers: Modifiers::default(), click_count: 1 }),
+                ],
+                "drag" => {
+                    let mut e = vec![PlatformInput::MouseDown(MouseDownEvent { button: left, position: at, modifiers: Modifiers::default(), click_count: 1, first_mouse: false })];
+                    for k in 1..=8 {
+                        let t = k as f32 / 8.;
+                        let p = point(at.x + (to.x - at.x) * t, at.y + (to.y - at.y) * t);
+                        e.push(PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: Some(left), modifiers: Modifiers::default() }));
+                    }
+                    e.push(PlatformInput::MouseUp(MouseUpEvent { button: left, position: to, modifiers: Modifiers::default(), click_count: 1 }));
+                    e
+                }
+                "pinch" => vec![PlatformInput::Pinch(PinchEvent { position: at, delta: n(3), modifiers: Modifiers::default(), phase: TouchPhase::Moved })],
+                "zoom-scroll" => vec![PlatformInput::ScrollWheel(ScrollWheelEvent { position: at, delta: ScrollDelta::Pixels(point(px(0.), px(n(3)))), modifiers: Modifiers { platform: true, ..Modifiers::default() }, touch_phase: TouchPhase::Moved })],
+                other => {
+                    tracing::warn!("no pointer {other}");
+                    vec![]
+                }
+            };
+            window.defer(cx, move |window, cx| {
+                for e in events {
+                    window.dispatch_event(e, cx);
+                }
+            });
+            return;
+        }
         if self.compare.read(cx).is_open() {
             let line = line.to_string();
             self.compare.update(cx, |c, cx| c.driven(&line, window, cx));
