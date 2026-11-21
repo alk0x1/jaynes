@@ -1161,6 +1161,14 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// The button that shortlists an option at a choosing stop, in the app's words ("☆ Shortlist", "★ Shortlisted").
+fn shortlist_button(id: &str) -> String {
+    format!("<button class=\"fin\" data-fin=\"{id}\" title=\"Shortlist it: two or three shortlisted are developed by the agent, then you choose again\">☆ Shortlist</button>", id = esc(id))
+}
+
+/// The row that sends the shortlist, shown once two are shortlisted.
+const FINALS_ROW: &str = "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the shortlisted</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>";
+
 fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
@@ -1193,7 +1201,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             .items
             .iter()
             .map(|it| {
-                let more_ways = format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\"><button class=\"fin\" data-fin=\"{id}\" title=\"Keep it among two or three finalists that the agent develops, then choose again\">Finalist</button>", id = esc(&it.id));
+                let more_ways = format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\">{}", shortlist_button(&it.id), id = esc(&it.id));
                 format!(
                     "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\">{more_ways}<button class=\"choose\" data-choose=\"{id}\">Choose</button></div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
                     id = esc(&it.id),
@@ -1202,8 +1210,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
                 )
             })
             .collect::<String>();
-        rows + "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the finalists</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>\
-               <div class=\"row choose\"><h3>None of these</h3><div class=\"pick\"><input class=\"adjust\" id=\"why\" placeholder=\"What was missing? The agent makes new options; these do not come back\"><button class=\"choose\" id=\"none\" disabled>None of these</button></div><ul class=\"fx-row\" id=\"fx-none\"></ul></div>"
+        rows + FINALS_ROW + "<div class=\"row choose\"><h3>None of these</h3><div class=\"pick\"><input class=\"adjust\" id=\"why\" placeholder=\"What was missing? The agent makes new options; these do not come back\"><button class=\"choose\" id=\"none\" disabled>None of these</button></div><ul class=\"fx-row\" id=\"fx-none\"></ul></div>"
     };
     let rows: String = if question.choose { choose_rows() } else { question
         .items
@@ -1745,11 +1752,12 @@ function choice(id) {
   if (note) n[id] = note;
   return JSON.stringify({ ...base, verdicts: v, notes: n, context: ctxOf() });
 }
-// finalists: each developed by the agent with its note, the rest leave
+// the shortlist: each developed by the agent with its note (the engine's, decide::SHORTLISTED, without one), the rest leave
+const SHORTLISTED = "Shortlisted: develop it further, keeping what it is.";
 const finals = new Set();
 function finalists() {
   const v = {}, n = {};
-  for (const x of base.items) { v[x] = finals.has(x) ? "change" : "drop"; if (finals.has(x)) n[x] = noteOf(x) || "A finalist: develop it further, keeping what it is."; }
+  for (const x of base.items) { v[x] = finals.has(x) ? "change" : "drop"; if (finals.has(x)) n[x] = noteOf(x) || SHORTLISTED; }
   return JSON.stringify({ ...base, verdicts: v, notes: n, context: ctxOf() });
 }
 // bring back one dropped in an earlier round: it goes on, made again by the agent, and the current options leave
@@ -1813,7 +1821,7 @@ async function said(id, body, ulId, btn) {
 function sayFinals() {
   const box = document.getElementById("finals"); if (!box) return;
   box.hidden = finals.size < 2;
-  box.querySelector(".finsay").textContent = finals.size >= 2 ? `${finals.size} finalists: ${[...finals].join(", ")}` : "";
+  box.querySelector(".finsay").textContent = finals.size >= 2 ? `${finals.size} shortlisted: ${[...finals].join(", ")}` : "";
   if (finals.size >= 2) said(null, finalists(), "fx-finals", "develop");
 }
 const later = {};
@@ -1828,7 +1836,7 @@ if (base && base.choose) {
   });
   document.addEventListener("click", async e => {
     const f = e.target.closest("button.fin");
-    if (f) { const id = f.dataset.fin; if (finals.has(id)) finals.delete(id); else finals.add(id); f.classList.toggle("on", finals.has(id)); sayFinals(); return; }
+    if (f) { const id = f.dataset.fin; if (finals.has(id)) finals.delete(id); else finals.add(id); f.classList.toggle("on", finals.has(id)); f.textContent = finals.has(id) ? "★ Shortlisted" : "☆ Shortlist"; sayFinals(); return; }
     const b = e.target.closest("button.choose"); if (!b || b.disabled) return;
     if (b.id === "none") {
       const words = [(document.getElementById("why") || {}).value || "", ctxOf()].filter(t => t.trim()).join(" ");
@@ -2124,6 +2132,19 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 mod tests {
     use super::*;
     use jaynes_core::question::QuestionKind;
+
+    #[test]
+    fn a_choosing_stop_shortlists_in_the_app_s_words_and_sends_the_engine_s_note() {
+        let b = shortlist_button("harbor");
+        assert!(b.contains(">☆ Shortlist<") && b.contains("data-fin=\"harbor\"") && !b.to_lowercase().contains("finalist"), "{b}");
+        assert!(FINALS_ROW.contains(">Develop the shortlisted<"), "{FINALS_ROW}");
+        // the note the agent gets is the engine's, which says the option's sentence ("“Harbor” is shortlisted: …")
+        assert!(SCRIPT.contains(&format!("\"{}\"", jaynes_core::decide::SHORTLISTED)), "the note");
+        assert!(SCRIPT.contains("★ Shortlisted") && SCRIPT.contains("☆ Shortlist") && SCRIPT.contains(" shortlisted: "));
+        for old in ["A finalist", "finalists:", "the finalists", ">Finalist<"] {
+            assert!(!SCRIPT.contains(old) && !FINALS_ROW.contains(old), "{old}");
+        }
+    }
 
     #[test]
     fn the_update_notice_names_the_version_installed_or_its_commit_when_it_cannot() {
