@@ -230,6 +230,12 @@ pub fn tab_goes_round(shows: Option<Shows>, on_tab: bool) -> bool {
     }
 }
 
+/// Whether a Tab goes into the open card at its first control: the keys are outside it (the run's tab, the column),
+/// where gpui would send them to the window's first stop, off the card. Shift-Tab goes back from where it is.
+pub fn enters_card(shows: Option<Shows>, inside: bool, shift: bool) -> bool {
+    shows == Some(Shows::Card) && !inside && !shift
+}
+
 /// The chip at the card's head: with the words field in focus, Esc leaves the field first, as in the compare mode.
 pub fn esc_chip(field: bool) -> &'static str {
     if field { "Esc · leave the field" } else { "Esc · later" }
@@ -409,6 +415,17 @@ impl Island {
         let compare = self.compare.read(cx);
         let on_tab = self.stop(cx).is_some_and(|s| self.tab_run(cx).as_deref() == Some(s.run.as_str()));
         (compare.is_open() && !compare.viewing()) || tab_goes_round(self.showing(cx), on_tab)
+    }
+
+    /// A Tab with the keys outside the open card: they go to its first control ("See the diff"), and true; else false,
+    /// and Tab goes round as the window's order says.
+    pub fn tab_into(&mut self, shift: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let inside = self.focus.contains_focused(window, cx);
+        if enters_card(self.showing(cx), inside, shift) {
+            window.focus(&self.first, cx);
+            return true;
+        }
+        false
     }
 
     /// Whether the person's words field has the keys: Esc then leaves the field before it folds the card.
@@ -1212,7 +1229,18 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, SENT, Sent, Shows, card_head, diff_title, esc_chip, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, SENT, Sent, Shows, card_head, diff_title, enters_card, esc_chip, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+
+    #[test]
+    fn the_first_tab_from_outside_the_open_card_lands_on_its_first_control() {
+        // the keys outside the card (the run's tab, the column): Tab goes to "See the diff", not to the window's first stop
+        assert!(enters_card(Some(Shows::Card), false, false));
+        // already inside: Tab goes round as before; Shift-Tab goes back from where it is
+        assert!(!enters_card(Some(Shows::Card), true, false));
+        assert!(!enters_card(Some(Shows::Card), false, true));
+        // a pill has no card to enter
+        assert!(!enters_card(Some(Shows::Pill), false, false));
+    }
     use gpui_base::input::InputEvent;
     use std::time::{Duration, Instant};
 

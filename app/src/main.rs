@@ -431,7 +431,9 @@ impl Render for Root {
                         cx.stop_propagation();
                     }
                     "tab" if !(m.platform || m.control || m.alt) && !over && this.island.read(cx).takes_tab(cx) => {
-                        if m.shift {
+                        if this.island.update(cx, |i, cx| i.tab_into(m.shift, window, cx)) {
+                            // into the open card, at its first control
+                        } else if m.shift {
                             window.focus_prev(cx);
                         } else {
                             window.focus_next(cx);
