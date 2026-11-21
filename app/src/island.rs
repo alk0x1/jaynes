@@ -45,6 +45,8 @@ pub struct Island {
     sent: Option<(Sent, String)>,
     /// The card's middle, which scrolls between its fixed head and foot.
     scroll: ScrollHandle,
+    /// Whether the words field had the keys when the card was last drawn.
+    words_had_keys: bool,
     /// The card itself, which takes the keys when the person leaves the words field (Esc): a second Esc folds it.
     focus: FocusHandle,
     /// The card's first control ("See the diff"): the keys go there when the pill opens the card, so Tab goes round it.
@@ -313,6 +315,50 @@ pub fn reads_on(e: &InputEvent) -> bool {
     matches!(e, InputEvent::PressEnter { secondary: false, .. })
 }
 
+/// How tall the card may grow in a window this tall: up to most of it, so a stop with many items or long words shows
+/// them without scrolling, while the run's story keeps a few lines over it; never less than the card had before.
+pub fn card_cap(window_height: Pixels) -> Pixels {
+    (window_height * 0.7).max(px(460.))
+}
+
+/// How tall the fade over the bottom of the card's middle is, while more is below.
+const FADE: f32 = 32.;
+/// The padding under the middle's last row.
+const MIDDLE_PAD: f32 = 12.;
+
+/// Where the middle scrolls to when the words field takes the keys: as little as brings its row whole into view, above
+/// the fade when more is below it, its top first when it is taller than that room. `view` is the middle, `row` the
+/// field's row as laid out (before scrolling), `max` how far the middle scrolls, `now` its offset (zero or less).
+/// None before the card was laid out once.
+pub fn words_offset(view: Bounds<Pixels>, row: Option<Bounds<Pixels>>, max: Pixels, now: Pixels) -> Option<Pixels> {
+    let row = row?;
+    let h = f32::from(view.size.height);
+    if h <= 0. {
+        return None;
+    }
+    let (top, bottom) = (f32::from(row.top() - view.top()), f32::from(row.bottom() - view.top()));
+    let mut down = -f32::from(now);
+    if bottom + FADE > down + h {
+        down = bottom + FADE - h;
+    }
+    if top < down {
+        down = top;
+    }
+    Some(px(-down.clamp(0., f32::from(max).max(0.))))
+}
+
+/// Whether the fade shows at the bottom of the middle: only while content is below the view, not only its padding.
+pub fn fades_below(max: Pixels, offset: Pixels) -> bool {
+    let (max, down) = (f32::from(max), -f32::from(offset));
+    max > 1. && down < max - MIDDLE_PAD - 1.
+}
+
+/// Whether the words field comes whole into view now: when it has just taken the keys, never while it keeps them,
+/// so the person may scroll away from it to read.
+pub fn comes_into_view(had_keys: bool, has_keys: bool) -> bool {
+    has_keys && !had_keys
+}
+
 impl Island {
     pub fn new(runs: Entity<Runs>, key: Option<Arc<Key>>, lightbox: Entity<Lightbox>, compare: Entity<Compare>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |this, _, cx| {
@@ -352,6 +398,7 @@ impl Island {
             said: None,
             sent: None,
             scroll: ScrollHandle::new(),
+            words_had_keys: false,
             focus: cx.focus_handle(),
             first: cx.focus_handle(),
             tabs: None,
@@ -495,10 +542,6 @@ impl Island {
             // Enter in the person's words reads them, as "Read my words" does
             if reads_on(e) && this.words.as_ref() == Some(&field) {
                 this.read_words(cx);
-            }
-            // the words field taking the keys comes whole into view, never half under the foot
-            if matches!(e, InputEvent::Focus) && this.words.as_ref() == Some(&field) {
-                this.scroll.scroll_to_item(WORDS_ROW);
             }
             // the field took or let go the keys: its ring follows
             cx.notify();
@@ -1142,6 +1185,16 @@ impl Render for Island {
         let q = stop.question.clone();
         let diff_stop = stop.clone();
         let field = self.words_focused(window, cx);
+        // the words field taking the keys comes whole into view, never half under the foot. Read from the focus as
+        // the card is drawn, not from the field's Focus event: gpui sends that only to the window in front, so a
+        // field focused in a window behind (and in every hidden test photo) never moved the view
+        if comes_into_view(self.words_had_keys, field) {
+            match words_offset(self.scroll.bounds(), self.scroll.bounds_for_item(WORDS_ROW), self.scroll.max_offset().y, self.scroll.offset().y) {
+                Some(y) => self.scroll.set_offset(point(px(0.), y)),
+                None => self.scroll.scroll_to_item(WORDS_ROW),
+            }
+        }
+        self.words_had_keys = field;
         let (first, second) = card_head(&name, &project, &stop.step, stop.round);
         let head = div()
             .flex()
@@ -1191,7 +1244,7 @@ impl Render for Island {
             .child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED))));
         // the middle scrolls between the fixed head and foot; while there is more below, its bottom edge fades
         let max = self.scroll.max_offset().y;
-        let more_below = f32::from(max) > 1. && f32::from(-self.scroll.offset().y) < f32::from(max) - 1.;
+        let more_below = fades_below(max, self.scroll.offset().y);
         let middle = div()
             .id("island-scroll")
             .track_scroll(&self.scroll)
@@ -1201,7 +1254,7 @@ impl Render for Island {
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .px(px(16.))
             .pt(px(2.))
-            .pb(px(12.))
+            .pb(px(MIDDLE_PAD))
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -1214,7 +1267,7 @@ impl Render for Island {
             .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))));
         let transparent = rgba(look::panel_2() << 8);
         // 32 px, over content: the foot's own line is already there, and 16 vanished over the gap between two rows
-        let fade = div().absolute().left_0().right_0().bottom_0().h(px(32.)).bg(linear_gradient(180., linear_color_stop(transparent, 0.), linear_color_stop(rgb(look::panel_2()), 1.)));
+        let fade = div().absolute().left_0().right_0().bottom_0().h(px(FADE)).bg(linear_gradient(180., linear_color_stop(transparent, 0.), linear_color_stop(rgb(look::panel_2()), 1.)));
         let foot = div()
             .flex_none()
             .flex()
@@ -1234,7 +1287,7 @@ impl Render for Island {
             .id("island")
             .track_focus(&self.focus)
             .w_full()
-            .max_h(px(460.))
+            .max_h(card_cap(window.viewport_size().height))
             .overflow_hidden()
             .rounded(px(12.))
             .bg(rgb(look::panel_2()))
@@ -1245,14 +1298,16 @@ impl Render for Island {
             .child(top)
             .child(div().relative().min_h_0().flex_shrink(1.).flex().flex_col().child(middle).when(more_below, |d| d.child(fade)))
             .child(foot);
-        wrap.child(card).into_any_element()
+        // the card takes the room it needs, up to its cap; in a window too small for it, it gives way, and its middle
+        // scrolls
+        wrap.min_h_0().flex_shrink(1.).child(card).into_any_element()
     }
 }
 
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, SENT, Sent, Shows, card_head, diff_title, enters_card, esc_chip, foot_line, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, SENT, Sent, Shows, card_cap, card_head, comes_into_view, diff_title, fades_below, words_offset, enters_card, esc_chip, foot_line, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
 
     #[test]
     fn beside_a_send_that_will_not_go_the_foot_says_why() {
@@ -1265,6 +1320,59 @@ mod tests {
         assert_eq!(foot_line(None, 0, 3, Some("say what to change")), ("0 of 3 judged".to_string(), false));
         // sent, or not sent: that line, whatever the marks
         assert_eq!(foot_line(Some("Not sent: no key"), 3, 3, Some("say what to change")), ("Not sent: no key".to_string(), false));
+    }
+
+    #[test]
+    fn the_card_grows_with_the_window_up_to_most_of_it_and_never_below_what_it_had() {
+        use gpui::px;
+        // the tab's space, less the room for the run's story to keep a few lines over it
+        assert_eq!(card_cap(px(900.)), px(630.));
+        assert_eq!(card_cap(px(1080.)), px(756.));
+        // a small window: as tall as the card was before it grew
+        assert_eq!(card_cap(px(640.)), px(460.));
+    }
+
+    #[test]
+    fn the_words_field_taking_the_keys_comes_whole_above_the_fade() {
+        use gpui::{Bounds, point, px, size};
+        // as the hidden app laid it out at 1024x640: the middle from 270, 273 tall; the field's row 291.5 under its top
+        let view = Bounds::new(point(px(307.), px(270.)), size(px(702.), px(273.)));
+        let row = Bounds::new(point(px(323.), px(561.5)), size(px(670.), px(34.)));
+        // "What this does" under it: the row's bottom comes up to the fade's top, not to the middle's edge under it
+        assert_eq!(words_offset(view, Some(row), px(234.), px(0.)), Some(px(-84.5)));
+        // nothing under it but the padding: as far as the middle goes, where no fade shows
+        assert_eq!(words_offset(view, Some(row), px(24.5), px(0.)), Some(px(-24.5)));
+        // already whole and clear of the fade: nothing moves
+        assert_eq!(words_offset(view, Some(row), px(234.), px(-100.)), Some(px(-100.)));
+        // scrolled past it, above: back to its top
+        assert_eq!(words_offset(view, Some(row), px(600.), px(-320.)), Some(px(-291.5)));
+        // a field taller than the room above the fade: its top first
+        let tall = Bounds::new(point(px(323.), px(561.5)), size(px(670.), px(260.)));
+        assert_eq!(words_offset(view, Some(tall), px(600.), px(0.)), Some(px(-291.5)));
+        // the card not laid out yet: no answer, and the plain scroll to the row does
+        assert_eq!(words_offset(view, None, px(234.), px(0.)), None);
+    }
+
+    #[test]
+    fn the_fade_says_more_is_below_only_for_content_not_for_the_padding() {
+        use gpui::px;
+        assert!(fades_below(px(234.), px(-84.5)));
+        // at the end, or with only the 12 of the middle's padding left under the view
+        assert!(!fades_below(px(234.), px(-234.)));
+        assert!(!fades_below(px(24.5), px(-12.5)));
+        // nothing to scroll
+        assert!(!fades_below(px(0.), px(0.)));
+    }
+
+    #[test]
+    fn the_words_field_comes_into_view_when_it_takes_the_keys_and_only_then() {
+        // the field takes the keys (a click, Tab, the driver): the middle scrolls it whole into view
+        assert!(comes_into_view(false, true));
+        // it keeps them: the person may scroll away to read, and the card leaves the view where they put it
+        assert!(!comes_into_view(true, true));
+        // it lets them go, or never had them: nothing moves
+        assert!(!comes_into_view(true, false));
+        assert!(!comes_into_view(false, false));
     }
 
     #[test]
