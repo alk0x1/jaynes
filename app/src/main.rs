@@ -2234,13 +2234,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             })
             .detach();
         // its close button hides it: the app stays, in the Dock and the menu bar, and notices still come
-        window.on_window_should_close(cx, |window, cx| {
-            if let Some(Some(root)) = window.root::<Root>() {
-                root.update(cx, |r, cx| r.let_go(cx));
-            }
-            hide_main(window);
-            false
-        });
+        window.on_window_should_close(cx, close_asked);
         // herdr-core that cannot save its terminals still starts one when asked, unseen: none is asked then
         let listed = existing_or_why(&core);
         let address = if listed.as_ref().is_err_and(hc::cannot_save) {
@@ -2535,6 +2529,16 @@ fn presence_ticks(main: AnyWindowHandle, cx: &mut App) {
 thread_local! {
     /// The main window: hidden when the person closes it, never closed, so it comes back as it was.
     static MAIN: std::cell::Cell<Option<AnyWindowHandle>> = const { std::cell::Cell::new(None) };
+}
+
+/// What the window's close button does, and the test driver's `close-window` with it: the window hides and the app
+/// stays, in the Dock and the menu bar; false, so AppKit never closes it and the last window's closing never quits.
+pub(crate) fn close_asked(window: &mut Window, cx: &mut App) -> bool {
+    if let Some(Some(root)) = window.root::<Root>() {
+        root.update(cx, |r, cx| r.let_go(cx));
+    }
+    hide_main(window);
+    false
 }
 
 /// Hides the main window, as its close button and Command-W on its last tab do: the app stays in the Dock and the

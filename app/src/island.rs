@@ -938,10 +938,7 @@ impl Island {
             // the window's close button, as a click on it closes the window; and a panic, to see the app's log keep it
             // as the close button does; and the Dock's click, which opens it again
             "close-window" => {
-                if let Some(Some(root)) = window.root::<crate::Root>() {
-                    root.update(cx, |r, cx| r.let_go(cx));
-                }
-                crate::hide_main(window);
+                crate::close_asked(window, cx);
             }
             // after this line, as the Dock's click comes: from outside the window's own update
             "reopen" => cx.defer(crate::show_main),
