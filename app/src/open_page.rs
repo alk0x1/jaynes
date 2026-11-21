@@ -103,13 +103,32 @@ mod tests {
         assert_eq!(super::OPENING, "Opening the web page…");
     }
 
+    /// A port the system gives on 127.0.0.1 that is free on [::1] too, where the page is also asked.
+    fn quiet_port() -> u16 {
+        loop {
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            if std::net::TcpListener::bind(("::1", port)).is_ok() {
+                return port;
+            }
+        }
+    }
+
     #[test]
     fn the_engine_that_cannot_start_the_page_says_why_on_one_line_and_never_the_key() {
         let home = std::env::temp_dir().join(format!("jaynes-open-page-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
-        // a port nothing answers on, and a program that ends at once in place of `jaynes page`; no browser is asked
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let said = open_with(&home, port, Path::new("/usr/bin/false"), false, jaynes_shell::install::ensure_page_on);
+        // a port nothing answers on, and a program that ends at once in place of `jaynes page`; no browser is asked. The
+        // port is free on both of the page's addresses when the system gives it, but another program on this machine
+        // (other tests start pages on port 0) may take it before the page is asked: then it is not this test's case,
+        // and another port is tried (it failed once in four full runs so)
+        let mut said = Err(String::new());
+        for _ in 0..5 {
+            let port = quiet_port();
+            said = open_with(&home, port, Path::new("/usr/bin/false"), false, jaynes_shell::install::ensure_page_on);
+            if !said.as_ref().is_err_and(|why| why.contains("answers on")) {
+                break;
+            }
+        }
         let key = std::fs::read_to_string(home.join("page.key")).unwrap_or_default();
         std::fs::remove_dir_all(&home).unwrap();
         let why = said.expect_err("a page that did not start");
