@@ -130,7 +130,7 @@ pub fn middle_of(open: Option<&str>, agent: bool, inbox: bool, changes: bool) ->
 }
 
 /// Where a click in the steps panel takes a run's story.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Place {
     Top,
     /// Where the agent is now: the story's end.

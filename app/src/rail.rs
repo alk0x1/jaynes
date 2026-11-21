@@ -22,6 +22,35 @@ pub fn waits_words(delivered: bool) -> (&'static str, Option<&'static str>) {
     if delivered { ("Delivered", Some(" · your answer can still correct it")) } else { ("Waits for you", None) }
 }
 
+/// A card of the panel: its head, "Now" while the run works, "Waits for you" while it waits, and each step (by its
+/// place in the run's steps).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Card {
+    Head,
+    Now,
+    Waits,
+    Step(usize),
+}
+
+/// The panel's cards in their order, each with where a click takes the run's story and whether the click also raises
+/// the question that waits: the head opens the story at its top, "Now" at its end, "Waits for you" at the step that
+/// waits (the story's end when none says it waits) with its question, the stop risen or the compare mode for one that
+/// chooses among designs, and a step at what the agent told there. Every card the panel draws is here, so none is a
+/// card that does nothing.
+pub fn cards(d: &Detail) -> Vec<(Card, Place, bool)> {
+    let mut cards = vec![(Card::Head, Place::Top, false)];
+    match d.mark {
+        Mark::Working => cards.push((Card::Now, Place::End, false)),
+        Mark::Needs => {
+            let waits = d.stages.iter().find(|s| s.class == "waiting").map(|s| Place::Step(s.name.clone())).unwrap_or(Place::End);
+            cards.push((Card::Waits, waits, true));
+        }
+        _ => {}
+    }
+    cards.extend(d.stages.iter().enumerate().map(|(i, s)| (Card::Step(i), Place::Step(s.name.clone()), false)));
+    cards
+}
+
 pub struct Rail {
     runs: Entity<Runs>,
     tabs: Entity<Tabs>,
@@ -60,9 +89,9 @@ fn opens(id: String, run: &str, place: Place, tabs: &Entity<Tabs>) -> Stateful<D
 }
 
 /// A step's row: lit under the mouse, and while it is the step lit in the story.
-fn step(run: &str, s: &Stage, lit: bool, tabs: &Entity<Tabs>) -> impl IntoElement {
+fn step(run: &str, s: &Stage, lit: bool, place: Place, tabs: &Entity<Tabs>) -> impl IntoElement {
     let todo = s.class == "todo";
-    opens(format!("step-{}", s.name), run, Place::Step(s.name.clone()), tabs)
+    opens(format!("step-{}", s.name), run, place, tabs)
         .mx(px(-8.))
         .px(px(8.))
         .rounded(px(7.))
@@ -85,8 +114,8 @@ fn step(run: &str, s: &Stage, lit: bool, tabs: &Entity<Tabs>) -> impl IntoElemen
         )
 }
 
-fn now(run: &str, text: &str, tabs: &Entity<Tabs>) -> impl IntoElement {
-    opens("now".into(), run, Place::End, tabs)
+fn now(run: &str, text: &str, place: Place, tabs: &Entity<Tabs>) -> impl IntoElement {
+    opens("now".into(), run, place, tabs)
         .hover(|d| d.border_color(rgb(look::line_2())))
         .flex()
         .gap(px(10.))
@@ -101,9 +130,9 @@ fn now(run: &str, text: &str, tabs: &Entity<Tabs>) -> impl IntoElement {
         .child(div().min_w_0().flex_1().truncate().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::dim())).child(text.to_string()))
 }
 
-fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<crate::island::Island>) -> impl IntoElement {
-    // the head is no card: it opens the story at its top, its look unchanged
-    let head = opens("head".into(), &d.id, Place::Top, tabs)
+/// The head: no card to the eye, it opens the story at its top, its look unchanged.
+fn head(d: &Detail, place: Place, tabs: &Entity<Tabs>) -> impl IntoElement {
+    opens("head".into(), &d.id, place, tabs)
         .px(px(16.))
         .pt(px(14.))
         .pb(px(12.))
@@ -121,19 +150,15 @@ fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<cra
                 .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("{} · {} min", d.role, d.minutes))),
         )
         .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(d.title.clone()))
-        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(d.project.clone()));
-    let mut body = div().id("steps").flex().flex_col().flex_1().overflow_y_scroll().px(px(16.)).py(px(14.)).gap(px(16.));
-    if d.mark == Mark::Working {
-        body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Now", look::faint())).child(now(&d.id, d.now.as_deref().unwrap_or("starting"), tabs)));
-    } else if d.mark == Mark::Needs {
-        // the step that waits, where the agent last spoke; the story's end when none says it waits
-        let waits = d.stages.iter().find(|s| s.class == "waiting").map(|s| Place::Step(s.name.clone())).unwrap_or(Place::End);
-        let island = island.clone();
-        body = body.child(
-            opens("waits".into(), &d.id, waits, tabs)
-                // and the question itself: the stop risen, or the compare mode for one that chooses among designs
-                .on_click(move |_, window, cx| island.update(cx, |i, cx| i.open_stop(window, cx)))
-                .hover(|d| d.bg(rgb(look::selected())))
+        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(d.project.clone()))
+}
+
+/// What waits: where the agent last spoke, and, when `raises`, the question itself.
+fn waits(d: &Detail, place: Place, raises: bool, tabs: &Entity<Tabs>, island: &Entity<crate::island::Island>) -> impl IntoElement {
+    let island = island.clone();
+    opens("waits".into(), &d.id, place, tabs)
+        .when(raises, |e| e.on_click(move |_, window, cx| island.update(cx, |i, cx| i.open_stop(window, cx))))
+        .hover(|d| d.bg(rgb(look::selected())))
                 .mx(px(-8.))
                 .px(px(8.))
                 .py(px(5.))
@@ -146,15 +171,27 @@ fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<cra
                     let (first, rest) = waits_words(d.delivered);
                     div().flex().child(look::label(first, if rest.is_some() { look::green() } else { look::amber() })).children(rest.map(|r| look::label(r, look::amber())))
                 })
-                .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(d.line.clone())),
-        );
-    }
+                .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(d.line.clone()))
+}
+
+/// The panel, drawn from its cards (cards), each opening the place a click on it takes the story.
+fn panel(d: &Detail, lit: Option<&str>, tabs: &Entity<Tabs>, island: &Entity<crate::island::Island>) -> impl IntoElement {
+    let mut top = div().flex().flex_col().size_full();
+    let mut body = div().id("steps").flex().flex_col().flex_1().overflow_y_scroll().px(px(16.)).py(px(14.)).gap(px(16.));
     let mut steps = div().flex().flex_col();
-    for s in &d.stages {
-        steps = steps.child(step(&d.id, s, lit == Some(s.name.as_str()), tabs));
+    for (card, place, raises) in cards(d) {
+        match card {
+            Card::Head => top = top.child(head(d, place, tabs)),
+            Card::Now => body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Now", look::faint())).child(now(&d.id, d.now.as_deref().unwrap_or("starting"), place, tabs))),
+            Card::Waits => body = body.child(waits(d, place, raises, tabs, island)),
+            Card::Step(i) => {
+                let s = &d.stages[i];
+                steps = steps.child(step(&d.id, s, lit == Some(s.name.as_str()), place, tabs));
+            }
+        }
     }
     body = body.child(div().flex().flex_col().gap(px(6.)).child(look::label("Steps", look::faint())).child(steps));
-    div().flex().flex_col().size_full().child(head).child(body)
+    top.child(body)
 }
 
 impl Render for Rail {
@@ -182,8 +219,38 @@ impl Render for Rail {
 
 #[cfg(test)]
 mod tests {
-    use super::{shows_run, waits_words};
-    use crate::tabs::Middle;
+    use super::{cards, shows_run, waits_words, Card};
+    use crate::model::Detail;
+    use crate::tabs::{Middle, Place};
+    use jaynes_shell::listing::{Mark, Stage};
+
+    fn stage(index: usize, name: &str, class: &'static str) -> Stage {
+        Stage { index, name: name.into(), about: String::new(), class, detail: String::new() }
+    }
+
+    fn run(mark: Mark, stages: Vec<Stage>) -> Detail {
+        Detail { id: "r1".into(), title: "Tighten the copy".into(), role: "review".into(), project: "app".into(), mark, line: "Which goes in?".into(), minutes: 3, stages, now: Some("editing".into()), delivered: false }
+    }
+
+    // Alan, 17/11 (option 1 of the steps panel, as the session that built it in ab48af1 wrote what he chose): every
+    // card in the steps panel clickable; a step lights its part of the story, "Waits for you" opens the stop (the
+    // choice, when it chooses), "Now" goes to the end, the head opens the top and does not look like a card
+    #[test]
+    fn asked_every_card_in_the_steps_panel_clickable() {
+        let steps = || vec![stage(1, "copy", "checked"), stage(2, "write", "waiting"), stage(3, "send", "todo")];
+        let step = |i: usize, name: &str| (Card::Step(i), Place::Step(name.into()), false);
+        // waiting: the head, what waits, at its step and with its question, and each step at its own place
+        assert_eq!(
+            cards(&run(Mark::Needs, steps())),
+            vec![(Card::Head, Place::Top, false), (Card::Waits, Place::Step("write".into()), true), step(0, "copy"), step(1, "write"), step(2, "send")]
+        );
+        // waiting with no step that says so: what waits opens the story's end, and still its question
+        assert_eq!(cards(&run(Mark::Needs, vec![stage(1, "copy", "checked")]))[1], (Card::Waits, Place::End, true));
+        // at work: "Now" goes to the end
+        assert_eq!(cards(&run(Mark::Working, steps()))[..2], [(Card::Head, Place::Top, false), (Card::Now, Place::End, false)]);
+        // finished: the head and the steps, each still opening its place
+        assert_eq!(cards(&run(Mark::Delivered, steps())), vec![(Card::Head, Place::Top, false), step(0, "copy"), step(1, "write"), step(2, "send")]);
+    }
 
     #[test]
     fn the_steps_panel_shows_the_run_only_while_a_run_s_tab_is_in_the_middle() {
