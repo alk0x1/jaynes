@@ -33,7 +33,7 @@ impl Bar {
     }
 
     /// Whether the bar's edge is its left one (the panels at the right are dragged by their left edge).
-    pub fn from_right(self) -> bool {
+    pub fn at_right(self) -> bool {
         !matches!(self, Bar::Column)
     }
 }
@@ -64,7 +64,7 @@ pub fn is_rail(width: f32) -> bool {
 
 /// Where a drag of the bar's edge, with the pointer at `x` in a window `window` wide, asks the bar's width to be.
 pub fn wanted_at(bar: Bar, x: f32, window: f32) -> f32 {
-    if bar.from_right() { window - x } else { x }
+    if bar.at_right() { window - x } else { x }
 }
 
 /// How wide the edge the person drags is, inside its bar.
@@ -87,7 +87,7 @@ pub fn right_after(now: Option<Bar>, pressed: Bar) -> Option<Bar> {
 /// Whether a drag of a panel at the right that asks `wanted` closes it: dragged under half its lowest width, as the
 /// column dragged narrow becomes the rail. The column never closes so.
 pub fn drag_closes(bar: Bar, wanted: f32) -> bool {
-    bar.from_right() && wanted < bar.bounds().1 / 2.
+    bar.at_right() && wanted < bar.bounds().1 / 2.
 }
 
 /// What shows beside the middle: the column or not, and the bar at the right (Changes over the steps), if any.
@@ -141,7 +141,7 @@ impl Bars {
     }
 
     /// As kept: none for a bar at its own width.
-    pub fn to_kept(&self) -> crate::app_state::Widths {
+    pub fn to_kept(self) -> crate::app_state::Widths {
         let keep = |bar: Bar| Some(self.of(bar)).filter(|w| *w != bar.default_width());
         crate::app_state::Widths { column: keep(Bar::Column), steps: keep(Bar::Steps), changes: keep(Bar::Changes) }
     }

@@ -22,27 +22,6 @@ pub fn waits_words(delivered: bool) -> (&'static str, Option<&'static str>) {
     if delivered { ("Delivered", Some(" · your answer can still correct it")) } else { ("Waits for you", None) }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{shows_run, waits_words};
-    use crate::tabs::Middle;
-
-    #[test]
-    fn the_steps_panel_shows_the_run_only_while_a_run_s_tab_is_in_the_middle() {
-        assert!(shows_run(&Middle::Run("r1".into())));
-        // the Inbox or Claude Code in the middle: "Pick a run to see its steps.", not the last run picked
-        for m in [Middle::Inbox, Middle::Terminal, Middle::Agent, Middle::Changes] {
-            assert!(!shows_run(&m), "{m:?}");
-        }
-    }
-
-    #[test]
-    fn a_run_delivered_while_its_stop_is_open_says_the_answer_still_corrects_it() {
-        assert_eq!(waits_words(false), ("Waits for you", None));
-        assert_eq!(waits_words(true), ("Delivered", Some(" · your answer can still correct it")));
-    }
-}
-
 pub struct Rail {
     runs: Entity<Runs>,
     tabs: Entity<Tabs>,
@@ -198,5 +177,26 @@ impl Render for Rail {
             Some(d) => frame.child(panel(&d, lit.as_deref(), &self.tabs, &self.island)),
             None => frame.child(div().p(px(16.)).text_size(px(12.)).text_color(rgb(look::faint())).child("Pick a run to see its steps.")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{shows_run, waits_words};
+    use crate::tabs::Middle;
+
+    #[test]
+    fn the_steps_panel_shows_the_run_only_while_a_run_s_tab_is_in_the_middle() {
+        assert!(shows_run(&Middle::Run("r1".into())));
+        // the Inbox or Claude Code in the middle: "Pick a run to see its steps.", not the last run picked
+        for m in [Middle::Inbox, Middle::Terminal, Middle::Agent, Middle::Changes] {
+            assert!(!shows_run(&m), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn a_run_delivered_while_its_stop_is_open_says_the_answer_still_corrects_it() {
+        assert_eq!(waits_words(false), ("Waits for you", None));
+        assert_eq!(waits_words(true), ("Delivered", Some(" · your answer can still correct it")));
     }
 }

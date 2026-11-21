@@ -33,7 +33,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "test-driver"))]
     fn a_build_for_people_reads_no_test_variable() {
-        assert!(!BUILT_FOR_TESTS);
+        const { assert!(!BUILT_FOR_TESTS) };
         for name in super::VARIABLES {
             // SAFETY: tests in this module read and set only their own variables, and nothing else reads them here.
             unsafe { std::env::set_var(name, "/tmp/anything") };
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     #[cfg(feature = "test-driver")]
     fn a_build_for_tests_reads_them() {
-        assert!(BUILT_FOR_TESTS);
+        const { assert!(BUILT_FOR_TESTS) };
         // SAFETY: as above.
         unsafe { std::env::set_var("JAYNES_APP_SHOT", "/tmp/a.png") };
         assert_eq!(var("JAYNES_APP_SHOT").as_deref(), Some(std::ffi::OsStr::new("/tmp/a.png")));

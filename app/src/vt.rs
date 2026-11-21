@@ -499,6 +499,9 @@ fn install_png_decoder() {
     });
 }
 
+/// A row as read, with its selection.
+type SeenRow = (Rc<Vec<Cell>>, Option<(u16, u16)>);
+
 pub struct Vt {
     term: GhosttyTerminal,
     /// Created lazily when a find bar opens; each terminal owns its own search.
@@ -529,7 +532,7 @@ pub struct Vt {
     drawn: (CursorKey, u64, u64),
     /// The rows read last frame by libghostty's row id, with their selection:
     /// one that isn't dirty is the same row and isn't read again.
-    seen: HashMap<[u64; 2], (Rc<Vec<Cell>>, Option<(u16, u16)>)>,
+    seen: HashMap<[u64; 2], SeenRow>,
     /// The width and colors they were read with: a change reads every row.
     seen_with: (u16, u64),
     placements_cache: RefCell<Option<Vec<Placement>>>,
@@ -705,13 +708,13 @@ impl Vt {
             let ud = &mut *shared as *mut Shared as *const c_void;
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_USERDATA, ud);
             let hold: GhosttyTerminalRenderHoldFn = Some(on_render_hold);
-            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_RENDER_HOLD, std::mem::transmute(hold));
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_RENDER_HOLD, std::mem::transmute::<GhosttyTerminalRenderHoldFn, *const c_void>(hold));
             let title: GhosttyTerminalTitleChangedFn = Some(on_title);
-            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, std::mem::transmute(title));
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, std::mem::transmute::<GhosttyTerminalTitleChangedFn, *const c_void>(title));
             let size: GhosttyTerminalSizeFn = Some(on_size);
-            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_SIZE, std::mem::transmute(size));
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_SIZE, std::mem::transmute::<GhosttyTerminalSizeFn, *const c_void>(size));
             let write: GhosttyTerminalWritePtyFn = Some(on_write_pty);
-            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_WRITE_PTY, std::mem::transmute(write));
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_WRITE_PTY, std::mem::transmute::<GhosttyTerminalWritePtyFn, *const c_void>(write));
             let clipboard: GhosttyTerminalClipboardWriteFn = Some(on_clipboard_write);
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE, std::mem::transmute::<GhosttyTerminalClipboardWriteFn, *const c_void>(clipboard));
             let max_clipboard: usize = MAX_CLIPBOARD_BYTES;
@@ -997,6 +1000,7 @@ impl Vt {
 
     /// Feeds one mouse step of a selection gesture (cell + pixel position in the grid).
     /// Applies the resulting selection; a plain click clears it.
+    #[allow(clippy::too_many_arguments)]
     pub fn select(&mut self, step: Select, col: u16, row: u16, x: f32, y: f32, cell_w: f32, height: f32) {
         unsafe {
             let mut r = GhosttyGridRef { size: std::mem::size_of::<GhosttyGridRef>(), ..Default::default() };

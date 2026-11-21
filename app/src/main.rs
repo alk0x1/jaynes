@@ -111,6 +111,9 @@ fn folder() -> String {
     std::env::args().nth(1).filter(|a| !a.starts_with("-psn")).or(here).unwrap_or(home)
 }
 
+/// The person's editor open from the Changes tab: its terminal, where to go back when it ends, the files stacked.
+type Editing = (String, Option<(String, String)>, Vec<String>);
+
 pub(crate) struct Root {
     runs: Entity<model::Runs>,
     tabs: Entity<tabs::Tabs>,
@@ -137,7 +140,7 @@ pub(crate) struct Root {
     was_changes: bool,
     /// The person's editor open from the Changes tab: its terminal, and where to go back when it ends (the agent that
     /// was open, the files stacked).
-    editing: Option<(String, Option<(String, String)>, Vec<String>)>,
+    editing: Option<Editing>,
     island: Entity<island::Island>,
     compare: Entity<compare::Compare>,
     lightbox: Entity<lightbox::Lightbox>,
@@ -316,7 +319,7 @@ impl Render for Root {
                 let bar = e.drag(cx).0;
                 let (x, width): (f32, f32) = (e.event.position.x.into(), window.viewport_size().width.into());
                 // a panel at the right closed already by this drag: the moves after it change nothing
-                if bar.from_right() && this.bars_shown().right != Some(bar) {
+                if bar.at_right() && this.bars_shown().right != Some(bar) {
                     return;
                 }
                 // dragged under half its lowest, the panel at the right closes, and opens again at its own width
@@ -921,8 +924,8 @@ impl Root {
             .absolute()
             .top_0()
             .bottom_0()
-            .when(bar.from_right(), |d| d.left_0())
-            .when(!bar.from_right(), |d| d.right_0())
+            .when(bar.at_right(), |d| d.left_0())
+            .when(!bar.at_right(), |d| d.right_0())
             .w(px(bars::EDGE))
             // the press is the edge's, not the top bar's under it, which would move the window
             .occlude()
@@ -1153,9 +1156,9 @@ impl Root {
             match split {
                 Ok((address, spaces)) => {
                     if let Ok(spaces) = spaces {
-                        let _ = agents.update(cx, |a, cx| a.read_now(spaces, cx));
+                        agents.update(cx, |a, cx| a.read_now(spaces, cx));
                     }
-                    let _ = tabs.update(cx, |t, cx| t.show_agent(address, "zsh".into(), cx));
+                    tabs.update(cx, |t, cx| t.show_agent(address, "zsh".into(), cx));
                 }
                 Err(e) => tracing::warn!("cannot split: {e}"),
             }
@@ -1366,9 +1369,9 @@ impl Root {
             match cx.background_executor().spawn(async move { agents::start_in(&core, &space, folder, display).map(|a| (a, agents::read_spaces(&core))) }).await {
                 Ok((address, spaces)) => {
                     if let Ok(spaces) = spaces {
-                        let _ = agents.update(cx, |a, cx| a.read_now(spaces, cx));
+                        agents.update(cx, |a, cx| a.read_now(spaces, cx));
                     }
-                    let _ = tabs.update(cx, |t, cx| t.show_agent(address, "claude".into(), cx));
+                    tabs.update(cx, |t, cx| t.show_agent(address, "claude".into(), cx));
                 }
                 Err(e) => tracing::warn!("{e}"),
             }

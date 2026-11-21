@@ -51,6 +51,6 @@ pub fn escape(shift: bool, ctrl: bool, alt: bool) -> Vec<u8> {
 }
 
 fn key(vk: u32, scan: u32, typed: u32, shift: bool, ctrl: bool, alt: bool) -> Vec<u8> {
-    let held = (shift as u32) * 0x10 | (ctrl as u32) * 0x08 | (alt as u32) * 0x02;
+    let held = ((shift as u32) * 0x10) | ((ctrl as u32) * 0x08) | ((alt as u32) * 0x02);
     [1, 0].iter().flat_map(|down| format!("\x1b[{vk};{scan};{typed};{down};{held};1_").into_bytes()).collect()
 }

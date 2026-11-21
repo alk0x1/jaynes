@@ -162,7 +162,7 @@ struct Grid {
     thumb: Option<Bounds<Pixels>>,
     track: Option<Bounds<Pixels>>,
     /// Each row's drawing by position, kept while the row is the same (`Rc`).
-    painted: Vec<(Rc<Vec<vt::Cell>>, Vec<RowOp>, Option<usize>)>,
+    painted: Vec<PaintedRow>,
     /// Font size, cell size, cell font, loaded fonts and ligature setting used to draw.
     painted_with: (u32, Size<Pixels>, Font, u64, bool),
 }
@@ -986,10 +986,10 @@ impl TerminalView {
         self.search_query = input.read(cx).value().to_string();
         self.grid.borrow_mut().vt.start_search(&self.search_query);
         self.focus_search_input(window, cx);
-        if reopening && !self.search_query.is_empty() {
-            if let Some(input) = &self.search_input {
-                input.update(cx, |state, cx| state.select_all(window, cx));
-            }
+        if reopening && !self.search_query.is_empty()
+            && let Some(input) = &self.search_input
+        {
+            input.update(cx, |state, cx| state.select_all(window, cx));
         }
         self.ensure_search_task(cx);
         cx.notify();
@@ -1849,7 +1849,8 @@ fn cell_metrics(window: &Window) -> CellMetrics {
     let id = ts.resolve_font(&cell_font(false, false));
     let (fs, scale) = (crate::settings::font_size(), window.scale_factor());
     // Asked for on every frame; changes with the font, size, scale, line height or cell width.
-    thread_local!(static LAST: Cell<Option<((FontId, u32, u32, u32, u32), CellMetrics)>> = const { Cell::new(None) });
+    type Key = (FontId, u32, u32, u32, u32);
+    thread_local!(static LAST: Cell<Option<(Key, CellMetrics)>> = const { Cell::new(None) });
     let s = crate::settings::get();
     let (line_height, cell_width) = (s.terminal_line_height, s.terminal_cell_width);
     let key = (id, fs.to_bits(), scale.to_bits(), line_height.to_bits(), cell_width.to_bits());
@@ -1989,12 +1990,16 @@ fn fallback_size(c: &vt::Cell, font: &Font, width: Pixels, ts: &gpui::WindowText
     (line.width() > width).then(|| size * f32::from(width) / f32::from(line.width()))
 }
 
+/// A row as drawn last: its cells, its drawing, and where the cursor was in it.
+type PaintedRow = (Rc<Vec<vt::Cell>>, Vec<RowOp>, Option<usize>);
+
 /// One piece of a row's drawing, in cells from the row's start.
 enum RowOp {
     Bg { from: usize, to: usize, color: Hsla },
     Sprite { x: usize, text: String, color: Hsla },
     Icon { x: usize, offset: Point<Pixels>, font: FontId, glyph: GlyphId, size: Pixels, color: Hsla },
-    Text { x: usize, line: ShapedLine },
+    /// Boxed: a shaped line is some 3 KB, and every other piece would be as big in the row's list.
+    Text { x: usize, line: Box<ShapedLine> },
     /// An underline in its style and color, a strikethrough in the text's color.
     Decoration { from: usize, to: usize, underline: Option<(vt::Underline, Hsla)>, strike: Option<Hsla> },
 }
@@ -2094,7 +2099,7 @@ fn row_ops(row: &[vt::Cell], cell: Size<Pixels>, cursor: Option<usize>, window: 
         let width = cell.width * if c.wide { 2.0 } else { (x - start) as f32 };
         let line = window.text_system().shape_line(text.into(), fitted_size.unwrap_or_else(|| px(crate::settings::font_size())), &[run], None)
             .with_cell_positions(&positions, width);
-        ops.push(RowOp::Text { x: start, line });
+        ops.push(RowOp::Text { x: start, line: Box::new(line) });
     }
     row_decorations(row, &mut ops);
     ops
@@ -2231,12 +2236,9 @@ fn paint_grid(bounds: Bounds<Pixels>, grid: &Rc<RefCell<Grid>>, focused: bool, w
     // cached RowOps or the terminal's own selection/copy state.
     for (y, (_, ops, _)) in painted.iter().enumerate() {
         for op in ops {
-            match op {
-                RowOp::Bg { from, to, color } => {
-                    let b = Bounds::new(at(*from, y), size(cell.width * (to - from) as f32, cell.height));
-                    window.paint_quad(fill(snap_box(b), *color));
-                }
-                _ => {}
+            if let RowOp::Bg { from, to, color } = op {
+                let b = Bounds::new(at(*from, y), size(cell.width * (to - from) as f32, cell.height));
+                window.paint_quad(fill(snap_box(b), *color));
             }
         }
     }

@@ -122,9 +122,6 @@ fn is_light(c: u32) -> bool {
     0.2126 * ch(16) + 0.7152 * ch(8) + 0.0722 * ch(0) > 0.5
 }
 
-/// Every theme that can be shown, presets first, each with its colors
-/// (the settings screen draws them as swatches).
-
 fn hex(c: u32) -> String {
     format!("#{c:06x}")
 }
@@ -361,8 +358,6 @@ pub fn color(name: &str) -> Hsla {
 pub fn color_or_literal(v: &str) -> Hsla {
     parse_hex(v).unwrap_or_else(|| color(v))
 }
-
-/// Reads settings.json (writing the defaults if it's missing), or says why it can't be used.
 
 /// Installs new settings; returns whether anything changed.
 pub fn set(s: Settings) -> bool {

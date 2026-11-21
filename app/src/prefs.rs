@@ -342,10 +342,7 @@ mod tests {
     fn what_is_saved_is_read_back() {
         let d = dir();
         let path = d.join("deeper/app-settings.json");
-        let mut p = Prefs::default();
-        p.terminal_font = "JetBrains Mono".into();
-        p.option_key = OptionAsAlt::Left;
-        p.notifications = false;
+        let p = Prefs { terminal_font: "JetBrains Mono".into(), option_key: OptionAsAlt::Left, notifications: false, ..Prefs::default() };
         save(&path, &p).unwrap();
         assert_eq!(load(&path), p);
     }
@@ -366,12 +363,7 @@ mod tests {
 
     #[test]
     fn the_terminal_draws_with_them() {
-        let mut p = Prefs::default();
-        p.terminal_colors = "ink".into();
-        p.terminal_font_size = 15.0;
-        p.copy_on_select = false;
-        p.scroll_speed = 2.0;
-        p.option_key = OptionAsAlt::Off;
+        let p = Prefs { terminal_colors: "ink".into(), terminal_font_size: 15.0, copy_on_select: false, scroll_speed: 2.0, option_key: OptionAsAlt::Off, ..Prefs::default() };
         let s = onto(&p, Settings::default());
         assert_eq!((s.theme.as_str(), s.font_size, s.copy_on_select, s.terminal_scroll_speed, s.option_as_alt), ("ink", 15.0, false, 2.0, OptionAsAlt::Off));
         // the rest stays as it was
@@ -394,8 +386,7 @@ mod tests {
     #[test]
     fn in_the_light_the_terminal_is_linen_and_in_the_dark_the_colors_picked() {
         use super::onto_for;
-        let mut p = Prefs::default();
-        p.terminal_colors = "moss".into();
+        let p = Prefs { terminal_colors: "moss".into(), ..Prefs::default() };
         assert_eq!(onto_for(&p, Settings::default(), true).theme, "linen");
         assert_eq!(onto_for(&p, Settings::default(), false).theme, "moss");
         assert!(crate::settings::swatch("linen").is_some());

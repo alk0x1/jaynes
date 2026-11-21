@@ -175,12 +175,15 @@ fn start(spec: &str) -> u32 {
 }
 
 /// The pieces of one file's `git diff -U0`; `staged` when it compared the last commit with the index.
+/// A piece while it is read: where it is, its lines before and after, where each side starts, and its raw text.
+type Reading = (String, Vec<(u32, String)>, Vec<(u32, String)>, u32, u32, String);
+
 pub fn parse(out: &str, staged: bool) -> Vec<Piece> {
     let mut pieces = vec![];
     // the file's header, before its first piece, which every piece's patch starts with
     let mut header = String::new();
-    let mut cur: Option<(String, Vec<(u32, String)>, Vec<(u32, String)>, u32, u32, String)> = None;
-    let done = |cur: Option<(String, Vec<(u32, String)>, Vec<(u32, String)>, u32, u32, String)>, header: &str, pieces: &mut Vec<Piece>| {
+    let mut cur: Option<Reading> = None;
+    let done = |cur: Option<Reading>, header: &str, pieces: &mut Vec<Piece>| {
         if let Some((at, b, a, _, _, raw)) = cur {
             pieces.push(Piece { staged, patch: format!("{header}{raw}"), ..piece(at, b, a) });
         }
