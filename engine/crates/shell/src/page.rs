@@ -847,7 +847,10 @@ impl Page {
         };
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
-                Some(r) => run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r))),
+                Some(r) => {
+                    let who = if r.halted { self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e)) } else { None };
+                    run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref())
+                }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
                     Ok(said) => format!("<div class=\"empty\">The run is not recorded yet. What starting it said:</div><pre class=\"said\">{}</pre>", esc(said.trim())),
@@ -1003,7 +1006,7 @@ fn phase_word(r: &Run) -> String {
     }
     match &r.phase {
         Phase::Running => "<span class=\"goes\">running</span>".into(),
-        Phase::Waiting { step: None, .. } => "<span class=\"goes\">delivered, answers open</span>".into(),
+        Phase::Waiting { step: None, .. } => "<span class=\"goes\">delivered · you can still correct it</span>".into(),
         Phase::Waiting { .. } => "<span class=\"holds\">waits for you</span>".into(),
         Phase::Blocked { .. } => "<span class=\"bad\">blocked</span>".into(),
         Phase::Finished { outcome } => format!("{outcome:?}").to_lowercase(),
@@ -1042,11 +1045,14 @@ fn summary_html(home: &std::path::Path, r: &Run) -> String {
 }
 
 /// A run: where it is, what it cost, its steps, what the person may do to it, and, once finished, its summary.
-fn run_html(r: &Run, changes: &str, summary: &str) -> String {
+/// `halted_by` says who halted it, in the column's words ("halted by an agent"), from its entries.
+fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> String {
     let path = r.path();
     let steps = stage_list(r);
     let phase = match &r.phase {
-        Phase::Blocked { reason, fault, .. } => format!("<div class=\"notice bad\">Blocked ({}): {}</div>", format!("{fault:?}").to_lowercase(), esc(reason)),
+        // in the app's words: where, why, and what Continue does
+        Phase::Blocked { step, reason, fault } => blocked_notice(step.as_deref(), *fault, reason),
+        Phase::Running if r.halted => format!("<div class=\"notice\">{}</div>", esc(&crate::listing::halted_said(halted_by.unwrap_or("halted"), crate::listing::halted_step(r).as_deref()))),
         Phase::Waiting { why, .. } => format!("<div class=\"notice\">{}</div>", esc(why)),
         Phase::Finished { outcome } => format!("<div class=\"notice ok\">Finished: {}</div>", format!("{outcome:?}").to_lowercase()),
         Phase::Running => String::new(),
@@ -1060,29 +1066,33 @@ fn run_html(r: &Run, changes: &str, summary: &str) -> String {
         .collect();
     let finished = r.finished();
     let mut buttons = String::new();
-    let mut button = |act: &str, text: &str, cls: &str| buttons.push_str(&format!("<button class=\"act {cls}\" data-act=\"{act}\">{text}</button>"));
+    let mut tipped = |act: &str, text: &str, cls: &str, tip: Option<&str>| {
+        let title = tip.map(|t| format!(" title=\"{}\"", esc(t))).unwrap_or_default();
+        buttons.push_str(&format!("<button class=\"act {cls}\" data-act=\"{act}\"{title}>{text}</button>"));
+    };
     if !finished {
         // each control only when it can do something: halting needs something at work, raising the ceiling a run
         // stopped by it or near it (four fifths of its time or tokens)
         if r.halted {
-            button("resume", "Resume", "");
+            tipped("resume", "Resume", "", None);
         } else if matches!(r.phase, Phase::Running) {
-            button("halt", "Halt", "");
+            tipped("halt", "Halt", "", None);
         }
         if r.blocked() {
-            button("continue", "Continue", "");
+            tipped("continue", "Continue", "", None);
         }
-        if r.risk == jaynes_core::risk::Risk::Low {
-            button("raise-risk", "Raise the risk", "");
+        // the app's words, and only where the high risk adds steps (listing::risk_adds_steps)
+        if r.risk == jaynes_core::risk::Risk::Low && crate::listing::risk_adds_steps(r) {
+            tipped("raise-risk", crate::listing::ASK_AT_MORE_STEPS, "", Some(crate::listing::ASK_AT_MORE_STEPS_TIP));
         }
         let near = r.spent.seconds * 5 >= r.ceiling.seconds * 4 || r.spent.tokens * 5 >= r.ceiling.tokens * 4;
         if near || matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }) {
-            button("raise-ceiling", "Raise the ceiling by 30 min", "");
+            tipped("raise-ceiling", "Raise the ceiling by 30 min", "", None);
         }
-        button("abandon", "Abandon", "danger");
+        tipped("abandon", "Abandon", "danger", r.delivered.is_some().then_some(crate::listing::ABANDON_DELIVERED_TIP));
     }
     if r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge && r.delivered.is_some() && !r.undone {
-        button("undo", "Undo the merge", "danger");
+        tipped("undo", "Undo the merge", "danger", None);
     }
     let correct = if r.delivered.is_some() {
         let options: String = std::iter::once("<option value=\"\">the step that erred, if you know it</option>".to_string())
@@ -1161,6 +1171,29 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// A blocked run's notice, in the app's words (listing::blocked_said): "Blocked at “plan”", why, and what Continue does.
+fn blocked_notice(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> String {
+    let said = crate::listing::blocked_said(step, fault, reason);
+    format!("<div class=\"notice bad\"><b>{}</b> · {} Continue {}.</div>", esc(&said.title), esc(&said.why), esc(&said.continue_does))
+}
+
+/// The title over what a step changed, as the app's diff says it: "Changes made at “directions” · 3 files".
+fn changes_title(step: &str, n: usize) -> String {
+    format!("Changes made at “{step}” · {n} file{}", if n == 1 { "" } else { "s" })
+}
+
+/// The button that chooses an option, as the app's compare mode says it.
+fn choose_button(id: &str) -> String {
+    format!("<button class=\"choose\" data-choose=\"{id}\">Choose this one</button>", id = esc(id))
+}
+
+/// The row that sends every option away: "Not this one" when there is one, as the app says it.
+fn none_row(options: usize) -> String {
+    let words = if options == 1 { "Not this one" } else { "None of these" };
+    let why = if options == 1 { "What was missing? The agent makes a new one; this one does not come back" } else { "What was missing? The agent makes new options; these do not come back" };
+    format!("<div class=\"row choose\"><h3>{words}</h3><div class=\"pick\"><input class=\"adjust\" id=\"why\" placeholder=\"{why}\"><button class=\"choose\" id=\"none\" disabled>{words}</button></div><ul class=\"fx-row\" id=\"fx-none\"></ul></div>")
+}
+
 /// The button that shortlists an option at a choosing stop, in the app's words ("☆ Shortlist", "★ Shortlisted").
 fn shortlist_button(id: &str) -> String {
     format!("<button class=\"fin\" data-fin=\"{id}\" title=\"Shortlist it: two or three shortlisted are developed by the agent, then you choose again\">☆ Shortlist</button>", id = esc(id))
@@ -1192,7 +1225,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         "<span class=\"badge\">● The run goes on while you look</span>"
     };
     let phase = match &run.phase {
-        Phase::Blocked { reason, .. } => format!("<div class=\"notice\">The run is blocked: {}</div>", esc(reason)),
+        Phase::Blocked { step, reason, fault } => blocked_notice(step.as_deref(), *fault, reason),
         _ => String::new(),
     };
     // a stop that chooses: one click on an option sends the choice; a note beside it adjusts the chosen one
@@ -1203,14 +1236,15 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             .map(|it| {
                 let more_ways = format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\">{}", shortlist_button(&it.id), id = esc(&it.id));
                 format!(
-                    "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\">{more_ways}<button class=\"choose\" data-choose=\"{id}\">Choose</button></div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
+                    "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\">{more_ways}{choose}</div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
                     id = esc(&it.id),
                     label = esc(&it.label),
-                    more = shown(it)
+                    more = shown(it),
+                    choose = choose_button(&it.id)
                 )
             })
             .collect::<String>();
-        rows + FINALS_ROW + "<div class=\"row choose\"><h3>None of these</h3><div class=\"pick\"><input class=\"adjust\" id=\"why\" placeholder=\"What was missing? The agent makes new options; these do not come back\"><button class=\"choose\" id=\"none\" disabled>None of these</button></div><ul class=\"fx-row\" id=\"fx-none\"></ul></div>"
+        rows + FINALS_ROW + &none_row(question.items.len())
     };
     let rows: String = if question.choose { choose_rows() } else { question
         .items
@@ -1293,9 +1327,8 @@ fn changes_html(home: &std::path::Path, run: &Run, only: Option<usize>) -> Strin
                 text.push_str(&format!("\n[{more} more bytes not shown: read the branch before it lands]"));
             }
             Some(format!(
-                "<div class=\"changes\"><div class=\"qh\">What {} changed · {n} file{}</div><pre class=\"diff\">{}</pre></div>",
-                esc(&d.name),
-                if n == 1 { "" } else { "s" },
+                "<div class=\"changes\"><div class=\"qh\">{}</div><pre class=\"diff\">{}</pre></div>",
+                esc(&changes_title(&d.name, n)),
                 diff_html(&text)
             ))
         })
@@ -1840,7 +1873,7 @@ if (base && base.choose) {
     const b = e.target.closest("button.choose"); if (!b || b.disabled) return;
     if (b.id === "none") {
       const words = [(document.getElementById("why") || {}).value || "", ctxOf()].filter(t => t.trim()).join(" ");
-      readWords(words, "None of these", none()); return;
+      readWords(words, document.getElementById("none").textContent, none()); return;
     }
     const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : choice(b.dataset.choose);
     document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
@@ -2125,7 +2158,7 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 </style></head><body>
 <div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a><a href="/setup">Setup</a></nav></div>
 <div class="wrap"><aside>{{aside}}</aside><main>{{who}}{{main}}<footer class="foot">Jaynes {{version}}</footer></main></div>
-<div class="effects" id="fxbar"><div class="what"><div class="label">What this answer will do · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
+<div class="effects" id="fxbar"><div class="what"><div class="label">What this does · written by Jaynes, not by the role</div><ul id="fx"></ul><div class="refused" id="refused"></div></div><button class="send" id="send">Send</button></div>
 <script src="/key.js"></script><script src="/page.js"></script></body></html>"##;
 
 #[cfg(test)]
@@ -2351,6 +2384,64 @@ mod tests {
         // and again a day later
         assert!(reminders_in(&page.render(View::Overview, later + 2 + drive::REMIND_EVERY).expect("overview")).contains("href=\"/q/w2/q1\""));
         let _gone = std::fs::remove_dir_all(&page.home);
+    }
+
+    /// A run of one agent step, "plan", and with `high` a second step only a high-risk run takes.
+    fn small_run(high: bool) -> Run {
+        let mut steps = vec![json!({"name": "plan", "executor": "agent"})];
+        if high {
+            steps.push(json!({"name": "review", "executor": "agent", "from_risk": "high"}));
+        }
+        let manifest: jaynes_core::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": steps})).expect("manifest");
+        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        Run::fold(&decide(None, &start).expect("start").events).expect("run")
+    }
+
+    #[test]
+    fn the_run_s_controls_say_what_the_app_s_say() {
+        // raising the risk asks at more steps, only where the high risk adds some, with the app's hint
+        let shown = run_html(&small_run(true), "", "", None);
+        assert!(shown.contains(">Ask me at more steps<") && shown.contains(&format!("title=\"{}\"", crate::listing::ASK_AT_MORE_STEPS_TIP)), "{shown}");
+        assert!(!shown.contains("Raise the risk"), "{shown}");
+        assert!(!run_html(&small_run(false), "", "", None).contains("Ask me at more steps"));
+        // abandoning a run already delivered says what stays
+        let mut delivered = small_run(false);
+        delivered.delivered = Some(jaynes_core::Digest("d".into()));
+        assert!(run_html(&delivered, "", "", None).contains(&format!("title=\"{}\"", crate::listing::ABANDON_DELIVERED_TIP)));
+    }
+
+    #[test]
+    fn a_blocked_or_halted_run_says_where_in_the_app_s_words() {
+        use jaynes_core::run::Status;
+        let mut r = small_run(false);
+        r.phase = Phase::Blocked { step: Some("plan".into()), fault: jaynes_core::event::Fault::Agent, reason: "plan spent its 3 attempts: the agent exited with code 1: no tests".into() };
+        let shown = run_html(&r, "", "", None);
+        assert!(shown.contains("Blocked at “plan”") && shown.contains("“plan” used its 3 attempts. The agent exited with code 1.") && shown.contains("Continue tries “plan” again, with its attempts back."), "{shown}");
+        assert!(!shown.contains("Blocked (agent)"), "{shown}");
+        let mut h = small_run(false);
+        h.halted = true;
+        h.steps[0].status = Status::Running { attempt: 1, fix: 0 };
+        assert!(run_html(&h, "", "", Some("halted by an agent")).contains("Halted by an agent at “plan”"));
+        // halted with no step under way in its record: where it would go on
+        let mut idle = small_run(false);
+        idle.halted = true;
+        idle.steps[0].status = Status::Idle;
+        assert!(run_html(&idle, "", "", Some("halted by an agent")).contains("Halted by an agent at “plan”"));
+        // a run delivered whose answers are still open, as the app's column says it
+        let mut w = small_run(false);
+        w.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
+        assert!(phase_word(&w).contains("delivered · you can still correct it"), "{}", phase_word(&w));
+    }
+
+    #[test]
+    fn a_choice_and_the_changes_read_as_in_the_app() {
+        assert_eq!(changes_title("directions", 3), "Changes made at “directions” · 3 files");
+        assert_eq!(changes_title("copy", 1), "Changes made at “copy” · 1 file");
+        assert!(choose_button("harbor").contains(">Choose this one<"));
+        // one option: not this one; more: none of these
+        assert!(none_row(1).contains(">Not this one<") && !none_row(1).contains("None of these"));
+        assert!(none_row(3).contains(">None of these<"));
+        assert!(PAGE.contains("What this does · written by Jaynes, not by the role") && !PAGE.contains("What this answer will do"));
     }
 
     #[test]

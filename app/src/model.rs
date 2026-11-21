@@ -39,21 +39,7 @@ pub struct Snapshot {
     pub halted: HashMap<String, String>,
 }
 
-/// Who halted a run, from its entries: the last halt's author, as the column says it.
-pub fn halted_by(events: &[jaynes_core::event::Event]) -> String {
-    use jaynes_core::question::By;
-    let by = events.iter().rev().find_map(|e| match e {
-        jaynes_core::event::Event::Halted { by } => Some(by),
-        _ => None,
-    });
-    match by {
-        Some(By::Person) => "halted by you",
-        Some(By::Agent { .. }) => "halted by an agent",
-        Some(By::Rule { .. }) => "halted by a rule",
-        None => "halted",
-    }
-    .into()
-}
+pub use jaynes_shell::listing::halted_by;
 
 /// How many files a run changed: each thing its done steps on the path changed, once, as the run's summary lists
 /// what was delivered (jaynes_shell::summary).

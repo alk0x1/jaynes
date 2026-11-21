@@ -329,6 +329,99 @@ fn tail(path: &Path, max: u64) -> Option<String> {
     Some(if len > max { text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default() } else { text })
 }
 
+/// "Ask me at more steps": raising a low-risk run's risk, in the app and on the page.
+pub const ASK_AT_MORE_STEPS: &str = "Ask me at more steps";
+/// What raising the risk does: the full path, with more stops and the higher limit (core risk.rs and decide.rs).
+pub const ASK_AT_MORE_STEPS_TIP: &str = "Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run.";
+/// What abandoning a run already delivered does: the core's Abandon finishes the run, never undoes it.
+pub const ABANDON_DELIVERED_TIP: &str = "Ends the run here. What it delivered stays as it is, and you can no longer correct it at its stops.";
+
+/// Whether the high risk takes steps the run's risk leaves out: without them, raising it changes only the limit, and
+/// "Ask me at more steps" is not offered.
+pub fn risk_adds_steps(r: &Run) -> bool {
+    r.manifest.path(jaynes_core::risk::Risk::High).len() > r.path().len()
+}
+
+/// The step a halted run was under way at (running, checking or probing); with none under way in its record, the
+/// first on its path not done yet, where it goes on when resumed.
+pub fn halted_step(r: &Run) -> Option<String> {
+    use jaynes_core::run::Status;
+    let path = r.path();
+    let under_way = path.iter().copied().find(|&i| matches!(r.steps[i].status, Status::Running { .. } | Status::Checking { .. } | Status::Probing));
+    under_way.or_else(|| path.iter().copied().find(|&i| r.steps[i].status != Status::Done)).map(|i| r.manifest.steps[i].name.clone())
+}
+
+/// What a blocked run's tab says at its top: where it stopped, why in words, and what Continue does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockedSaid {
+    /// The step it stopped at, when one did.
+    pub step: Option<String>,
+    pub title: String,
+    pub why: String,
+    pub continue_does: String,
+}
+
+/// A blocked run's words, from the core's (`Phase::Blocked`): the step's name always in curly quotes, since a role's
+/// "change" or "fix" reads as a verb; "change spent its 3 attempts: the agent exited with code 1: …" becomes
+/// "“change” used its 3 attempts. The agent exited with code 1."; any other reason is the engine's, as a sentence.
+/// Continue gives an agent's attempts back (the core's Continued sets them to 0 for Fault::Agent), else goes on.
+pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> BlockedSaid {
+    let quoted = |s: &str| format!("“{s}”");
+    let sentence = |t: &str| {
+        let t = t.trim();
+        let mut c = t.chars();
+        let up = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+        if up.is_empty() || up.ends_with(['.', '!', '?']) { up } else { format!("{up}.") }
+    };
+    // a record keeps a reason as the engine said it then ("exited with Some(1)"): read as it says it now
+    let reason = &in_words(reason);
+    let spent = step.and_then(|s| reason.strip_prefix(&format!("{s} spent its ")).and_then(|rest| rest.split_once(" attempts")).map(|(n, failures)| (s, n, failures.trim_start_matches(':'))));
+    let why = match spent {
+        Some((s, n, failures)) => {
+            // the first failure's own words, before its detail: "the agent exited with code 1"
+            let head = failures.split("; ").next().unwrap_or("").split(": ").next().unwrap_or("").trim();
+            if head.is_empty() { format!("{} used its {n} attempts.", quoted(s)) } else { format!("{} used its {n} attempts. {}", quoted(s), sentence(head)) }
+        }
+        None => sentence(reason),
+    };
+    BlockedSaid {
+        step: step.map(str::to_string),
+        title: step.map(|s| format!("Blocked at {}", quoted(s))).unwrap_or_else(|| "Blocked".into()),
+        why,
+        continue_does: match step {
+            Some(s) if fault == jaynes_core::event::Fault::Agent => format!("tries {} again, with its attempts back", quoted(s)),
+            Some(s) => format!("goes on from {}", quoted(s)),
+            None => "goes on".into(),
+        },
+    }
+}
+
+/// Who halted a run, from its entries: the last halt's author, as the column says it.
+pub fn halted_by(events: &[jaynes_core::event::Event]) -> String {
+    use jaynes_core::question::By;
+    let by = events.iter().rev().find_map(|e| match e {
+        jaynes_core::event::Event::Halted { by } => Some(by),
+        _ => None,
+    });
+    match by {
+        Some(By::Person) => "halted by you",
+        Some(By::Agent { .. }) => "halted by an agent",
+        Some(By::Rule { .. }) => "halted by a rule",
+        None => "halted",
+    }
+    .into()
+}
+
+/// The title of a halted run's block: who halted it, as the column says it ("halted by an agent"), and at which step.
+pub fn halted_said(who: &str, step: Option<&str>) -> String {
+    let mut c = who.chars();
+    let who = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+    match step {
+        Some(s) => format!("{who} at “{s}”"),
+        None => who,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

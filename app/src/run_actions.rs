@@ -35,7 +35,7 @@ impl Act {
             Act::Halt => "Halt",
             Act::Resume => "Resume",
             Act::Continue => "Continue",
-            Act::RaiseRisk => "Ask me at more steps",
+            Act::RaiseRisk => jaynes_shell::listing::ASK_AT_MORE_STEPS,
             Act::RaiseCeiling => "Raise the ceiling by 30 min",
             Act::Abandon => "Abandon",
         }
@@ -46,8 +46,9 @@ impl Act {
     /// keeps what it delivered (the core's Abandon finishes the run, never undoes it).
     pub fn tip(self, f: &Facts) -> Option<&'static str> {
         match self {
-            Act::RaiseRisk => Some("Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run."),
-            Act::Abandon if f.delivered => Some("Ends the run here. What it delivered stays as it is, and you can no longer correct it at its stops."),
+            // the page's words too (jaynes_shell::listing)
+            Act::RaiseRisk => Some(jaynes_shell::listing::ASK_AT_MORE_STEPS_TIP),
+            Act::Abandon if f.delivered => Some(jaynes_shell::listing::ABANDON_DELIVERED_TIP),
             _ => None,
         }
     }
@@ -83,7 +84,7 @@ impl Facts {
             running: matches!(r.phase, Phase::Running),
             blocked: r.blocked(),
             low_risk: r.risk == jaynes_core::risk::Risk::Low,
-            risk_adds_steps: r.manifest.path(jaynes_core::risk::Risk::High).len() > r.path().len(),
+            risk_adds_steps: jaynes_shell::listing::risk_adds_steps(r),
             near_ceiling: r.spent.seconds * 5 >= r.ceiling.seconds * 4 || r.spent.tokens * 5 >= r.ceiling.tokens * 4,
             stopped_by_ceiling: matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }),
             delivered: !r.finished() && r.delivered.is_some(),

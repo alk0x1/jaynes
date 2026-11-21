@@ -13,50 +13,7 @@ use jaynes_shell::listing::{Listing, Mark, Row};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// What a blocked run's tab says at its top: where it stopped, why in words, and what Continue does.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BlockedSaid {
-    /// The step it stopped at, when one did.
-    pub step: Option<String>,
-    pub title: String,
-    pub why: String,
-    pub continue_does: String,
-}
-
-/// A blocked run's words, from the core's (`Phase::Blocked`): the step's name always in curly quotes, since a role's
-/// "change" or "fix" reads as a verb; "change spent its 3 attempts: the agent exited with code 1: …" becomes
-/// "“change” used its 3 attempts. The agent exited with code 1."; any other reason is the engine's, as a sentence.
-/// Continue gives an agent's attempts back (the core's Continued sets them to 0 for Fault::Agent), else goes on.
-pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> BlockedSaid {
-    let quoted = |s: &str| format!("“{s}”");
-    let sentence = |t: &str| {
-        let t = t.trim();
-        let mut c = t.chars();
-        let up = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
-        if up.is_empty() || up.ends_with(['.', '!', '?']) { up } else { format!("{up}.") }
-    };
-    // a record keeps a reason as the engine said it then ("exited with Some(1)"): read as it says it now
-    let reason = &jaynes_shell::listing::in_words(reason);
-    let spent = step.and_then(|s| reason.strip_prefix(&format!("{s} spent its ")).and_then(|rest| rest.split_once(" attempts")).map(|(n, failures)| (s, n, failures.trim_start_matches(':'))));
-    let why = match spent {
-        Some((s, n, failures)) => {
-            // the first failure's own words, before its detail: "the agent exited with code 1"
-            let head = failures.split("; ").next().unwrap_or("").split(": ").next().unwrap_or("").trim();
-            if head.is_empty() { format!("{} used its {n} attempts.", quoted(s)) } else { format!("{} used its {n} attempts. {}", quoted(s), sentence(head)) }
-        }
-        None => sentence(reason),
-    };
-    BlockedSaid {
-        step: step.map(str::to_string),
-        title: step.map(|s| format!("Blocked at {}", quoted(s))).unwrap_or_else(|| "Blocked".into()),
-        why,
-        continue_does: match step {
-            Some(s) if fault == jaynes_core::event::Fault::Agent => format!("tries {} again, with its attempts back", quoted(s)),
-            Some(s) => format!("goes on from {}", quoted(s)),
-            None => "goes on".into(),
-        },
-    }
-}
+pub use jaynes_shell::listing::{BlockedSaid, blocked_said, halted_said};
 
 /// The last lines the agent said at `step`, where it was blocked: at most six, from the story's latest time there.
 pub fn last_said(story: &[(String, Vec<String>)], step: Option<&str>) -> Vec<String> {
@@ -71,15 +28,6 @@ pub fn note_for(finished: bool, halted: bool, blocked: bool) -> Option<&'static 
     (!finished && !halted && !blocked).then_some("The agent works on its own and reports to Jaynes. You answer at its stops.")
 }
 
-/// The title of a halted run's block: who halted it, as the column says it ("halted by an agent"), and at which step.
-pub fn halted_said(who: &str, step: Option<&str>) -> String {
-    let mut c = who.chars();
-    let who = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
-    match step {
-        Some(s) => format!("{who} at “{s}”"),
-        None => who,
-    }
-}
 
 /// The story in the role's order, the first step first, whatever times its files carry; a step the role does not
 /// name comes last.
