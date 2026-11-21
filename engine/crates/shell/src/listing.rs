@@ -310,19 +310,22 @@ pub fn stages(r: &Run) -> Vec<Stage> {
         .enumerate()
         .map(|(i, d)| {
             let s = &r.steps[i];
+            // only an agent's step has attempts to say, counted as the run's work counts them
+            let agent = d.executor == Executor::Agent;
             let tries = format!("{} attempt{}", s.attempt, if s.attempt == 1 { "" } else { "s" });
+            let try_n = |attempt: &u32| if agent { format!(", attempt {attempt}") } else { String::new() };
             let round = if s.round > 0 { format!(", round {}", s.round + 1) } else { String::new() };
             let answer = s.question.as_ref().and_then(|q| r.questions.get(q)).and_then(|q| q.answer.clone());
             let (class, detail) = if !path.contains(&i) {
                 ("todo", "left out at this risk".to_string())
             } else if blocked == Some(d.name.as_str()) {
                 // the agent spent every attempt it had: said so, as the run's tab says it
-                ("blocked", if spent_all { format!("blocked: used its {tries}") } else { format!("blocked, {tries}") })
+                ("blocked", if spent_all { format!("blocked: used its {tries}") } else if agent { format!("blocked, {tries}") } else { "blocked".to_string() })
             } else {
                 match &s.status {
-                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() && r.halted => ("halted", format!("halted, attempt {attempt}{round}")),
+                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() && r.halted => ("halted", format!("halted{}{round}", try_n(attempt))),
                     Status::Probing if !r.finished() && r.halted => ("halted", "halted while testing what it reaches".to_string()),
-                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running, attempt {attempt}{round}")),
+                    Status::Running { attempt, .. } | Status::Checking { attempt, .. } if !r.finished() => ("running", format!("running{}{round}", try_n(attempt))),
                     Status::Probing if !r.finished() => ("running", "testing what it reaches".to_string()),
                     _ if asks(i) && r.finished() => ("todo", "left unanswered".to_string()),
                     _ if asks(i) => ("waiting", format!("waiting for you{round}")),
@@ -456,6 +459,39 @@ fn tail(path: &Path, max: u64) -> Option<String> {
     f.read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Some(if len > max { text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default() } else { text })
+}
+
+/// What the agents of a run did, counted one way for the page, the app and the summary: the attempts at the steps
+/// an agent works (a step Jaynes or the person does is no attempt), the fixes it made inside them after a check, and
+/// the attempts that failed by its own fault, the only ones a step's limit counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Work {
+    pub attempts: u32,
+    pub fixes: u32,
+    pub own_failures: u32,
+}
+
+/// What the agents of a run did, from its steps: an attempt is a step's go from the start, numbered by the core.
+pub fn work(r: &Run) -> Work {
+    use jaynes_core::manifest::Executor;
+    let attempts = r.manifest.steps.iter().zip(&r.steps).filter(|(d, _)| d.executor == Executor::Agent).map(|(_, s)| s.attempt).sum();
+    Work { attempts, fixes: r.counts.fixes, own_failures: r.counts.spent }
+}
+
+impl Work {
+    /// "2 attempts by the agent, 1 of them failed by its own fault, 1 fix"; a part that is none is not said, but the
+    /// attempts.
+    pub fn said(&self) -> String {
+        let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let mut out = if self.attempts == 0 { "no attempt by the agent".to_string() } else { format!("{} by the agent", plural(self.attempts, "attempt", "attempts")) };
+        if self.own_failures > 0 {
+            out.push_str(&format!(", {} failed by its own fault", if self.attempts == 1 { "it".to_string() } else { format!("{} of them", self.own_failures) }));
+        }
+        if self.fixes > 0 {
+            out.push_str(&format!(", {}", plural(self.fixes, "fix", "fixes")));
+        }
+        out
+    }
 }
 
 /// "Ask me at more steps": raising a low-risk run's risk, in the app and on the page.
@@ -644,6 +680,33 @@ fn unspent(reason: &str) -> (String, bool) {
     (if after.is_empty() { before.to_string() } else { format!("{before}. {after}") }, true)
 }
 
+/// `s` split at `sep`, never inside curly quotes, where a label may say anything ("“Footer: links” was dropped").
+fn split_outside_quotes<'a>(s: &'a str, sep: &str) -> Vec<&'a str> {
+    let (mut out, mut depth, mut start, mut skip) = (Vec::new(), 0u32, 0, 0);
+    for (i, c) in s.char_indices() {
+        if i < skip {
+            continue;
+        }
+        match c {
+            '“' => depth += 1,
+            '”' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && s[i..].starts_with(sep) => {
+                out.push(&s[start..i]);
+                start = i + sep.len();
+                skip = start;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// What a failure says before its detail: "the agent exited with code 1" of "the agent exited with code 1: boom".
+fn head_of(failure: &str) -> &str {
+    split_outside_quotes(failure, ": ").first().copied().unwrap_or("").trim()
+}
+
 /// Each thing said once, in the order first said: one said more than once ends with "(3 times)".
 fn once<'a>(items: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let mut seen: Vec<(&str, usize)> = Vec::new();
@@ -782,12 +845,12 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
                 details.push(OPEN_DID_NOT_HELP.trim().into());
             }
         }
-        None => match inner.split_once(": ") {
-            Some((first, _)) => {
+        None => match head_of(inner) {
+            first if first.len() < inner.trim().len() => {
                 said.why = sentence(first);
                 details.push(inner.trim().to_string());
             }
-            None => said.why = sentence(inner),
+            _ => said.why = sentence(inner),
         },
     }
     details.extend(not_given.map(not_given_said));
@@ -838,10 +901,12 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
             said.what = format!("The agent could not finish {at}.");
             let spent = step.and_then(|s| reason.strip_prefix(&format!("{s} spent its ")).and_then(|rest| rest.split_once(" attempts")).map(|(n, failures)| (s, n, failures.trim_start_matches(':'))));
             if let Some((s, n, failures)) = spent {
-                // the first failure's own words, before its detail: "the agent exited with code 1"
-                let head = failures.split("; ").next().unwrap_or("").split(": ").next().unwrap_or("").trim();
+                // the first failure's own words, before its detail: "the agent exited with code 1"; a label in
+                // curly quotes is never cut
+                let failures = split_outside_quotes(failures, "; ");
+                let head = head_of(failures.first().copied().unwrap_or(""));
                 said.why = if head.is_empty() { format!("{} used its {n} attempts.", quoted(s)) } else { format!("{} used its {n} attempts. {}", quoted(s), sentence(head)) };
-                said.details = once(failures.split("; "));
+                said.details = once(failures.iter().copied());
                 if said.details == [head] {
                     said.details.clear();
                 }
@@ -1052,6 +1117,64 @@ mod blocked_tests {
         }
         let none = what(None, Fault::Role, "nothing to deliver.");
         assert_eq!((none.title.as_str(), none.why.as_str(), none.continue_does.as_str()), ("Blocked", "Nothing to deliver.", "Continue goes on."));
+    }
+
+    #[test]
+    fn a_label_in_curly_quotes_is_never_cut_in_the_middle() {
+        // the copy-review of the scene: the agent gives back an item the person dropped, three times
+        let gone = "“Footer: quieter links” was dropped by the person and may not come back";
+        let b = blocked_said(Some("copy"), Fault::Agent, &format!("copy spent its 3 attempts: {gone}; {gone}; {gone}"));
+        assert_eq!(b.why, format!("“copy” used its 3 attempts. {gone}."));
+        assert_eq!(b.details, [format!("{gone} (3 times)")]);
+        // a label with "; " in it stays one failure, and its detail after the quotes is still cut off the why
+        let semi = "the check “a; b: c” failed: 2 of 3";
+        let s2 = blocked_said(Some("copy"), Fault::Agent, &format!("copy spent its 2 attempts: {semi}"));
+        assert_eq!(s2.why, "“copy” used its 2 attempts. The check “a; b: c” failed.");
+        assert_eq!(s2.details, [semi]);
+        let unjudged = blocked_said(Some("copy"), Fault::Jaynes, "the check fits of copy could not judge: “Plan: v2” has no picture: none found. No attempt was spent");
+        assert_eq!(unjudged.why, "“Plan: v2” has no picture.");
+    }
+
+    // uso real, 21/11: "Os contadores se contradizem: "2 attempts, 0 spent by the agent" ao lado de "blocked, 1 attempt";
+    // depois do Continue, "3 attempts, 0 spent by the agent, 1 fixes", com o agente tendo trabalhado duas vezes."
+    #[test]
+    fn the_counters_never_contradict_each_other() {
+        use jaynes_core::event::{Event, Usage};
+        use jaynes_core::manifest::Executor;
+        use jaynes_core::question::By;
+        let mut r = super::tests::run("r1", "Filter the items by price");
+        // a step Jaynes does itself first (the role's runner), then the agent's
+        r.manifest.steps[0].executor = Executor::Role;
+        let started = |step: &str, attempt: u32| Event::AttemptStarted { step: step.into(), round: 0, attempt, fix: 0, session: None, deadline_seconds: 0, tokens_left: 0, key: None };
+        for e in [
+            started("plan", 1),
+            Event::StepDone { step: "plan".into(), round: 0, output: jaynes_core::Digest("o".into()), items: vec![], reads: vec![], changed: vec![] },
+            started("change", 1),
+            Event::AttemptFailed { step: "change".into(), attempt: 1, reasons: vec!["could not judge".into()], usage: Usage::default(), spent: false },
+            Event::Blocked { step: Some("change".into()), fault: Fault::Jaynes, reason: "the check suite of change could not judge: x. No attempt was spent".into() },
+        ] {
+            r.apply(&e);
+        }
+        // the run's count and the step's line say the same: one attempt, the agent's
+        assert_eq!(work(&r), Work { attempts: 1, fixes: 0, own_failures: 0 });
+        assert_eq!(work(&r).said(), "1 attempt by the agent");
+        assert_eq!(stages(&r)[1].detail, "blocked, 1 attempt");
+        assert!(!stages(&r).iter().any(|s| s.name == "plan" && s.detail.contains("attempt")), "{:?}", stages(&r));
+
+        for e in [
+            Event::Continued { by: By::Person },
+            started("change", 2),
+            Event::FixAsked { step: "change".into(), attempt: 2, fix: 1, reasons: vec!["the suite fails".into()] },
+        ] {
+            r.apply(&e);
+        }
+        // the agent worked twice, its second attempt with a fix in it
+        assert_eq!(work(&r).said(), "2 attempts by the agent, 1 fix");
+        assert_eq!(stages(&r)[1].detail, "running, attempt 2");
+        // a failure of its own is said as such, and the fixes as fixes
+        let mine = Work { attempts: 3, fixes: 2, own_failures: 1 };
+        assert_eq!(mine.said(), "3 attempts by the agent, 1 of them failed by its own fault, 2 fixes");
+        assert_eq!(Work { attempts: 1, fixes: 0, own_failures: 1 }.said(), "1 attempt by the agent, it failed by its own fault");
     }
 
     #[test]

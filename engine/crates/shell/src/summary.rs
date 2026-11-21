@@ -279,8 +279,9 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         refused: Vec::new(),
         started: events.first().map(|(ts, _)| *ts).unwrap_or(0),
         ended: events.last().map(|(ts, _)| *ts).unwrap_or(0),
-        // the agents' own: an attempt of a step Jaynes does itself is not theirs
-        attempts: steps.iter().filter(|s| s.by == "agent").map(|s| s.attempts).sum(),
+        // the agents' own, counted as the page and the app count them: an attempt of a step Jaynes does itself is not
+        // theirs
+        attempts: crate::listing::work(&r).attempts,
         steps,
         promises,
         agent_seconds: r.spent.seconds,
@@ -502,12 +503,11 @@ impl Summary {
             people.push_str(&format!(" A person also acted on the run {} (halt, resume, continue, raise, correct or undo).", if p.acts == 1 { "once".to_string() } else { format!("{} times", p.acts) }));
         }
         out.push_str(&format!(
-            "\n### Cost\n\n- Agents: {} of work, {} tokens, {} ({} spent by the agent's own fault), {}.\n- People: {people}\n",
+            "\n### Cost\n\n- Agents: {} of work, {} tokens, {}.\n- People: {people}\n",
             span(self.agent_seconds),
             thousands(self.tokens),
-            plural(self.attempts, "attempt"),
-            self.spent,
-            plural(self.fixes, "fix").replace("fixs", "fixes"),
+            // said as the page and the app say it (listing::work)
+            crate::listing::Work { attempts: self.attempts, fixes: self.fixes, own_failures: self.spent }.said(),
         ));
         if p.waited > 0 {
             out.push_str(&format!("- The run stood {} at its stops, waiting for an answer. That is waiting, not anyone's attention.\n", span(p.waited)));
@@ -782,7 +782,7 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 
 ### Cost
 
-- Agents: 12 min of work, 252,250 tokens, 3 attempts (1 spent by the agent's own fault), 0 fixes.
+- Agents: 12 min of work, 252,250 tokens, 3 attempts by the agent, 1 of them failed by its own fault.
 - People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.
 - The run stood 11 h 0 min at its stops, waiting for an answer. That is waiting, not anyone's attention.
 

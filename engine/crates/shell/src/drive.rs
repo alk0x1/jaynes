@@ -774,7 +774,7 @@ impl<'a> Driver<'a> {
                 clear_caches(&self.setup.dir);
             }
             for e in &events {
-                narrate(e);
+                narrate(e, &state);
             }
             for e in &events {
                 if let Event::AttemptStarted { step, fix: 0, .. } = e {
@@ -797,7 +797,7 @@ impl<'a> Driver<'a> {
                         match decide_and_record(self.store, &self.setup.run, &input) {
                             Ok((now, events, more)) => {
                                 for e in &events {
-                                    narrate(e);
+                                    narrate(e, &now);
                                 }
                                 state = now;
                                 queue.extend(more.into_iter().filter_map(|m| self.carry_out_quietly(&state, m)));
@@ -811,7 +811,7 @@ impl<'a> Driver<'a> {
                     if state.halted {
                         if let Ok((now, events, _)) = decide_and_record(self.store, &self.setup.run, &Input::Recovered) {
                             for e in &events {
-                                narrate(e);
+                                narrate(e, &now);
                             }
                             state = now;
                         }
@@ -1762,7 +1762,8 @@ fn fix_prompt(turn: &AgentTurn) -> String {
     p
 }
 
-pub fn narrate(e: &Event) {
+/// `r` is the run after `e`, which a run's end reads for the agents' work, counted as the page and the app count it.
+pub fn narrate(e: &Event, r: &Run) {
     match e {
         Event::RunStarted { run, risk, reasons, ceiling, .. } => say(&format!(
             "run {run} started at {} risk{}; ceiling {} min, {} tokens",
@@ -1781,8 +1782,11 @@ pub fn narrate(e: &Event) {
         Event::StepInvalidated { step, because, .. } => say(&format!("↺ {step} runs again: {}", because.join("; "))),
         Event::Waiting { why, .. } => say(&format!("… {why}")),
         Event::RunFinished { outcome, cost } => say(&format!(
-            "run finished, {outcome:?}: {} s, {} tokens, {} attempts ({} spent by the agent), {} fixes, {} sent back",
-            cost.usage.seconds, cost.usage.tokens, cost.attempts, cost.spent, cost.fixes, cost.sent_back
+            "run finished, {outcome:?}: {} s, {} tokens, {}, {} sent back",
+            cost.usage.seconds,
+            cost.usage.tokens,
+            crate::listing::work(r).said(),
+            cost.sent_back
         )),
         _ => {}
     }

@@ -168,7 +168,7 @@ fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
     assert!(told.contains("1. **runner** (Jaynes): done.\n2. **change** (agent): done, 1 attempt.\n"), "{told}");
     // the role's promise, proved again from the run's own copy of the role
     assert!(told.contains("### Promises proved of the role\n\n- Nothing is delivered before the project's suite passed on the change\n"), "{told}");
-    assert!(told.contains("1,234 tokens, 1 attempt (0 spent by the agent's own fault), 0 fixes.\n- People: no stop answered by a person.\n"), "{told}");
+    assert!(told.contains("1,234 tokens, 1 attempt by the agent.\n- People: no stop answered by a person.\n"), "{told}");
     // nobody was asked, so the run stood at no stop
     assert!(!told.contains("That is waiting"), "{told}");
     // the proof is kept, so the next reading does not prove again

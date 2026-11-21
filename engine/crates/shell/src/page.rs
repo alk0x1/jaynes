@@ -1129,7 +1129,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
     let data = json!({"run": r.id}).to_string();
     format!(
         "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{why}{strip}{phase}{answers}\
-         <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
+         <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {work}, {back} sent back{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
@@ -1144,9 +1144,8 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
         st = r.spent.tokens,
         ct = r.ceiling.tokens,
         cached = r.spent.cached,
-        att = r.counts.attempts,
-        spent = r.counts.spent,
-        fixes = r.counts.fixes,
+        // the agents' work as the app and the summary count it (listing::work)
+        work = esc(&crate::listing::work(r).said()),
         back = r.counts.sent_back,
         corr = if r.counts.corrections > 0 { format!(", {} corrected after delivery", r.counts.corrections) } else { String::new() },
         data = data.replace('<', "\\u003c"),
