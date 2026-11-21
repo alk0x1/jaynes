@@ -1,0 +1,56 @@
+name: app
+
+# The app's tests and clippy on macOS, so a test of something the person asked for goes red on its own before the
+# change reaches anyone. Both builds are checked: the one for people and the one with the test driver, since
+# src/testing.rs has tests on each side. The app is built from the engine's crates too (jaynes-shell and jaynes-core,
+# which take in engine/python, the roles and the page), so a change there runs it as well; the Lean model is not in the
+# app. Every branch runs it when pushed: a new step is proved on a branch before main.
+on:
+  push:
+    paths: ["app/**", "engine/**", "!engine/model/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["app/**", "engine/**", "!engine/model/**", ".github/workflows/app.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch makes the older run moot
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: app
+    env:
+      # libghostty-vt, inside the app, builds with Zig 0.16
+      ZIG: /opt/homebrew/opt/zig@0.16/bin/zig
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: app-${{ runner.os }}-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: app-${{ runner.os }}-
+      - run: brew install zig@0.16
+      - name: Clippy, the build for people
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy, the build with the test driver
+        run: cargo clippy --locked --all-targets --features test-driver -- -D warnings
+      - name: Tests, the build for people
+        run: cargo test --locked
+      - name: Tests, the build with the test driver
+        run: cargo test --locked --features test-driver
