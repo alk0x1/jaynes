@@ -60,7 +60,7 @@ pub fn proof(key: &str, nonce: &str) -> String {
 
 /// The commit of Jaynes installed when the page started: what it runs.
 static RUNNING: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-/// The newest commit where Jaynes is published, asked once an hour.
+/// The version of the latest release built for this machine, what Update installs, asked once an hour.
 static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// Connections the page serves at once, on both of its addresses.
 const MOST_AT_ONCE: usize = 64;
@@ -220,10 +220,10 @@ impl Page {
         RUNNING.get_or_init(crate::install::installed_commit);
         if std::env::var("JAYNES_NO_UPDATE_CHECK").is_err() {
             std::thread::spawn(|| loop {
-                if let Some(c) = crate::install::latest_commit()
+                if let Some(v) = crate::install::latest_release()
                     && let Ok(mut l) = LATEST.lock()
                 {
-                    *l = Some(c);
+                    *l = Some(v);
                 }
                 std::thread::sleep(std::time::Duration::from_secs(3600));
             });
@@ -1361,7 +1361,8 @@ fn diff_html(text: &str) -> String {
         .collect()
 }
 
-/// A newer Jaynes: installed since the page started, so the page should restart; or published, so it can be updated.
+/// A newer Jaynes: installed since the page started, so the page should restart; or a release newer than the program
+/// installed, so it can be updated. Main ahead of the latest release is no newer Jaynes: Update installs the release.
 fn banner() -> String {
     let running = RUNNING.get().cloned().flatten();
     let installed = crate::install::installed_commit();
@@ -1372,8 +1373,8 @@ fn banner() -> String {
         && r != i
     {
         (updated_to(crate::install::installed_version().as_deref(), env!("CARGO_PKG_VERSION"), i), "restart", "Restart the page")
-    } else if let (Some(l), Some(i)) = (&latest, &installed)
-        && l != i
+    } else if let (Some(l), Some(i)) = (&latest, crate::install::installed_version())
+        && crate::install::newer(l, &i)
     {
         ("A newer Jaynes is out.".to_string(), "update", "Update")
     } else {

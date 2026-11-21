@@ -43,8 +43,9 @@ requires signed commits or a verified email refuses the push.
 The engine's program has no network library. It reaches the network by running `git`, `curl`, `gh` and `cargo`, and
 in one step of the menu from its own library, only for these:
 
-- **Checking for a newer version.** While the page runs, it asks the published repository for its newest commit,
-  with `git ls-remote`, once an hour, so it can offer an update. `JAYNES_NO_UPDATE_CHECK` turns this off.
+- **Checking for a newer version.** While the page runs, it reads the latest release's manifest with `curl`, once
+  an hour, so it can offer an update when that release is newer than the program installed. `JAYNES_NO_UPDATE_CHECK`
+  turns this off.
 - **Installing a role by name.** `jaynes add NAME`, and updating roles installed from git, clone the role index (a
   public git repository; `JAYNES_INDEX` names another) and the role's own repository with `git clone`.
 - **Installing a role from a URL.** `jaynes add URL#path` clones that repository.

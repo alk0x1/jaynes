@@ -1357,6 +1357,64 @@ fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
     assert!(get("/home").contains("Restart the page"));
 }
 
+/// "A newer Jaynes is out." and its Update show only when a release newer than the program installed is published:
+/// main ahead of the last release is no newer Jaynes, since Update installs the release (found by the real-user agent
+/// on 0.2.4, the latest release, with main ahead of it: the notice showed, and Update changed nothing). Nothing
+/// reaches the network: git finds Jaynes's source in a repository of the test's, and the releases in a folder of it.
+#[test]
+fn the_newer_jaynes_notice_waits_for_a_release_never_for_main() {
+    let s = scratch("newer");
+    let base = s.home.parent().expect("base").to_path_buf();
+    // main, ahead of the release and of the program installed
+    let source = base.join("source.git");
+    let git = |args: &[&str]| assert!(Command::new("git").args(args).status().expect("git").success(), "git {args:?}");
+    git(&["init", "-q", "--bare", &source.display().to_string()]);
+    git(&["-C", &s.project.display().to_string(), "push", "-q", &source.display().to_string(), "HEAD:refs/heads/main"]);
+    let gitconfig = base.join("gitconfig");
+    std::fs::write(&gitconfig, format!("[url \"file://{}\"]\n\tinsteadOf = https://github.com/alk0x1/jaynes\n", source.display())).expect("write");
+    let install = base.join("install");
+    std::fs::create_dir_all(&install).expect("dir");
+    let commit = "a".repeat(40);
+    std::fs::write(install.join(".crates.toml"), format!("[v1]\n\"jaynes-shell 0.1.0 (git+https://github.com/alk0x1/jaynes#{commit})\" = [\"jaynes\"]\n")).expect("write");
+    let me = "jaynes_key=k3y";
+    // a page whose latest release is `version`, built for every machine
+    let page = |name: &str, version: &str| {
+        let releases = base.join(format!("releases-{name}"));
+        std::fs::create_dir_all(&releases).expect("dir");
+        let built = serde_json::json!({"url": "file:///nonexistent/jaynes.tar.gz"});
+        let targets: serde_json::Map<String, Value> =
+            ["macos-aarch64", "macos-x86_64", "linux-x86_64", "linux-aarch64"].iter().map(|t| (t.to_string(), built.clone())).collect();
+        std::fs::write(releases.join("latest.json"), serde_json::json!({"version": version, "targets": targets}).to_string()).expect("write");
+        page_on_any_port(
+            jaynes()
+                .arg("page")
+                .env("JAYNES_ENGINE_HOME", base.join(format!("home-{name}")))
+                .env("JAYNES_NO_PAGE", "1")
+                .env("JAYNES_HOME", base.join(format!("settings-{name}")))
+                .env("JAYNES_INSTALL_ROOT", &install)
+                .env("JAYNES_RELEASES", format!("file://{}", releases.display()))
+                .env("GIT_CONFIG_GLOBAL", &gitconfig)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("JAYNES_PAGE_KEY", "k3y"),
+        )
+    };
+    let (_latest, latest) = page("latest", env!("CARGO_PKG_VERSION"));
+    let (_newer, newer) = page("newer", "99.0.0");
+    let home = |port: u16| http(port, &format!("GET /home HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !home(newer).contains("A newer Jaynes is out.") {
+        assert!(std::time::Instant::now() < until, "a release newer than the program installed is told: {}", home(newer));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(home(newer).contains("data-setup=\"update\">Update"), "{}", home(newer));
+    // the page started with it has asked too: the latest release is the program installed, and main is no release
+    for _ in 0..10 {
+        let said = home(latest);
+        assert!(!said.contains("A newer Jaynes is out.") && !said.contains("data-setup=\"update\""), "main ahead of the latest release is no newer Jaynes: {said}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 #[test]
 fn the_page_shows_what_the_watching_guard_would_have_asked_and_frees_an_owner_from_it() {
     let s = scratch("watch");

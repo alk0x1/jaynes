@@ -569,12 +569,11 @@ pub fn commit_of(said: &str) -> Option<String> {
     (commit.len() >= 7).then_some(commit)
 }
 
-/// The newest commit of Jaynes where it is published, asked of git.
-pub fn latest_commit() -> Option<String> {
-    let out = Command::new("git").args(["ls-remote", SOURCE, "refs/heads/main"]).output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let commit = text.split_whitespace().next()?.to_string();
-    (out.status.success() && commit.len() == 40).then_some(commit)
+/// The version of the latest release built for this machine, where the releases are: what `jaynes update` installs.
+/// Never the newest commit of main, which no update installs. None when no release could be read or none is built for
+/// this machine.
+pub fn latest_release() -> Option<String> {
+    offered(&manifest(), &target())
 }
 
 /// Where the guard in Claude Code keeps whether it is on and the GitHub owners that pass freely.
@@ -684,13 +683,30 @@ pub enum Release {
 
 /// What the release manifest (`latest.json`) offers a machine of `target` whose program is version `have`.
 pub fn release(manifest: &str, target: &str, have: &str) -> Release {
-    let Ok(m) = serde_json::from_str::<serde_json::Value>(manifest) else { return Release::None };
-    let Some(version) = m["version"].as_str() else { return Release::None };
-    if m["targets"][target]["url"].as_str().is_none() {
-        return Release::None;
+    match offered(manifest, target) {
+        None => Release::None,
+        Some(v) if newer(&v, have) => Release::Newer(v),
+        Some(v) => Release::Current(v),
     }
+}
+
+/// The version the release manifest offers a machine of `target`, when it has a build for it.
+fn offered(manifest: &str, target: &str) -> Option<String> {
+    let m = serde_json::from_str::<serde_json::Value>(manifest).ok()?;
+    m["targets"][target]["url"].as_str()?;
+    m["version"].as_str().map(str::to_string)
+}
+
+/// Whether version `version` is newer than `have`, number by number.
+pub fn newer(version: &str, have: &str) -> bool {
     let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
-    if parts(version) > parts(have) { Release::Newer(version.to_string()) } else { Release::Current(version.to_string()) }
+    parts(version) > parts(have)
+}
+
+/// The latest release's manifest, read where the releases are; empty when it could not be read.
+fn manifest() -> String {
+    let read = Command::new("curl").args(["-fsSL", &format!("{}/latest.json", releases())]).stderr(Stdio::null()).output();
+    read.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
 }
 
 /// Whether the app is where install.sh or the person put it.
@@ -700,8 +716,7 @@ pub fn has_app(home_dir: &Path) -> bool {
 
 pub fn update(home: &Path) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
-    let manifest = Command::new("curl").args(["-fsSL", &format!("{}/latest.json", releases())]).stderr(Stdio::null()).output();
-    let manifest = manifest.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let manifest = manifest();
     // a program updated from source, as 0.1.0 updated itself, came without the app: the release brings it
     let home_dir = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     let app_missing = target() == "macos-aarch64" && !has_app(&home_dir);
