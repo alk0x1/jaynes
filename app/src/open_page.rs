@@ -108,8 +108,10 @@ mod tests {
     }
     use std::path::{Path, PathBuf};
 
+    // Alan, 20/11: "seria bom o app e o site mostrarem a versão atual instalada em algum lugar" (the app shows it in
+    // Settings and in the status bar; the site at its foot, engine/crates/shell/tests/page_open.rs)
     #[test]
-    fn the_version_shown_is_the_apps_own_from_its_cargo_toml() {
+    fn asked_the_app_shows_the_version_installed_its_own_from_its_cargo_toml() {
         let manifest = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).expect("Cargo.toml");
         let package = manifest.split("[package]").nth(1).expect("[package]");
         let line = package.lines().find(|l| l.trim_start().starts_with("version")).expect("its version");

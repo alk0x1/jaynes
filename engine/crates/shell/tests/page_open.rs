@@ -155,9 +155,11 @@ fn up(home: &Home, port: u16) -> Up {
     up
 }
 
+// Alan, 20/11: "ficar rodando open site com a key toda hora é foda": the app's "Open the page" opens it with its key,
+// up or not
 #[test]
-fn the_app_s_open_the_page_opens_it_with_its_key_when_it_is_already_up_and_when_it_is_not() {
-    if !in_child("the_app_s_open_the_page_opens_it_with_its_key_when_it_is_already_up_and_when_it_is_not") {
+fn asked_no_open_site_with_the_key_every_time_the_app_opens_the_page_with_its_key_up_or_not() {
+    if !in_child("asked_no_open_site_with_the_key_every_time_the_app_opens_the_page_with_its_key_up_or_not") {
         return;
     }
     let h = home("app");
@@ -199,9 +201,10 @@ fn the_app_opens_a_path_of_the_page_with_its_key_and_refuses_one_that_could_go_e
     assert_eq!(opened(p).len(), 2, "a refused path opened something");
 }
 
+// Alan, 20/11, the same request: a start opens the page with its key, unless a tab with it is open already
 #[test]
-fn a_start_opens_a_tab_only_when_no_tab_with_the_key_asked_the_page_lately() {
-    if !in_child("a_start_opens_a_tab_only_when_no_tab_with_the_key_asked_the_page_lately") {
+fn asked_no_open_site_with_the_key_every_time_a_start_opens_the_page_with_it_unless_a_tab_is_open() {
+    if !in_child("asked_no_open_site_with_the_key_every_time_a_start_opens_the_page_with_it_unless_a_tab_is_open") {
         return;
     }
     let h = home("start");
@@ -303,9 +306,10 @@ fn what_only_the_person_does_tells_them_to_open_the_page_from_the_app_or_with_ja
     assert!(script.contains("Open it from the Jaynes app (Open the page), or run ") && !script.contains("the page printed") && !script.contains("`jaynes open`"), "{script}");
 }
 
+// Alan, 20/11: "seria bom o app e o site mostrarem a versão atual instalada em algum lugar"
 #[test]
-fn the_page_names_its_version_and_shows_its_own_icon_without_the_key() {
-    if !in_child("the_page_names_its_version_and_shows_its_own_icon_without_the_key") {
+fn asked_the_site_shows_the_version_installed_and_its_own_icon_without_the_key() {
+    if !in_child("asked_the_site_shows_the_version_installed_and_its_own_icon_without_the_key") {
         return;
     }
     let h = home("looks");
