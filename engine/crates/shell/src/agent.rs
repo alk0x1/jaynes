@@ -438,6 +438,28 @@ pub const PACKAGE_HOSTS: &[&str] = &[
     "files.pythonhosted.org", "crates.io", "index.crates.io", "static.crates.io",
 ];
 
+/// What Claude Code reads as a pattern in a folder's path, with no escape it honours (2.1.330, against a stand-in API,
+/// 21/11): with `*` or `?` the step's rules let its agent write in other folders, backslashed or between brackets;
+/// `[` and `]` make a class, and with them its checks of the agent's commands ask more; a `\` matches nothing. Every
+/// other character a path may hold reads as itself.
+const PATTERN_IN_A_PATH: &[char] = &['*', '?', '[', ']', '\\'];
+
+/// Whether Claude Code's rules can name `folder` by its whole path; if not, why, for the step to be refused before
+/// it starts.
+fn rule_safe(folder: &Path) -> Result<(), String> {
+    for f in whole_paths(folder) {
+        if let Some(c) = f.chars().find(|c| PATTERN_IN_A_PATH.contains(c)) {
+            return Err(format!(
+                "the step's folder {} has `{c}` in its path, which Claude Code reads as a pattern and lets no rule escape, \
+                 so Jaynes could not keep its agent inside it: Jaynes makes a run's copy in its home, so put that home \
+                 in a folder whose path has none of `*`, `?`, `[`, `]` and `\\`",
+                f.trim_start_matches('/'),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A folder as Claude Code's path rules name it whatever folder the agent's shell is in: `//` and its whole path, as
 /// given and, when it differs, as the system resolves it.
 fn whole_paths(folder: &Path) -> Vec<String> {
@@ -520,6 +542,7 @@ impl Agent for Claude {
     }
 
     fn probe(&self, cwd: &Path) -> Result<(), String> {
+        rule_safe(cwd)?;
         if binary("claude").is_none() {
             return Err("Claude Code is not installed".to_string());
         }
@@ -855,7 +878,9 @@ fn refused_writes(out: &str, cwd: &Path, reach: &Reach) -> Option<Vec<String>> {
             if b["type"] == "tool_result" && b["is_error"].as_bool().unwrap_or(false) {
                 let text = b["content"].as_str().map(str::to_string).unwrap_or_else(|| b["content"].to_string());
                 let Some(path) = b["tool_use_id"].as_str().and_then(|id| asked.get(id)) else { continue };
-                if !text.contains("Permission to use") && !text.contains("not permitted") {
+                // older Claude Code said "Permission to use ...", 2.1.330 says "Claude requested permissions to write to
+                // X, but you haven't granted it yet."
+                if !text.contains("Permission to use") && !text.contains("not permitted") && !text.contains("haven't granted it") {
                     continue;
                 }
                 let rel = Path::new(path).strip_prefix(cwd).map(|p| p.display().to_string()).ok();
@@ -1186,6 +1211,36 @@ mod tests {
         assert_eq!(refused_writes(out, Path::new("/w"), &reach), Some(vec!["/w/.jaynes/output.json".to_string()]));
         let none = r#"{"type":"user","message":{"content":[]}}"#;
         assert_eq!(refused_writes(none, Path::new("/w"), &reach), None);
+    }
+
+    #[test]
+    fn a_write_claude_code_says_it_was_not_granted_is_a_refused_write() {
+        // the words Claude Code 2.1.330 refuses a write with, in default and dontAsk modes, read from a real run
+        let out = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/w/src/a.py"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"Claude requested permissions to write to /w/src/a.py, but you haven't granted it yet.","is_error":true,"tool_use_id":"t1"}]}}"#;
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
+        assert_eq!(refused_writes(out, Path::new("/w"), &reach), Some(vec!["/w/src/a.py".to_string()]));
+        // the agent's own failure is not a refusal
+        let failed = out.replace("Claude requested permissions to write to /w/src/a.py, but you haven't granted it yet.", "File has not been read yet. Read it first before writing to it.");
+        assert_eq!(refused_writes(&failed, Path::new("/w"), &reach), None);
+    }
+
+    #[test]
+    fn a_folder_whose_path_claude_code_reads_as_a_pattern_is_refused_before_the_step() {
+        // what Claude Code 2.1.330 did with a step's folder named so, against a stand-in API (21/11): with * or ? the
+        // rule let the agent write in other folders, escaped or not; [ and ] made a class, and its checks of the
+        // agent's commands asked more; a \ matched nothing
+        for c in ['*', '?', '[', ']', '\\'] {
+            let folder = PathBuf::from(format!("/h{c}x/runs/r1/project"));
+            assert!(rule_safe(&folder).is_err(), "{folder:?}");
+            let refused = Claude::default().probe(&folder).expect_err("refused");
+            assert!(refused.contains(&format!("`{c}`")) && refused.contains("/runs/r1/project"), "{refused}");
+        }
+        // what it read as it is
+        for c in [' ', '(', ')', '{', '}', '\'', '"', '$', ';', '!', '#', ','] {
+            let folder = PathBuf::from(format!("/h{c}x/runs/r1/project"));
+            assert_eq!(rule_safe(&folder), Ok(()), "{folder:?}");
+        }
     }
 
     #[test]
