@@ -966,7 +966,7 @@ fn the_page_halts_resumes_and_records_a_correction() {
     // what each check said, and where its answer comes from
     assert!(view.contains("suite-passes (open, read runner) passed"), "{view}");
     // what the step changed, line by line, as git shows it
-    assert!(view.contains("What change changed · 2 files") && view.contains("<span class=\"del\"><i>-</i>hello") && view.contains("<span class=\"file\">greeting.txt</span>"), "{view}");
+    assert!(view.contains("Changes made at “change” · 2 files") && view.contains("<span class=\"del\"><i>-</i>hello") && view.contains("<span class=\"file\">greeting.txt</span>"), "{view}");
     // an agent may halt, only the person resumes
     assert_eq!(post(port, "/api/act", r#"{"run":"acts","action":"halt"}"#, "")["ok"], true);
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -1638,7 +1638,7 @@ fn a_finished_run_s_copy_is_cleared_after_a_while_and_its_changes_still_show() {
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PAGE_KEY", "k3y").env("JAYNES_NO_UPDATE_CHECK", "1"),
     );
     let view = http(port, &format!("GET /run/old HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
-    assert!(view.contains("What change changed") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
+    assert!(view.contains("Changes made at “change”") && view.contains("<span class=\"add\"><i>+</i>hi</span>"), "{view}");
 }
 
 #[test]
