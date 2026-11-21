@@ -15,6 +15,7 @@ pub const VARIABLES: &[&str] = &[
     "JAYNES_APP_CHANGES",
     "JAYNES_APP_NOSIDE",
     "JAYNES_APP_STATE",
+    "JAYNES_APP_PAGE_PORT",
 ];
 
 /// Whether this build is one for tests.

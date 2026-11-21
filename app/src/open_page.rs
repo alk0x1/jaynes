@@ -36,7 +36,22 @@ pub fn live_with(home: &Path, port: u16, exe: &Path, page: &str, ensure_at: impl
 /// What a click on "Open live version" does: the page of the engine home the app reads, from the installed `jaynes`,
 /// as "Open the web page ↗" does; the key goes in the link the engine opens, never through the app.
 pub fn live(page: &str) -> Result<(), String> {
-    live_with(&jaynes_shell::home(), jaynes_shell::install::PORT, &crate::answer::engine_program(), page, jaynes_shell::install::ensure_page_at)
+    live_with(&jaynes_shell::home(), page_port()?, &crate::answer::engine_program(), page, jaynes_shell::install::ensure_page_at)
+}
+
+/// The port the page is asked on: the engine's own (install::PORT), or, in a build for tests only, the one
+/// JAYNES_APP_PAGE_PORT names, so a test never reaches the page of the person who runs it.
+fn page_port() -> Result<u16, String> {
+    port_from(crate::testing::var("JAYNES_APP_PAGE_PORT"))
+}
+
+/// The engine's port when nothing is named; the named one, or why it is none, so a test that named a wrong one opens
+/// nothing rather than the person's page.
+fn port_from(named: Option<std::ffi::OsString>) -> Result<u16, String> {
+    match named {
+        None => Ok(jaynes_shell::install::PORT),
+        Some(v) => v.to_str().and_then(|v| v.parse::<u16>().ok()).filter(|p| *p != 0).ok_or_else(|| format!("{DID_NOT_OPEN}: JAYNES_APP_PAGE_PORT is {v:?}, not a port")),
+    }
 }
 
 /// `why` on one line, as a sentence: its lines and runs of spaces as one space, its first letter a capital.
@@ -54,12 +69,28 @@ fn one_line(why: &str) -> String {
 /// to, as the engine's own start reads it.
 pub fn open() -> Result<(), String> {
     let browser = std::env::var_os("JAYNES_NO_BROWSER").is_none();
-    open_with(&jaynes_shell::home(), jaynes_shell::install::PORT, &crate::answer::engine_program(), browser, jaynes_shell::install::ensure_page_on)
+    open_with(&jaynes_shell::home(), page_port()?, &crate::answer::engine_program(), browser, jaynes_shell::install::ensure_page_on)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{live_with, open_with, version};
+    use super::{live_with, open_with, page_port, port_from, version};
+
+    #[test]
+    fn a_test_build_asks_the_page_on_the_port_it_is_given_and_a_build_for_people_always_on_the_engines() {
+        use std::ffi::OsString;
+        assert_eq!(port_from(None), Ok(jaynes_shell::install::PORT));
+        assert_eq!(port_from(Some(OsString::from("51234"))), Ok(51234));
+        // a name that is no port opens nothing, never the person's page in its place
+        for bad in ["", "0", "x", "70000", "8750 "] {
+            assert!(port_from(Some(OsString::from(bad))).is_err_and(|why| why.contains("not a port")), "{bad:?}");
+        }
+        // SAFETY: only page_port reads this variable, and no other test here sets it.
+        unsafe { std::env::set_var("JAYNES_APP_PAGE_PORT", "51235") };
+        let port = page_port();
+        unsafe { std::env::remove_var("JAYNES_APP_PAGE_PORT") };
+        assert_eq!(port, Ok(if crate::testing::BUILT_FOR_TESTS { 51235 } else { jaynes_shell::install::PORT }));
+    }
 
     #[test]
     fn the_live_version_opens_through_the_page_at_its_own_path_with_its_key() {
