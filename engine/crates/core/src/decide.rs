@@ -1584,6 +1584,35 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
     out
 }
 
+/// The note an option shortlisted at a choosing stop carries to the agent, before what of it stays ("Its palette
+/// stays."): the app and the command line write it.
+pub const SHORTLISTED: &str = "Shortlisted: develop it further, keeping what it is.";
+
+/// The same note before the word was "shortlisted": answers recorded then, and the page, still carry it.
+const FINALIST_NOTE: &str = "A finalist: develop it further, keeping what it is.";
+
+/// What a shortlisted option does, in one sentence: "“Harbor” is shortlisted: the agent develops it further, keeping
+/// what it is. Its palette stays."; a note of the person's own goes in as they wrote it, never as a quote in a quote.
+fn shortlisted(label: &str, text: &str) -> String {
+    let text = text.trim();
+    match [SHORTLISTED, FINALIST_NOTE].iter().find_map(|p| text.strip_prefix(p)) {
+        Some(rest) => format!("“{label}” is shortlisted: the agent develops it further, keeping what it is.{rest}"),
+        None => {
+            let end = if text.ends_with(['.', '!', '?']) { "" } else { "." };
+            format!("“{label}” is shortlisted: the agent develops it as you wrote: {text}{end}")
+        }
+    }
+}
+
+/// A sentence of `effects` as it reads before the answer goes: the choice is being made ("Choosing “Harbor”: no
+/// later round of directions may change it."), not made yet; every other sentence as it is.
+pub fn before_sending(sentence: &str) -> String {
+    match sentence.strip_prefix('“').and_then(|r| r.split_once("” is chosen: ")) {
+        Some((label, rest)) => format!("Choosing “{label}”: {rest}"),
+        None => sentence.to_string(),
+    }
+}
+
 /// What an answer will do, in Jaynes's words, from the run as it is now. The page shows it before the person
 /// sends, and the record keeps it with the answer.
 pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
@@ -1628,9 +1657,7 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         let label = &item.label;
         sentences.push(match (&v, person) {
             (Verdict::Keep, _) if q.choose => format!("“{label}” is chosen: no later round of {} may change it.", q.step),
-            (Verdict::Change { text }, _) if q.choose && answer.choice(q) == Some(Choice::Finalists) => {
-                format!("“{label}” is a finalist: the agent develops it as you wrote: “{text}”.")
-            }
+            (Verdict::Change { text }, _) if q.choose && answer.choice(q) == Some(Choice::Finalists) => shortlisted(label, text),
             (Verdict::Change { text }, _) if q.choose => format!("“{label}” is chosen, and is adjusted as you wrote: “{text}”."),
             (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option unless you bring it back."),
             (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),

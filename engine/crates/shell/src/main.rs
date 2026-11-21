@@ -725,7 +725,7 @@ fn answer(args: &[String]) -> Result<(), String> {
     if let Some(names) = flag(args, "--finalists") {
         let names: Vec<&str> = names.split(',').map(str::trim).collect();
         verdicts = q.items.iter().map(|x| {
-            let v = if names.contains(&x.id.as_str()) { Verdict::Change { text: "A finalist: develop it further, keeping what it is.".into() } } else { Verdict::Drop };
+            let v = if names.contains(&x.id.as_str()) { Verdict::Change { text: jaynes_core::decide::SHORTLISTED.into() } } else { Verdict::Drop };
             (x.id.clone(), v)
         }).collect();
     }

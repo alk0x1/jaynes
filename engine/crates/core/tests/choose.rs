@@ -208,7 +208,7 @@ fn finalists_go_back_to_the_agent_to_be_developed_and_the_rest_leave() {
     let more = || Verdict::Change { text: "develop it further".into() };
     let (events, cmds) = feed(&mut run, answer(&q, &[("Sun", more()), ("Moss", more()), ("Ink", Verdict::Drop)]));
     let said = events.iter().find_map(|e| if let Event::AnswerRecorded { effects, .. } = e { Some(effects.sentences.join(" ")) } else { None }).expect("recorded");
-    assert!(said.contains("“Sun” is a finalist") && said.contains("you choose again"), "{said}");
+    assert!(said.contains("“Sun” is shortlisted") && said.contains("you choose again"), "{said}");
     let t = turn(&cmds);
     assert_eq!(t.keep, None, "the agent develops the finalists");
     let notes = t.notes.join("\n");
@@ -216,6 +216,38 @@ fn finalists_go_back_to_the_agent_to_be_developed_and_the_rest_leave() {
     let (events, _) = deliver(&mut run, &t, "two", vec![item("Sun", "s2"), item("Moss", "m2")]);
     let q2 = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked again");
     assert_eq!(q2.items.len(), 2);
+}
+
+fn effects_of(run: &Run, q: &Question, verdicts: &[(&str, Verdict)]) -> Vec<String> {
+    let Input::Answer { answer } = answer(q, verdicts) else { unreachable!("an answer") };
+    jaynes_core::effects(run, q, &answer).sentences
+}
+
+#[test]
+fn a_shortlisted_option_is_said_in_one_sentence_with_the_parts_that_stay() {
+    let (run, q) = asked();
+    let note = |rest: &str| Verdict::Change { text: format!("{}{rest}", jaynes_core::decide::SHORTLISTED) };
+    let said = effects_of(&run, &q, &[("Sun", note(" Its palette stays.")), ("Moss", note(" Its palette and type stay.")), ("Ink", Verdict::Drop)]);
+    assert!(said.contains(&"“Sun” is shortlisted: the agent develops it further, keeping what it is. Its palette stays.".to_string()), "{said:?}");
+    assert!(said.contains(&"“Moss” is shortlisted: the agent develops it further, keeping what it is. Its palette and type stay.".to_string()), "{said:?}");
+    // a note from before the word changed says the same; one of the person's own goes in without a quote inside the quote
+    let old = Verdict::Change { text: "A finalist: develop it further, keeping what it is.".into() };
+    let said = effects_of(&run, &q, &[("Sun", old), ("Moss", Verdict::Change { text: "warmer".into() }), ("Ink", Verdict::Drop)]);
+    assert!(said.contains(&"“Sun” is shortlisted: the agent develops it further, keeping what it is.".to_string()), "{said:?}");
+    assert!(said.contains(&"“Moss” is shortlisted: the agent develops it as you wrote: warmer.".to_string()), "{said:?}");
+    assert!(said.iter().all(|s| !s.contains(".”.") && !s.contains(": “")), "{said:?}");
+}
+
+#[test]
+fn before_it_is_sent_a_choice_says_it_is_being_made() {
+    let (run, q) = asked();
+    let said = effects_of(&run, &q, &[("Sun", Verdict::Keep), ("Moss", Verdict::Drop), ("Ink", Verdict::Drop)]);
+    let chosen = said.iter().find(|s| s.starts_with("“Sun”")).expect("said");
+    assert_eq!(chosen, "“Sun” is chosen: no later round of directions may change it.");
+    assert_eq!(jaynes_core::decide::before_sending(chosen), "Choosing “Sun”: no later round of directions may change it.");
+    // what is not the choice says what it says
+    let gone = said.iter().find(|s| s.starts_with("“Ink”")).expect("said");
+    assert_eq!(&jaynes_core::decide::before_sending(gone), gone);
 }
 
 #[test]
