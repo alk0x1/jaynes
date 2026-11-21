@@ -23,7 +23,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const FINALIST: &str = "A finalist: develop it further, keeping what it is.";
+/// The note a shortlisted direction carries to the agent, with what of it stays: "… Its palette and type stay."
+pub fn shortlist_note(stays: &[String]) -> String {
+    let base = jaynes_core::decide::SHORTLISTED;
+    match stays {
+        [] => base.to_string(),
+        [one] => format!("{base} Its {one} stays."),
+        [rest @ .., last] => format!("{base} Its {} and {last} stay.", rest.join(", ")),
+    }
+}
 
 /// How long a zoom made by a button or a click takes; a pinch or a wheel follows the fingers.
 const ZOOM_TIME: Duration = Duration::from_millis(180);
@@ -95,9 +103,9 @@ pub fn card_label(i: usize, name: &str, kept: usize) -> String {
 /// The line under the question: which run asks, at which step, and what the step does.
 pub fn under_title(run: &str, step: &str, about: &str) -> Option<String> {
     match (run.is_empty(), about.is_empty()) {
-        (false, false) => Some(format!("{run} · at {step}: {about}")),
-        (false, true) => Some(format!("{run} · at {step}")),
-        (true, false) => Some(format!("At {step}: {about}")),
+        (false, false) => Some(format!("{run} · at “{step}”: {about}")),
+        (false, true) => Some(format!("{run} · at “{step}”")),
+        (true, false) => Some(format!("At “{step}”: {about}")),
         (true, true) => None,
     }
 }
@@ -272,8 +280,7 @@ impl Marks {
                 let item = &stop.items[k];
                 verdicts.insert(item.id.clone(), "change".into());
                 let stays = pinned(k);
-                let note = if stays.is_empty() { FINALIST.to_string() } else { format!("{FINALIST} Its {} stay.", stays.join(", ")) };
-                notes.insert(item.id.clone(), note);
+                notes.insert(item.id.clone(), shortlist_note(&stays));
             }
             let label = format!("Develop {} and {}", names[self.keep[0]], names[self.keep[1]]);
             return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)));
@@ -1473,7 +1480,15 @@ impl Render for Compare {
 
 #[cfg(test)]
 mod tests {
-    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, card_label, chip, esc, invite, keep_word, none_word, said_panel, said_row, same_stop, star_word, strip, under_title};
+    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, card_label, chip, esc, invite, keep_word, none_word, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_title};
+
+    #[test]
+    fn a_shortlisted_direction_carries_what_of_it_stays_in_one_sentence() {
+        assert_eq!(shortlist_note(&[]), jaynes_core::decide::SHORTLISTED);
+        assert_eq!(shortlist_note(&["palette".to_string()]), format!("{} Its palette stays.", jaynes_core::decide::SHORTLISTED));
+        assert_eq!(shortlist_note(&["palette".to_string(), "type".to_string()]), format!("{} Its palette and type stay.", jaynes_core::decide::SHORTLISTED));
+        assert_eq!(shortlist_note(&["palette".into(), "type".into(), "layout".into()]), format!("{} Its palette, type and layout stay.", jaynes_core::decide::SHORTLISTED));
+    }
     use jaynes_core::question::QuestionKind;
     use jaynes_shell::stop::{Item, Stop};
 
@@ -1554,10 +1569,10 @@ mod tests {
 
     #[test]
     fn the_line_under_the_question_says_which_run_asks() {
-        assert_eq!(under_title("Three directions for the look", "directions", "the look of the site").as_deref(), Some("Three directions for the look · at directions: the look of the site"));
-        assert_eq!(under_title("Three directions for the look", "directions", "").as_deref(), Some("Three directions for the look · at directions"));
+        assert_eq!(under_title("Three directions for the look", "directions", "the look of the site").as_deref(), Some("Three directions for the look · at “directions”: the look of the site"));
+        assert_eq!(under_title("Three directions for the look", "directions", "").as_deref(), Some("Three directions for the look · at “directions”"));
         // a run with no name read yet: the step and what it does, as before
-        assert_eq!(under_title("", "directions", "the look of the site").as_deref(), Some("At directions: the look of the site"));
+        assert_eq!(under_title("", "directions", "the look of the site").as_deref(), Some("At “directions”: the look of the site"));
         assert_eq!(under_title("", "directions", ""), None);
     }
 

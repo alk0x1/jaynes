@@ -420,9 +420,14 @@ impl Render for Root {
                 let m = e.keystroke.modifiers;
                 match e.keystroke.key.as_str() {
                     "escape" if !m.modified() && this.island.read(cx).takes_esc_now(over, cx) => {
-                        this.island.update(cx, |i, cx| i.fold(cx));
-                        let to = this.keys_home(cx);
-                        window.focus(&to, cx);
+                        // the words field in focus: Esc leaves the field, and a second Esc folds the card
+                        if this.island.read(cx).words_focused(window, cx) {
+                            this.island.update(cx, |i, cx| i.leave_field(window, cx));
+                        } else {
+                            this.island.update(cx, |i, cx| i.fold(cx));
+                            let to = this.keys_home(cx);
+                            window.focus(&to, cx);
+                        }
                         cx.stop_propagation();
                     }
                     "tab" if !(m.platform || m.control || m.alt) && !over && this.island.read(cx).takes_tab(cx) => {

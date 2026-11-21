@@ -40,7 +40,8 @@ pub fn reckon(body: &Value) -> Reckoned {
         Err(e) => return Reckoned { sentences: Vec::new(), refused: Some(e) },
     };
     let sentences = match jaynes_shell::drive::effects(&home, &run, &q.question, &answer) {
-        Ok(fx) => fx.sentences,
+        // before it goes: a choice is being made, not made yet ("Choosing “Harbor”: …")
+        Ok(fx) => fx.sentences.iter().map(|s| jaynes_core::decide::before_sending(s)).collect(),
         Err(e) => vec![format!("Jaynes cannot say what this does: {e}")],
     };
     let refused = (run.engine == jaynes_core::ENGINE).then(|| jaynes_core::decide(Some(&run), &jaynes_core::Input::Answer { answer }).err().map(|r| r.0)).flatten();
