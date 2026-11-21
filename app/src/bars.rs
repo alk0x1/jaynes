@@ -70,6 +70,24 @@ pub fn wanted_at(bar: Bar, x: f32, window: f32) -> f32 {
 /// How wide the edge the person drags is, inside its bar.
 pub const EDGE: f32 = 6.;
 
+/// What the right side shows, from the two switches app_state keeps (`steps`, `changes`, as since 0.2.1): one panel
+/// or nothing, never two. Kept with both on (Changes drawn over the steps, before 0.2.5), it is Changes, as the
+/// window drew it.
+pub fn right_kept(steps: bool, changes: bool) -> Option<Bar> {
+    if changes {
+        Some(Bar::Changes)
+    } else if steps {
+        Some(Bar::Steps)
+    } else {
+        None
+    }
+}
+
+/// The right side as app_state keeps it: (`steps`, `changes`), at most one of them on.
+pub fn right_to_kept(right: Option<Bar>) -> (bool, bool) {
+    (right == Some(Bar::Steps), right == Some(Bar::Changes))
+}
+
 /// What the right side shows after the person presses `pressed`, with `now` there: one panel at a time. The panel
 /// button (Bar::Steps, ⌘E) is the right side's own: whatever shows, it closes it, and with nothing there it opens the
 /// steps. Changes' switch opens Changes, and closes them to nothing when they show. (Before, the button switched the
@@ -90,7 +108,7 @@ pub fn drag_closes(bar: Bar, wanted: f32) -> bool {
     bar.at_right() && wanted < bar.bounds().1 / 2.
 }
 
-/// What shows beside the middle: the column or not, and the bar at the right (Changes over the steps), if any.
+/// What shows beside the middle: the column or not, and the one panel at the right, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shown {
     pub column: bool,
@@ -267,30 +285,61 @@ mod tests {
         assert_eq!(wanted_at(Bar::Steps, 1000., 1400.), 400.);
     }
 
+    // Alan, 16/11 (direction D of the sketches, as the app's first handoff wrote what he chose): "a steps panel on the
+    // right that collapses"
     #[test]
-    fn the_panel_button_closes_the_right_side_whatever_shows_there() {
-        // Changes over the steps was what the button could not close: it switched the steps hidden under Changes
-        assert_eq!(right_after(Some(Bar::Changes), Bar::Steps), None);
-        assert_eq!(right_after(Some(Bar::Steps), Bar::Steps), None);
-        // with nothing at the right, it opens the steps
-        assert_eq!(right_after(None, Bar::Steps), Some(Bar::Steps));
+    fn asked_a_steps_panel_on_the_right_that_collapses() {
+        // the panel button (and Command-E) opens the steps with nothing at the right, and collapses them
+        let right = right_after(None, Bar::Steps);
+        assert_eq!(right, Some(Bar::Steps));
+        assert_eq!(right_after(right, Bar::Steps), None);
+        // collapsed or open, the next time the app opens it stands as the person left it
+        assert_eq!(right_kept(right_to_kept(None).0, right_to_kept(None).1), None);
+        let (steps, changes) = right_to_kept(Some(Bar::Steps));
+        assert_eq!(right_kept(steps, changes), Some(Bar::Steps));
     }
 
+    // Alan, 21/11: "por que a aba lateral direita nao ta colapsando?"
     #[test]
-    fn changes_switch_opens_changes_and_closes_them_to_nothing() {
+    fn asked_the_right_side_panel_collapses_whatever_shows_there() {
+        // his window as kept: both switches on, Changes drawn over the steps. Since 17/11 the panel button switched
+        // the steps hidden under Changes, so a click changed nothing he could see.
+        let right = right_kept(true, true);
+        assert_eq!(right, Some(Bar::Changes));
+        assert_eq!(right_after(right, Bar::Steps), None);
+        // whatever shows, the button collapses it
+        assert_eq!(right_after(Some(Bar::Steps), Bar::Steps), None);
+        assert_eq!(right_after(Some(Bar::Changes), Bar::Steps), None);
+        // Changes' switch opens Changes and closes them to nothing, never to the steps that were under them
         assert_eq!(right_after(None, Bar::Changes), Some(Bar::Changes));
         assert_eq!(right_after(Some(Bar::Steps), Bar::Changes), Some(Bar::Changes));
-        // closed, Changes leave the right side empty, never the steps that were under them
-        assert_eq!(right_after(Some(Bar::Changes), Bar::Changes), None);
+        assert_eq!(right_after(right, Bar::Changes), None);
+        // collapsed, it is kept collapsed: no switch left on under it to come back up
+        assert_eq!(right_to_kept(None), (false, false));
     }
 
+    // Alan, 21/11: "por que a aba lateral direita nao ta colapsando?" (dragging the panel almost to the window's end
+    // collapses it too, as the column dragged narrow becomes the rail)
     #[test]
-    fn a_panel_at_the_right_dragged_under_half_its_lowest_closes_and_the_column_never_does() {
+    fn asked_a_right_panel_dragged_almost_to_the_end_collapses() {
         // the steps' lowest is 160, Changes' 180
         assert!(!drag_closes(Bar::Steps, 80.) && drag_closes(Bar::Steps, 79.));
         assert!(!drag_closes(Bar::Changes, 90.) && drag_closes(Bar::Changes, 89.));
         assert!(drag_closes(Bar::Changes, -40.));
         // the column dragged narrow is the rail, as before
         assert!(!drag_closes(Bar::Column, 0.));
+    }
+
+    #[test]
+    fn the_right_side_is_kept_as_one_panel_and_comes_back_as_it_was() {
+        for right in [None, Some(Bar::Steps), Some(Bar::Changes)] {
+            let (steps, changes) = right_to_kept(right);
+            assert!(!(steps && changes), "{right:?} kept as two panels");
+            assert_eq!(right_kept(steps, changes), right);
+        }
+        // the column is no panel at the right: pressing it leaves the right side as it stands
+        for right in [None, Some(Bar::Steps), Some(Bar::Changes)] {
+            assert_eq!(right_after(right, Bar::Column), right);
+        }
     }
 }

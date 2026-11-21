@@ -133,7 +133,6 @@ pub(crate) struct Root {
     rail: Entity<rail::Rail>,
     /// What git says about the folder the middle works in, at the right (Shift-Command-G).
     changes: Entity<changes::Changes>,
-    changes_on: bool,
     /// The Changes tab's stacked files, in the middle.
     stack: Entity<changes::Stack>,
     /// Whether the Changes tab showed when the focus last followed the tabs.
@@ -144,8 +143,9 @@ pub(crate) struct Root {
     island: Entity<island::Island>,
     compare: Entity<compare::Compare>,
     lightbox: Entity<lightbox::Lightbox>,
-    /// Whether the steps panel shows (Command-E).
-    steps: bool,
+    /// What shows at the right: the run's steps (Command-E), Changes (Shift-Command-G), or nothing. One panel at a
+    /// time, kept as one, so two never stand on at once (bars::right_after).
+    right: Option<bars::Bar>,
     /// Whether the runs column shows.
     sidebar: bool,
     /// How wide the person left the column, the steps panel and Changes (bars.rs), by dragging their edges.
@@ -257,9 +257,14 @@ impl Render for Root {
                             // a run's question, over Claude Code's terminal and the runs' tabs, not over an agent or the Inbox
                             .when(self.agent_view.is_none() && !self.tabs.read(cx).inbox && self.tabs.read(cx).changes.is_none(), |d| d.child(self.island.clone())),
                     )
-                    // at the right, Changes when it is on, else the run's steps, each as wide as the person left it
-                    .when(self.changes_on, |d| d.child(self.bar(bars::Bar::Changes, self.changes.clone().into_any_element(), cx)))
-                    .when(!self.changes_on && self.steps, |d| d.child(self.bar(bars::Bar::Steps, self.rail.clone().into_any_element(), cx))),
+                    // at the right, the one panel that shows, as wide as the person left it
+                    .children(self.right.map(|bar| {
+                        let inside = match bar {
+                            bars::Bar::Changes => self.changes.clone().into_any_element(),
+                            _ => self.rail.clone().into_any_element(),
+                        };
+                        self.bar(bar, inside, cx)
+                    })),
             );
         div()
             .size_full()
@@ -319,13 +324,13 @@ impl Render for Root {
                 let bar = e.drag(cx).0;
                 let (x, width): (f32, f32) = (e.event.position.x.into(), window.viewport_size().width.into());
                 // a panel at the right closed already by this drag: the moves after it change nothing
-                if bar.at_right() && this.bars_shown().right != Some(bar) {
+                if bar.at_right() && this.right != Some(bar) {
                     return;
                 }
                 // dragged under half its lowest, the panel at the right closes, and opens again at its own width
                 if bars::drag_closes(bar, bars::wanted_at(bar, x, width)) {
                     this.bars.reset(bar);
-                    this.set_right(None);
+                    this.right = None;
                     cx.notify();
                 } else if this.bars.drag(bar, x, width, this.bars_shown()) {
                     cx.notify();
@@ -354,7 +359,7 @@ impl Render for Root {
             }))
             // c in the Changes tab: the panel shows, its commit message takes the keys
             .on_action(cx.listener(|this, _: &CommitBox, window, cx| {
-                this.set_right(Some(bars::Bar::Changes));
+                this.right = Some(bars::Bar::Changes);
                 this.changes.update(cx, |c, cx| c.focus_message(window, cx));
                 cx.notify();
             }))
@@ -890,20 +895,12 @@ impl Root {
 
     /// What shows beside the middle, for the bars' widths.
     fn bars_shown(&self) -> bars::Shown {
-        let right = if self.changes_on { Some(bars::Bar::Changes) } else { self.steps.then_some(bars::Bar::Steps) };
-        bars::Shown { column: self.sidebar, right }
-    }
-
-    /// The right side showing `right`: one panel at a time, so the one hidden under another never comes up when that
-    /// one closes.
-    fn set_right(&mut self, right: Option<bars::Bar>) {
-        self.changes_on = right == Some(bars::Bar::Changes);
-        self.steps = right == Some(bars::Bar::Steps);
+        bars::Shown { column: self.sidebar, right: self.right }
     }
 
     /// The panel button (Bar::Steps) or Changes' switch pressed, by click, key or menu (bars::right_after).
     fn press_right(&mut self, pressed: bars::Bar) {
-        self.set_right(bars::right_after(self.bars_shown().right, pressed));
+        self.right = bars::right_after(self.right, pressed);
     }
 
     /// A bar at the right, as wide as the person left it, with the edge they drag.
@@ -949,7 +946,8 @@ impl Root {
             (None, false, None) => app_state::Open::Main,
         };
         let frame = Some(app_state::frame_of(window.window_bounds().get_bounds(), window.display(cx).map(|d| d.id().into())));
-        app_state::State { open, column: self.sidebar, steps: self.steps, changes: self.changes_on, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept(), cleared: self.side.read(cx).cleared_kept(cx), seen: self.side.read(cx).seen_to_keep() }
+        let (steps, changes) = bars::right_to_kept(self.right);
+        app_state::State { open, column: self.sidebar, steps, changes, closed: t.closed_kept(cx), frame, widths: self.bars.to_kept(), cleared: self.side.read(cx).cleared_kept(cx), seen: self.side.read(cx).seen_to_keep() }
     }
 
     /// Keeps what the window shows when it changed, once what stood was shown again.
@@ -1504,7 +1502,7 @@ impl Root {
                         this.new_run(window, cx);
                     })))
                     // the right side's own button: lit while anything shows there, and it closes whatever does
-                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.bars_shown().right.is_some()))
+                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.right.is_some()))
                         .tooltip(look::tip("Show or hide the panel ⌘E"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.press_right(bars::Bar::Steps);
@@ -1527,8 +1525,8 @@ impl Root {
                 .rounded(px(6.))
                 .text_size(px(12.5))
                 .cursor_pointer()
-                .text_color(rgb(if self.changes_on { look::text() } else { look::faint() }))
-                .when(self.changes_on, |d| d.bg(rgb(look::selected())))
+                .text_color(rgb(if self.right == Some(bars::Bar::Changes) { look::text() } else { look::faint() }))
+                .when(self.right == Some(bars::Bar::Changes), |d| d.bg(rgb(look::selected())))
                 .hover(|d| d.text_color(rgb(look::dim())))
                 .child("Changes")
                 .when(n > 0, |d| d.child(div().text_color(rgb(look::faint())).child(n.to_string()))),
@@ -2384,12 +2382,14 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             // JAYNES_APP_NOSIDE: a test's picture of the window without its runs column
             // the window moved or resized is kept as it stands
             let bounds = cx.observe_window_bounds(window, |this: &mut Root, window, cx| this.remember(window, cx));
-            let (changes_on, steps, sidebar) = (state.changes || crate::testing::var("JAYNES_APP_CHANGES").is_some(), state.steps, state.column && crate::testing::var("JAYNES_APP_NOSIDE").is_none());
+            // kept with both on (before 0.2.5), Changes, as the window drew them
+            let right = bars::right_kept(state.steps, state.changes || crate::testing::var("JAYNES_APP_CHANGES").is_some());
+            let sidebar = state.column && crate::testing::var("JAYNES_APP_NOSIDE").is_none();
             let (bars, why) = bars::Bars::from_kept(state.widths);
             for why in why {
                 tracing::warn!("{why}");
             }
-            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, changes_on, stack, was_changes: false, editing: None, island, compare, lightbox, steps, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, inbox_at: None, inbox_scroll: ScrollHandle::new(), act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
+            Root { runs, tabs, side, terminal: view, core: core.clone(), agents, agent_view: None, panes: Vec::new(), cover: None, rail, changes, stack, was_changes: false, editing: None, island, compare, lightbox, right, sidebar, bars, branch: String::new(), help: false, focus: cx.focus_handle(), was_open: None, was_inbox: false, let_go: false, armed: None, halt_all_at: None, inbox_at: None, inbox_scroll: ScrollHandle::new(), act_said: None, page_trouble: None, page_opening: false, palette: None, later: Default::default(), restore: Some(state), kept: None, _bounds: Some(bounds), _branch: branch }
         })
     })
     .map(|handle| {
