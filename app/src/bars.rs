@@ -120,6 +120,27 @@ pub fn column_switch_at(column: bool, width: f32) -> SwitchAt {
     if column && !is_rail(width) { SwitchAt::ColumnHead } else { SwitchAt::TabsBar }
 }
 
+/// The column from which the name fits beside the giraffe, clear of the column's switch at the right.
+pub const MARK_WORD_FROM: f32 = 190.;
+
+/// What the column's head shows of the Jaynes mark, after the macOS buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkShows {
+    GiraffeAndName,
+    Giraffe,
+    Nothing,
+}
+
+/// The mark in the column's head: the giraffe and the name while the column is wide enough for the name, the giraffe
+/// alone below that, nothing on the rail (its head holds only the macOS buttons) or with the column hidden.
+pub fn mark_shows(column: bool, width: f32) -> MarkShows {
+    match () {
+        _ if !column || is_rail(width) => MarkShows::Nothing,
+        _ if width >= MARK_WORD_FROM => MarkShows::GiraffeAndName,
+        _ => MarkShows::Giraffe,
+    }
+}
+
 /// What shows beside the middle: the column or not, and the one panel at the right, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shown {
@@ -353,6 +374,21 @@ mod tests {
         assert_eq!(column_switch_at(false, Bar::Column.default_width()), SwitchAt::TabsBar);
         assert_eq!(column_switch_at(true, RAIL), SwitchAt::TabsBar);
         assert_eq!(column_switch_at(false, RAIL), SwitchAt::TabsBar);
+    }
+
+    // Alan, 20/11: "falta o botão settings embaixo na ui igual todos os apps têm, e não tem a logo da Jaynes e a marca
+    // em lugar nenhum" (the mark, here; Settings at the bottom left is the status bar's, main.rs, seen in the photo
+    // rounds)
+    #[test]
+    fn asked_the_jaynes_logo_and_name_somewhere_in_the_app() {
+        // the column at its own width: the giraffe and the name
+        assert_eq!(mark_shows(true, Bar::Column.default_width()), MarkShows::GiraffeAndName);
+        // narrower than the name, still the giraffe
+        assert_eq!(mark_shows(true, MARK_WORD_FROM - 10.), MarkShows::Giraffe);
+        assert_eq!(mark_shows(true, NAMES), MarkShows::Giraffe);
+        // the rail and the column hidden: no room for it
+        assert_eq!(mark_shows(true, RAIL), MarkShows::Nothing);
+        assert_eq!(mark_shows(false, Bar::Column.default_width()), MarkShows::Nothing);
     }
 
     // Alan, 18/11, picking sketch 1 of the column (the board's words for what he asked): "barras arrastáveis (mínimo

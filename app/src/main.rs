@@ -536,8 +536,6 @@ const SETTINGS_ITEM: &str = "settings-item";
 /// compare mode's top starts too), and the giraffe's height.
 const MARK_AT: f32 = 84.;
 const MARK_HEIGHT: f32 = 16.;
-/// The column from which the name fits beside the giraffe, clear of the column's switch at the right.
-const MARK_WORD_FROM: f32 = 190.;
 
 struct Cover {
     was: Shown,
@@ -1455,9 +1453,9 @@ impl Root {
     /// The runs column's header, after herdr: the macOS buttons, the mark and the name, then the column's switch.
     /// On the rail it is under the macOS buttons alone, and the switch goes to the tabs bar.
     fn side_head(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let rail = self.column_is_rail();
-        let word = self.bars.column >= MARK_WORD_FROM;
-        title_bar("side-head").when(!rail, |d| {
+        let mark = bars::mark_shows(self.sidebar, self.bars.column);
+        let word = mark == bars::MarkShows::GiraffeAndName;
+        title_bar("side-head").when(mark != bars::MarkShows::Nothing, |d| {
             // after the macOS buttons, the giraffe and the name: no button, so a press on them moves the window as the
             // bar does; in a column too narrow for the name, the giraffe alone, clear of the switch
             d.pl(px(MARK_AT))
