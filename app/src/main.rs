@@ -314,14 +314,24 @@ impl Render for Root {
             // a bar's edge dragged: the bar follows the pointer, within its bounds (bars.rs)
             .on_drag_move::<DragBar>(cx.listener(|this, e: &DragMoveEvent<DragBar>, window, cx| {
                 let bar = e.drag(cx).0;
-                if this.bars.drag(bar, e.event.position.x.into(), window.viewport_size().width.into(), this.bars_shown()) {
+                let (x, width): (f32, f32) = (e.event.position.x.into(), window.viewport_size().width.into());
+                // a panel at the right closed already by this drag: the moves after it change nothing
+                if bar.from_right() && this.bars_shown().right != Some(bar) {
+                    return;
+                }
+                // dragged under half its lowest, the panel at the right closes, and opens again at its own width
+                if bars::drag_closes(bar, bars::wanted_at(bar, x, width)) {
+                    this.bars.reset(bar);
+                    this.set_right(None);
+                    cx.notify();
+                } else if this.bars.drag(bar, x, width, this.bars_shown()) {
                     cx.notify();
                 }
             }))
             .on_action(copy_into(&shown))
             .on_action(paste_into(&shown))
             .on_action(cx.listener(|this, _: &ToggleSteps, _, cx| {
-                this.steps = !this.steps;
+                this.press_right(bars::Bar::Steps);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &NewRun, window, cx| this.new_run(window, cx)))
@@ -336,12 +346,12 @@ impl Render for Root {
             // the button under a finished run's story
             .on_action(cx.listener(|this, _: &CopySummary, _, cx| this.tabs.update(cx, |t, cx| t.copy_summary(cx))))
             .on_action(cx.listener(|this, _: &ToggleChanges, _, cx| {
-                this.changes_on = !this.changes_on;
+                this.press_right(bars::Bar::Changes);
                 cx.notify();
             }))
             // c in the Changes tab: the panel shows, its commit message takes the keys
             .on_action(cx.listener(|this, _: &CommitBox, window, cx| {
-                this.changes_on = true;
+                this.set_right(Some(bars::Bar::Changes));
                 this.changes.update(cx, |c, cx| c.focus_message(window, cx));
                 cx.notify();
             }))
@@ -879,6 +889,18 @@ impl Root {
     fn bars_shown(&self) -> bars::Shown {
         let right = if self.changes_on { Some(bars::Bar::Changes) } else { self.steps.then_some(bars::Bar::Steps) };
         bars::Shown { column: self.sidebar, right }
+    }
+
+    /// The right side showing `right`: one panel at a time, so the one hidden under another never comes up when that
+    /// one closes.
+    fn set_right(&mut self, right: Option<bars::Bar>) {
+        self.changes_on = right == Some(bars::Bar::Changes);
+        self.steps = right == Some(bars::Bar::Steps);
+    }
+
+    /// The panel button (Bar::Steps) or Changes' switch pressed, by click, key or menu (bars::right_after).
+    fn press_right(&mut self, pressed: bars::Bar) {
+        self.set_right(bars::right_after(self.bars_shown().right, pressed));
     }
 
     /// A bar at the right, as wide as the person left it, with the edge they drag.
@@ -1478,10 +1500,13 @@ impl Root {
                     .child(own_press(look::icon_button("new-run", look::Icon::Plus, false)).tooltip(look::tip("New run ⌘N")).on_click(cx.listener(|this, _, window, cx| {
                         this.new_run(window, cx);
                     })))
-                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.steps)).tooltip(look::tip("Steps ⌘E")).on_click(cx.listener(|this, _, _, cx| {
-                        this.steps = !this.steps;
-                        cx.notify();
-                    }))),
+                    // the right side's own button: lit while anything shows there, and it closes whatever does
+                    .child(own_press(look::icon_button("steps-switch", look::Icon::Panel, self.bars_shown().right.is_some()))
+                        .tooltip(look::tip("Show or hide the panel ⌘E"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.press_right(bars::Bar::Steps);
+                            cx.notify();
+                        }))),
             )
     }
 
@@ -1506,7 +1531,7 @@ impl Root {
                 .when(n > 0, |d| d.child(div().text_color(rgb(look::faint())).child(n.to_string()))),
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            this.changes_on = !this.changes_on;
+            this.press_right(bars::Bar::Changes);
             cx.notify();
         }))
     }

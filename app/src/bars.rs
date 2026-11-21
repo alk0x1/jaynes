@@ -70,6 +70,26 @@ pub fn wanted_at(bar: Bar, x: f32, window: f32) -> f32 {
 /// How wide the edge the person drags is, inside its bar.
 pub const EDGE: f32 = 6.;
 
+/// What the right side shows after the person presses `pressed`, with `now` there: one panel at a time. The panel
+/// button (Bar::Steps, ⌘E) is the right side's own: whatever shows, it closes it, and with nothing there it opens the
+/// steps. Changes' switch opens Changes, and closes them to nothing when they show. (Before, the button switched the
+/// steps hidden under Changes, so the side never closed.)
+pub fn right_after(now: Option<Bar>, pressed: Bar) -> Option<Bar> {
+    match (now, pressed) {
+        (Some(_), Bar::Steps) => None,
+        (None, Bar::Steps) => Some(Bar::Steps),
+        (Some(Bar::Changes), Bar::Changes) => None,
+        (_, Bar::Changes) => Some(Bar::Changes),
+        (now, Bar::Column) => now,
+    }
+}
+
+/// Whether a drag of a panel at the right that asks `wanted` closes it: dragged under half its lowest width, as the
+/// column dragged narrow becomes the rail. The column never closes so.
+pub fn drag_closes(bar: Bar, wanted: f32) -> bool {
+    bar.from_right() && wanted < bar.bounds().1 / 2.
+}
+
 /// What shows beside the middle: the column or not, and the bar at the right (Changes over the steps), if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shown {
@@ -245,5 +265,32 @@ mod tests {
     fn the_panels_at_the_right_are_dragged_by_their_left_edge() {
         assert_eq!(wanted_at(Bar::Column, 250., 1400.), 250.);
         assert_eq!(wanted_at(Bar::Steps, 1000., 1400.), 400.);
+    }
+
+    #[test]
+    fn the_panel_button_closes_the_right_side_whatever_shows_there() {
+        // Changes over the steps was what the button could not close: it switched the steps hidden under Changes
+        assert_eq!(right_after(Some(Bar::Changes), Bar::Steps), None);
+        assert_eq!(right_after(Some(Bar::Steps), Bar::Steps), None);
+        // with nothing at the right, it opens the steps
+        assert_eq!(right_after(None, Bar::Steps), Some(Bar::Steps));
+    }
+
+    #[test]
+    fn changes_switch_opens_changes_and_closes_them_to_nothing() {
+        assert_eq!(right_after(None, Bar::Changes), Some(Bar::Changes));
+        assert_eq!(right_after(Some(Bar::Steps), Bar::Changes), Some(Bar::Changes));
+        // closed, Changes leave the right side empty, never the steps that were under them
+        assert_eq!(right_after(Some(Bar::Changes), Bar::Changes), None);
+    }
+
+    #[test]
+    fn a_panel_at_the_right_dragged_under_half_its_lowest_closes_and_the_column_never_does() {
+        // the steps' lowest is 160, Changes' 180
+        assert!(!drag_closes(Bar::Steps, 80.) && drag_closes(Bar::Steps, 79.));
+        assert!(!drag_closes(Bar::Changes, 90.) && drag_closes(Bar::Changes, 89.));
+        assert!(drag_closes(Bar::Changes, -40.));
+        // the column dragged narrow is the rail, as before
+        assert!(!drag_closes(Bar::Column, 0.));
     }
 }
