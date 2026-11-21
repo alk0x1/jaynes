@@ -890,8 +890,9 @@ mod tests {
         Row { id: id.into(), project: String::new(), apart: None, title: id.into(), line: line.into(), mark }
     }
 
+    // Alan, 18/11, picking sketch 1 of the column (the board's words): "Needs you first"
     #[test]
-    fn what_waits_for_the_person_comes_first_runs_and_agents_together_and_leaves_its_space() {
+    fn asked_needs_you_first_runs_and_agents_together_leaving_their_space() {
         let listing = Listing { needs: vec![row("q", Mark::Needs, "Keep this fix?")], projects: vec![] };
         let spaces = vec![agents::Space {
             id: "w1".into(),
@@ -980,8 +981,11 @@ mod tests {
         assert_eq!(finished_tag(&row("f", Mark::Undone, "reverted by you"), Some(2)), None);
     }
 
+    // Alan, 18/11, after testing the hardened runtime (the board's words for what he asked): "limpar da coluna execuções
+    // terminadas, abandonadas ou desfeitas (x na linha, "Clear finished", filtro "Show finished"; somem da coluna, não
+    // do registro; o que espera a pessoa nunca some)"
     #[test]
-    fn a_cleared_run_leaves_the_finished_for_its_own_list_and_one_that_waits_or_works_never_leaves() {
+    fn asked_clear_finished_runs_from_the_column_never_one_that_waits_or_works() {
         let listing = Listing {
             needs: vec![row("q", Mark::Needs, "Keep this fix?")],
             projects: vec![("my-app".into(), vec![row("a", Mark::Working, "step 2 of 4, running"), row("b", Mark::Merged, "merged"), row("c", Mark::Abandoned, "abandoned"), row("d", Mark::Undone, "reverted by you")])],

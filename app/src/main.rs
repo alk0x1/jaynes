@@ -76,7 +76,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ("Inbox", &[("⌘I", "The Inbox: what needs you, in every space"), ("⌘O", "The next thing that needs you")]),
     ("Agents", &[("⌘↩", "Allow, the first choice"), ("⌘⌫", "Deny"), ("⌥1 … ⌥9", "Pick that choice")]),
     ("Panes", &[("⌘D", "Split right: your shell beside the agent"), ("⇧⌘D", "Split down"), ("⌘]  ⌘[", "Next pane, previous pane")]),
-    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Steps panel"), ("⇧⌘G", "Changes panel"), ("⌘K", "Go to any agent, run or command"), ("⌘/", "This list")]),
+    ("Window", &[("⌘0", "Runs column"), ("⌘E", "Right panel: show or hide"), ("⇧⌘G", "Changes panel"), ("⌘K", "Go to any agent, run or command"), ("⌘/", "This list")]),
 ];
 
 /// The top bar's height; the macOS window buttons sit inside it, in the runs column's header.
@@ -323,16 +323,7 @@ impl Render for Root {
             .on_drag_move::<DragBar>(cx.listener(|this, e: &DragMoveEvent<DragBar>, window, cx| {
                 let bar = e.drag(cx).0;
                 let (x, width): (f32, f32) = (e.event.position.x.into(), window.viewport_size().width.into());
-                // a panel at the right closed already by this drag: the moves after it change nothing
-                if bar.at_right() && this.right != Some(bar) {
-                    return;
-                }
-                // dragged under half its lowest, the panel at the right closes, and opens again at its own width
-                if bars::drag_closes(bar, bars::wanted_at(bar, x, width)) {
-                    this.bars.reset(bar);
-                    this.right = None;
-                    cx.notify();
-                } else if this.bars.drag(bar, x, width, this.bars_shown()) {
+                if this.drag_edge(bar, x, width) {
                     cx.notify();
                 }
             }))
@@ -896,6 +887,22 @@ impl Root {
     /// What shows beside the middle, for the bars' widths.
     fn bars_shown(&self) -> bars::Shown {
         bars::Shown { column: self.sidebar, right: self.right }
+    }
+
+    /// A bar's edge dragged with the pointer at `x` in a window `width` wide, by the person's hand or a test's: whether
+    /// what shows changed.
+    fn drag_edge(&mut self, bar: bars::Bar, x: f32, width: f32) -> bool {
+        // a panel at the right closed already by this drag: the moves after it change nothing
+        if bar.at_right() && self.right != Some(bar) {
+            return false;
+        }
+        // dragged under half its lowest, the panel at the right closes, and opens again at its own width
+        if bars::drag_closes(bar, bars::wanted_at(bar, x, width)) {
+            self.bars.reset(bar);
+            self.right = None;
+            return true;
+        }
+        self.bars.drag(bar, x, width, self.bars_shown())
     }
 
     /// The panel button (Bar::Steps) or Changes' switch pressed, by click, key or menu (bars::right_after).
@@ -1466,7 +1473,7 @@ impl Root {
                         .when(word, |d| d.child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).text_color(rgb(look::text())).child("Jaynes"))),
                 )
                 .child(div().flex_1())
-                .child(self.sidebar_switch(cx))
+                .when(bars::column_switch_at(self.sidebar, self.bars.column) == bars::SwitchAt::ColumnHead, |d| d.child(self.sidebar_switch(cx)))
         })
     }
 
@@ -1485,11 +1492,11 @@ impl Root {
             .gap(px(4.))
             // without the runs column, the macOS buttons and its switch move here; beside the rail, what of the
             // buttons' room the rail does not give
-            .when(!self.sidebar || self.column_is_rail(), |d| {
+            .when(bars::column_switch_at(self.sidebar, self.bars.column) == bars::SwitchAt::TabsBar, |d| {
                 let inset = if self.sidebar { BUTTONS - self.bars.column } else { BUTTONS };
                 d.pl(px(inset)).child(div().flex().items_center().child(self.sidebar_switch(cx)))
             })
-            .when(self.sidebar && !self.column_is_rail(), |d| d.pl(px(4.)))
+            .when(bars::column_switch_at(self.sidebar, self.bars.column) == bars::SwitchAt::ColumnHead, |d| d.pl(px(4.)))
             .child(self.tabs.clone())
             .child(div().flex_1())
             .child(
@@ -2136,7 +2143,7 @@ fn main() {
                     MenuItem::action("Go to…", OpenPalette),
                     MenuItem::separator(),
                     MenuItem::action("Runs Column", ToggleRuns),
-                    MenuItem::action("Steps Panel", ToggleSteps),
+                    MenuItem::action("Right Panel", ToggleSteps),
                     MenuItem::action("Changes Panel", ToggleChanges),
                     MenuItem::separator(),
                     MenuItem::action("Next Tab", NextTab),
@@ -2460,13 +2467,14 @@ pub(crate) fn drag_bar(what: String, cx: &mut App) {
             match at {
                 "own" => r.bars.reset(bar),
                 x => match x.parse::<f32>() {
+                    // the way the person's drag goes, closing a panel at the right dragged almost to the end
                     Ok(x) => {
-                        r.bars.drag(bar, x, wide, r.bars_shown());
+                        r.drag_edge(bar, x, wide);
                     }
                     Err(_) => return tracing::warn!("bar {what}: {x} is not a place"),
                 },
             }
-            tracing::info!("the {bar:?} is {} wide", r.bars.of(bar));
+            tracing::info!("the {bar:?} is {} wide; the right shows {:?}", r.bars.of(bar), r.right);
             cx.notify();
         });
     });

@@ -108,6 +108,18 @@ pub fn drag_closes(bar: Bar, wanted: f32) -> bool {
     bar.at_right() && wanted < bar.bounds().1 / 2.
 }
 
+/// Where the runs column's switch is: in the column's own head while the column shows with its names, else at the
+/// start of the tabs bar. Hidden, or narrowed to the rail, the column keeps its switch at hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchAt {
+    ColumnHead,
+    TabsBar,
+}
+
+pub fn column_switch_at(column: bool, width: f32) -> SwitchAt {
+    if column && !is_rail(width) { SwitchAt::ColumnHead } else { SwitchAt::TabsBar }
+}
+
 /// What shows beside the middle: the column or not, and the one panel at the right, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shown {
@@ -328,6 +340,39 @@ mod tests {
         assert!(drag_closes(Bar::Changes, -40.));
         // the column dragged narrow is the rail, as before
         assert!(!drag_closes(Bar::Column, 0.));
+    }
+
+    // Alan, 16/11 (top bar C of the sketches, as the session that built it wrote what he picked): "runs column header
+    // with macOS buttons + mark + hide switch"
+    #[test]
+    fn asked_a_switch_that_hides_the_runs_column() {
+        // shown with its names, the switch is in the column's head
+        assert_eq!(column_switch_at(true, Bar::Column.default_width()), SwitchAt::ColumnHead);
+        // hidden, the switch that shows it again is at the start of the tabs bar; on the rail, too, as the rail's
+        // head holds only the macOS buttons
+        assert_eq!(column_switch_at(false, Bar::Column.default_width()), SwitchAt::TabsBar);
+        assert_eq!(column_switch_at(true, RAIL), SwitchAt::TabsBar);
+        assert_eq!(column_switch_at(false, RAIL), SwitchAt::TabsBar);
+    }
+
+    // Alan, 18/11, picking sketch 1 of the column (the board's words for what he asked): "barras arrastáveis (mínimo
+    // bem baixo, máximo, duplo clique volta, lembra a largura)"
+    #[test]
+    fn asked_bars_dragged_with_a_very_low_minimum_a_maximum_a_double_click_back_and_the_width_kept() {
+        let mut b = Bars::default();
+        // a very low minimum: the column down to the rail, as narrow as Herdr's; the steps down to 160
+        b.drag(Bar::Column, 0., 1600., both());
+        b.drag(Bar::Steps, 1600., 1600., both());
+        assert_eq!((b.column, b.steps), (RAIL, 160.));
+        // a maximum, whatever the pointer asks
+        b.drag(Bar::Column, 1500., 1600., both());
+        b.drag(Bar::Steps, 0., 1600., both());
+        assert_eq!((b.column, b.steps), (480., 560.));
+        // a double click gives the bar its own width back
+        b.reset(Bar::Column);
+        assert_eq!(b.column, Bar::Column.default_width());
+        // the widths are kept: the app opens again with them as the person left them
+        assert_eq!(Bars::from_kept(b.to_kept()), (b, vec![]));
     }
 
     #[test]

@@ -237,8 +237,9 @@ mod tests {
         assert_eq!(moved(0, Some(1), 1), None, "nothing to walk");
     }
 
+    // Alan, 17/11, approving look C of the app (as the session that built it wrote it): "⌘O next thing that needs you"
     #[test]
-    fn command_o_goes_round_what_needs_the_person() {
+    fn asked_command_o_the_next_thing_that_needs_me() {
         let order = [Key::Agent("t2".into()), Key::Run("r1".into()), Key::Agent("t1".into())];
         assert_eq!(next(&order, None), Some(Key::Agent("t2".into())));
         assert_eq!(next(&order, Some(&Key::Agent("t2".into()))), Some(Key::Run("r1".into())));
