@@ -1368,7 +1368,7 @@ fn banner() -> String {
     let installed = crate::install::installed_commit();
     let latest = LATEST.lock().ok().and_then(|l| l.clone());
     let (text, act, label) = if UPDATING.load(std::sync::atomic::Ordering::SeqCst) {
-        return "<div class=\"notice new\"><span>Jaynes is updating: cargo builds it, which takes a few minutes.</span></div>".to_string();
+        return format!("<div class=\"notice new\"><span>{}</span></div>", esc(&updating_says(latest.as_deref())));
     } else if let (Some(r), Some(i)) = (&running, &installed)
         && r != i
     {
@@ -1381,6 +1381,15 @@ fn banner() -> String {
         return String::new();
     };
     format!("<div class=\"notice new\"><span>{text}</span><button class=\"act\" data-setup=\"{act}\">{label}</button></div>")
+}
+
+/// What the notice says while Update runs, as `jaynes update` does it: the latest release built for this machine
+/// (`latest`) is downloaded and installed; with none, cargo builds the newest source.
+fn updating_says(latest: Option<&str>) -> String {
+    match latest {
+        Some(v) => format!("Jaynes is updating: it downloads Jaynes {v} and installs it."),
+        None => "Jaynes is updating: no release is built for this machine, so cargo builds the newest source, which takes a few minutes.".to_string(),
+    }
 }
 
 /// What the notice says of a Jaynes installed since the page started: its version, read from the program installed
@@ -2166,6 +2175,15 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 mod tests {
     use super::*;
     use jaynes_core::question::QuestionKind;
+
+    #[test]
+    fn while_jaynes_updates_the_notice_says_what_update_does() {
+        // the notice offers Update only for a release built for this machine, and Update downloads it and installs it
+        assert_eq!(updating_says(Some("0.2.5")), "Jaynes is updating: it downloads Jaynes 0.2.5 and installs it.");
+        // with no release known for this machine, `jaynes update` builds the newest source with cargo
+        let said = updating_says(None);
+        assert_eq!(said, "Jaynes is updating: no release is built for this machine, so cargo builds the newest source, which takes a few minutes.");
+    }
 
     #[test]
     fn a_choosing_stop_shortlists_in_the_app_s_words_and_sends_the_engine_s_note() {
