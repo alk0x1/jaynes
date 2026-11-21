@@ -316,8 +316,10 @@ mod tests {
         Entry { label: label.into(), space: space.into(), go, key: None, agent: None, run: None, detail: None }
     }
 
+    // Alan, 18/11, "sim a todos" to the list the tech-lead brought, item 1 (as the board keeps it): after the stops,
+    // Command-K
     #[test]
-    fn it_lists_the_inbox_every_agent_every_run_once_then_the_commands() {
+    fn asked_command_k_the_inbox_every_agent_every_run_once_then_the_commands() {
         use crate::agents::{Agent, Space, State};
         use jaynes_shell::listing::{Listing, Mark, Row};
         let agent = |a: &str| Agent { address: a.into(), title: a.to_uppercase(), state: State::Idle, since_ms: 0, shell: false, turn: 0, kind: None, msg: String::new(), cwd: String::new() };

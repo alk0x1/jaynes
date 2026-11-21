@@ -1324,8 +1324,7 @@ impl Root {
     /// Command-plus, Command-minus or Command-0 where the keys are: Changes (its tab, or its commit message), else the
     /// terminal that has them, whose font all the terminals share. Kept, as Settings keeps its font.
     fn zoom(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>) {
-        let in_changes = self.stack.read(cx).focus.is_focused(window) || self.changes.read(cx).message_focused(window, cx);
-        let view = if in_changes { prefs::View::Changes } else { prefs::View::Terminal };
+        let view = prefs::zoom_view(self.stack.read(cx).focus.is_focused(window), self.changes.read(cx).message_focused(window, cx));
         let (name, value) = prefs::zoomed(view, &prefs::get(), steps);
         if let Err(e) = prefs::change(name, &value, cx) {
             tracing::warn!("{e}");

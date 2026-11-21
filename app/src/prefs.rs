@@ -86,6 +86,11 @@ pub enum View {
     Terminal,
 }
 
+/// What the zoom keys zoom: Changes while the stacked diffs or the commit message have the keys, else the terminal.
+pub fn zoom_view(diffs_focused: bool, message_focused: bool) -> View {
+    if diffs_focused || message_focused { View::Changes } else { View::Terminal }
+}
+
 /// The setting the zoom keys change in `view`, and its new value: `steps` up or down (a tenth of Changes' size, a
 /// point of the terminal's font), held in reach; 0 brings the view's own size back.
 pub fn zoomed(view: View, p: &Prefs, steps: i32) -> (&'static str, String) {
@@ -279,10 +284,17 @@ pub fn change(name: &str, value: &str, cx: &mut gpui::App) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
-    use super::{Prefs, View, load, new_agent_argv, onto, save, set, zoomed};
+    use super::{Prefs, View, load, new_agent_argv, onto, save, set, zoom_view, zoomed};
 
+    // Alan, 20/11: "quero zoom e outzoom no app também"; then "o principal zoom é pra ver as mudanças, comparações etc"
+    // (the comparisons' pictures zoom in the viewer, the desktop-engineer's)
     #[test]
-    fn each_view_keeps_its_own_zoom_a_step_at_a_time_and_command_0_brings_it_back() {
+    fn asked_zoom_in_and_out_in_the_app_mainly_to_see_the_changes() {
+        // the changes zoom where they are read: the stacked diffs, and Changes with its message in hand; the rest is
+        // the terminal's font
+        assert_eq!(zoom_view(true, false), View::Changes);
+        assert_eq!(zoom_view(false, true), View::Changes);
+        assert_eq!(zoom_view(false, false), View::Terminal);
         let mut p = Prefs::default();
         assert_eq!(p.changes_zoom, 1.0);
         // Changes: a tenth a step, between 0.7 and 2
@@ -370,8 +382,10 @@ mod tests {
         assert_eq!(s.terminal_padding, Settings::default().terminal_padding);
     }
 
+    // Alan, 18/11 (decided by him, as the board keeps it): the light theme is option 2, Linen, with the line
+    // "Appearance" (Dark, Light, Match the system)
     #[test]
-    fn the_appearance_is_dark_unless_light_is_picked_or_the_system_is_light() {
+    fn asked_appearance_dark_light_or_match_the_system() {
         use super::{Appearance, light_now};
         let mut p = Prefs::default();
         assert_eq!(p.appearance, Appearance::Dark);
@@ -383,8 +397,9 @@ mod tests {
         assert!(set(&mut p, "appearance", "sepia").is_err());
     }
 
+    // Alan, 18/11, the same decision: the light theme is Linen
     #[test]
-    fn in_the_light_the_terminal_is_linen_and_in_the_dark_the_colors_picked() {
+    fn asked_a_light_theme_linen_and_in_the_dark_the_colors_picked() {
         use super::onto_for;
         let p = Prefs { terminal_colors: "moss".into(), ..Prefs::default() };
         assert_eq!(onto_for(&p, Settings::default(), true).theme, "linen");

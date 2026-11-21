@@ -189,8 +189,10 @@ mod tests {
         d
     }
 
+    // Alan, 18/11, "sim a todos", item 1, its end (as the board keeps it): remember the tabs and the open agent on
+    // reopening
     #[test]
-    fn what_was_kept_comes_back_as_it_was() {
+    fn asked_remember_tabs_and_the_open_agent_on_reopening() {
         let p = dir().join("app-state.json");
         let s = State {
             open: Open::Agent { address: "w1:t2".into() },

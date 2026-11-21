@@ -959,8 +959,15 @@ mod tests {
         assert_eq!(inbox_count(&order(&listing, &spaces, &HashSet::new())), 4);
     }
 
+    // Alan, 18/11 (the rule the tech-lead wrote from what he found at the demo, as the board keeps it): "cada etiqueta
+    // da coluna diz o que se espera da pessoa, ou nada"
     #[test]
-    fn an_agent_says_what_is_expected_of_the_person_or_only_how_it_stands() {
+    fn asked_each_column_label_says_what_is_expected_of_me_or_nothing() {
+        // a run stopped says what the person can do; one that asks says nothing, its question is under it
+        assert_eq!(needs_tag(&row("e", Mark::Blocked, "step 3 of 3, blocked: no room")).map(|t| t.0).as_deref(), Some("blocked · open it"));
+        assert_eq!(needs_tag(&row("q", Mark::Needs, "Keep this fix?")), None);
+        // a finished one says what it left, or nothing
+        assert_eq!(finished_tag(&row("d", Mark::Abandoned, "abandoned"), Some(0)), None);
         let now = 10 * 60_000;
         let mut done = agent("t", State::ToReview);
         done.since_ms = 5 * 60_000;
