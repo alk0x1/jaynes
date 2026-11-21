@@ -1226,7 +1226,8 @@ impl Render for Compare {
             None => div().id("stage").flex_1().flex().items_center().justify_center().text_color(rgb(look::faint())).child("This direction has no picture."),
         };
         // the directions as a strip of large pictures under the stage, each with its star; none for one option
-        let mut strip_row = div().flex().gap(px(12.)).items_end().flex_none();
+        // the hint after the directions, or on a line of its own under them when the window leaves it no room
+        let mut strip_row = div().flex().flex_wrap().gap(px(12.)).items_end().flex_none();
         for (i, it) in stop.items.iter().enumerate() {
             let on = i == self.marks.dir;
             let starred = self.marks.keep.contains(&i);
