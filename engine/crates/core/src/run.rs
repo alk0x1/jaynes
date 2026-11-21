@@ -55,6 +55,18 @@ pub struct Run {
     /// The defects planted and taken out since, by id.
     #[serde(default)]
     pub unplanted: std::collections::BTreeSet<String>,
+    /// What the person chose for the project's ports since the run's setup, the last choice: none, as the setup says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Ports>,
+}
+
+/// The project's ports as the person chose them: every local port, opened at `opened` (seconds since 1970), or only
+/// the ones a run reserves and a step declares.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Ports {
+    pub any: bool,
+    #[serde(default)]
+    pub opened: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -140,6 +152,10 @@ pub struct StepState {
     /// The person's words for this step in earlier rounds, oldest first.
     #[serde(default)]
     pub earlier: Vec<String>,
+    /// A check could not judge the output under its checks (`pending`): it waits for the person's continue, which has
+    /// them judge that same output again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unjudged: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -256,6 +272,7 @@ impl Run {
             never_merge: *never_merge,
             planted: BTreeMap::new(),
             unplanted: Default::default(),
+            ports: None,
         })
     }
 
@@ -310,6 +327,7 @@ impl Run {
                 }
                 if let Some(s) = self.step_mut(step) {
                     s.attempt = *attempt;
+                    s.unjudged = false;
                     s.status = Status::Running { attempt: *attempt, fix: *fix };
                     if session.is_some() {
                         s.session = session.clone();
@@ -323,6 +341,7 @@ impl Run {
                     s.acted |= acts;
                     s.resume = None;
                     s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone(), tree: tree.clone() });
+                    s.unjudged = false;
                     s.status = Status::Checking { attempt: *attempt, fix: *fix };
                     if session.is_some() {
                         s.session = session.clone();
@@ -343,6 +362,7 @@ impl Run {
                         s.failure = reasons.clone();
                     }
                     s.pending = None;
+                    s.unjudged = false;
                     s.status = Status::Idle;
                 }
             }
@@ -365,6 +385,7 @@ impl Run {
             Event::AttemptInterrupted { step, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.pending = None;
+                    s.unjudged = false;
                     s.status = Status::Idle;
                 }
             }
@@ -406,6 +427,7 @@ impl Run {
                     });
                     s.status = Status::Done;
                     s.pending = None;
+                    s.unjudged = false;
                     s.failure.clear();
                     // what a choice kept alone was already answered: the question stays the round's
                     if let Some(q) = s.narrow.take() {
@@ -426,6 +448,7 @@ impl Run {
                     s.notes = notes.clone();
                     s.failure.clear();
                     s.pending = None;
+                    s.unjudged = false;
                     s.question = None;
                     s.inputs.clear();
                 }
@@ -578,6 +601,8 @@ impl Run {
                         }
                         if matches!(fault, Fault::Jaynes) {
                             s.probed = false;
+                            // the checks judge the same output again, under way from here
+                            s.unjudged = false;
                         }
                         if matches!(fault, Fault::MayHaveActed | Fault::Role) {
                             s.status = Status::Idle;
@@ -586,6 +611,12 @@ impl Run {
                 self.delivering = None;
                 self.phase = Phase::Running;
             }
+            Event::ChecksUnjudged { step, .. } => {
+                if let Some(s) = self.step_mut(step) {
+                    s.unjudged = true;
+                }
+            }
+            Event::PortsChosen { any, opened } => self.ports = Some(Ports { any: *any, opened: *opened }),
             Event::Halted { .. } => self.halted = true,
             Event::Resumed { .. } => self.halted = false,
             Event::DeliveryAsked { digest } => {
@@ -625,6 +656,15 @@ impl Run {
 
     pub fn output(&self, i: usize) -> Option<&Digest> {
         self.steps[i].done.as_ref().map(|d| &d.output)
+    }
+
+    /// The step whose output waits, blocked, for its checks to judge it again: a check could not judge it, and the
+    /// person's continue has them judge that same output, the agent working no more.
+    pub fn checks_again(&self) -> Option<usize> {
+        let Phase::Blocked { step: Some(name), fault: Fault::Jaynes, .. } = &self.phase else { return None };
+        let i = self.manifest.index(name)?;
+        let s = &self.steps[i];
+        (s.unjudged && matches!(s.status, Status::Checking { .. }) && s.pending.is_some()).then_some(i)
     }
 
     /// The steps step `i` uses: those it needs, and, for a step on the project, every earlier step that changes

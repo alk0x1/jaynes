@@ -24,8 +24,12 @@ pub struct Setup {
     /// The run's copy of its target, when it has one.
     pub copy: Option<Box<dyn Workspace>>,
     pub agent: Box<dyn Agent>,
-    /// The person opened the project's checks to every local port, as the run's setup says (`ports_open`).
+    /// The person opened the project's checks to every local port: as they last chose for this run (a `PortsChosen`
+    /// in the record), else as the run's setup says (`ports_open`).
     pub any_port: bool,
+    /// The engine's home, and the person's project the run works on, when it has one.
+    pub home: PathBuf,
+    pub project: Option<PathBuf>,
 }
 
 impl Setup {
@@ -44,8 +48,38 @@ impl Setup {
             _ => None,
         };
         let agent = agent_in(s["agent"].as_str().unwrap_or("claude"), Some(&role.library));
-        Ok(Setup { run: run.to_string(), dir, role, copy, agent, any_port: ports_open(&s).is_some() })
+        let chosen = store.state(run)?.and_then(|r| r.ports).map(|p| p.any);
+        let any_port = chosen.unwrap_or(ports_open(&s).is_some());
+        let project = s["project"].as_str().map(PathBuf::from);
+        Ok(Setup { run: run.to_string(), dir, role, copy, agent, any_port, home: home.to_path_buf(), project })
     }
+}
+
+/// The variables of the environment a run keeps from its start, and every process that carries it on runs with: where
+/// the person's programs and toolchains are (a compiler from mise, asdf or Homebrew is found by them), and nothing
+/// else, so no key or token the environment holds goes into the record.
+pub const RUN_ENV: &[&str] = &[
+    "PATH", "GOROOT", "GOPATH", "GOBIN", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "JAVA_HOME", "NVM_DIR", "NVM_BIN",
+    "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL", "PYENV_ROOT", "PYENV_VERSION", "RBENV_ROOT", "ASDF_DIR", "ASDF_DATA_DIR",
+    "MISE_DATA_DIR", "MISE_CONFIG_DIR", "HOMEBREW_PREFIX", "DEVELOPER_DIR", "SDKROOT",
+];
+
+/// This process's values of [`RUN_ENV`], for the setup of a run it starts.
+pub fn started_env() -> serde_json::Map<String, serde_json::Value> {
+    RUN_ENV.iter().filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), serde_json::Value::String(v)))).collect()
+}
+
+/// The environment the run's setup kept from its start, by variable of [`RUN_ENV`]; none for a run started before it
+/// kept one.
+pub fn run_env(setup: &serde_json::Value) -> Option<std::collections::BTreeMap<String, String>> {
+    let kept = setup.get("env")?.as_object()?;
+    Some(kept.iter().filter(|(k, _)| RUN_ENV.contains(&k.as_str())).filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
+}
+
+/// Whether this process's environment is the one `kept` says, for every variable of [`RUN_ENV`]: those it holds set
+/// as it holds them, the others unset.
+pub fn env_is(kept: &std::collections::BTreeMap<String, String>) -> bool {
+    RUN_ENV.iter().all(|k| std::env::var_os(k).as_deref() == kept.get(*k).map(std::ffi::OsStr::new))
 }
 
 /// When the person let this run's project reach any local port, as the run's setup recorded it at its start: the
@@ -142,6 +176,10 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
     if run.engine != jaynes_core::ENGINE {
         let said = act_elsewhere(home, run, &json!({"submit": input}))?;
         return Ok(if said["recorded"] == "inbox" { "inbox" } else { "now" });
+    }
+    // what the person chose for the project's ports, the run's own process reads from their file: nobody else says it
+    if matches!(input, Input::PortsChosen { .. }) {
+        return Err("only the run's own process records the project's ports, read from what the person chose".into());
     }
     jaynes_core::decide(Some(run), &input).map_err(|r| r.0)?;
     let mut store = Store::open(&home.join("record.sqlite3"))?;
@@ -684,6 +722,10 @@ impl<'a> Driver<'a> {
                 queue.push_front(input);
             }
             let Some(mut input) = queue.pop_front() else { break };
+            // the person continues as the project's ports stand now: what they chose since the start goes on record first
+            if matches!(input, Input::Continue { .. }) {
+                self.ports_now()?;
+            }
             // A turn whose agent a halt stopped is interrupted, so it spends no attempt and runs again on resume.
             if matches!(input, Input::AttemptEnded { .. }) && std::fs::remove_file(self.setup.dir.join(HALTED_AGENT)).is_ok() {
                 input = Input::Recovered;
@@ -885,6 +927,29 @@ impl<'a> Driver<'a> {
         d.removed = Some(crate::planted::Removed { by: remover.to_string(), at: crate::store::now(), verified });
         crate::planted::write(&self.setup.dir, &defects)?;
         end
+    }
+
+    /// Record what the person chose for the project's ports since the run last said, and take it from here: the setup
+    /// stays as it was.
+    fn ports_now(&mut self) -> Result<(), String> {
+        let Some(project) = &self.setup.project else { return Ok(()) };
+        let chosen = crate::project_prefs::load(&self.setup.home, project)?.ports.filter(|p| p.any);
+        let any = chosen.is_some();
+        if any == self.setup.any_port {
+            return Ok(());
+        }
+        let input = Input::PortsChosen { any, opened: chosen.map(|p| p.opened).unwrap_or(0) };
+        // a run that cannot take it (one finished) answers the continue itself
+        let Some(run) = self.store.state(&self.setup.run)? else { return Ok(()) };
+        if jaynes_core::decide(Some(&run), &input).is_err() {
+            return Ok(());
+        }
+        let (_, events, _) = decide_and_record(self.store, &self.setup.run, &input)?;
+        for e in &events {
+            narrate(e);
+        }
+        self.setup.any_port = any;
+        Ok(())
     }
 
     /// Put the copy where step `i` works: the base with the changes of the earlier steps it uses, and, when it
@@ -1706,6 +1771,9 @@ pub fn narrate(e: &Event) {
         Event::StepDone { step, round, .. } => say(&format!("✓ {step} (round {round})")),
         Event::AttemptFailed { step, reasons, spent: true, .. } => say(&format!("✗ {step}: {}", reasons.join("; "))),
         Event::FixAsked { step, reasons, .. } => say(&format!("↻ {step} fixes in place: {}", reasons.join("; "))),
+        Event::ChecksUnjudged { step, .. } => say(&format!("… {step}: a check could not judge; continue has them check the same change again")),
+        Event::PortsChosen { any: true, opened } => say(&format!("this project's checks reach any local port of this machine from here: opened by you on {}", crate::summary::utc(*opened))),
+        Event::PortsChosen { any: false, .. } => say("this project's checks reach only the ports the run reserves and the ones a step declares, from here: closed by you"),
         Event::StepInvalidated { step, because, .. } => say(&format!("↺ {step} runs again: {}", because.join("; "))),
         Event::Waiting { why, .. } => say(&format!("… {why}")),
         Event::RunFinished { outcome, cost } => say(&format!(

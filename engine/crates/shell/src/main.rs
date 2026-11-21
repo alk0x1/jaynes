@@ -150,6 +150,26 @@ fn run(args: &[String]) -> Result<(), String> {
             .ok_or_else(|| format!("run {id} started on engine {}, which is no longer on this machine: this one ({}) cannot carry it on", state.engine, jaynes_core::ENGINE))?;
         return Err(format!("the engine of run {id} did not start: {}", std::process::Command::new(exe).args(args).exec()));
     }
+    // A command that carries a run on runs with the environment the run started with (where the person's toolchains
+    // are), whatever process gave it: the page and the app may have been opened with a short PATH. This process
+    // becomes itself with it.
+    if matches!(cmd, "continue" | "answer" | "raise" | "halt" | "resume" | "abandon" | "undo" | "correct" | "plant" | "unplant")
+        && let Some(id) = rest.first()
+        && let Some(kept) = store().and_then(|s| s.setup(id)).ok().as_ref().and_then(drive::run_env)
+        && !drive::env_is(&kept)
+    {
+        use std::os::unix::process::CommandExt;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let mut again = std::process::Command::new(exe);
+        again.args(args);
+        for k in drive::RUN_ENV {
+            match kept.get(*k) {
+                Some(v) => again.env(k, v),
+                None => again.env_remove(k),
+            };
+        }
+        return Err(format!("Jaynes could not carry run {id} on with the environment it started with: {}", again.exec()));
+    }
     match cmd {
         "--version" | "version" => {
             println!("{}", install::version());
@@ -252,7 +272,11 @@ fn run(args: &[String]) -> Result<(), String> {
             let s = store()?;
             let state = s.state(id)?.ok_or("no such run")?;
             print_state(&state);
-            if let Some(opened) = s.setup(id).ok().as_ref().and_then(drive::ports_open) {
+            let opened = match state.ports {
+                Some(p) => p.any.then_some(p.opened),
+                None => s.setup(id).ok().as_ref().and_then(drive::ports_open),
+            };
+            if let Some(opened) = opened {
                 println!("{}", ports_sentence(opened));
             }
             Ok(())
@@ -607,7 +631,7 @@ fn start(args: &[String]) -> Result<(), String> {
         let c = jaynes_core::attention::count(&history, &key, &lineage, &agent, store::now(), stop.budget.map(|b| b.0), jaynes_core::DELTA);
         attention.insert(step.name.clone(), c);
     }
-    // the project's open ports as the person left them now, fixed for the whole run
+    // the project's open ports as the person left them now; a continue reads them again, and the record says so
     let ports = match &project {
         Some(p) => project_prefs::load(&home(), p)?.ports.filter(|p| p.any),
         None => None,
@@ -616,6 +640,7 @@ fn start(args: &[String]) -> Result<(), String> {
         "role_given": role_dir, "fingerprint": fingerprint, "agent": agent, "target": manifest.target,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
         "ports": ports.as_ref().map(|p| json!({"any": true, "opened": p.opened})),
+        "env": drive::started_env(),
     }))?;
     if let Some(p) = &ports {
         say(&ports_sentence(p.opened));
@@ -659,7 +684,7 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
             prefs.ports = Some(project_prefs::Ports { any: open, opened: if open { store::now() } else { 0 } });
             project_prefs::save(&home(), &dir, &prefs)?;
             println!("{}", if open {
-                format!("{}; a run started from now on lets its checks reach every service listening here, the Jaynes page's port among them. `jaynes project close-ports {}` closes them again", ports_sentence(store::now()), dir.display())
+                format!("{}; a run started from now on, and a blocked one when you continue it, lets its checks reach every service listening here, the Jaynes page's port among them. `jaynes project close-ports {}` closes them again", ports_sentence(store::now()), dir.display())
             } else {
                 "closed: this project's checks reach only the ports a run reserves for them and the ones a step declares".to_string()
             });

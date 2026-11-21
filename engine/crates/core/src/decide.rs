@@ -170,8 +170,23 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             if !allowed {
                 return refuse("only you continue a blocked run");
             }
+            let again = c.run.checks_again();
             c.emit(Event::Continued { by: by.clone() });
+            // a change a check could not judge is judged again as it was: the agent does not work again
+            if let Some(i) = again {
+                c.check_again(i);
+            }
             c.advance();
+        }
+        Input::PortsChosen { any, opened } => {
+            if c.run.finished() {
+                return refuse("the run is finished");
+            }
+            let now = crate::run::Ports { any: *any, opened: if *any { *opened } else { 0 } };
+            if c.run.ports == Some(now) {
+                return refuse("the project's ports are already so for this run");
+            }
+            c.emit(Event::PortsChosen { any: now.any, opened: now.opened });
         }
         Input::DeliveryEnded { digest, ok, reference } => {
             if c.run.delivering.as_ref() != Some(digest) {
@@ -964,6 +979,10 @@ impl Ctx {
             self.stale(step, attempt, "checks of an attempt that is no longer under way ended");
             return Ok(());
         }
+        if self.run.steps[i].unjudged {
+            self.stale(step, attempt, "checks ended while the change they could not judge waits for the person to continue");
+            return Ok(());
+        }
         let decl = self.run.manifest.steps[i].clone();
         // a check judged the step's output only if it was given the state of the project the output was measured
         // at: one that judged another, or none where there was one, could not judge it
@@ -1016,12 +1035,12 @@ impl Ctx {
             match results.iter().find(|r| r.check == c.name).map(|r| &r.verdict) {
                 None => {
                     let reason = format!("the check {} of {step} gave no verdict. No attempt was spent", c.name);
-                    self.fail_unspent(step, attempt, &reason);
+                    self.unjudged(step, attempt, fix, &reason);
                     return Ok(());
                 }
                 Some(CheckVerdict::Blocked { reason }) => {
                     let reason = format!("the check {} of {step} could not judge: {reason}. No attempt was spent", c.name);
-                    self.fail_unspent(step, attempt, &reason);
+                    self.unjudged(step, attempt, fix, &reason);
                     return Ok(());
                 }
                 Some(CheckVerdict::Pass) => {}
@@ -1068,15 +1087,19 @@ impl Ctx {
         Ok(())
     }
 
-    fn fail_unspent(&mut self, step: &str, attempt: u32, reason: &str) {
-        self.emit(Event::AttemptFailed {
-            step: step.to_string(),
-            attempt,
-            reasons: vec![reason.to_string()],
-            usage: Default::default(),
-            spent: false,
-        });
+    /// A check could not judge the output: the attempt waits at its checks, unspent, for the person's continue (G4).
+    fn unjudged(&mut self, step: &str, attempt: u32, fix: u32, reason: &str) {
+        self.emit(Event::ChecksUnjudged { step: step.to_string(), attempt, fix });
         self.block(Some(step.to_string()), Fault::Jaynes, reason.to_string());
+    }
+
+    /// Have the checks of step `i` judge again the output they could not judge, as the attempt delivered it.
+    fn check_again(&mut self, i: usize) {
+        let Some(p) = self.run.steps[i].pending.clone() else { return };
+        let Status::Checking { attempt, fix } = self.run.steps[i].status else { return };
+        let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
+        let checks = self.run.manifest.steps[i].checks.iter().map(|c| c.name.clone()).collect();
+        self.command(Command::RunChecks { step: self.name(i), attempt, fix, output: p.output, given, checks });
     }
 
     /// What a delivered output breaks of what the person kept or dropped.
@@ -1132,6 +1155,8 @@ impl Ctx {
                         self.emit(Event::AttemptInterrupted { step: name, attempt, reason: "Jaynes stopped while it ran".to_string() });
                     }
                 }
+                // checks that could not judge wait for the person's continue, never for a restart
+                Status::Checking { .. } if self.run.steps[i].unjudged => {}
                 Status::Checking { attempt, fix } => {
                     if let Some(p) = self.run.steps[i].pending.clone() {
                         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included

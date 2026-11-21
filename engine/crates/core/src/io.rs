@@ -129,6 +129,14 @@ pub enum Input {
         id: String,
         by: By,
     },
+    /// What the person chose for the project's ports since the run's setup, as the run's own process reads it from
+    /// the person's file when they continue: every local port (`any`, opened at `opened`, in seconds since 1970) or
+    /// only the reserved and declared ones. The shell's alone: nothing from outside the run's process sends it.
+    PortsChosen {
+        any: bool,
+        #[serde(default)]
+        opened: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

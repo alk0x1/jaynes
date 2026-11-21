@@ -178,6 +178,8 @@ struct World {
     seed: u64,
     /// When set, every state the run reaches, as the Lean model reads it, with the move the core makes from it.
     cases: Option<Vec<String>>,
+    /// Continues that had the checks judge again a change they could not judge.
+    rechecked: u32,
 }
 
 impl World {
@@ -192,6 +194,7 @@ impl World {
             ended: BTreeMap::new(),
             seed,
             cases: None,
+            rechecked: 0,
         }
     }
 
@@ -446,6 +449,23 @@ impl World {
                 }
                 _ => {}
             }
+        }
+        // G4: on the person's continue, a change a check could not judge is judged again as the attempt delivered it,
+        // and no attempt starts for it.
+        if let (Input::Continue { .. }, Some(b)) = (input, before)
+            && let Some(i) = b.checks_again()
+            && events.iter().any(|e| matches!(e, Event::Continued { .. }))
+        {
+            let (name, output) = (&b.manifest.steps[i].name, &b.steps[i].pending.as_ref().expect("a change waits").output);
+            assert!(
+                !events.iter().any(|e| matches!(e, Event::AttemptStarted { step, .. } if step == name)),
+                "seed {seed}: G4 a continue of a change the checks could not judge started an attempt"
+            );
+            assert!(
+                commands.iter().any(|c| matches!(c, Command::RunChecks { step, output: o, .. } if step == name && o == output)),
+                "seed {seed}: G4 a continue did not have the checks judge the same change again: {commands:?}"
+            );
+            self.rechecked += 1;
         }
         // G4: a fault of Jaynes spends no attempt.
         let faulted = match input {
@@ -1411,7 +1431,8 @@ fn g14_an_act_that_repeats_safely_starts_again_after_a_stop_with_the_same_key() 
 }
 
 /// A step that acts, delivered (so it acted) and whose check then failed or could not judge: continuing does not act
-/// again; the run asks the person, and only their order is a second act.
+/// again. A check that could not judge judges the same act again; one that failed has the run ask the person, and only
+/// their order is a second act.
 #[test]
 fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
     for verdict in [CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new() }, CheckVerdict::Blocked { reason: "could not look".to_string() }] {
@@ -1428,6 +1449,15 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
         let attempt = run.steps[0].attempt;
         feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: verdict.clone(), tree: None }] });
         assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
+        if matches!(verdict, CheckVerdict::Blocked { .. }) {
+            // the check judges the same act again, and nothing acts
+            let c = feed(&mut run, Input::Continue { by: By::Person });
+            assert!(pushes_of(&c, "send").is_empty(), "continuing acted again: {c:?}");
+            assert!(c.iter().any(|c| matches!(c, Command::RunChecks { step, attempt: a, .. } if step == "send" && *a == attempt)), "{c:?}");
+            let failed = CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new() };
+            feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: failed, tree: None }] });
+            assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
+        }
         let c = feed(&mut run, Input::Continue { by: By::Person });
         let c = probe_ok(&mut run, c);
         assert!(pushes_of(&c, "send").is_empty(), "{verdict:?}: continuing acted again: {c:?}");
@@ -1758,6 +1788,9 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         if w.run().finished() {
             hit("finished");
         }
+        if w.rechecked > 0 {
+            hit("a change judged again on the person's continue");
+        }
         for e in &w.log {
             match e {
                 Event::StepInvalidated { because, .. } if because.iter().any(|b| b.contains("second act")) => hit("a second act ordered"),
@@ -1789,6 +1822,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
         "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
+        "a change judged again on the person's continue",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }

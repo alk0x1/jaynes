@@ -100,10 +100,12 @@ fn a_check_that_judged_another_tree_or_none_could_not_judge_the_output() {
         assert!(!done(&events), "{trees:?}: {events:?}");
         let records = events.iter().find_map(|e| if let Event::ChecksJudged { checks, .. } = e { Some(checks.clone()) } else { None }).expect("judged");
         assert!(records.iter().any(|r| r.blocked && !r.passed), "{trees:?}: the check is recorded as one that could not judge: {records:?}");
-        let failed = events.iter().find_map(|e| if let Event::AttemptFailed { reasons, spent, .. } = e { Some((reasons.clone(), *spent)) } else { None });
-        let (reasons, spent) = failed.expect("the attempt ends unspent");
-        assert!(!spent, "{events:?}");
-        assert!(reasons.iter().any(|r| r.contains("not the state of the project the step left (t1)")), "{reasons:?}");
+        // the attempt is not spent: it waits at its checks for the person's continue, and the block says why
+        assert!(events.iter().any(|e| matches!(e, Event::ChecksUnjudged { .. })), "{trees:?}: {events:?}");
+        assert!(!events.iter().any(|e| matches!(e, Event::AttemptFailed { .. })), "{trees:?}: {events:?}");
+        assert_eq!(run.counts.spent, 0);
+        let reason = events.iter().find_map(|e| if let Event::Blocked { reason, .. } = e { Some(reason.clone()) } else { None }).expect("blocked");
+        assert!(reason.contains("not the state of the project the step left (t1)"), "{reason}");
     }
 }
 
@@ -113,4 +115,83 @@ fn an_output_measured_at_no_tree_is_judged_as_before() {
     assert!(done(&judged(&mut run, attempt, [None, None])));
     let (mut run, attempt) = checking(None);
     assert!(done(&judged(&mut run, attempt, [Some("t9"), None])), "no tree to hold the checks to: their verdicts stand");
+}
+
+fn person() -> jaynes_core::question::By {
+    jaynes_core::question::By::Person
+}
+
+fn verdicts(run: &mut Run, attempt: u32, verdict: CheckVerdict) -> Vec<Event> {
+    let results = ["suite", "shape"].iter().map(|c| CheckResult { check: c.to_string(), verdict: verdict.clone(), tree: Some("t1".into()) }).collect();
+    feed(run, Input::ChecksEnded { step: "make".into(), attempt, fix: 0, results }).0
+}
+
+/// A check that could not judge leaves the attempt at its checks, and the person's continue has them judge the
+/// same output again: the agent does not work again, and no attempt is spent.
+#[test]
+fn continue_after_a_check_that_could_not_judge_checks_the_same_change_again_and_the_agent_does_not_work_again() {
+    let (mut run, attempt) = checking(Some("t1"));
+    let events = judged(&mut run, attempt, [Some("t1"), Some("t2")]);
+    assert!(run.blocked(), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, Event::AttemptFailed { .. })), "the attempt waits at its checks, it did not fail: {events:?}");
+    assert_eq!(run.checks_again(), Some(0), "the run knows a change waits to be checked again");
+    assert_eq!(run.counts.spent, 0);
+    let (events, commands) = feed(&mut run, Input::Continue { by: person() });
+    assert!(!events.iter().any(|e| matches!(e, Event::AttemptStarted { .. } | Event::ProbeAsked { .. })), "{events:?}");
+    let again = commands.iter().find_map(|c| match c {
+        Command::RunChecks { step, attempt: a, fix, output, .. } => Some((step.clone(), *a, *fix, output.clone())),
+        _ => None,
+    });
+    assert_eq!(again, Some(("make".to_string(), attempt, 0, Digest("o".into()))), "{commands:?}");
+    assert!(!commands.iter().any(|c| matches!(c, Command::RunAgent(_) | Command::Probe { .. })), "{commands:?}");
+    assert_eq!(run.checks_again(), None, "the checks are under way again");
+    let events = judged(&mut run, attempt, [Some("t1"), Some("t1")]);
+    assert!(done(&events), "the same output passes: {events:?}");
+    assert_eq!(run.steps[0].done.as_ref().map(|d| d.output.clone()), Some(Digest("o".into())));
+    assert_eq!((run.counts.attempts, run.counts.spent), (1, 0), "{:?}", run.counts);
+}
+
+/// Judged again, an output that truly fails goes the way of today: the attempt is spent and a new one starts.
+#[test]
+fn a_change_that_fails_when_it_is_checked_again_spends_its_attempt_as_any_failure() {
+    let (mut run, attempt) = checking(Some("t1"));
+    verdicts(&mut run, attempt, CheckVerdict::Blocked { reason: "a port was refused".into() });
+    assert!(run.blocked());
+    feed(&mut run, Input::Continue { by: person() });
+    let events = verdicts(&mut run, attempt, CheckVerdict::Fail { reasons: vec!["it does not hold".into()], detail: String::new() });
+    let spent = events.iter().find_map(|e| if let Event::AttemptFailed { spent, .. } = e { Some(*spent) } else { None });
+    assert_eq!(spent, Some(true), "{events:?}");
+    assert_eq!(run.counts.spent, 1);
+    assert_eq!(run.steps[0].pending, None);
+}
+
+/// Only the person's continue has the checks judge again: a restart of the shell does not, and a verdict that
+/// comes while the run waits for the person is a late report.
+#[test]
+fn nothing_but_the_person_s_continue_has_the_checks_judge_again() {
+    let (mut run, attempt) = checking(Some("t1"));
+    verdicts(&mut run, attempt, CheckVerdict::Blocked { reason: "the tool did not start".into() });
+    let (events, commands) = feed(&mut run, Input::Recovered);
+    assert!(!commands.iter().any(|c| matches!(c, Command::RunChecks { .. })), "a restart judged again: {commands:?} {events:?}");
+    assert!(run.blocked());
+    let events = verdicts(&mut run, attempt, CheckVerdict::Pass);
+    assert!(matches!(events.as_slice(), [Event::StaleReport { .. }]), "{events:?}");
+    assert!(run.blocked() && run.checks_again() == Some(0));
+    let refused = decide(Some(&run), &Input::Continue { by: jaynes_core::question::By::Agent { who: "claude".into() } });
+    assert!(refused.is_err(), "an agent continued: {refused:?}");
+}
+
+/// What the person chose for the project's ports after the start is a fact of the record, with when, and the
+/// setup stays as it was: the same choice twice is nothing new.
+#[test]
+fn the_project_s_ports_opened_or_closed_after_the_start_are_recorded_with_when() {
+    let (mut run, _) = checking(Some("t1"));
+    assert_eq!(run.ports, None, "as the run's setup says");
+    let (events, _) = feed(&mut run, Input::PortsChosen { any: true, opened: 1_700_000_000 });
+    assert!(matches!(events.as_slice(), [Event::PortsChosen { any: true, opened: 1_700_000_000 }]), "{events:?}");
+    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: true, opened: 1_700_000_000 }));
+    assert!(decide(Some(&run), &Input::PortsChosen { any: true, opened: 1_700_000_000 }).is_err(), "the same choice again");
+    let (events, _) = feed(&mut run, Input::PortsChosen { any: false, opened: 0 });
+    assert!(matches!(events.as_slice(), [Event::PortsChosen { any: false, .. }]), "{events:?}");
+    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: false, opened: 0 }));
 }

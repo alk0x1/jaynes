@@ -277,6 +277,20 @@ pub enum Event {
     Continued {
         by: By,
     },
+    /// A check of the attempt could not judge its output: the attempt is not over, it waits at its checks, and the
+    /// person's continue has them judge the same output again, the agent working no more.
+    ChecksUnjudged {
+        step: String,
+        attempt: u32,
+        fix: u32,
+    },
+    /// The person opened the project's checks to every local port (`any`, at `opened`) or closed them again, after
+    /// the run's setup; the setup stays as it was, and from here the run's commands reach what this says.
+    PortsChosen {
+        any: bool,
+        #[serde(default)]
+        opened: u64,
+    },
     Halted {
         by: By,
     },
@@ -347,6 +361,8 @@ impl Event {
             Event::Waiting { .. } => "Waiting",
             Event::Blocked { .. } => "Blocked",
             Event::Continued { .. } => "Continued",
+            Event::ChecksUnjudged { .. } => "ChecksUnjudged",
+            Event::PortsChosen { .. } => "PortsChosen",
             Event::Halted { .. } => "Halted",
             Event::Resumed { .. } => "Resumed",
             Event::DeliveryAsked { .. } => "DeliveryAsked",

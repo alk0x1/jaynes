@@ -3232,3 +3232,118 @@ print(json.dumps({{name: b.program_selftest(Path(sys.executable), make=make) for
         }
     }
 }
+
+/// A role whose one step changes the greeting and whose check serves on a port of its own choosing (port 0, as
+/// Go's httptest does), after running `tool` from the PATH when one is named: with the project's ports closed, the
+/// box refuses the port and the check cannot judge.
+fn port_zero_role(s: &Scratch, name: &str, tool: Option<&str>) -> PathBuf {
+    let role = s.home.parent().expect("base").join(name);
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), format!(r#"
+role = "{name}"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = {{ project = "write", write = ["**"], commands = true }}
+instructions = "Make the change: {{{{request}}}}"
+checks = [{{ use = "field-required", field = "summary" }}, {{ script = "checks/serves.py", about = "the project serves on a port of its own" }}]
+
+[step.output]
+summary = {{ type = "string", about = "what changed" }}
+files = {{ type = "array", items = "string" }}
+"#)).expect("write");
+    let needs = tool.map(|t| format!("if subprocess.run([{t:?}]).returncode != 0:\n    print(\"{t}: command not found\")\n    sys.exit(1)\n")).unwrap_or_default();
+    std::fs::write(role.join("checks/serves.py"), format!(r#"#!/usr/bin/env python3
+import socket, subprocess, sys
+{needs}mine = socket.socket()
+mine.bind(("127.0.0.1", 0))
+mine.listen()
+socket.create_connection(("127.0.0.1", mine.getsockname()[1]), timeout=3).close()
+if b"hi" not in open("greeting.txt", "rb").read():
+    print("the greeting is not hi")
+    sys.exit(1)
+"#)).expect("write");
+    let script = role.join("checks/serves.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    role
+}
+
+/// `jaynes ARGS` at a terminal, as the person types it, with `path` as the PATH when one is given.
+fn at_terminal(s: &Scratch, args: &[&str], path: Option<&str>) -> String {
+    let mut c = tty();
+    c.arg(BIN).args(args).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "");
+    if let Some(p) = path {
+        c.env("PATH", p);
+    }
+    let out = c.output().expect("terminal");
+    format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
+fn continue_after_the_person_opens_the_ports_checks_the_same_change_again_and_the_agent_does_not_work_again() {
+    let s = scratch("reopen");
+    let role = port_zero_role(&s, "reopen-role", None);
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let (_, out) = engine(&s, &[
+        "start", "--run", "reopen", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        "--request", "say hi instead of hello", "--agent", &format!("command:{agent}"),
+    ]);
+    let e = events(&s, "reopen");
+    let started = |e: &[Value]| e.iter().filter(|x| x["type"] == "AttemptStarted").count();
+    assert!(e.iter().any(|x| x["type"] == "Blocked" && x["fault"] == "jaynes"), "the closed box stops the check: {out}\n{:?}", types(&e));
+    assert_eq!(started(&e), 1, "{:?}", types(&e));
+    // the person opens the project's ports at a terminal, after the run started, and continues
+    let opened = at_terminal(&s, &["project", "open-ports", s.project.to_str().expect("path")], None);
+    assert!(opened.contains("opened by you on"), "{opened}");
+    let said = at_terminal(&s, &["continue", "reopen"], None);
+    let e = events(&s, "reopen");
+    let chosen = e.iter().find(|x| x["type"] == "PortsChosen").unwrap_or_else(|| panic!("the record does not say the ports were opened: {:?}\n{said}", types(&e)));
+    assert_eq!(chosen["any"], true, "{chosen}");
+    assert!(chosen["opened"].as_u64().is_some_and(|t| t > 0), "with when: {chosen}");
+    assert_eq!(started(&e), 1, "the agent worked again: {:?}\n{said}", types(&e));
+    let judged: Vec<&Value> = e.iter().filter(|x| x["type"] == "ChecksJudged").collect();
+    assert_eq!(judged.len(), 2, "{:?}", types(&e));
+    assert_eq!(judged[0]["attempt"], judged[1]["attempt"], "the same attempt's change is checked again");
+    let served = judged[1]["checks"].as_array().into_iter().flatten().find(|c| c["check"] == "serves").expect("judged");
+    assert_eq!(served["passed"], true, "{}\n{said}", judged[1]);
+    assert_eq!(judged[0]["checks"][1]["tree"], judged[1]["checks"][1]["tree"], "the same tree");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+}
+
+/// The real-user's find of 21/11: "o Continue da página relançou o agente sem o Go no PATH", because the page's
+/// process had a short PATH. Every continue carries the run on with the environment it started with.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
+fn a_continue_from_a_process_with_a_short_path_still_finds_the_toolchain_the_run_started_with() {
+    let s = scratch("shortpath");
+    let tools = s.base.join("tools/bin");
+    std::fs::create_dir_all(&tools).expect("dir");
+    std::fs::write(tools.join("quitanda-cc"), "#!/bin/sh\nexit 0\n").expect("write");
+    let mut mode = std::fs::metadata(tools.join("quitanda-cc")).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(tools.join("quitanda-cc"), mode).expect("chmod");
+    let role = port_zero_role(&s, "shortpath-role", Some("quitanda-cc"));
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let long = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap_or_default());
+    let out = jaynes()
+        .args(["start", "--run", "shortpath", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("PATH", &long)
+        .output().expect("start");
+    let e = events(&s, "shortpath");
+    assert!(e.iter().any(|x| x["type"] == "Blocked" && x["fault"] == "jaynes"), "{}\n{:?}", String::from_utf8_lossy(&out.stdout), types(&e));
+    at_terminal(&s, &["project", "open-ports", s.project.to_str().expect("path")], None);
+    // the continue comes from a process whose PATH has none of the person's tools, as the app opened from the Dock
+    let said = at_terminal(&s, &["continue", "shortpath"], Some("/usr/bin:/bin"));
+    let e = events(&s, "shortpath");
+    let last = e.iter().rev().find(|x| x["type"] == "ChecksJudged").expect("judged");
+    let serves = last["checks"].as_array().into_iter().flatten().find(|c| c["check"] == "serves").expect("serves");
+    assert_eq!(serves["passed"], true, "the check did not find the tool the run started with: {last}\n{said}");
+    assert!(!said.contains("command not found"), "{said}");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+}
