@@ -108,8 +108,7 @@ impl Changes {
 
     /// A click on a file: its changes go to the bottom of the Changes tab, which shows.
     pub fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
-        if !self.shown.contains(&path) {
-            self.shown.push(path.clone());
+        if stack(&mut self.shown, &path) {
             self.read_diffs(vec![path], cx);
         }
         let n = self.shown.len();
@@ -450,13 +449,14 @@ impl Stack {
         if m.platform || m.control || m.alt {
             return;
         }
+        let Some(act) = key_act(e.keystroke.key.as_str(), m.shift) else { return };
         let all = self.pieces(cx);
         let at = all.get(self.cursor.min(all.len().saturating_sub(1))).cloned();
-        match (e.keystroke.key.as_str(), m.shift) {
-            ("n", false) | ("down", false) => self.cursor = (self.cursor + 1).min(all.len().saturating_sub(1)),
-            ("p", false) | ("up", false) => self.cursor = self.cursor.saturating_sub(1),
-            ("s", false) | ("u", false) => {
-                let staged = e.keystroke.key == "u";
+        match act {
+            Key::Next => self.cursor = (self.cursor + 1).min(all.len().saturating_sub(1)),
+            Key::Previous => self.cursor = self.cursor.saturating_sub(1),
+            Key::Stage | Key::Unstage => {
+                let staged = act == Key::Unstage;
                 if let Some((path, i)) = at {
                     // s stages only what is not staged, u takes back only what is
                     let fits = self.changes.read(cx).diffs.get(&path).and_then(|d| d.pieces.get(i)).is_some_and(|p| p.staged == staged);
@@ -465,17 +465,16 @@ impl Stack {
                     }
                 }
             }
-            ("c", false) => window.dispatch_action(Box::new(crate::CommitBox), cx),
-            ("e", false) => {
+            Key::Commit => window.dispatch_action(Box::new(crate::CommitBox), cx),
+            Key::Edit => {
                 if let Some((path, i)) = at {
                     let line = self.changes.read(cx).diffs.get(&path).and_then(|d| d.pieces.get(i)).map_or(1, |p| p.after.first().or(p.before.first()).map_or(1, |l| l.n));
                     self.edit = Some((path, line));
                     window.dispatch_action(Box::new(crate::OpenEditor), cx);
                 }
             }
-            ("p", true) => self.changes.update(cx, |c, cx| c.push(cx)),
-            ("escape", _) => window.dispatch_action(Box::new(crate::CloseTab), cx),
-            _ => return,
+            Key::Push => self.changes.update(cx, |c, cx| c.push(cx)),
+            Key::Close => window.dispatch_action(Box::new(crate::CloseTab), cx),
         }
         cx.stop_propagation();
         cx.notify();
@@ -514,6 +513,48 @@ fn side(label: &'static str, lines: &[diff::Line], colour: u32) -> Div {
     col
 }
 
+/// A file clicked in the panel goes to the bottom of the stack the Changes tab shows, once: whether it is new there.
+pub fn stack(shown: &mut Vec<String>, path: &str) -> bool {
+    if shown.iter().any(|p| p == path) {
+        return false;
+    }
+    shown.push(path.to_owned());
+    true
+}
+
+/// What a key does in the Changes tab, as magit's keys: n and p (and the arrows) move between the pieces, s stages,
+/// u takes back, c goes to the commit message, P pushes, e opens the person's editor, Esc closes the tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Next,
+    Previous,
+    Stage,
+    Unstage,
+    Commit,
+    Push,
+    Edit,
+    Close,
+}
+
+/// The key typed (as gpui names it) and Shift; None for a key the tab leaves to the window.
+pub fn key_act(key: &str, shift: bool) -> Option<Key> {
+    Some(match (key, shift) {
+        ("n" | "down", false) => Key::Next,
+        ("p" | "up", false) => Key::Previous,
+        ("s", false) => Key::Stage,
+        ("u", false) => Key::Unstage,
+        ("c", false) => Key::Commit,
+        ("p", true) => Key::Push,
+        ("e", false) => Key::Edit,
+        ("escape", _) => Key::Close,
+        _ => return None,
+    })
+}
+
+/// The keys the line at the tab's bottom shows, as typed, and what each does.
+pub const KEYS: &[(&str, &str)] =
+    &[("s", "stage"), ("u", "unstage"), ("n p", "next, previous piece"), ("c", "commit"), ("P", "push"), ("e", "edit in your editor"), ("Esc", "close")];
+
 /// The keys the Changes tab answers, at its bottom, as magit's menu shows what works.
 fn keys_line() -> Div {
     let key = |k: &str, what: &str| div().flex().gap(px(4.)).child(div().font_family(look::MONO_FONT).text_color(rgb(look::text())).child(k.to_string())).child(what.to_string());
@@ -529,13 +570,7 @@ fn keys_line() -> Div {
         .border_color(rgb(look::line()))
         .text_size(z(11.5))
         .text_color(rgb(look::faint()))
-        .child(key("s", "stage"))
-        .child(key("u", "unstage"))
-        .child(key("n p", "next, previous piece"))
-        .child(key("c", "commit"))
-        .child(key("P", "push"))
-        .child(key("e", "edit in your editor"))
-        .child(key("Esc", "close"))
+        .children(KEYS.iter().map(|(k, what)| key(k, what)))
 }
 
 impl Render for Stack {
@@ -664,7 +699,7 @@ pub fn enter_commits(s: &crate::git::Status) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_label, enter_commits, split};
+    use super::{commit_label, enter_commits, key_act, split, stack, Key, KEYS};
     use crate::git::{Entry, Status};
 
     fn status(staged: &[&str], changed: &[&str]) -> Status {
@@ -689,10 +724,51 @@ mod tests {
         assert!(!enter_commits(&status(&[], &[])));
     }
 
+    // Alan, 17/11, the Changes as in app-changes.html: "painel simples como o VS Code" (his words were not kept: this
+    // is how the app's memory of 17/11 tells it, perhaps a paraphrase; the goal, "magit's power with VS Code's
+    // simplicity"). A file shows by its name, its folder after it, faint, as VS Code lists them.
     #[test]
-    fn a_path_shows_its_name_then_its_folder() {
+    fn asked_a_simple_panel_like_vs_code_a_file_by_its_name_then_its_folder() {
         assert_eq!(split("app/src/main.rs"), ("main.rs".into(), "app/src".into()));
         assert_eq!(split("research.org"), ("research.org".into(), String::new()));
         assert_eq!(split("docs/audits/"), ("audits/".into(), "docs".into()));
+    }
+
+    // Alan, 17/11, the Changes as in app-changes.html: "clicar empilha os diffs numa aba" (from the app's memory of
+    // 17/11, perhaps a paraphrase)
+    #[test]
+    fn asked_a_click_stacks_the_diffs_in_one_tab() {
+        let mut shown = vec![];
+        assert!(stack(&mut shown, "app/src/main.rs"));
+        assert!(stack(&mut shown, "app/src/rail.rs"));
+        // the next file under the last, and a file clicked again stays where it was, once
+        assert!(!stack(&mut shown, "app/src/main.rs"));
+        assert_eq!(shown, ["app/src/main.rs", "app/src/rail.rs"]);
+    }
+
+    // Alan, 17/11, the Changes as in app-changes.html: "teclas do magit" (from the app's memory of 17/11, perhaps a
+    // paraphrase; the goal, "magit's power with VS Code's simplicity")
+    #[test]
+    fn asked_magit_keys_in_the_changes_tab() {
+        assert_eq!(key_act("n", false), Some(Key::Next));
+        assert_eq!(key_act("p", false), Some(Key::Previous));
+        assert_eq!(key_act("s", false), Some(Key::Stage));
+        assert_eq!(key_act("u", false), Some(Key::Unstage));
+        assert_eq!(key_act("c", false), Some(Key::Commit));
+        assert_eq!(key_act("p", true), Some(Key::Push));
+        assert_eq!(key_act("e", false), Some(Key::Edit));
+        assert_eq!(key_act("escape", false), Some(Key::Close));
+        assert_eq!(key_act("x", false), None);
+        // every key the line at the bottom shows does something
+        for (typed, what) in KEYS {
+            for k in typed.split(' ') {
+                let (k, shift) = match k {
+                    "Esc" => ("escape", false),
+                    "P" => ("p", true),
+                    k => (k, false),
+                };
+                assert!(key_act(k, shift).is_some(), "{typed} ({what}) does nothing");
+            }
+        }
     }
 }

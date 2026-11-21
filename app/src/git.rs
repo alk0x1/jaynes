@@ -194,8 +194,10 @@ pub fn push(root: &str) -> Result<(), String> {
 mod tests {
     use super::{commit, parse_log, parse_numstat, parse_status, read, stage, unstage, Entry};
 
+    // Alan, 17/11, the Changes as in app-changes.html: "arquivos novos à parte com +" (from the app's memory of 17/11,
+    // perhaps a paraphrase): the new files git does not follow are a list of their own, each added with its +
     #[test]
-    fn status_splits_staged_changed_and_new() {
+    fn asked_new_files_apart_with_a_plus() {
         let out = b"M  app/src/tabs.rs\0 M app/src/main.rs\0MM app/src/agents.rs\0?? research.org\0?? docs/audits/\0R  new.rs\0old.rs\0 D gone.rs\0";
         let (staged, changed, new) = parse_status(out);
         assert_eq!(staged, ["app/src/tabs.rs", "app/src/agents.rs", "new.rs"]);
@@ -237,8 +239,11 @@ mod tests {
         dir
     }
 
+    // Alan, 17/11, the Changes as in app-changes.html: "nada marcado leva todo arquivo acompanhado" (from the app's
+    // memory of 17/11, perhaps a paraphrase): with nothing staged, Commit takes every changed file git follows, as
+    // VS Code does, never a new one
     #[test]
-    fn a_real_repository_reads_stages_and_commits() {
+    fn asked_nothing_staged_commits_every_file_git_follows() {
         let dir = repo();
         let root = dir.to_string_lossy().to_string();
         std::fs::write(dir.join("a.txt"), "one\nTWO\nthree\n").unwrap();

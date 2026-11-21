@@ -2686,8 +2686,10 @@ pub(crate) fn shots(window: AnyWindowHandle, path: std::path::PathBuf, cx: &mut 
 mod tests {
     use super::{editor_argv, home_short};
 
+    // Alan, 17/11, the Changes as in app-changes.html: "abre o editor dele" (from the app's memory of 17/11, perhaps a
+    // paraphrase): e, or a file's open icon, opens the person's own editor at the piece's line
     #[test]
-    fn the_editor_opens_at_the_line_through_the_login_shell() {
+    fn asked_the_changes_open_my_editor_at_the_line() {
         let argv = editor_argv("app/src/it's.rs", 218, "");
         assert_eq!(argv[1], "-lic");
         let out = std::process::Command::new("sh").arg("-c").arg(argv[2].replace("exec $e", "echo $e")).env("VISUAL", "nvim").output().unwrap();

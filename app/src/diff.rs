@@ -331,8 +331,10 @@ mod tests {
         assert!(!p.after[1].parts[0].1);
     }
 
+    // Alan, 17/11, the Changes as in app-changes.html: "diff como o difftastic" (from the app's memory of 17/11,
+    // perhaps a paraphrase): it reads the code, not the lines, and only what changed is lit
     #[test]
-    fn a_changed_word_is_lit_on_both_sides() {
+    fn asked_a_diff_like_difftastic_only_the_changed_words_lit() {
         let out = "@@ -57 +57 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[\n-    (\"⌘.\", \"Halt the picked run\"),\n+    (\"⌘.\", \"Stop the open agent, or halt the picked run\"),\n";
         let p = &parse(out, false)[0];
         assert_eq!(lit(&p.before), ["Halt"]);
