@@ -23,14 +23,45 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The note a shortlisted direction carries to the agent, with what of it stays: "… Its palette and type stay."
+/// The note a shortlisted direction carries to the agent, with what of it stays, from the parts' labels as the stop
+/// has them: "… Its palette stays.", "… Its palette and type stay."
 pub fn shortlist_note(stays: &[String]) -> String {
     let base = jaynes_core::decide::SHORTLISTED;
     match stays {
         [] => base.to_string(),
-        [one] => format!("{base} Its {one} stays."),
-        [rest @ .., last] => format!("{base} Its {} and {last} stay.", rest.join(", ")),
+        [_] => format!("{base} Its {} stays.", parts_phrase(stays)),
+        _ => format!("{base} Its {} stay.", parts_phrase(stays)),
     }
+}
+
+/// A part of a direction as a sentence names it: its label with a small first letter ("Palette" is "palette"), unless
+/// the label is written in capitals ("CTA").
+pub fn part_word(label: &str) -> String {
+    let mut letters = label.chars();
+    match (letters.next(), letters.next()) {
+        (Some(first), second) if !second.is_some_and(char::is_uppercase) => first.to_lowercase().chain(label.chars().skip(1)).collect(),
+        _ => label.to_string(),
+    }
+}
+
+/// Parts named in a sentence: "palette", "palette and type", "palette, type and layout".
+pub fn parts_phrase(labels: &[String]) -> String {
+    let words: Vec<String> = labels.iter().map(|l| part_word(l)).collect();
+    match words.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The note of a mix, in the shortlist's words for its parts: the parts of the base direction that stay, and each part
+/// another direction lends it, as (part, its direction, what it is).
+pub fn mix_note(base: &str, kept: &[String], lent: &[(String, String, String)]) -> String {
+    let mut note = format!("Mix: keep the {} of {base}.", parts_phrase(kept));
+    for (label, name, text) in lent {
+        note.push_str(&format!(" Take the {} of {name}: {text}", part_word(label)));
+    }
+    note
 }
 
 /// How long a zoom made by a button or a click takes; a pinch or a wheel follows the fingers.
@@ -290,15 +321,16 @@ impl Marks {
             // the direction with the most pins is the base; the others lend it the parts pinned in them
             let base = *dirs.iter().max_by_key(|d| (pinned(**d).len(), **d == self.dir)).unwrap_or(&self.dir);
             let item = &stop.items[base];
-            let mut note = format!("Mix: keep the {} of {}.", pinned(base).join(", "), names[base]);
             let mut parts = vec![];
+            let mut lent = vec![];
             for &d in dirs.iter().filter(|d| **d != base) {
                 for label in pinned(d) {
                     let text = stop.items[d].aspects.iter().find(|(l, _)| *l == label).map(|(_, t)| t.clone()).unwrap_or_default();
-                    note.push_str(&format!(" Take the {label} of {}: {text}", names[d]));
                     parts.push(format!("{label} of {}", names[d]));
+                    lent.push((label, names[d].clone(), text));
                 }
             }
+            let note = mix_note(&names[base], &pinned(base), &lent);
             verdicts.insert(item.id.clone(), "change".into());
             notes.insert(item.id.clone(), note);
             let label = format!("Mix: {} + {}", names[base], parts.join(" + "));
@@ -1480,7 +1512,32 @@ impl Render for Compare {
 
 #[cfg(test)]
 mod tests {
-    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, card_label, chip, esc, invite, keep_word, none_word, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_title};
+    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, card_label, chip, esc, invite, keep_word, mix_note, none_word, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_title};
+
+    #[test]
+    fn the_notes_name_the_parts_as_a_sentence_does_from_the_labels_the_stop_has() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let shortlisted = jaynes_core::decide::SHORTLISTED;
+        // in lower case inside a sentence, unless the label is written in capitals
+        assert_eq!(part_word("Palette"), "palette");
+        assert_eq!(part_word("CTA"), "CTA");
+        assert_eq!(parts_phrase(&s(&["Palette"])), "palette");
+        assert_eq!(parts_phrase(&s(&["Palette", "Type"])), "palette and type");
+        assert_eq!(parts_phrase(&s(&["Palette", "Type", "CTA"])), "palette, type and CTA");
+        // the shortlist's note, from the labels as the stop has them
+        assert_eq!(shortlist_note(&s(&["Palette"])), format!("{shortlisted} Its palette stays."));
+        assert_eq!(shortlist_note(&s(&["Palette", "Fonts"])), format!("{shortlisted} Its palette and fonts stay."));
+        // the mix's, in the same words
+        assert_eq!(mix_note("Harbor", &s(&["Palette", "Fonts"]), &[("Palette".into(), "Night".into(), "navy, white".into())]), "Mix: keep the palette and fonts of Harbor. Take the palette of Night: navy, white");
+        // and through the button that sends them: two shortlisted, the first with its palette kept
+        let stop = choosing(&["Harbor", "Night", "Ledger"]);
+        let two = Marks { keep: vec![0, 1], pins: [(0, "Palette".to_string())].into(), ..Marks::default() };
+        let (_, body) = two.proposal(&stop, "", "").expect("a proposal");
+        assert_eq!(body["notes"]["harbor"], format!("{shortlisted} Its palette stays."));
+        let mix = Marks { pins: [(0, "Palette".to_string()), (0, "Fonts".to_string()), (1, "Palette".to_string())].into(), ..Marks::default() };
+        let (_, body) = mix.proposal(&stop, "", "").expect("a proposal");
+        assert_eq!(body["notes"]["harbor"], "Mix: keep the fonts and palette of Harbor. Take the palette of Night: cream, ink");
+    }
 
     #[test]
     fn a_shortlisted_direction_carries_what_of_it_stays_in_one_sentence() {
