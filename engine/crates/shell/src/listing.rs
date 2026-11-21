@@ -138,9 +138,14 @@ pub fn where_in(r: &Run) -> String {
     format!("step {at} of {}", path.len())
 }
 
-/// What a question asks, in a line.
+/// What a question asks, in a line. A choice with one option asks whether to go with it, by its name (its label
+/// before the colon, as the app names a direction): the role's question goes on the line under it.
 pub fn title(q: &QuestionState) -> String {
-    if !q.question.about.trim().is_empty() {
+    if q.question.one_option() {
+        let label = &q.question.items[0].label;
+        let name = label.split_once(':').map_or(label.as_str(), |(n, _)| n).trim();
+        format!("Go with “{name}”?")
+    } else if !q.question.about.trim().is_empty() {
         q.question.about.clone()
     } else if q.question.kind == QuestionKind::Permission {
         format!("May the agent {}?", q.question.about)
@@ -465,6 +470,24 @@ mod tests {
         assert_eq!(names, ["site", "app"]);
         let app: Vec<(&str, Mark, &str)> = listing.projects[1].1.iter().map(|r| (r.id.as_str(), r.mark, r.line.as_str())).collect();
         assert_eq!(app, [("r2", Mark::Working, "step 1 of 2, running"), ("r3", Mark::Delivered, "delivered")]);
+    }
+
+    #[test]
+    fn a_choice_of_one_option_asks_whether_to_go_with_it() {
+        let item = |id: &str, label: &str| jaynes_core::question::Item { id: id.into(), label: label.into(), digest: jaynes_core::Digest(id.into()) };
+        let asked = |items, choose| QuestionState {
+            question: Question {
+                id: "q1".into(), step: "stack".into(), round: 1, kind: QuestionKind::Decision, items, offered: vec![], holds: true,
+                about: "Which stack goes on?".into(), choose, pass: 0, passes: 0, back: vec![],
+            },
+            answer: None, effects: None, superseded: false,
+        };
+        // the name, before the colon of its label: the app and the page read the same line
+        assert_eq!(title(&asked(vec![item("py", "Python + FastAPI: small and known")], true)), "Go with “Python + FastAPI”?");
+        assert_eq!(title(&asked(vec![item("go", "Go")], true)), "Go with “Go”?");
+        // two or more, and one item of a stop that does not choose: the role's question
+        assert_eq!(title(&asked(vec![item("py", "Python"), item("go", "Go")], true)), "Which stack goes on?");
+        assert_eq!(title(&asked(vec![item("py", "Python")], false)), "Which stack goes on?");
     }
 
     #[test]

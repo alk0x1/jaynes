@@ -1473,7 +1473,7 @@ impl Ctx {
                 continue;
             }
             if let Some(j) = self.run.manifest.index(&item.id) {
-                let note = note(item, &v, None);
+                let note = note(item, &v, None, false);
                 self.invalidate(j, vec![format!("you sent it back at {here}")], vec![note]);
             }
         }
@@ -1531,7 +1531,8 @@ pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str
     }
 }
 
-fn note(item: &Item, v: &Verdict, choose: Option<Choice>) -> String {
+/// `one`: the stop chooses with this option alone ([`Question::one_option`]), so a change chooses nothing yet.
+fn note(item: &Item, v: &Verdict, choose: Option<Choice>, one: bool) -> String {
     let choose_one = choose.is_some();
     // the person's words end the sentence they are put in, so their own last period is not doubled
     let v = &match v {
@@ -1543,6 +1544,9 @@ fn note(item: &Item, v: &Verdict, choose: Option<Choice>) -> String {
             "“{}” is a finalist: develop it further as the person writes, keeping its name: {text}",
             item.label
         ),
+        Verdict::Change { text } if choose_one && one => {
+            format!("“{}” is not chosen yet. The person wrote: {text}. Change it only as they ask. Give it again with its name: they decide then.", item.label)
+        }
         Verdict::Change { text } if choose_one => format!(
             "“{}” was chosen. Give it alone, changed as the person writes: {text}. You may take from the other options, in your previous output, what the person names.",
             item.label
@@ -1565,7 +1569,7 @@ pub(crate) fn notes(q: &Question, answer: &Answer) -> Vec<String> {
         .iter()
         .map(|item| (item, answer.verdict(&item.id)))
         .filter(|(_, v)| *v != Verdict::Skip)
-        .map(|(item, v)| note(item, &v, choice))
+        .map(|(item, v)| note(item, &v, choice, q.one_option()))
         .collect();
     for (id, words) in &answer.back {
         let label = q.back.iter().find(|x| &x.id == id).map_or(id.as_str(), |x| x.label.as_str());
@@ -1652,12 +1656,18 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     let person = run.manifest.steps[i].executor == Executor::Person;
     let input = run.steps[i].inputs.contains(&q.id);
     let mut reruns: Vec<usize> = Vec::new();
+    let by = maker(run, i).map(|j| run.manifest.steps[j].name.clone()).unwrap_or_else(|| q.step.clone());
+    // one option and the person's words: nothing is chosen yet, the words go to the agent and the stop asks again
+    let not_yet = q.one_option() && answer.choice(q) == Some(Choice::One) && matches!(answer.verdict(&q.items[0].id), Verdict::Change { .. });
     for item in &q.items {
         let v = answer.verdict(&item.id);
         let label = &item.label;
         sentences.push(match (&v, person) {
             (Verdict::Keep, _) if q.choose => format!("“{label}” is chosen: no later round of {} may change it.", q.step),
             (Verdict::Change { text }, _) if q.choose && answer.choice(q) == Some(Choice::Finalists) => shortlisted(label, text),
+            (Verdict::Change { text }, _) if not_yet && text.trim().is_empty() => format!("“{label}” is not chosen yet: write what to ask or change."),
+            (Verdict::Change { text }, _) if not_yet => format!("“{label}” is not chosen yet: your words go to the agent at “{by}”: “{text}”."),
+            (Verdict::Change { text }, _) if q.choose && text.trim().is_empty() => format!("“{label}” is chosen and adjusted: say how in its field."),
             (Verdict::Change { text }, _) if q.choose => format!("“{label}” is chosen, and is adjusted as you wrote: “{text}”."),
             (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option unless you bring it back."),
             (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),
@@ -1665,6 +1675,7 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             (Verdict::Keep, true) => format!("“{label}” is accepted."),
             (Verdict::Skip, _) => format!("“{label}” stays as it was made, and is not judged."),
             (Verdict::Drop, _) => format!("“{label}” is dropped: it does not come back in this run unless you bring it back."),
+            (Verdict::Change { text }, _) if text.trim().is_empty() => format!("“{label}” is changed: say how in its field."),
             (Verdict::Change { text }, _) => format!("“{label}” is changed as you wrote: “{text}”."),
             (Verdict::Redo { .. }, _) => format!("“{label}” is done again, with your note."),
         });
@@ -1749,10 +1760,10 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             sentences.push(format!("Run again only if what they used comes out different: {}.", may_rerun.join(", ")));
         }
     } else if q.choose {
-        let by = maker(run, i).map(|j| run.manifest.steps[j].name.clone()).unwrap_or_else(|| q.step.clone());
         sentences.push(match answer.choice(q) {
             Some(Choice::Finalists) => format!("The agent at {by} develops the finalists, and you choose again."),
             Some(Choice::None) => format!("The agent at {by} makes new options from your words; these do not come back."),
+            _ if not_yet => "The agent answers or changes it as you wrote, and asks you again.".to_string(),
             _ => format!("The agent at {by} adjusts what you chose, seeing every option it made, and you see the result."),
         });
         reviewed(&mut sentences, run, i, q, &may_rerun);

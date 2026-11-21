@@ -276,3 +276,79 @@ fn none_sends_every_option_away_with_the_person_s_words_and_new_ones_are_made() 
     let (events, _) = deliver(&mut run, &t, "again", vec![item("Ink", "i"), item("Ember", "e")]);
     assert!(!events.iter().any(|e| matches!(e, Event::QuestionOpened { .. })), "Ink came back: {events:?}");
 }
+
+/// A run whose directions step made one option only, as an agent often does: the stop asks whether it goes on.
+fn asked_one(label: &str) -> (Run, Question) {
+    let out = decide(None, &Input::Start {
+        run: "r".into(),
+        request: "a stack".into(),
+        manifest: manifest(),
+        role_fingerprint: Digest("f".into()),
+        agent: "claude:m1".into(),
+        raise: None,
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
+    })
+    .expect("start");
+    let mut run = Run::fold(&out.events).expect("run");
+    let (_, cmds) = feed(&mut run, Input::ProbeEnded { step: "directions".into(), ok: true, reason: String::new() });
+    let t = turn(&cmds);
+    let one = Item { id: "py".into(), label: label.into(), digest: Digest("p".into()) };
+    let (events, _) = deliver(&mut run, &t, "one", vec![one]);
+    let q = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked");
+    (run, q)
+}
+
+// Alan, 21/11: "entender onde o python entra antes de decidir"
+#[test]
+fn asked_one_option_with_words_is_not_chosen_yet() {
+    let (mut run, q) = asked_one("Python + FastAPI");
+    let words = "entender onde o python entra antes de decidir";
+    let change = || Verdict::Change { text: words.into() };
+    let said = effects_of(&run, &q, &[("py", change())]);
+    assert!(said.iter().all(|s| !s.contains("is chosen")), "{said:?}");
+    assert!(said.contains(&format!("“Python + FastAPI” is not chosen yet: your words go to the agent at “directions”: “{words}”.")), "{said:?}");
+    assert!(said.contains(&"The agent answers or changes it as you wrote, and asks you again.".to_string()), "{said:?}");
+    // before it is sent it reads the same: nothing is being chosen
+    assert!(said.iter().all(|s| &jaynes_core::decide::before_sending(s) == s && !s.starts_with("Choosing")), "{said:?}");
+    let (events, cmds) = feed(&mut run, answer(&q, &[("py", change())]));
+    let recorded = events.iter().find_map(|e| if let Event::AnswerRecorded { effects, .. } = e { Some(effects.sentences.clone()) } else { None }).expect("recorded");
+    assert_eq!(recorded, said);
+    // the agent is asked, not ordered to change it
+    let t = turn(&cmds);
+    assert_eq!(t.keep, None, "the agent works this round");
+    let notes = t.notes.join("\n");
+    assert!(notes.contains(&format!("“Python + FastAPI” is not chosen yet. The person wrote: {words}. Change it only as they ask. Give it again with its name: they decide then.")), "{notes}");
+    assert!(!notes.contains("was chosen"), "{notes}");
+    // nothing is held: no later round is bound to it
+    assert!(run.steps[0].locks.is_empty(), "{:?}", run.steps[0].locks);
+    // the agent gives it again and the stop asks again
+    let (events, _) = deliver(&mut run, &t, "one2", vec![Item { id: "py".into(), label: "Python + FastAPI".into(), digest: Digest("p2".into()) }]);
+    let q2 = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked again");
+    assert!(q2.choose);
+    assert_eq!(q2.items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["py"]);
+    // going with it then is the choice, as before
+    let said = effects_of(&run, &q2, &[("py", Verdict::Keep)]);
+    assert!(said.contains(&"“Python + FastAPI” is chosen: no later round of directions may change it.".to_string()), "{said:?}");
+}
+
+#[test]
+fn a_change_without_words_says_what_to_write_in_its_field() {
+    let empty = || Verdict::Change { text: String::new() };
+    // one option: nothing is chosen yet
+    let (run, q) = asked_one("Python + FastAPI");
+    let said = effects_of(&run, &q, &[("py", empty())]);
+    assert_eq!(said[0], "“Python + FastAPI” is not chosen yet: write what to ask or change.");
+    // among several: the one is chosen and adjusted
+    let (run, q) = asked();
+    let said = effects_of(&run, &q, &[("Sun", empty()), ("Ink", Verdict::Drop), ("Moss", Verdict::Drop)]);
+    assert!(said.contains(&"“Sun” is chosen and adjusted: say how in its field.".to_string()), "{said:?}");
+    // with words, two or more read as before
+    let said = effects_of(&run, &q, &[("Sun", Verdict::Change { text: "warmer".into() }), ("Ink", Verdict::Drop), ("Moss", Verdict::Drop)]);
+    assert!(said.contains(&"“Sun” is chosen, and is adjusted as you wrote: “warmer”.".to_string()), "{said:?}");
+    assert!(said.contains(&"The agent at directions adjusts what you chose, seeing every option it made, and you see the result.".to_string()), "{said:?}");
+    // out of a choice: it is changed
+    let mut plain = q.clone();
+    plain.choose = false;
+    let said = effects_of(&run, &plain, &[("Sun", empty())]);
+    assert!(said.contains(&"“Sun” is changed: say how in its field.".to_string()), "{said:?}");
+}

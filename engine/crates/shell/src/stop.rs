@@ -27,6 +27,9 @@ pub struct Stop {
     /// The fingerprint of the question as shown: an answer counts only for what the person saw (G10).
     pub shown: String,
     pub title: String,
+    /// The role's question at this stop ("Which stack goes on?"), empty when it has none. With one option to choose
+    /// the title asks whether to go with it, and this goes on the line under it.
+    pub asks: String,
     pub step: String,
     pub permission: bool,
     /// The question's kind, for the names of its verdicts ([`label_for`]).
@@ -79,6 +82,7 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
         question: q.question.id.clone(),
         shown: q.question.shown().0,
         title: crate::listing::title(q),
+        asks: q.question.about.clone(),
         step: q.question.step.clone(),
         permission: q.question.kind == QuestionKind::Permission,
         kind: q.question.kind,
@@ -197,12 +201,26 @@ mod tests {
         r
     }
 
+    // Alan, 21/11: "entender onde o python entra antes de decidir"
+    #[test]
+    fn a_stop_with_one_option_asks_whether_to_go_with_it_and_keeps_the_role_s_question_under() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-one-{}", std::process::id()));
+        let mut r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
+        let q = &mut r.questions.get_mut("q1").expect("asked").question;
+        q.choose = true;
+        q.items.truncate(1);
+        q.items[0].label = "Python + FastAPI: small and known".into();
+        let stop = waiting(&home, &r).expect("a stop");
+        assert_eq!((stop.title.as_str(), stop.asks.as_str()), ("Go with “Python + FastAPI”?", "Which plan goes on?"));
+    }
+
     #[test]
     fn a_waiting_run_is_a_stop_and_the_marks_make_its_answer() {
         let home = std::env::temp_dir().join(format!("jaynes-stop-{}", std::process::id()));
         let r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
         let stop = waiting(&home, &r).expect("a stop");
         assert_eq!((stop.question.as_str(), stop.title.as_str(), stop.step.as_str()), ("q1", "Which plan goes on?", "plan"));
+        assert_eq!(stop.asks, "Which plan goes on?");
         assert_eq!(stop.shown, r.questions["q1"].question.shown().0);
         assert_eq!(stop.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["Plan A", "Plan B"]);
         assert_eq!(stop.offered, [VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop]);

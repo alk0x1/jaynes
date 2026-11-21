@@ -1563,6 +1563,7 @@ mod tests {
             question: "q".into(),
             shown: "s".into(),
             title: "Which direction goes on?".into(),
+            asks: "Which direction goes on?".into(),
             step: "directions".into(),
             permission: false,
             kind: QuestionKind::Decision,

@@ -23,6 +23,13 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
              adjusted. Two or three changed are finalists the agent develops before asking again. All dropped is none: \
              new options are made from the person's words.\n\n",
         );
+        if q.one_option() {
+            p.push_str(
+                "With one option there is nothing to choose among: keep is “go with it”; change is “not yet”: their words \
+                 go to the agent as a question or a change, and nothing is chosen; drop is “not this one”. A question or \
+                 a doubt is never keep.\n\n",
+            );
+        }
     } else {
         p.push_str("Each item is judged on its own.\n\n");
     }
@@ -266,6 +273,25 @@ mod tests {
     fn a_change_with_nothing_said_is_left_out_rather_than_refused() {
         let p = proposal(&question(), &json!({"verdicts": {"Prumo": "change"}, "notes": {}}), "hm");
         assert_eq!(p["verdicts"], json!({}));
+    }
+
+    // Alan, 21/11: "entender onde o python entra antes de decidir"
+    #[test]
+    fn with_one_option_a_question_or_a_doubt_is_never_keep() {
+        use jaynes_core::manifest::{Executor, Manifest, Reach, SessionKind, StepDecl};
+        let step = StepDecl {
+            name: "pick".into(), needs: vec![], executor: Executor::Agent, session: SessionKind::Fresh, reach: Reach::default(),
+            effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
+        };
+        let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
+        let start = jaynes_core::Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let run = Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run");
+        let sentence = "With one option there is nothing to choose among: keep is “go with it”; change is “not yet”: their words go to the agent as a question or a change, and nothing is chosen; drop is “not this one”. A question or a doubt is never keep.";
+        let words = "entender onde o python entra antes de decidir";
+        let one = Question { items: vec![item("Python + FastAPI")], back: vec![], ..question() };
+        assert!(prompt(&run, &one, &|_| String::new(), words, None).contains(sentence));
+        // two or more: nothing changes
+        assert!(!prompt(&run, &question(), &|_| String::new(), words, None).contains("With one option"));
     }
 
     #[test]

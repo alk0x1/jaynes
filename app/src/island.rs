@@ -1350,6 +1350,7 @@ mod tests {
             question: "q".into(),
             shown: "s".into(),
             title: "Which of these copy changes go in?".into(),
+            asks: "Which of these copy changes go in?".into(),
             step: "copy".into(),
             permission: false,
             kind: QuestionKind::Decision,

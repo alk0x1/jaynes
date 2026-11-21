@@ -115,6 +115,12 @@ impl Question {
     pub fn shown(&self) -> Digest {
         Digest::of_json(self)
     }
+
+    /// A stop that chooses with one option only: there is nothing to choose among, so it asks yes or no. Going with
+    /// it is the choice; a change is "not yet", the person's words go to the agent and nothing is chosen.
+    pub fn one_option(&self) -> bool {
+        self.choose && self.items.len() == 1
+    }
 }
 
 /// Who gave an answer, and under which authority.
