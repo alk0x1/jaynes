@@ -132,7 +132,7 @@ pub fn ahead(run: &Run, step: &str) -> Option<String> {
     let path = run.path();
     let later: Vec<usize> = path.into_iter().filter(|&j| j > from).collect();
     if let Some(&j) = later.iter().find(|&&j| run.manifest.steps[j].effect.irreversible()) {
-        return Some(format!("{} cannot be undone", run.manifest.steps[j].name));
+        return Some(format!("“{}” cannot be undone", run.manifest.steps[j].name));
     }
     let another_stop = later.iter().any(|&j| run.manifest.steps[j].stop.is_some() || run.manifest.steps[j].executor == jaynes_core::manifest::Executor::Person);
     (run.manifest.lands() && !another_stop).then(|| "the run merges into your branch".to_string())
@@ -223,7 +223,8 @@ mod tests {
     fn what_cannot_be_undone_ahead_is_said() {
         assert_eq!(ahead(&run(&[("plan", false), ("change", false)], DeliveryKind::Branch), "plan"), None);
         let deploy = run(&[("plan", false), ("deploy", true)], DeliveryKind::Branch);
-        assert_eq!(ahead(&deploy, "plan").as_deref(), Some("deploy cannot be undone"));
+        // the step's name in curly quotes, as every sentence names a step ("Ahead: “deploy” cannot be undone.")
+        assert_eq!(ahead(&deploy, "plan").as_deref(), Some("“deploy” cannot be undone"));
         let merge = run(&[("plan", false), ("change", false)], DeliveryKind::Merge);
         assert_eq!(ahead(&merge, "plan").as_deref(), Some("the run merges into your branch"));
     }
