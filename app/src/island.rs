@@ -246,6 +246,20 @@ pub fn not_judged(n: usize, kept: bool) -> String {
     if kept { format!("{n} not judged: kept as they are") } else { format!("{n} not judged yet") }
 }
 
+/// The foot's line beside Send: what was said of the last send, else the count of judged items, and, once something
+/// is marked, why the engine would refuse the answer as marked, since that is what keeps Send off. True when it
+/// reads as that refusal (in red).
+pub fn foot_line(said: Option<&str>, judged: usize, total: usize, refused: Option<&str>) -> (String, bool) {
+    if let Some(s) = said {
+        return (s.to_string(), false);
+    }
+    let count = format!("{judged} of {total} judged");
+    match refused.filter(|_| judged > 0) {
+        Some(r) => (format!("{count} · Jaynes would refuse this: {r}"), true),
+        None => (count, false),
+    }
+}
+
 /// "What this does" at the card: nothing before the first mark (or something brought back that Send would take);
 /// then the sentence of each marked item, one a line, what else the answer does, and one line for the rest. The
 /// engine says one sentence an item, in their order, before the rest; and counts an item without a mark as kept, so
@@ -805,6 +819,15 @@ impl Island {
                     w.update(cx, |s, cx| s.set_value(text, window, cx));
                 }
             }
+            // the words under a Change or a Redo of an item, as typed there
+            "note" => {
+                let (item, text) = rest.split_once(' ').unwrap_or((rest, ""));
+                if let Some(n) = self.notes.get(item).cloned() {
+                    let text = text.to_string();
+                    n.update(cx, |s, cx| s.set_value(text, window, cx));
+                }
+                self.reckon(cx);
+            }
             "read" => self.read_words(cx),
             "close-box" => self.lightbox.update(cx, |l, cx| l.close(cx)),
             "menubar" => crate::menubar::click(),
@@ -1188,8 +1211,7 @@ impl Render for Island {
             .child(div().flex().gap(px(8.)).items_center().child(div().flex_1().child(focus_field("words", &words, window, cx))).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
             .children(understood)
             .when(!said.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint())).child(sentences(&said))))
-            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))))
-            .when_some(self.reckoned.refused.clone().filter(|_| judged > 0), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(format!("Jaynes would refuse this: {r}"))));
+            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))));
         let transparent = rgba(look::panel_2() << 8);
         // 32 px, over content: the foot's own line is already there, and 16 vanished over the gap between two rows
         let fade = div().absolute().left_0().right_0().bottom_0().h(px(32.)).bg(linear_gradient(180., linear_color_stop(transparent, 0.), linear_color_stop(rgb(look::panel_2()), 1.)));
@@ -1202,10 +1224,11 @@ impl Render for Island {
             .py(px(10.))
             .border_t_1()
             .border_color(rgb(look::line()))
-            .child(div().flex_1().text_size(px(12.)).text_color(rgb(look::faint())).child(match &self.said {
-                Some(s) => s.clone(),
-                None => format!("{judged} of {} judged", stop.items.len()),
-            }))
+            .child({
+                // why Send stays off, where Send is: never under the middle's fold
+                let (line, refusing) = foot_line(self.said.as_deref(), judged, stop.items.len(), self.reckoned.refused.as_deref());
+                div().flex_1().min_w_0().text_size(px(12.)).text_color(rgb(if refusing { look::red() } else { look::faint() })).child(line)
+            })
             .child(primary("send", send_label, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.send(cx)))));
         let card = div()
             .id("island")
@@ -1229,7 +1252,20 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, SENT, Sent, Shows, card_head, diff_title, enters_card, esc_chip, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, SENT, Sent, Shows, card_head, diff_title, enters_card, esc_chip, foot_line, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+
+    #[test]
+    fn beside_a_send_that_will_not_go_the_foot_says_why() {
+        // all judged, the engine would take it: the count, plain
+        assert_eq!(foot_line(None, 3, 3, None), ("3 of 3 judged".to_string(), false));
+        // all judged, a Change with no words: the engine's reason beside the Send it keeps off, not under the
+        // middle's fold (the design-lead's a48d8b7 round, s3c/marked-all.png)
+        assert_eq!(foot_line(None, 3, 3, Some("say what to change")), ("3 of 3 judged · Jaynes would refuse this: say what to change".to_string(), true));
+        // nothing marked yet: no reason to give, the empty answer is not the person's
+        assert_eq!(foot_line(None, 0, 3, Some("say what to change")), ("0 of 3 judged".to_string(), false));
+        // sent, or not sent: that line, whatever the marks
+        assert_eq!(foot_line(Some("Not sent: no key"), 3, 3, Some("say what to change")), ("Not sent: no key".to_string(), false));
+    }
 
     #[test]
     fn the_first_tab_from_outside_the_open_card_lands_on_its_first_control() {
