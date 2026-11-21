@@ -73,7 +73,15 @@ pub fn blocked_block(said: &BlockedSaid, last: &[String], controls: Option<Div>)
         .flex_col()
         .gap(px(6.))
         .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(said.title.clone()))
-        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(said.why.clone()));
+        .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(said.what.clone()))
+        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child([said.why.as_str()].into_iter().chain(said.holds.as_deref()).collect::<Vec<_>>().join(" ")));
+    // the ways out, the best first, each with its command
+    for w in &said.ways {
+        b = b.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(w.says.clone()));
+        if let Some(c) = &w.command {
+            b = b.child(div().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::story())).child(c.clone()));
+        }
+    }
     if !last.is_empty() {
         let mut lines = div().flex().flex_col().font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(18.)).text_color(rgb(look::story()));
         for l in last {
@@ -83,7 +91,7 @@ pub fn blocked_block(said: &BlockedSaid, last: &[String], controls: Option<Div>)
     }
     // the controls, Continue first, and under them what Continue does
     b.when_some(controls, |d, c| d.child(div().pt(px(6.)).child(c)))
-        .child(div().text_size(px(11.5)).text_color(rgb(look::faint())).child(format!("Continue {}", said.continue_does)))
+        .child(div().text_size(px(11.5)).text_color(rgb(look::faint())).child(said.continue_does.clone()))
 }
 
 /// What shows in the middle of the window, over the rest: what the keys follow, and the one place a run's own keys
@@ -857,13 +865,13 @@ mod tests {
         assert_eq!(b.title, "Blocked at “change”");
         assert_eq!(b.why, "“change” used its 3 attempts. The agent exited with code 1.");
         // the agent's attempts come back with Continue (core: Fault::Agent sets spent to 0)
-        assert_eq!(b.continue_does, "tries “change” again, with its attempts back");
+        assert_eq!(b.continue_does, "Continue tries “change” again, with its attempts back.");
         // any other cause: the engine's words, as a sentence, and Continue goes on from there
         let j = blocked_said(Some("change"), Fault::Jaynes, "the role program could not answer: no box here");
         assert_eq!(j.why, "The role program could not answer: no box here.");
-        assert_eq!(j.continue_does, "goes on from “change”");
+        assert_eq!(j.continue_does, "Continue goes on from “change”.");
         let r = blocked_said(None, Fault::Role, "nothing to deliver.");
-        assert_eq!((r.title.as_str(), r.why.as_str(), r.continue_does.as_str()), ("Blocked", "Nothing to deliver.", "goes on"));
+        assert_eq!((r.title.as_str(), r.why.as_str(), r.continue_does.as_str()), ("Blocked", "Nothing to deliver.", "Continue goes on."));
         // a run blocked before the engine said codes in words keeps "Some(1)" in its record: said as a code too
         let old = blocked_said(Some("change"), Fault::Agent, "change spent its 3 attempts: the agent exited with Some(1):   ");
         assert_eq!(old.why, "“change” used its 3 attempts. The agent exited with code 1.");

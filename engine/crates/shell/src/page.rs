@@ -1194,10 +1194,13 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// A blocked run's notice, in the app's words (listing::blocked_said): "Blocked at “plan”", why, and what Continue does.
+/// A blocked run's notice, in the app's words (listing::blocked_said): "Blocked at “plan”", what happened, why, the
+/// ways out with their commands, and what Continue does.
 fn blocked_notice(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> String {
     let said = crate::listing::blocked_said(step, fault, reason);
-    format!("<div class=\"notice bad\"><b>{}</b> · {} Continue {}.</div>", esc(&said.title), esc(&said.why), esc(&said.continue_does))
+    let holds = said.holds.as_deref().map(|h| format!(" {}", esc(h))).unwrap_or_default();
+    let ways: String = said.ways.iter().map(|w| format!(" {}{}", esc(&w.says), w.command.as_deref().map(|c| format!(" <code>{}</code>", esc(c))).unwrap_or_default())).collect();
+    format!("<div class=\"notice bad\"><b>{}</b> · {} {}{holds}{ways} {}</div>", esc(&said.title), esc(&said.what), esc(&said.why), esc(&said.continue_does))
 }
 
 /// The title over what a step changed, as the app's diff says it: "Changes made at “directions” · 3 files".
