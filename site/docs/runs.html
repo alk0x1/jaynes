@@ -32,7 +32,7 @@
 <li>A fault of Jaynes or of the machine (a box that refuses, a program that does not start, a check that cannot judge) never spends an attempt: the run stops and says so.</li>
 </ul>
 <h2 id="risk">Risk and cost</h2>
-<p>A run starts at low risk unless its role has a step that cannot be undone, or you raise it. Rules in code raise it when the change grows past 30 lines or 5 files, or touches a file that runs later outside any box (CI, hooks, package scripts, agents' settings); then the steps of the full path run too. Nothing lowers it. Every run has a ceiling, said when it starts: 20 minutes and 2 million tokens at low risk, 2 hours and 10 million at high. No attempt starts past it; you can raise it on the run's page.</p>
+<p>A run starts at low risk unless its role has a step that cannot be undone, or you raise it. Rules in code raise it when the change grows past 30 lines or 5 files outside its tests, or touches a file that runs later outside any box (CI, hooks, package scripts, agents' settings); then the steps of the full path run too. Nothing lowers it. Every run has a ceiling, said when it starts: 20 minutes and 2 million tokens at low risk, 2 hours and 10 million at high. No attempt starts past it; you can raise it on the run's page.</p>
 <h2 id="answers">Your answers</h2>
 <p>A question shows items, and you give each a verdict; an item you leave unmarked is kept.</p>
 <table>

@@ -150,7 +150,7 @@ Roles are listed in an index, [jaynes-roles](https://github.com/alk0x1/jaynes-ro
 
 | Role | What it does |
 |---|---|
-| `small-change` | A change of a few lines; the project's suite must pass. Past 30 changed lines, or a file that runs outside any box, it becomes a high-risk run and asks you |
+| `small-change` | A change of a few lines; the project's suite must pass. Past 30 changed lines outside its tests, or a file that runs outside any box, it becomes a high-risk run and asks you |
 | `fix-bug` | A test that fails because of the bug, then a fix, judged by cases written from your request alone that the fixer never sees; merged into your branch, and undone with one click |
 
 ```sh

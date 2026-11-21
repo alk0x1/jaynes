@@ -147,28 +147,49 @@ pub fn of_role(m: &Manifest) -> (Risk, Vec<String>) {
     }
 }
 
+/// Test files, by the same names the fix-bug role gives them: they run only when the suite runs, inside the box, so
+/// their lines and files do not make a change bigger than a small one. A test file on the floor (a `conftest.py`)
+/// makes it risky all the same.
+pub const TESTS: &[&str] = &[
+    "**/tests/**", "**/test/**", "**/__tests__/**", "**/spec/**", "**/test_*.py", "**/*_test.py",
+    "**/*.test.*", "**/*.spec.*", "**/*_test.go", "**/*_spec.rb", "**/*Test.java", "**/*Tests.cs",
+];
+
+/// Whether `path` is a test file ([`TESTS`]).
+pub fn test_file(path: &str) -> bool {
+    TESTS.iter().any(|g| glob::matches(path, g))
+}
+
 /// The risk of a run's change so far on its target, with the reason for each rule that raised it. The same rules for
-/// every target: what is on the floor, the size of the change, and how many things it touches. A measure may mark
-/// more as on the floor than the core knows, and never less: on a repository, a path on [`FLOOR`] is on it whatever
-/// the measure said.
+/// every target: what is on the floor, the size of the change, and how many things it touches, its tests left out
+/// of the size and the count ([`TESTS`]). A measure may mark more as on the floor than the core knows, and never
+/// less: on a repository, a path on [`FLOOR`] is on it whatever the measure said. Each reason names the files on the
+/// floor as a stop names them, so it reads the same wherever it is shown.
 pub fn of_change(target: Target, changed: &[Changed]) -> (Risk, Vec<String>) {
-    let mut reasons = Vec::new();
     let on_floor = |c: &Changed| {
         c.floor
             || match target {
                 Target::Repository => !floor([c.what.as_str()]).is_empty(),
             }
     };
+    let mut reasons = Vec::new();
     let floor: Vec<&str> = changed.iter().filter(|c| on_floor(c)).map(|c| c.what.as_str()).collect();
     if !floor.is_empty() {
-        reasons.push(format!("the change touches files that run later outside any box: {}", floor.join(", ")));
+        reasons.push(format!("the change touches {}, which {} later outside any box", named(&floor), if floor.len() == 1 { "runs" } else { "run" }));
     }
-    let lines: u64 = changed.iter().map(|c| c.size).sum();
+    let counted: Vec<&Changed> = changed
+        .iter()
+        .filter(|c| match target {
+            Target::Repository => !test_file(&c.what),
+        })
+        .collect();
+    let outside = if counted.len() < changed.len() { " outside its tests" } else { "" };
+    let lines: u64 = counted.iter().map(|c| c.size).sum();
     if lines > SMALL_LINES {
-        reasons.push(format!("the change has {lines} changed lines, more than {SMALL_LINES}"));
+        reasons.push(format!("the change has {lines} changed lines{outside}, more than a small change's {SMALL_LINES}"));
     }
-    if changed.len() > SMALL_FILES {
-        reasons.push(format!("the change touches {} files, more than {SMALL_FILES}", changed.len()));
+    if counted.len() > SMALL_FILES {
+        reasons.push(format!("the change touches {} files{outside}, more than a small change's {SMALL_FILES}", counted.len()));
     }
     (if reasons.is_empty() { Risk::Low } else { Risk::High }, reasons)
 }
@@ -180,25 +201,7 @@ pub const RISK_TOLD: &str = "{{risk}}";
 /// [`of_change`] that holds, the files that run later outside any box named, and how much bigger than a small change
 /// it is. None when none holds.
 pub fn told(target: Target, changed: &[Changed]) -> Vec<String> {
-    let on_floor = |c: &Changed| {
-        c.floor
-            || match target {
-                Target::Repository => !floor([c.what.as_str()]).is_empty(),
-            }
-    };
-    let mut told = Vec::new();
-    let floor: Vec<&str> = changed.iter().filter(|c| on_floor(c)).map(|c| c.what.as_str()).collect();
-    if !floor.is_empty() {
-        told.push(format!("This change touches {}, which {} later outside any box.", named(&floor), if floor.len() == 1 { "runs" } else { "run" }));
-    }
-    let lines: u64 = changed.iter().map(|c| c.size).sum();
-    if lines > SMALL_LINES {
-        told.push(format!("This change has {lines} changed lines, more than a small change's {SMALL_LINES}."));
-    }
-    if changed.len() > SMALL_FILES {
-        told.push(format!("This change touches {} files, more than a small change's {SMALL_FILES}.", changed.len()));
-    }
-    told
+    of_change(target, changed).1.into_iter().map(|r| format!("This{}.", r.strip_prefix("the").unwrap_or(&r))).collect()
 }
 
 /// The most files a stop names; the rest are counted.
@@ -323,5 +326,22 @@ mod tests {
         assert_eq!(of_change(Target::Repository, &[c("src/a.py", 31)]).0, Risk::High);
         let many: Vec<Changed> = (0..6).map(|i| c(&format!("src/{i}.py"), 1)).collect();
         assert_eq!(of_change(Target::Repository, &many).0, Risk::High);
+    }
+
+    #[test]
+    fn test_files_count_neither_as_lines_nor_as_files() {
+        assert_eq!(of_change(Target::Repository, &[c("src/a.go", 18), c("src/a_test.go", 40)]), (Risk::Low, Vec::new()));
+        let tests: Vec<Changed> = (0..9).map(|i| c(&format!("tests/test_{i}.py"), 100)).collect();
+        assert_eq!(of_change(Target::Repository, &tests).0, Risk::Low);
+        assert_eq!(
+            of_change(Target::Repository, &[c("src/a.go", 31), c("src/a_test.go", 40)]),
+            (Risk::High, vec!["the change has 31 changed lines outside its tests, more than a small change's 30".to_string()])
+        );
+        // on the floor whatever folder it is in
+        assert_eq!(of_change(Target::Repository, &[c("tests/conftest.py", 1)]).0, Risk::High);
+        // a name that only looks like a test's is not one
+        for p in ["src/testing.py", "src/latest.go", "src/contest.rs", "docs/test-plan.md"] {
+            assert!(!test_file(p), "{p}");
+        }
     }
 }

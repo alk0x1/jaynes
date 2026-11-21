@@ -21,6 +21,9 @@ pub struct Run {
     pub protocol: u32,
     pub format: u32,
     pub risk: Risk,
+    /// Why the risk is what it is, as the rules or the answer that last set it said: empty while nothing raised it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risk_why: Vec<String>,
     pub ceilings: Ceilings,
     pub ceiling: Ceiling,
     pub spent: Usage,
@@ -240,7 +243,7 @@ impl Run {
     }
 
     pub fn started(e: &Event) -> Option<Run> {
-        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, ceilings, ceiling, attention, never_merge, .. } = e else {
+        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, reasons, ceilings, ceiling, attention, never_merge, .. } = e else {
             return None;
         };
         Some(Run {
@@ -254,6 +257,7 @@ impl Run {
             protocol: *protocol,
             format: *format,
             risk: *risk,
+            risk_why: if *risk > Risk::Low { reasons.clone() } else { Vec::new() },
             ceilings: *ceilings,
             ceiling: *ceiling,
             spent: Usage::default(),
@@ -298,8 +302,9 @@ impl Run {
                 self.planted.remove(id);
                 self.unplanted.insert(id.clone());
             }
-            Event::RiskRaised { to, ceiling, .. } => {
+            Event::RiskRaised { to, ceiling, reasons, .. } => {
                 self.risk = *to;
+                self.risk_why = reasons.clone();
                 self.ceiling = *ceiling;
             }
             Event::CeilingRaised { ceiling, .. } => {

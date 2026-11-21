@@ -134,3 +134,31 @@ fn a_file_s_name_is_shown_as_a_name_never_as_words_of_jaynes() {
     let got = asked(ASK, many).expect("asked");
     assert!(got.starts_with("This change touches `.github/workflows/0.yml`, `.github/workflows/1.yml`, `.github/workflows/2.yml`, `.github/workflows/3.yml`, `.github/workflows/4.yml` and 3 more, which run later outside any box."), "{got}");
 }
+
+// real-user, 21/11: "O direto mudou as mesmas 57, das quais 40 são os dois testes que o pedido mandou pôr."
+#[test]
+fn the_tests_the_request_asked_for_do_not_make_the_change_big() {
+    // 18 lines of code and the 40 lines of the tests the request asked for: a small change, nothing asked
+    assert_eq!(asked(ASK, vec![file("server.go", 18), file("server_test.go", 40)]), None);
+    // tests as each language writes them
+    for t in ["tests/test_items.py", "app/items_test.py", "web/items.test.ts", "web/__tests__/items.js", "spec/items_spec.rb", "src/test/java/ItemsTest.java", "Api.Tests/ItemsTests.cs"] {
+        assert_eq!(asked(ASK, vec![file("src/items.py", 10), file(t, 200)]), None, "{t}");
+    }
+    // many test files are not many files
+    let mut many: Vec<Changed> = (0..7).map(|n| file(&format!("tests/test_{n}.py"), 2)).collect();
+    many.push(file("src/items.py", 4));
+    assert_eq!(asked(ASK, many), None);
+    // the lines and files outside the tests still count, and the stop says it counted only those
+    assert_eq!(
+        asked(ASK, vec![file("server.go", 45), file("server_test.go", 40)]).as_deref(),
+        Some("This change has 45 changed lines outside its tests, more than a small change's 30. Keep it, or have it done again?")
+    );
+    let mut many: Vec<Changed> = (0..6).map(|n| file(&format!("src/{n}.py"), 1)).collect();
+    many.push(file("tests/test_a.py", 1));
+    assert_eq!(asked(ASK, many).as_deref(), Some("This change touches 6 files outside its tests, more than a small change's 5. Keep it, or have it done again?"));
+    // a test file that runs later outside any box raises it all the same
+    assert_eq!(
+        asked(ASK, vec![file("tests/conftest.py", 3)]).as_deref(),
+        Some("This change touches `tests/conftest.py`, which runs later outside any box. Keep it, or have it done again?")
+    );
+}

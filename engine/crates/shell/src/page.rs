@@ -1046,6 +1046,28 @@ fn summary_html(home: &std::path::Path, r: &Run) -> String {
 
 /// A run: where it is, what it cost, its steps, what the person may do to it, and, once finished, its summary.
 /// `halted_by` says who halted it, in the column's words ("halted by an agent"), from its entries.
+/// Why a high-risk run is so, and what that changes in its ceiling, in one line; nothing for a low-risk run.
+fn risk_why(r: &Run) -> String {
+    if r.risk == jaynes_core::risk::Risk::Low {
+        return String::new();
+    }
+    let why = if r.risk_why.is_empty() { "the run says no more of why".to_string() } else { r.risk_why.join("; ") };
+    let (high, low) = (r.ceilings.high, r.ceilings.low);
+    format!(
+        "<p class=\"sub\">High risk: {}. It may take up to {} min and {} tokens, where a low-risk run stops at {} min and {} tokens.</p>",
+        esc(&why),
+        high.seconds / 60,
+        tokens_said(high.tokens),
+        low.seconds / 60,
+        tokens_said(low.tokens),
+    )
+}
+
+/// A count of tokens as a person reads it: whole millions in words, anything else as it is.
+fn tokens_said(n: u64) -> String {
+    if n >= 1_000_000 && n.is_multiple_of(1_000_000) { format!("{} million", n / 1_000_000) } else { n.to_string() }
+}
+
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> String {
     let path = r.path();
     let steps = stage_list(r);
@@ -1106,7 +1128,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
     };
     let data = json!({"run": r.id}).to_string();
     format!(
-        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{strip}{phase}{answers}\
+        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{why}{strip}{phase}{answers}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {att} attempts, {spent} spent by the agent, {fixes} fixes, {back} sent back{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
@@ -1114,6 +1136,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
         version = esc(&r.manifest.version),
         id = esc(&r.id),
         risk = r.risk.word(),
+        why = risk_why(r),
         request = esc(&short(&r.request)),
         strip = strip(r),
         sm = r.spent.seconds / 60,
@@ -2414,6 +2437,27 @@ mod tests {
         let manifest: jaynes_core::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": steps})).expect("manifest");
         let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
         Run::fold(&decide(None, &start).expect("start").events).expect("run")
+    }
+
+    // real-user, 21/11: "A página só mostra "HIGH RISK"; o porquê só aparece no terminal do start."
+    #[test]
+    fn the_page_says_why_a_run_is_high_risk_and_what_that_changes() {
+        let mut r = small_run(false);
+        assert!(!run_html(&r, "", "", None).contains("High risk"), "a low-risk run says nothing of it");
+        r.apply(&jaynes_core::event::Event::RiskRaised {
+            to: jaynes_core::risk::Risk::High,
+            by: By::Rule { rule: "what-the-change-touches".into() },
+            reasons: vec!["the change has 45 changed lines outside its tests, more than a small change's 30".into()],
+            ceiling: r.ceilings.high,
+        });
+        let shown = run_html(&r, "", "", None);
+        assert!(
+            shown.contains("High risk: the change has 45 changed lines outside its tests, more than a small change&#39;s 30. It may take up to 120 min and 10 million tokens, where a low-risk run stops at 20 min and 2 million tokens."),
+            "{shown}"
+        );
+        // a name an agent chose is shown as text, never as the page's own markup
+        r.apply(&jaynes_core::event::Event::RiskRaised { to: jaynes_core::risk::Risk::High, by: By::Person, reasons: vec!["the change touches `<b>x</b>`".into()], ceiling: r.ceilings.high });
+        assert!(run_html(&r, "", "", None).contains("High risk: the change touches `&lt;b&gt;x&lt;/b&gt;`."));
     }
 
     #[test]
