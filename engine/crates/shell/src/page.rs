@@ -2201,6 +2201,9 @@ mod tests {
     use super::*;
     use jaynes_core::question::QuestionKind;
 
+    // Alan, 20/11, in the video of the choice screen: "o que são esses pins?" (the design-lead's checkup, item 14): the
+    // star became "☆ Shortlist", saying what it does, on the page as in the app (compare.rs asked_what_are_these_pins);
+    // the page has no parts to keep, so no pin of its own
     #[test]
     fn while_jaynes_updates_the_notice_says_what_update_does() {
         // the notice offers Update only for a release built for this machine, and Update downloads it and installs it
@@ -2210,8 +2213,11 @@ mod tests {
         assert_eq!(said, "Jaynes is updating: no release is built for this machine, so cargo builds the newest source, which takes a few minutes.");
     }
 
+    // Alan, 20/11, in the video of the choice screen: "o que são esses pins?" (the design-lead's checkup, item 14): the
+    // star became "☆ Shortlist", saying what it does, on the page as in the app (compare.rs asked_what_are_these_pins);
+    // the page has no parts to keep, so no pin of its own
     #[test]
-    fn a_choosing_stop_shortlists_in_the_app_s_words_and_sends_the_engine_s_note() {
+    fn asked_what_are_these_pins_the_page_shortlists_in_the_app_s_words() {
         let b = shortlist_button("harbor");
         assert!(b.contains(">☆ Shortlist<") && b.contains("data-fin=\"harbor\"") && !b.to_lowercase().contains("finalist"), "{b}");
         assert!(FINALS_ROW.contains(">Develop the shortlisted<"), "{FINALS_ROW}");
