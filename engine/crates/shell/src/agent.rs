@@ -438,6 +438,18 @@ pub const PACKAGE_HOSTS: &[&str] = &[
     "files.pythonhosted.org", "crates.io", "index.crates.io", "static.crates.io",
 ];
 
+/// A folder as Claude Code's path rules name it whatever folder the agent's shell is in: `//` and its whole path, as
+/// given and, when it differs, as the system resolves it.
+fn whole_paths(folder: &Path) -> Vec<String> {
+    let folder = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let mut out = vec![format!("/{}", folder.display())];
+    if let Ok(real) = std::fs::canonicalize(&folder)
+        && real != folder {
+            out.push(format!("/{}", real.display()));
+        }
+    out
+}
+
 fn binary(name: &str) -> Option<PathBuf> {
     let path = std::env::var("PATH").unwrap_or_default();
     let mut dirs: Vec<PathBuf> = path.split(':').map(PathBuf::from).collect();
@@ -451,12 +463,17 @@ impl Claude {
     /// The settings for one step, generated from what it may reach. Ported from the Python engine's runtime.
     pub fn settings(&self, cwd: &Path, reach: &Reach, reads: &[PathBuf], asks: bool) -> Value {
         let web = reach.network == Network::Web;
-        let mut allow: Vec<String> = vec!["Read(./**)".into()];
+        // Claude Code reads a rule's ./ from the folder the agent's shell is in now, which follows every cd the agent
+        // runs: after `cd src/engram`, Edit(./**) asked the person for each file under tests/ (21/11). So a rule names
+        // the step's folder by its whole path, which Claude Code writes after //, as Jaynes gives it and as the
+        // system resolves it when that differs (macOS: /tmp is /private/tmp).
+        let folders = whole_paths(cwd);
+        let mut allow: Vec<String> = folders.iter().map(|f| format!("Read({f}/**)")).collect();
         if reach.project == ProjectAccess::Write || reach.project == ProjectAccess::None {
             // Edit(path) is the rule of every tool that writes a file; Claude Code matches no Write(path) rule
-            allow.push("Edit(./**)".into());
+            allow.extend(folders.iter().map(|f| format!("Edit({f}/**)")));
         } else {
-            allow.push(format!("Edit(./{}/**)", crate::project::EXCHANGE));
+            allow.extend(folders.iter().map(|f| format!("Edit({f}/{}/**)", crate::project::EXCHANGE)));
         }
         if reach.commands {
             allow.push("Bash".into());
@@ -1076,13 +1093,78 @@ mod tests {
         }
     }
 
+    /// Whether a path rule `Read(pattern)` or `Edit(pattern)` among `allow` lets the agent use `file` while its
+    /// shell is in `shell`, read as Claude Code reads one: `//` begins a whole path, and `./` (or no prefix) a path
+    /// from the folder the shell is in now, which follows every `cd` the agent ran. Seen with Claude Code 2.1.330
+    /// and an Anthropic API stand-in on the loopback, no model: after `cd sub`, `Edit(./**)` asked for other/x.txt
+    /// and let sub/y.txt through; `Edit(//<the folder>/**)` let both through. `/` alone begins a path from the
+    /// settings file, which a step's settings, given on the command line, do not have: it matches nothing here.
+    fn claude_code_lets(tool: &str, allow: &[&str], shell: &str, file: &str) -> bool {
+        allow.iter().filter_map(|r| r.strip_prefix(tool)?.strip_prefix('(')?.strip_suffix(')')).any(|p| {
+            let whole = if let Some(rest) = p.strip_prefix("//") {
+                format!("/{rest}")
+            } else if p.starts_with('/') || p.starts_with('~') {
+                return false;
+            } else {
+                format!("{shell}/{}", p.strip_prefix("./").unwrap_or(p))
+            };
+            jaynes_core::glob::matches(file, &whole)
+        })
+    }
+
+    // Alan, 21/11: "pq to sendo chamado aqui? a role?"
+    #[test]
+    fn asked_why_am_i_called_here() {
+        // A step its role lets write the whole project (build, write = ["**"]). Its agent ran `cd src/engram`, then
+        // wrote tests/conftest.py and six more files under tests/, and Claude Code asked the person for each one,
+        // though the step may write them all: the rule read ./ from the folder the agent's shell had gone into.
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
+        let s = Claude::default().settings(Path::new("/w"), &reach, &[], true);
+        let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        for shell in ["/w", "/w/src/engram", "/w/tests", "/w/.jaynes/tmp"] {
+            for file in ["/w/tests/conftest.py", "/w/tests/fakes.py", "/w/src/engram/api.py", "/w/pyproject.toml"] {
+                assert!(claude_code_lets("Edit", &allow, shell, file), "after cd {shell}, writing {file} asks the person: {allow:?}");
+                assert!(claude_code_lets("Read", &allow, shell, file), "after cd {shell}, reading {file} asks for leave: {allow:?}");
+            }
+        }
+        // and still nothing outside the step's folder, wherever the shell is
+        for shell in ["/w", "/w/src/engram"] {
+            for file in ["/elsewhere/x.py", "/w2/x.py"] {
+                assert!(!claude_code_lets("Edit", &allow, shell, file), "after cd {shell}, {file} may be written: {allow:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_step_s_folder_reached_through_a_link_is_named_both_ways() {
+        // the folder as Jaynes gives it and as the system resolves it (macOS: /tmp is /private/tmp), so a rule
+        // matches whichever one Claude Code compares
+        let base = std::env::temp_dir().join(format!("jaynes-link-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("real")).expect("dir");
+        std::os::unix::fs::symlink(base.join("real"), base.join("link")).expect("link");
+        let real = std::fs::canonicalize(base.join("real")).expect("real");
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
+        let s = Claude::default().settings(&base.join("link"), &reach, &[], true);
+        let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        for folder in [base.join("link"), real] {
+            let file = folder.join("tests/conftest.py").display().to_string();
+            assert!(claude_code_lets("Edit", &allow, "/nowhere", &file), "{file}: {allow:?}");
+        }
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn a_read_only_step_writes_only_its_exchange_folder() {
         let reach = Reach { project: ProjectAccess::Read, write: vec![], network: Network::None, commands: false, local_ports: vec![] };
         let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-        assert!(allow.contains(&"Edit(./.jaynes/**)"));
-        assert!(!allow.contains(&"Edit(./**)"));
+        // wherever its agent's shell went
+        for shell in ["/w", "/w/src"] {
+            assert!(claude_code_lets("Edit", &allow, shell, "/w/.jaynes/output.json"), "after cd {shell}: {allow:?}");
+            assert!(!claude_code_lets("Edit", &allow, shell, "/w/src/a.rs"), "after cd {shell}: {allow:?}");
+            assert!(claude_code_lets("Read", &allow, shell, "/w/src/a.rs"), "after cd {shell}: {allow:?}");
+        }
         assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "Bash"));
         // the shell's box reads nothing in the person's home but the step's folder (a real run: `cat ~/file` was
         // refused with "Operation not permitted")
