@@ -245,11 +245,6 @@ pub fn pill(run: &str, question: &str) -> String {
     if run.is_empty() { format!("◆ {question} · open") } else { format!("◆ {run}: {question} · open") }
 }
 
-/// The invitation to compare: how many options and the question.
-pub fn invite_line(count: &str, question: &str) -> String {
-    format!("{count} · {question}")
-}
-
 /// Whether Tab goes round the stop: its card, or its pill folded on its run's own tab (Enter or Space open it); over
 /// Claude Code's terminal the pill leaves Tab to the terminal.
 pub fn tab_goes_round(shows: Option<Shows>, on_tab: bool) -> bool {
@@ -759,7 +754,7 @@ impl Island {
         let q = stop.question.clone();
         let name = self.run_name(&stop.run, cx);
         // one option is opened, not compared
-        let (count, open_word) = crate::compare::invite(stop.items.len());
+        let (line, open_word) = crate::compare::invite(stop.items.len(), &stop.title);
         div()
             .flex()
             .gap(px(12.))
@@ -778,7 +773,7 @@ impl Island {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
-                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(invite_line(&count, &stop.title)))
+                    .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(line))
                     .when(!name.is_empty(), |d| d.child(div().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(name))),
             )
             .child(primary("compare", open_word.into(), true).on_click(open))
@@ -1334,7 +1329,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, SENT, Sent, Shows, WORDS_HINT, ahead_line, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, SENT, Sent, Shows, WORDS_HINT, ahead_line, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1542,7 +1537,6 @@ mod tests {
         assert_eq!(card_head("", "site", "copy", 1), ("site".to_string(), "at “copy” · round 1".to_string()));
         assert_eq!(pill("Tighten the site's copy", "Which of these copy changes go in?"), "◆ Tighten the site's copy: Which of these copy changes go in? · open");
         assert_eq!(pill("", "Which of these copy changes go in?"), "◆ Which of these copy changes go in? · open");
-        assert_eq!(invite_line("◆ 3 options", "Which direction goes on?"), "◆ 3 options · Which direction goes on?");
         assert_eq!(DELIVERED, "Already delivered. Your answer can still correct it.");
         assert_eq!(diff_title("copy"), "Changes made at “copy”");
     }

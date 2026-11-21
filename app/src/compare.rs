@@ -115,8 +115,31 @@ pub const HINT: &str = "← → flip · shortlist two to develop both";
 pub const FULL: &str = "Two at most: unshortlist one first";
 /// The hint in the person's words field.
 pub const WORDS_HINT: &str = "Your words: what stays, what changes, in any language";
+/// The hint in the words field when there is one option only: words there ask or change before anything is chosen.
+pub const ONE_HINT: &str = "Not sure yet? Ask the agent, or say what to change";
+/// With one option: the main button while the field is empty, and the button beside "Not yet" once it has words.
+pub const GO_ONE: &str = "Go with this one";
+/// With one option and the person's words: nothing is chosen, and the words go to the agent as a question or a change.
+pub const NOT_YET: &str = "Not yet: send my words";
 /// How long that hint shows.
 pub const FULL_FOR: Duration = Duration::from_secs(3);
+
+/// Whether a stop chooses with one option only: there is nothing to choose among, so it asks yes or not yet, by the
+/// option's name ("Go with “Python + FastAPI”?"), and the role's question goes on the line under it.
+pub fn one_option(stop: &Stop) -> bool {
+    stop.choose && stop.items.len() == 1
+}
+
+/// The hint in the person's words field.
+pub fn words_hint(one: bool) -> &'static str {
+    if one { ONE_HINT } else { WORDS_HINT }
+}
+
+/// What the line under the question says after the step: the role's question with one option, whose title asks whether
+/// to go with it; else what the step does.
+pub fn under_about(stop: &Stop) -> &str {
+    if one_option(stop) && !stop.asks.trim().is_empty() { &stop.asks } else { &stop.about }
+}
 
 /// A part's button: keep it, or kept.
 pub fn keep_word(kept: bool) -> &'static str {
@@ -169,9 +192,10 @@ pub fn esc(viewer: bool, more: bool, field: bool) -> Esc {
     }
 }
 
-/// The card that invites to the mode: how many options, and its button.
-pub fn invite(n: usize) -> (String, &'static str) {
-    if n == 1 { ("◆ 1 option".into(), "Open") } else { (format!("◆ {n} options"), "Compare") }
+/// The card that invites to the mode: its line, and its button. With one option the title already names it ("Go with
+/// “Harbor”?"), so no count repeats it.
+pub fn invite(n: usize, title: &str) -> (String, &'static str) {
+    if n == 1 { (format!("◆ {title}"), "Open") } else { (format!("◆ {n} options · {title}"), "Compare") }
 }
 
 /// Whether the mode shows the strip of directions to flip among: not for a stop with one option.
@@ -339,11 +363,35 @@ impl Marks {
             return Some((label, answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)));
         }
         let target = self.chosen(stop)?;
+        let one = one_option(stop);
+        if one && !words.trim().is_empty() {
+            // one option and words: "not yet", a change with the words on it, which chooses nothing (the engine says
+            // "is not chosen yet"); going with it, the words beside, is the button next to this one (also)
+            verdicts.insert(stop.items[target].id.clone(), "change".into());
+            notes.insert(stop.items[target].id.clone(), words.trim().to_string());
+            return Some((NOT_YET.to_string(), answer::body(stop, &verdicts, &notes, &BTreeMap::new(), "")));
+        }
         verdicts.insert(stop.items[target].id.clone(), "keep".into());
         // the option's name is on its card, ringed while the pointer is on the button: a name in the button read as
-        // something else ("Go on with Go")
-        let label = if target == self.dir { "Choose this one" } else { "Choose the one with kept parts" };
+        // something else ("Go on with Go"); with one option there is nothing to choose among
+        let label = if one {
+            GO_ONE
+        } else if target == self.dir {
+            "Choose this one"
+        } else {
+            "Choose the one with kept parts"
+        };
         Some((label.to_string(), answer::body(stop, &verdicts, &notes, &BTreeMap::new(), words)))
+    }
+
+    /// The button beside the main one, when there is one: with one option and the person's words, going with it
+    /// anyway, the words sent beside as they are today.
+    pub fn also(&self, stop: &Stop, words: &str) -> Option<(String, Value)> {
+        if !one_option(stop) || words.trim().is_empty() || self.none || self.bring.is_some() {
+            return None;
+        }
+        let verdicts: BTreeMap<String, String> = [(stop.items[0].id.clone(), "keep".to_string())].into();
+        Some((GO_ONE.to_string(), answer::body(stop, &verdicts, &BTreeMap::new(), &BTreeMap::new(), words)))
     }
 }
 
@@ -467,7 +515,7 @@ impl Compare {
                 why
             });
             if !back.words.is_empty() {
-                let words = self.input(WORDS_HINT, window, cx);
+                let words = self.input(words_hint(one_option(&stop)), window, cx);
                 words.update(cx, |s, cx| s.set_value(back.words, window, cx));
                 self.words = Some(words);
             }
@@ -481,7 +529,8 @@ impl Compare {
         self.open = true;
         self.viewer = None;
         if self.words.is_none() {
-            self.words = Some(self.input(WORDS_HINT, window, cx));
+            let hint = words_hint(self.stop.as_ref().is_some_and(one_option));
+            self.words = Some(self.input(hint, window, cx));
         }
         window.focus(&self.focus, cx);
         self.reckon(cx);
@@ -604,6 +653,17 @@ impl Compare {
             return;
         }
         if let Some((_, body)) = self.proposal(cx) {
+            self.send_body(body, cx);
+        }
+    }
+
+    /// The button beside the main one: with one option and words, going with it anyway.
+    fn go_also(&mut self, cx: &mut Context<Self>) {
+        if self.sending {
+            return;
+        }
+        let Some(stop) = self.stop.as_ref() else { return };
+        if let Some((_, body)) = self.marks.also(stop, &Self::text(self.words.as_ref(), cx)) {
             self.send_body(body, cx);
         }
     }
@@ -900,6 +960,7 @@ impl Compare {
                 self.reckon(cx);
             }
             "go" => self.go(cx),
+            "also" => self.go_also(cx),
             // Enter on the mode, as the keyboard's reaches it with the keys on the mode
             "enter" => self.enter(cx),
             "close" => self.close(cx),
@@ -931,10 +992,13 @@ impl Compare {
                     });
                 }
             }
+            // the person's words, as typing leaves them: set_value sends no Change, which each keystroke does, so what
+            // the answer does is reckoned here as a keystroke has it reckoned
             "type" => {
                 if let Some(w) = self.words.clone() {
                     let text = rest.to_string();
                     w.update(cx, |s, cx| s.set_value(text, window, cx));
+                    self.reckon(cx);
                 }
             }
             "hover-go" => {
@@ -1188,8 +1252,12 @@ impl Render for Compare {
         let proposal = self.proposal(cx);
         let chosen = self.marks.chosen(&stop);
         let mut label = proposal.as_ref().map(|(l, _)| l.clone()).unwrap_or_default();
+        let mut also = self.marks.also(&stop, &Self::text(self.words.as_ref(), cx)).map(|(l, _)| l);
         if stop.ahead.is_some() {
             label.push_str(" · Touch ID");
+            if let Some(a) = also.as_mut() {
+                a.push_str(" · Touch ID");
+            }
         }
         let can = !self.sending && self.reckoned.refused.is_none() && proposal.is_some();
         let field = self.some_field_focused(window, cx);
@@ -1453,6 +1521,7 @@ impl Render for Compare {
                     .child(div().flex_1().min_w_0().child(self.consequences(cx)))
                     .when_some(self.reckoned.refused.clone(), |d, r| d.child(div().max_w(px(360.)).text_size(px(12.)).text_color(rgb(look::red())).child(r)))
                     .when_some(self.said.clone(), |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(s)))
+                    .when_some(also.filter(|_| !self.sending), |d, a| d.child(button("also".into(), &a, false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.go_also(cx)))))
                     .child(go),
             )
             .children(panel);
@@ -1467,7 +1536,7 @@ impl Render for Compare {
             .bg(rgb(look::panel()))
             .pl(px(84.))
             .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
-            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, &stop.about), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under))))
+            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, under_about(&stop)), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under))))
             .when(stop.round > 0, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("round {}", stop.round))))
             // as wide as its longer words, so "round" does not move when they change; a press on it keeps the keys
             // where they are, so it does what it says
@@ -1515,7 +1584,7 @@ impl Render for Compare {
 
 #[cfg(test)]
 mod tests {
-    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, WORDS_HINT, card_label, chip, esc, invite, keep_word, mix_note, none_word, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_title};
+    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, WORDS_HINT, card_label, chip, esc, invite, keep_word, mix_note, none_word, one_option, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_about, under_title, words_hint};
 
     #[test]
     fn the_notes_name_the_parts_as_a_sentence_does_from_the_labels_the_stop_has() {
@@ -1678,8 +1747,8 @@ mod tests {
     // Alan, 20/11: "aparece "compare" mesmo so com uma opcao"
     #[test]
     fn asked_no_compare_with_only_one_option() {
-        assert_eq!(invite(1), ("◆ 1 option".to_string(), "Open"));
-        assert_eq!(invite(3), ("◆ 3 options".to_string(), "Compare"));
+        assert_eq!(invite(1, "Go with “Harbor”?"), ("◆ Go with “Harbor”?".to_string(), "Open"));
+        assert_eq!(invite(3, "Which direction goes on?"), ("◆ 3 options · Which direction goes on?".to_string(), "Compare"));
         assert!(!strip(1) && strip(2));
         assert_eq!(none_word(1), "Not this one");
         assert_eq!(none_word(3), "None of these");
@@ -1687,6 +1756,45 @@ mod tests {
         let none = Marks { none: true, ..Marks::default() };
         assert_eq!(label(&none, &one), "Not this one: make a new one");
         assert_eq!(label(&none, &choosing(&["Harbor", "Night", "Ledger"])), "None of these: make 3 new ones");
+    }
+
+    // Alan, 21/11: "entender onde o python entra antes de decidir"
+    #[test]
+    fn asked_one_option_asks_go_with_it_or_not_yet_and_never_chooses_his_question() {
+        let mut one = choosing(&["Python + FastAPI"]);
+        one.title = "Go with “Python + FastAPI”?".into();
+        one.asks = "Which stack goes on?".into();
+        one.about = "Picks the stack.".into();
+        let shown = Marks::default();
+        let words = "entender onde o python entra antes de decidir";
+        // the field says words can ask before choosing; with two or more it says what it said
+        assert_eq!(words_hint(one_option(&one)), "Not sure yet? Ask the agent, or say what to change");
+        assert_eq!(words_hint(one_option(&choosing(&["Harbor", "Night"]))), WORDS_HINT);
+        // the field empty: going with it is the choice
+        let (go, body) = shown.proposal(&one, "", "").expect("a proposal");
+        assert_eq!((go.as_str(), body["verdicts"]["python + fastapi"].as_str()), ("Go with this one", Some("keep")));
+        assert_eq!(shown.also(&one, ""), None);
+        // his words: not yet, a change carrying them, never a keep; nothing is chosen
+        let (go, body) = shown.proposal(&one, words, "").expect("a proposal");
+        assert_eq!(go, "Not yet: send my words");
+        assert_eq!(body["verdicts"]["python + fastapi"].as_str(), Some("change"));
+        assert_eq!(body["notes"]["python + fastapi"].as_str(), Some(words));
+        assert_eq!(body["context"].as_str(), Some(""));
+        // and beside it, going with it anyway, his words sent beside it as before
+        let (also, body) = shown.also(&one, words).expect("the button beside");
+        assert_eq!((also.as_str(), body["verdicts"]["python + fastapi"].as_str(), body["context"].as_str()), ("Go with this one", Some("keep"), Some(words)));
+        // "Not this one" stays
+        assert_eq!(label(&Marks { none: true, ..Marks::default() }, &one), "Not this one: make a new one");
+        assert_eq!(Marks { none: true, ..Marks::default() }.also(&one, words), None);
+        // the role's question goes on the line under the title, which asks whether to go with it
+        assert_eq!(under_title("Pick a stack", &one.step, under_about(&one)).as_deref(), Some("Pick a stack · at “directions”: Which stack goes on?"));
+        assert_eq!(invite(1, &one.title).0, "◆ Go with “Python + FastAPI”?");
+        // with two or more nothing changes: the words go beside the choice
+        let two = choosing(&["Harbor", "Night"]);
+        assert_eq!(label(&shown, &two), "Choose this one");
+        assert_eq!(shown.proposal(&two, words, "").expect("a proposal").1["context"].as_str(), Some(words));
+        assert_eq!(shown.also(&two, words), None);
+        assert_eq!(under_about(&Stop { about: "Picks the look.".into(), ..two }), "Picks the look.");
     }
 
     // Alan, 20/11: "o "Go on with.." fez eu achar que a tecnologia ia ser "Go" de golang, vamos deixar mais claro oq o
