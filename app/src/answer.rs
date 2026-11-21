@@ -87,12 +87,17 @@ pub fn engine_program() -> PathBuf {
     })
 }
 
+/// What macOS says when it asks for the person's touch: only when something that cannot be undone lies ahead.
+pub fn touch_reason(ahead: Option<&str>) -> Option<String> {
+    ahead.map(|a| format!("send your answer to Jaynes: {a}"))
+}
+
 /// Sends the answer as the person's: their touch first when something that cannot be undone lies ahead, then signed
 /// with their key. Resolves to what to tell them.
 pub async fn send(key: Option<Arc<Key>>, ahead: Option<String>, body: Value) -> Result<(), String> {
     let key = key.ok_or("the app has no key of yours, so it cannot answer as you")?;
-    if let Some(ahead) = ahead {
-        crate::presence::ask(&format!("send your answer to Jaynes: {ahead}")).recv().await.unwrap_or_else(|_| Err("no answer from macOS".into()))?;
+    if let Some(reason) = touch_reason(ahead.as_deref()) {
+        crate::presence::ask(&reason).recv().await.unwrap_or_else(|_| Err("no answer from macOS".into()))?;
     }
     let home = jaynes_shell::home();
     let (run, _, answer) = jaynes_shell::page::answer_in(&home, &body, By::Agent { who: "the Jaynes app, before it is signed".into() })?;

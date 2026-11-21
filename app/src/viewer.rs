@@ -145,8 +145,9 @@ mod tests {
         ((at.0 - v.x) / v.z, (at.1 - v.y) / v.z)
     }
 
+    // Alan, 20/11: "fica dificil de ver a imagem, nao da pra dar zoom e nem abrir ela quando clico em "two more""
     #[test]
-    fn it_opens_whole_in_the_middle_of_its_box() {
+    fn asked_the_picture_opens_whole_to_be_seen() {
         let v = View::fitted(S);
         // the width decides: 976 of 2000, the picture 976 by 488 with 12 on each side and the height centred
         assert!(near(v.z, 0.488), "{v:?}");
@@ -154,8 +155,10 @@ mod tests {
         assert_eq!(v.percent(), 49);
     }
 
+    // Alan, 20/11: "fica dificil de ver a imagem, nao da pra dar zoom"; and later that day "quero zoom e "outzoom" no
+    // app tbm", "o principal zoom e pra ver as mudancas comparacoes etc"
     #[test]
-    fn it_zooms_round_the_pointer_from_fit_to_four_times() {
+    fn asked_zoom_in_and_out_of_the_picture_hard_to_see() {
         let fit = View::fitted(S);
         let at = (500., 300.);
         let v = fit.zoomed(1., at, S);

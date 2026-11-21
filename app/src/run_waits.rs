@@ -27,6 +27,17 @@ pub fn line(waits: &[Waiting], later: &HashSet<String>, agent_asks: bool) -> Opt
     waits.iter().filter(open).find(|w| w.ahead).or_else(|| waits.iter().find(open)).cloned()
 }
 
+/// The line's words: its head, what waits (said when something that cannot be undone lies ahead), and its buttons.
+pub const HEAD: &str = "◆ A run waits";
+pub const OPEN: &str = "Open";
+pub const OPEN_KEY: &str = "⌘O";
+pub const LATER: &str = "Later";
+
+/// What the line says of the run that waits.
+pub fn what(w: &Waiting) -> String {
+    if w.ahead { format!("{} · {} · before something that cannot be undone", w.title, w.about) } else { format!("{} · {}", w.title, w.about) }
+}
+
 /// How Later remembers a question.
 pub fn key(w: &Waiting) -> String {
     format!("{}/{}", w.run, w.question)
@@ -43,7 +54,7 @@ pub fn waiting(snap: &crate::model::Snapshot) -> Vec<Waiting> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Waiting, line};
+    use super::{HEAD, LATER, OPEN, OPEN_KEY, Waiting, key, line, what};
     use std::collections::HashSet;
 
     fn w(run: &str, q: &str, ahead: bool) -> Waiting {
@@ -71,5 +82,23 @@ mod tests {
         // what lies ahead that cannot be undone comes first, and is said
         let l = line(&[w("r1", "q1", false), w("r2", "q2", true)], &none, false).unwrap();
         assert_eq!((l.run.as_str(), l.ahead), ("r2", true));
+    }
+
+    // Alan, 18/11, on a run's question while an agent is open (the board's "Decidido pelo Alan em 18/11"): "a opção 1 do
+    // esboço. Uma linha fina acima do terminal do agente, com Open ⌘O e Later; a tela do agente fica inteira"
+    #[test]
+    fn asked_a_thin_line_over_the_agents_terminal_with_open_and_later() {
+        let none = HashSet::new();
+        let waits = [w("r1", "q1", false)];
+        // a line, not a stop over the agent: what waits in a few words, Open with its key, and Later
+        let l = line(&waits, &none, false).expect("the line");
+        assert_eq!((HEAD, OPEN, OPEN_KEY, LATER), ("◆ A run waits", "Open", "⌘O", "Later"));
+        assert_eq!(what(&l), "Run r1 · about q1");
+        // Later puts it off until that run asks something else
+        let later: HashSet<String> = [key(&l)].into();
+        assert!(line(&waits, &later, false).is_none());
+        assert!(line(&[w("r1", "q2", false)], &later, false).is_some());
+        // what lies ahead that cannot be undone is said on the line
+        assert_eq!(what(&w("r2", "q2", true)), "Run r2 · about q2 · before something that cannot be undone");
     }
 }

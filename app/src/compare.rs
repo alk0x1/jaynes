@@ -113,6 +113,8 @@ pub const PARTS: &str = "Its parts · keep one to carry it on; parts from two ma
 pub const HINT: &str = "← → flip · shortlist two to develop both";
 /// The hint, for a while, after a third shortlist was refused.
 pub const FULL: &str = "Two at most: unshortlist one first";
+/// The hint in the person's words field.
+pub const WORDS_HINT: &str = "Your words: what stays, what changes, in any language";
 /// How long that hint shows.
 pub const FULL_FOR: Duration = Duration::from_secs(3);
 
@@ -465,7 +467,7 @@ impl Compare {
                 why
             });
             if !back.words.is_empty() {
-                let words = self.input("Your words: what stays, what changes, in any language", window, cx);
+                let words = self.input(WORDS_HINT, window, cx);
                 words.update(cx, |s, cx| s.set_value(back.words, window, cx));
                 self.words = Some(words);
             }
@@ -479,7 +481,7 @@ impl Compare {
         self.open = true;
         self.viewer = None;
         if self.words.is_none() {
-            self.words = Some(self.input("Your words: what stays, what changes, in any language", window, cx));
+            self.words = Some(self.input(WORDS_HINT, window, cx));
         }
         window.focus(&self.focus, cx);
         self.reckon(cx);
@@ -1513,7 +1515,7 @@ impl Render for Compare {
 
 #[cfg(test)]
 mod tests {
-    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, card_label, chip, esc, invite, keep_word, mix_note, none_word, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_title};
+    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, WORDS_HINT, card_label, chip, esc, invite, keep_word, mix_note, none_word, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_title};
 
     #[test]
     fn the_notes_name_the_parts_as_a_sentence_does_from_the_labels_the_stop_has() {
@@ -1613,8 +1615,10 @@ mod tests {
         assert_eq!(m.keep, vec![2, 1]);
     }
 
+    // Alan, 20/11, in the video of the choice screen: "o que são esses pins?" (the design-lead's checkup, item 14): the
+    // parts' pins became "Keep this part" and the star "☆ Shortlist", each saying what it does
     #[test]
-    fn parts_and_stars_say_what_they_do() {
+    fn asked_what_are_these_pins() {
         assert_eq!(keep_word(false), "Keep this part");
         assert_eq!(keep_word(true), "Kept ✓");
         assert_eq!(PARTS, "Its parts · keep one to carry it on; parts from two make a mix");
@@ -1657,8 +1661,9 @@ mod tests {
         assert!(!same_stop(&look, &Stop { question: "q2".into(), ..look.clone() }));
     }
 
+    // Alan, 20/11: "o esc nao funciona se o foco tiver no input, nao sei se e a melhor forma"
     #[test]
-    fn one_esc_closes_one_layer_from_the_top() {
+    fn asked_esc_works_with_the_focus_in_the_field() {
         assert_eq!(esc(true, true, true), Esc::Viewer);
         assert_eq!(esc(false, true, true), Esc::More);
         assert_eq!(esc(false, false, true), Esc::Field);
@@ -1669,8 +1674,9 @@ mod tests {
         assert_eq!(chip(false), "Esc · back");
     }
 
+    // Alan, 20/11: "aparece "compare" mesmo so com uma opcao"
     #[test]
-    fn a_stop_with_one_option_opens_it_with_nothing_to_compare() {
+    fn asked_no_compare_with_only_one_option() {
         assert_eq!(invite(1), ("◆ 1 option".to_string(), "Open"));
         assert_eq!(invite(3), ("◆ 3 options".to_string(), "Compare"));
         assert!(!strip(1) && strip(2));
@@ -1682,8 +1688,10 @@ mod tests {
         assert_eq!(label(&none, &choosing(&["Harbor", "Night", "Ledger"])), "None of these: make 3 new ones");
     }
 
+    // Alan, 20/11: "o "Go on with.." fez eu achar que a tecnologia ia ser "Go" de golang, vamos deixar mais claro oq o
+    // botao fala"
     #[test]
-    fn the_main_button_chooses_without_a_name_that_reads_as_something_else() {
+    fn asked_the_main_button_says_clearly_what_it_does_not_go_on_with_read_as_go() {
         let stop = choosing(&["Go", "Night", "Ledger"]);
         let shown = Marks { dir: 0, ..Marks::default() };
         assert_eq!(label(&shown, &stop), "Choose this one");
@@ -1700,8 +1708,9 @@ mod tests {
         assert!(label(&mix, &stop).starts_with("Mix: "));
     }
 
+    // Alan, 20/11: "o fewer vai la pra lado esquerdo, ruim" (the switch of the list of what the answer does)
     #[test]
-    fn more_of_what_the_answer_does_opens_over_the_bar_and_its_switch_stays_put() {
+    fn asked_the_fewer_switch_does_not_jump_to_the_left() {
         let said: Vec<String> = ["\"Harbor\" is chosen.", "\"Night\" leaves.", "\"Ledger\" leaves.", "directions keeps only what you chose."].map(String::from).to_vec();
         let closed = said_row(&said, false).expect("a line");
         let open = said_row(&said, true).expect("still the line, with the list open");
@@ -1714,5 +1723,49 @@ mod tests {
         let one = vec!["\"Harbor\" is chosen.".to_string()];
         assert_eq!(said_row(&one, true), Some((one[0].clone(), None)));
         assert_eq!(said_panel(&one, true), None);
+    }
+
+    // Alan, 16/11 (as the app's first handoff wrote what he chose): "A design stop is not an island: it opens a
+    // full-window compare mode. It says what the stop fixes now and what comes later; shows each direction at real
+    // size, flipped in place with the arrow keys; has tabs for main, empty and phone; a live-version link; the
+    // reference beside; pins saying "this stays" to mix directions; keep two; none with a reason; the round."
+    #[test]
+    fn asked_a_design_stop_opens_a_full_window_compare_mode() {
+        use crate::viewer::{Does, key};
+        let stop = choosing(&["Harbor", "Night", "Ledger"]);
+        // flipped in place with the arrow keys, round the strip; the up and down arrows go through a direction's screens
+        assert_eq!((key("right", false), key("left", false)), (Some(Does::Direction(1)), Some(Does::Direction(-1))));
+        assert_eq!((key("down", false), key("up", false)), (Some(Does::Screen(1)), Some(Does::Screen(-1))));
+        let mut m = Marks::default();
+        m.flip(-1, 3);
+        assert_eq!(m.dir, 2);
+        // parts kept from two directions make a mix
+        let mix = Marks { pins: [(0, "Palette".to_string()), (1, "Fonts".to_string())].into(), ..Marks::default() };
+        assert!(label(&mix, &stop).starts_with("Mix: "));
+        // keep two, never a third
+        let mut two = Marks::default();
+        assert_eq!((two.star(0), two.star(2), two.star(1)), (Starred::On, Starred::On, Starred::Full));
+        assert_eq!(label(&two, &stop), "Develop Harbor and Ledger");
+        // none, with what was missing in all of them going with the answer
+        let none = Marks { none: true, ..Marks::default() };
+        let (said, body) = none.proposal(&stop, "", "all too dark").expect("a proposal");
+        assert_eq!(said, "None of these: make 3 new ones");
+        assert!(body["context"].as_str().is_some_and(|c| c.contains("all too dark")), "{body}");
+    }
+
+    // Alan, 16/11 (as the app's first handoff wrote what he chose): "the lock binds the agent, never the person. Every
+    // stop has "Your words" (read into verdicts, effects written by Jaynes), bring back what was dropped, and the parts
+    // of an option shown apart."
+    #[test]
+    fn asked_the_choice_has_your_words_and_the_parts_of_an_option_apart() {
+        assert!(WORDS_HINT.starts_with("Your words"));
+        let stop = choosing(&["Harbor", "Night"]);
+        // the person's words go with whatever the button sends
+        let (_, body) = Marks::default().proposal(&stop, "warmer, please", "").expect("a proposal");
+        assert!(body["context"].as_str().is_some_and(|c| c.contains("warmer, please")), "{body}");
+        // each option's parts shown apart, each one kept on its own
+        assert_eq!(stop.items[0].aspects.len(), 2);
+        assert!(PARTS.starts_with("Its parts"));
+        assert_eq!(keep_word(false), "Keep this part");
     }
 }

@@ -64,7 +64,35 @@ const READ_ROW: usize = 3;
 
 /// A verdict that sends the item back takes the person's words.
 fn takes_words(v: VerdictKind) -> bool {
-    matches!(v, VerdictKind::Change | VerdictKind::Redo)
+    asks(v).is_some()
+}
+
+/// What the field under an item sent back asks: how it should change, or what is missing in it.
+fn asks(v: VerdictKind) -> Option<&'static str> {
+    match v {
+        VerdictKind::Change => Some("how should it change?"),
+        VerdictKind::Redo => Some("what is missing?"),
+        VerdictKind::Keep | VerdictKind::Drop | VerdictKind::Skip => None,
+    }
+}
+
+/// The hint in the person's words field, in every stop's card.
+pub const WORDS_HINT: &str = "Your words: say what you think, in any language (or answer with the buttons)";
+
+/// The line over the foot when something that cannot be undone lies ahead: sending asks for the person's touch. None
+/// when nothing does, and then no touch is asked.
+pub fn ahead_line(ahead: Option<&str>) -> Option<String> {
+    ahead.map(|a| format!("Ahead: {a}. Sending asks for your touch."))
+}
+
+/// The caret of every field: blue, where the kit's own near-black hid it on the dark.
+pub fn caret() -> u32 {
+    look::blue()
+}
+
+/// A text field's border and whether the soft blue ring shows round it: blue with the ring while it has the keys.
+pub fn field_look(focused: bool) -> (u32, bool) {
+    if focused { (look::blue(), true) } else { (look::line(), false) }
 }
 
 fn word(v: VerdictKind) -> &'static str {
@@ -106,8 +134,8 @@ pub fn tabbed(d: Stateful<Div>) -> Stateful<Div> {
 /// the I-beam over the whole box, and a press anywhere in the box gives it the keys with the caret after the text; a
 /// press on the text itself puts the caret there, as any field does.
 pub fn focus_field(id: impl Into<ElementId>, input: &Entity<InputState>, window: &Window, cx: &mut App) -> Stateful<Div> {
-    input.update(cx, |s, _| s.set_editor_style(InputEditorStyle { caret: rgb(look::blue()).into(), ..InputEditorStyle::default() }));
-    let focused = input.read(cx).focus_handle(cx).is_focused(window);
+    input.update(cx, |s, _| s.set_editor_style(InputEditorStyle { caret: rgb(caret()).into(), ..InputEditorStyle::default() }));
+    let (border, ring) = field_look(input.read(cx).focus_handle(cx).is_focused(window));
     let take = input.clone();
     div()
         .id(id)
@@ -118,8 +146,8 @@ pub fn focus_field(id: impl Into<ElementId>, input: &Entity<InputState>, window:
         .rounded(px(8.))
         .bg(rgb(look::panel()))
         .border_1()
-        .border_color(rgb(if focused { look::blue() } else { look::line() }))
-        .when(focused, |d| d.shadow(focus_ring()))
+        .border_color(rgb(border))
+        .when(ring, |d| d.shadow(focus_ring()))
         .cursor(CursorStyle::IBeam)
         .text_size(px(13.))
         .text_color(rgb(look::text()))
@@ -552,8 +580,10 @@ impl Island {
 
     fn mark(&mut self, item: String, v: VerdictKind, window: &mut Window, cx: &mut Context<Self>) {
         self.marks.insert(item.clone(), v);
-        if takes_words(v) && !self.notes.contains_key(&item) {
-            let input = self.input(if v == VerdictKind::Change { "how should it change?" } else { "what is missing?" }, window, cx);
+        if let Some(hint) = asks(v)
+            && !self.notes.contains_key(&item)
+        {
+            let input = self.input(hint, window, cx);
             self.notes.insert(item, input);
         }
         self.reckon(cx);
@@ -1111,7 +1141,7 @@ impl Render for Island {
         let delivered = self.runs.read(cx).snap.details.get(&stop.run).is_some_and(|d| d.delivered);
         let project = self.runs.read(cx).snap.details.get(&stop.run).map(|d| d.project.clone()).unwrap_or_default();
         if self.words.is_none() {
-            self.words = Some(self.input("Your words: say what you think, in any language (or answer with the buttons)", window, cx));
+            self.words = Some(self.input(WORDS_HINT, window, cx));
         }
         let words = self.words.clone().expect("made above");
         let judged = stop.items.iter().filter(|i| self.marks.contains_key(&i.id)).count();
@@ -1264,7 +1294,7 @@ impl Render for Island {
             .child(div().flex().gap(px(8.)).items_center().child(div().flex_1().child(focus_field("words", &words, window, cx))).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
             .children(understood)
             .when(!said.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint())).child(sentences(&said))))
-            .when_some(stop.ahead.clone(), |d, ahead| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(format!("Ahead: {ahead}. Sending asks for your touch."))));
+            .when_some(ahead_line(stop.ahead.as_deref()), |d, line| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(line)));
         let transparent = rgba(look::panel_2() << 8);
         // 32 px, over content: the foot's own line is already there, and 16 vanished over the gap between two rows
         let fade = div().absolute().left_0().right_0().bottom_0().h(px(FADE)).bg(linear_gradient(180., linear_color_stop(transparent, 0.), linear_color_stop(rgb(look::panel_2()), 1.)));
@@ -1307,7 +1337,110 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, SENT, Sent, Shows, card_cap, card_head, comes_into_view, diff_title, fades_below, words_offset, enters_card, esc_chip, foot_line, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, SENT, Sent, Shows, WORDS_HINT, ahead_line, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, invite_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use jaynes_core::question::{QuestionKind, VerdictKind};
+    use jaynes_shell::stop::{Item, Stop, label_for};
+    use std::collections::BTreeMap;
+
+    /// A verdict stop with `ids` for items, one dropped in an earlier round, invented.
+    fn judging(ids: &[&str]) -> Stop {
+        let item = |id: &str| Item { id: id.into(), label: format!("The {id}"), detail: String::new(), aspects: vec![], pictures: vec![], page: None };
+        Stop {
+            run: "r".into(),
+            question: "q".into(),
+            shown: "s".into(),
+            title: "Which of these copy changes go in?".into(),
+            step: "copy".into(),
+            permission: false,
+            kind: QuestionKind::Decision,
+            choose: false,
+            offered: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Redo, VerdictKind::Drop],
+            items: ids.iter().map(|i| item(i)).collect(),
+            back: vec![item("old")],
+            round: 1,
+            about: String::new(),
+            ahead: None,
+        }
+    }
+
+    // Alan, 16/11 (direction D of the sketches, as the app's first handoff wrote what he chose): "the stop rises as a
+    // big island over the terminal (Esc shrinks it to a pill)"
+    #[test]
+    fn asked_the_stop_rises_as_a_big_island_over_the_terminal_and_esc_shrinks_it_to_a_pill() {
+        use gpui::px;
+        // on its run's tab the stop rises as its card, over the run's terminal
+        assert_eq!(shows(true, false), Shows::Card);
+        // a big island: up to 70% of the window
+        assert_eq!(card_cap(px(1000.)), px(700.));
+        // Esc is the card's while it is open, before the terminal under it sees it
+        assert!(takes_esc(Shows::Card, false));
+        // and folded, it is a pill of one line that says which run asks, and opens again
+        assert_eq!(shows(true, true), Shows::Pill);
+        assert_eq!(pill("Tighten the site's copy", "Which of these go in?"), "◆ Tighten the site's copy: Which of these go in? · open");
+    }
+
+    // Alan, 16/11 (as the app's first handoff wrote what he chose): "A verdict stop says what Approve and Refuse do,
+    // has a "what is missing?" line per refused item, enlarges proof pictures and shows the diff."
+    #[test]
+    fn asked_a_verdict_stop_says_what_its_buttons_do_and_asks_what_is_missing_per_refused_item() {
+        // the buttons are named as the question's kind names them: Allow and Refuse for a permission
+        assert_eq!((label_for(VerdictKind::Keep, QuestionKind::Permission), label_for(VerdictKind::Drop, QuestionKind::Permission)), ("Allow", "Refuse"));
+        // what each mark does, in the engine's sentences, one a line under "What this does", and a line for the rest
+        let said: Vec<String> = ["“The hero” is kept.", "“The footer” is done again.", "“The menu” is kept."].map(String::from).to_vec();
+        assert_eq!(said_lines(&said, &[true, true, false], false), vec!["“The hero” is kept.", "“The footer” is done again.", "1 not judged yet"]);
+        // an item sent back gets its own line of the person's words: what is missing, or how it should change
+        assert_eq!(asks(VerdictKind::Redo), Some("what is missing?"));
+        assert_eq!(asks(VerdictKind::Change), Some("how should it change?"));
+        assert_eq!((asks(VerdictKind::Keep), asks(VerdictKind::Drop), asks(VerdictKind::Skip)), (None, None, None));
+        // and those words go with that item in the answer
+        let stop = judging(&["hero", "footer"]);
+        let verdicts: BTreeMap<String, String> = [("hero".into(), "keep".into()), ("footer".into(), "redo".into())].into();
+        let notes: BTreeMap<String, String> = [("footer".into(), "the links to the docs".into())].into();
+        let body = crate::answer::body(&stop, &verdicts, &notes, &BTreeMap::new(), "");
+        assert_eq!(body["notes"]["footer"], "the links to the docs");
+        // the change the step made opens as its diff, named by its step
+        assert_eq!(diff_title("copy"), "Changes made at “copy”");
+    }
+
+    // Alan, 16/11 (as the app's first handoff wrote what he chose): "the lock binds the agent, never the person. Every
+    // stop has "Your words" (read into verdicts, effects written by Jaynes), bring back what was dropped, and the parts
+    // of an option shown apart."
+    #[test]
+    fn asked_every_stop_has_your_words_and_brings_back_what_was_dropped() {
+        assert!(WORDS_HINT.starts_with("Your words"));
+        assert!(crate::compare::WORDS_HINT.starts_with("Your words"));
+        // the person's words go with the answer, whatever they marked; what they bring back goes with theirs on how
+        let stop = judging(&["hero"]);
+        let back: BTreeMap<String, String> = [("old".into(), "with the new colours".into())].into();
+        let body = crate::answer::body(&stop, &BTreeMap::new(), &BTreeMap::new(), &back, "  keep it short  ");
+        assert_eq!(body["context"], "keep it short");
+        assert_eq!(body["back"]["old"], "with the new colours");
+        // what was dropped is the stop's to show, and only the person brings it back
+        assert_eq!(stop.back.len(), 1);
+    }
+
+    // Alan, 16/11, asked "quer que o Mac peça Touch ID? 1. Nunca 2. Só no que não se desfaz, como o merge 3. Em toda
+    // resposta": "2"
+    #[test]
+    fn asked_touch_id_only_before_what_cannot_be_undone() {
+        // nothing that cannot be undone ahead: no touch asked, and the card says none
+        assert_eq!(crate::answer::touch_reason(None), None);
+        assert_eq!(ahead_line(None), None);
+        // ahead of “send”: macOS asks for the touch saying why, and the card says so before the person sends
+        assert_eq!(crate::answer::touch_reason(Some("“send” cannot be undone")).as_deref(), Some("send your answer to Jaynes: “send” cannot be undone"));
+        assert_eq!(ahead_line(Some("“send” cannot be undone")).as_deref(), Some("Ahead: “send” cannot be undone. Sending asks for your touch."));
+    }
+
+    // Alan, 20/11: "o cursor no your words nao aparece quando quero escrever ai nao sei se o input ta com foco"
+    #[test]
+    fn asked_the_cursor_in_your_words_shows_so_i_know_the_field_has_focus() {
+        // the caret is blue, never the field's own colour
+        assert_eq!(caret(), crate::look::blue());
+        assert_ne!(caret(), crate::look::panel());
+        // with the keys: the border blue and the soft blue ring round it; without them, neither
+        assert_eq!(field_look(true), (crate::look::blue(), true));
+        assert_eq!(field_look(false), (crate::look::line(), false));
+    }
 
     #[test]
     fn beside_a_send_that_will_not_go_the_foot_says_why() {

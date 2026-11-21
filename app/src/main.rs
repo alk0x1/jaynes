@@ -578,7 +578,7 @@ impl Root {
     fn run_waits_line(&self, cx: &mut Context<Self>) -> Option<Div> {
         let w = self.run_waits(cx)?;
         let (run, key) = (w.run.clone(), run_waits::key(&w));
-        let what = if w.ahead { format!("{} · {} · before something that cannot be undone", w.title, w.about) } else { format!("{} · {}", w.title, w.about) };
+        let what = run_waits::what(&w);
         Some(
             div()
                 .flex_none()
@@ -594,7 +594,7 @@ impl Root {
                 .items_center()
                 .gap(px(8.))
                 .text_size(px(12.5))
-                .child(div().flex_none().text_color(rgb(look::amber())).font_weight(FontWeight::SEMIBOLD).child("◆ A run waits"))
+                .child(div().flex_none().text_color(rgb(look::amber())).font_weight(FontWeight::SEMIBOLD).child(run_waits::HEAD))
                 .child(div().flex_1().min_w_0().truncate().text_color(rgb(look::text())).child(what))
                 .child(
                     div()
@@ -609,8 +609,8 @@ impl Root {
                         .bg(rgb(look::blue()))
                         .text_color(rgb(look::on_fill()))
                         .cursor_pointer()
-                        .child("Open")
-                        .child(div().text_size(px(10.5)).child("⌘O"))
+                        .child(run_waits::OPEN)
+                        .child(div().text_size(px(10.5)).child(run_waits::OPEN_KEY))
                         .on_click(cx.listener(move |this, _, _, cx| this.tabs.update(cx, |t, cx| t.show(Some(run.clone()), cx)))),
                 )
                 .child(
@@ -624,7 +624,7 @@ impl Root {
                         .border_color(rgb(look::line_2()))
                         .text_color(rgb(look::dim()))
                         .cursor_pointer()
-                        .child("Later")
+                        .child(run_waits::LATER)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.later.insert(key.clone());
                             cx.notify();
