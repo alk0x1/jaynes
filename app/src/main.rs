@@ -1222,7 +1222,9 @@ impl Root {
             div()
                 .id(id)
                 .flex_none()
-                .max_w(px(260.))
+                // a choice says itself whole ("No, and tell Claude what to do differently"); only one wider than
+                // the bar is cut, and the buttons wrap onto a second line before that
+                .max_w_full()
                 .flex()
                 .items_center()
                 .gap(px(7.))
