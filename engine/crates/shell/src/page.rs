@@ -901,7 +901,8 @@ impl Page {
             let ids = json!(older.iter().map(|r| r.id.as_str()).collect::<Vec<_>>()).to_string();
             let (all, ask) = if n > 1 {
                 (
-                    format!(" <button class=\"linkish\" id=\"moveall\">{}</button>", crate::listing::MOVE_ALL),
+                    // on a line of its own under the group's head, which it no longer squeezes (the design-lead, 22/11)
+                    format!("<div class=\"ogall\"><button class=\"linkish\" id=\"moveall\">{}</button></div>", crate::listing::MOVE_ALL),
                     format!(
                         "<div class=\"moveall\" id=\"moveallask\" hidden>{}<span class=\"mvb\"><button class=\"mv\" id=\"moveallyes\" data-runs=\"{}\">{}</button><button class=\"mv\" id=\"moveallno\">Cancel</button></span><div class=\"refused\" id=\"moveallmsg\"></div></div>",
                         esc(&crate::listing::move_all_asks(n)),
@@ -913,7 +914,7 @@ impl Page {
                 (String::new(), String::new())
             };
             aside.push_str(&format!(
-                "<div class=\"qh og\" style=\"margin-top:18px\"><span>{} · {n}</span>{all}</div>{ask}{}",
+                "<div class=\"qh og\" style=\"margin-top:18px\"><span>{} · {n}</span></div>{all}{ask}{}",
                 crate::listing::OLDER_GROUP,
                 older.iter().rev().map(older_link).collect::<String>()
             ));
@@ -2588,7 +2589,7 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 button.copyplace, .moveall button.mv { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:3px 10px; font-size:12px; margin-left:6px; }
 button.copyplace:hover, .moveall button.mv:hover { border-color:var(--blue); } .moveall button.mv { padding:5px 12px; margin:8px 6px 0 0; }
 small.older { color:var(--dim); } button.linkish { background:none; border:0; padding:0; color:var(--dim); text-decoration:underline; text-transform:none; letter-spacing:0; font:inherit; cursor:pointer; }
-.qh.og { display:flex; justify-content:space-between; align-items:baseline; } .moveall .mvb { display:block; }
+.qh.og { padding-bottom:4px; } .ogall { padding:0 18px 8px; font-size:12px; } .moveall .mvb { display:block; }
 .moveall { padding:0 18px 12px; font-size:13px; color:var(--ink); }
 .say { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; padding:6px 12px; margin-bottom:6px; }
 .say label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
