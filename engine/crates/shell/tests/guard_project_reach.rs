@@ -1,5 +1,6 @@
-//! Opening or closing a project's local ports or its network (`jaynes project open-ports`, `close-ports`,
-//! `open-network`, `close-network`) is the person's alone, at a terminal of their own. The command line refuses a
+//! Opening or closing a project's local ports or its network, or letting its tests start their own test servers
+//! (`jaynes project open-ports`, `close-ports`, `open-network`, `close-network`, `test-servers`), is the person's
+//! alone, at a terminal of their own. The command line refuses a
 //! program without a terminal, but an agent can give the command one (`script -q /dev/null jaynes ...`), so the guard
 //! refuses these commands in an agent's session: its first deny, never an ask, and in every form it reads, with the
 //! guard on or off, here or in a folder where the person turned it off. Reading the choices (`jaynes project ports`)
@@ -91,6 +92,10 @@ const REFUSED: &[&str] = &[
     "python3 -c \"import subprocess; subprocess.run(['jaynes', 'project', 'open-network', '.'])\"",
     "echo 'jaynes project open-ports .' | sh",
     "ls && jaynes project open-ports . && echo done",
+    "jaynes project test-servers .",
+    "script -q /dev/null jaynes project test-servers .",
+    "printf 'y\\n' | script -q /dev/null jaynes project test-servers /Users/someone/thing",
+    "sh -c 'jaynes project test-servers .'",
 ];
 
 #[test]
@@ -113,6 +118,8 @@ fn the_refusal_names_the_command_the_person_runs_and_says_it_is_theirs() {
     assert!(why.contains("network"), "{why}");
     let why = why_of(&w, "script -q /dev/null jaynes project close-ports .");
     assert!(why.contains("jaynes project close-ports"), "{why}");
+    let why = why_of(&w, "script -q /dev/null jaynes project test-servers .");
+    assert!(why.contains("jaynes project test-servers") && why.contains("test servers"), "{why}");
 }
 
 fn why_of(w: &World, command: &str) -> String {
@@ -136,6 +143,8 @@ fn reading_the_choices_and_talking_about_the_commands_pass() {
         "jaynes project ports .",
         "jaynes project ports /Users/someone/thing",
         "grep -rn 'project open-ports' engine docs",
+        "rg 'jaynes project test-servers' .",
+        "git commit -q -m 'jaynes project test-servers DIR lets the tests start their own servers'",
         "rg 'jaynes project open-network' .",
         "git commit -q -m 'jaynes project open-network DIR lets the network reach the checks'",
         "git log --grep 'project open-ports'",

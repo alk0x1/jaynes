@@ -5,7 +5,8 @@ python3's standard library. It holds git and GitHub actions that cannot be undon
 answering "ask"; everything else gets no answer at all, so Claude Code's own permission flow applies. It never
 blocks (never exits 2): in claude -p, where nobody can answer, Claude Code turns the ask into a deny by itself. One
 thing it refuses outright ("deny"), whatever its settings: changing what a project's checks reach (jaynes project
-open-ports, close-ports, open-network, close-network), which is the person's alone, at a terminal of their own.
+open-ports, close-ports, open-network, close-network, test-servers), which is the person's alone, at a terminal of
+their own.
 
 Settings: $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json) with "on", "watch" and "owners". On a free owner's
 repositories on GitHub, what can be taken back passes: a plain push, a pull request opened or merged. With no valid
@@ -695,11 +696,12 @@ def writes_own(cmd: Simple) -> str | None:
 # when it runs (a verb in a variable, a script written first) is not seen, and the command line's refusal stays.
 PERSON_ONLY = {
     "open-ports": "which local ports a project's checks reach",
-    "close-ports": "which local ports a project's checks reach",
+    "close-ports": "which local ports a project's checks reach, and whether its tests start their own test servers",
     "open-network": "whether the machines on your network reach the servers a project's checks start",
     "close-network": "whether the machines on your network reach the servers a project's checks start",
+    "test-servers": "whether a project's tests start their own test servers",
 }
-PERSON_ONLY_TEXT = re.compile(r"\bproject\W{1,8}((?:open|close)-(?:ports|network))\b")
+PERSON_ONLY_TEXT = re.compile(r"\bproject\W{1,8}((?:open|close)-(?:ports|network)|test-servers)\b")
 TALKS_ONLY = {"git", "gh", "grep", "egrep", "fgrep", "rg", "ag", "ack"}  # their words are searched or written, not run
 
 
