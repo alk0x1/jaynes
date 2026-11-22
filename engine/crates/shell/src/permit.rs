@@ -2,7 +2,8 @@
 //!
 //! Claude Code starts it as an MCP server (`--permission-prompt-tool mcp__jaynes__permit`). Each request becomes a
 //! `PermissionAsked` for the core, recorded at once: a rule in the core grants a routine leave (reading inside the
-//! project), and anything else opens a question for the person on the page. The server waits for the answer in
+//! project), and anything else opens a question for the person on the page, but a write outside the step's folder,
+//! which is refused at once. The server waits for the answer in
 //! the record and replies allow or deny. It waits as long as the person takes: while it waits, a file marks the wait,
 //! and the turn's clock does not count that time against the agent.
 
@@ -58,6 +59,74 @@ pub fn ask_of(tool: &str, input: &Value, cwd: &Path) -> Ask {
         "Bash" => Ask { kind: AskKind::Command, target: input["command"].as_str().unwrap_or("").to_string() },
         other => Ask { kind: AskKind::Command, target: format!("{other} {}", input) },
     }
+}
+
+/// Where `path` leads, its `..` and its links followed in the order they come: a link then `..` goes up from where
+/// the link leads, as the system goes. A path that does not exist yet leads where it is written.
+fn resolved(path: &Path) -> PathBuf {
+    fn walk(path: &Path, depth: u32) -> PathBuf {
+        let mut at = PathBuf::from("/");
+        for c in path.components() {
+            match c {
+                std::path::Component::ParentDir => {
+                    at.pop();
+                }
+                std::path::Component::Normal(n) => {
+                    let next = at.join(n);
+                    at = match std::fs::read_link(&next) {
+                        // a link's own target, absolute or from the folder that holds it
+                        Ok(to) if depth < 40 => walk(&at.join(to), depth + 1),
+                        _ => next,
+                    };
+                }
+                _ => {}
+            }
+        }
+        at
+    }
+    walk(path, 0)
+}
+
+const REFUSED: &str = "Jaynes refused this write: ";
+const OUTSIDE: &str = " is outside this step's folder, ";
+const NOTHING: &str = ", and nothing is written outside it.";
+const SAME: &str = " The same file in your copy of the project is ";
+const THERE: &str = ": write it there.";
+
+/// The refusal a write to a file outside `cwd`, the step's folder, gets at once, in the design-lead's words: Claude
+/// Code's file tools run outside Jaynes's box, so a write allowed there would land on the Mac with no merge and no
+/// Undo. Where it leads is read through its `..` and its links. When the file is the person's project's, at a path
+/// the copy has too, the agent is told the copy's. None for any other call.
+pub fn refusal(tool: &str, input: &Value, cwd: &Path, project: Option<&Path>) -> Option<String> {
+    if !matches!(tool, "Write" | "Edit" | "MultiEdit" | "NotebookEdit") {
+        return None;
+    }
+    let given = ["file_path", "notebook_path"].iter().find_map(|k| input[*k].as_str())?;
+    let lands = resolved(&cwd.join(given));
+    if lands.starts_with(resolved(cwd)) {
+        return None;
+    }
+    let folder = cwd.display();
+    let copy = project
+        .and_then(|p| lands.strip_prefix(resolved(p)).ok())
+        .filter(|rest| !rest.as_os_str().is_empty())
+        .map(|rest| cwd.join(rest))
+        .filter(|c| c.is_file() && resolved(c).starts_with(resolved(cwd)));
+    Some(match copy {
+        Some(c) => format!("{REFUSED}{}{OUTSIDE}{folder}{NOTHING}{SAME}{}{THERE}", lands.display(), c.display()),
+        None => format!("{REFUSED}{}{OUTSIDE}{folder}{NOTHING} Write only under {folder}.", lands.display()),
+    })
+}
+
+/// What a refusal of a write outside the step's folder said: the path refused, and the file of the copy the agent
+/// was told to write instead, from the step's folder. None for any other text.
+pub fn refused_said(text: &str) -> Option<(String, Option<String>)> {
+    let rest = &text[text.find(REFUSED)? + REFUSED.len()..];
+    let (path, rest) = rest.split_once(OUTSIDE)?;
+    let (folder, rest) = rest.split_once(NOTHING)?;
+    let copy = rest.strip_prefix(SAME).and_then(|r| r.split_once(THERE)).map(|(c, _)| c);
+    let told = copy.and_then(|c| c.strip_prefix(folder)).map(|r| r.trim_start_matches('/').to_string());
+    Some((path.to_string(), told))
 }
 
 /// The most of a file Jaynes keeps to show what an agent wants to write in it.
@@ -154,6 +223,12 @@ impl Permit {
             Ok(s) => s,
             Err(e) => return Self::deny(format!("Jaynes could not read its record: {e}")),
         };
+        // a write outside the step's folder is refused at once, with no question: nothing allowed there is undone
+        let project = store.setup(&self.run).ok().and_then(|s| s["project"].as_str().map(PathBuf::from));
+        if let Some(refused) = refusal(tool, &input, &self.cwd, project.as_deref()) {
+            say(&format!("! a write outside {}'s folder refused: {}", self.step, ask.target));
+            return Self::deny(refused);
+        }
         let asked = Input::PermissionAsked { step: self.step.clone(), attempt: self.attempt, ask: ask.clone() };
         let events = match store.decide(&self.run, &asked) {
             Ok((_, events, _)) => events,
@@ -204,6 +279,64 @@ mod tests {
         assert_eq!(b.target, "/etc/hosts");
         let c = ask_of("WebFetch", &json!({"url": "https://example.com"}), Path::new("/w"));
         assert_eq!(c.kind, AskKind::Network);
+    }
+
+    /// The engineer lead's ask (22/11), after the real-user almost allowed a write into the real project
+    /// (tidepool/test/screens.test.js): Claude Code's file tools run outside the box, so a write the person allows
+    /// outside the step's folder lands on the Mac, with no merge and no Undo. Jaynes refuses it at once, the target
+    /// resolved through its `..` and its links, in the design-lead's words (permissao.md).
+    #[test]
+    fn asked_a_write_outside_the_step_s_folder_is_refused_wherever_its_path_leads() {
+        let base = std::env::temp_dir().join(format!("jaynes-outside-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let (project, cwd, elsewhere) = (base.join("tidepool"), base.join("runs/r/project"), base.join("elsewhere"));
+        for d in [project.join("test"), cwd.join("test"), elsewhere.clone()] {
+            std::fs::create_dir_all(&d).expect("dir");
+        }
+        std::fs::write(project.join("test/screens.test.js"), "real\n").expect("write");
+        std::fs::write(cwd.join("test/screens.test.js"), "copy\n").expect("write");
+        std::os::unix::fs::symlink(&elsewhere, cwd.join("out")).expect("link");
+        std::os::unix::fs::symlink(&elsewhere, cwd.join("test/up")).expect("link");
+        let real = |p: &Path| std::fs::canonicalize(p).expect("real");
+        let write = |path: &str| refusal("Write", &json!({"file_path": path, "content": "x"}), &cwd, Some(&project));
+        let (c, f) = (cwd.display().to_string(), real(&base).display().to_string());
+        // the file of the person's project whose same file is in the copy: the agent is told where it is
+        let into = project.join("test/screens.test.js").display().to_string();
+        assert_eq!(write(&into).as_deref(), Some(format!(
+            "Jaynes refused this write: {f}/tidepool/test/screens.test.js is outside this step's folder, {c}, and nothing is written outside it. The same file in your copy of the project is {c}/test/screens.test.js: write it there."
+        ).as_str()));
+        for tool in ["Edit", "MultiEdit"] {
+            assert!(refusal(tool, &json!({"file_path": into, "old_string": "a", "new_string": "b"}), &cwd, Some(&project)).is_some(), "{tool}");
+        }
+        // one the copy has not: only where to write
+        let new = project.join("test/new.test.js").display().to_string();
+        assert_eq!(write(&new).as_deref(), Some(format!(
+            "Jaynes refused this write: {f}/tidepool/test/new.test.js is outside this step's folder, {c}, and nothing is written outside it. Write only under {c}."
+        ).as_str()));
+        // up and out with .., a link of the copy that leads out, and a link followed by ..
+        for (path, lands) in [
+            (format!("{c}/../../../elsewhere/a.txt"), format!("{f}/elsewhere/a.txt")),
+            ("../outside.txt".to_string(), format!("{f}/runs/r/outside.txt")),
+            (format!("{c}/out/a.txt"), format!("{f}/elsewhere/a.txt")),
+            ("out/a.txt".to_string(), format!("{f}/elsewhere/a.txt")),
+            (format!("{c}/test/up/../escaped.txt"), format!("{f}/escaped.txt")),
+        ] {
+            let said = write(&path).unwrap_or_else(|| panic!("{path} was let through"));
+            assert!(said.starts_with(&format!("Jaynes refused this write: {lands} is outside this step's folder, {c},")), "{path}: {said}");
+        }
+        // inside the step's folder, as given or by a path that comes back into it, nothing is refused
+        for path in [format!("{c}/test/screens.test.js"), "test/a.js".to_string(), format!("{c}/test/../b.js"), format!("{}/test/c.js", real(&cwd).display())] {
+            assert_eq!(write(&path), None, "{path}");
+        }
+        assert_eq!(refusal("Read", &json!({"file_path": into}), &cwd, Some(&project)), None, "a read is not a write");
+        // without a project, the same words without the copy's file
+        assert!(refusal("Write", &json!({"file_path": into}), &cwd, None).is_some_and(|s| s.ends_with(&format!("Write only under {c}."))));
+        // the story reads back what was refused, and where the agent was told to write
+        let said = write(&into).expect("refused");
+        assert_eq!(refused_said(&said), Some((format!("{f}/tidepool/test/screens.test.js"), Some("test/screens.test.js".to_string()))));
+        assert_eq!(refused_said(&write(&new).expect("refused")), Some((format!("{f}/tidepool/test/new.test.js"), None)));
+        assert_eq!(refused_said("the person refused leave to write a.txt. Go on without it."), None);
+        let _gone = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -469,6 +469,9 @@ fn actions(v: &serde_json::Value, project: &Path) -> Vec<String> {
         let text = text.strip_prefix(inside.as_str()).unwrap_or(text);
         text.lines().next().unwrap_or_default().trim().chars().take(160).collect()
     };
+    if v["type"].as_str() == Some("user") {
+        return refused(v);
+    }
     if v["type"].as_str() != Some("assistant") {
         return Vec::new();
     }
@@ -486,6 +489,65 @@ fn actions(v: &serde_json::Value, project: &Path) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The marks of the writes outside the step's folder Jaynes refused, in a tool's result Claude Code gave the agent
+/// (never in what the agent wrote itself): the path refused, and the copy's file it was told to write.
+const REFUSED_MARK: &str = "\u{1}refused\u{1}";
+
+fn refused(v: &serde_json::Value) -> Vec<String> {
+    let blocks = v["message"]["content"].as_array().cloned().unwrap_or_default();
+    blocks
+        .iter()
+        .filter(|b| b["type"] == "tool_result")
+        .filter_map(|b| {
+            let text = match &b["content"] {
+                serde_json::Value::String(t) => t.clone(),
+                serde_json::Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+                _ => return None,
+            };
+            let (path, told) = crate::permit::refused_said(&text)?;
+            Some(format!("{REFUSED_MARK}{path}{REFUSED_MARK}{}", told.unwrap_or_default()))
+        })
+        .collect()
+}
+
+/// A step's story with each write Jaynes refused said in the design-lead's words (permissao.md): one line, grey with
+/// its ◇, "◇ Jaynes refused a write outside tidepool's copy: ~/Projects/tidepool/test/screens.test.js", its path
+/// whole with the home as ~, and under it "told the agent to write test/screens.test.js in its copy" when it was told
+/// so. The same refusal again in the step is the same line, with " · 3 times" at its end.
+fn with_refusals(said: Vec<String>, project: Option<&str>) -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tilde = |p: &str| match p.strip_prefix(home.as_str()) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
+        _ => p.to_string(),
+    };
+    let copy = project.map(|p| format!("{p}'s copy")).unwrap_or_else(|| "the run's copy".to_string());
+    let mut out: Vec<String> = Vec::new();
+    // where each refusal's line is in `out`, and how many times it came
+    let mut seen: Vec<(String, usize, usize)> = Vec::new();
+    for line in said {
+        let Some(mark) = line.strip_prefix(REFUSED_MARK) else {
+            out.push(line);
+            continue;
+        };
+        if let Some(s) = seen.iter_mut().find(|s| s.0 == mark) {
+            s.2 += 1;
+            continue;
+        }
+        let (path, told) = mark.split_once(REFUSED_MARK).unwrap_or((mark, ""));
+        seen.push((mark.to_string(), out.len(), 1));
+        out.push(format!("◇ Jaynes refused a write outside {copy}: {}", tilde(path)));
+        if !told.is_empty() {
+            out.push(format!("told the agent to write {told} in its copy"));
+        }
+    }
+    for (_, at, n) in seen {
+        if n > 1 {
+            out[at].push_str(&format!(" · {n} times"));
+        }
+    }
+    out
 }
 
 /// A stop's conversation, one line each, as the run's story tells it on the page and in the app: "you asked: …",
@@ -522,6 +584,8 @@ pub fn story(home: &Path, run: &str) -> Vec<(String, Vec<String>)> {
 pub fn story_of(home: &Path, run: &str, state: Option<&Run>) -> Vec<(String, Vec<String>)> {
     let dir = home.join("runs").join(run);
     let project = dir.join("project");
+    let setup = Store::open(&home.join("record.sqlite3")).and_then(|s| s.setup(run)).unwrap_or_default();
+    let named = setup["project"].as_str().and_then(|p| Path::new(p).file_name()).map(|n| n.to_string_lossy().into_owned());
     let when = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
     let mut steps: Vec<(Option<std::time::SystemTime>, String, Vec<std::path::PathBuf>)> = std::fs::read_dir(dir.join("steps"))
         .into_iter()
@@ -551,7 +615,7 @@ pub fn story_of(home: &Path, run: &str, state: Option<&Run>) -> Vec<(String, Vec
             if let Some(s) = state.and_then(|r| r.manifest.index(&name).map(|i| &r.steps[i])) {
                 said.extend(talk(s));
             }
-            (name, said)
+            (name, with_refusals(said, named.as_deref()))
         })
         .collect()
 }

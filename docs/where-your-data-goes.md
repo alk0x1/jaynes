@@ -80,6 +80,9 @@ with them turned off and writes the settings of each step itself. It also names 
 reading, searching and editing files, the shell when the step runs commands, and the web tools when the step reaches
 the web. None of Claude Code's other tools come with them, such as those that send a message to your other Claude
 sessions or start work elsewhere, and a turn whose agent program says it runs with a tool beyond these does not count.
+Claude Code's file tools run outside Jaynes's box, so a write the agent asks for outside the step's folder, wherever
+its `..` and its links lead, is refused at once and never asked of you: allowed, it would land on your Mac with no
+merge and no Undo. The agent is told where the same file is in its copy, and the run's story says what was refused.
 
 ## What a step with network reaches
 
