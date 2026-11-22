@@ -38,6 +38,9 @@ pub struct Spec<'a> {
     pub servers: bool,
     /// Of those, the person opened the project's ports (`open-ports`): every local port, not only its tests' own.
     pub any_port: bool,
+    /// The ports the person let this project's tests use while Jaynes holds those of databases and caches
+    /// (`test-servers` naming them): the agent's commands bind and reach them as the step's, as a check's do.
+    pub freed_ports: Vec<u16>,
     /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
     /// it counts neither towards the deadline nor in the turn's time.
     pub paused: Option<PathBuf>,
@@ -1759,11 +1762,12 @@ mod tests {
         let cwd = std::env::temp_dir().join("jaynes-spec-step");
         let reads = vec![PathBuf::from("/deps/lib")];
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![5432] };
-        let spec = |reach: &Reach, servers, any_port| {
+        let freed = |reach: &Reach, servers, any_port, freed_ports: Vec<u16>| {
             box_spec(&Spec { cwd: &cwd, prompt: "", session: None, reach, deadline: Duration::from_secs(1), reads: &reads, env: vec![],
-                             transcript: None, pidfile: None, permit: None, servers, any_port, paused: None, on_session: None, budget: None, model: StepModel::Default, turns: None },
+                             transcript: None, pidfile: None, permit: None, servers, any_port, freed_ports, paused: None, on_session: None, budget: None, model: StepModel::Default, turns: None },
                      Path::new("/py"), Path::new("/lib"))
         };
+        let spec = |reach: &Reach, servers, any_port| freed(reach, servers, any_port, vec![]);
         let s = spec(&reach, true, false);
         assert_eq!(s["work"], json!(cwd));
         assert_eq!(s["writable"], json!([cwd]));
@@ -1789,6 +1793,11 @@ mod tests {
         // open ports are every port, with no window of the test servers' own
         let open = spec(&reach, true, true);
         assert_eq!((&open["test_servers"], &open["any_port"]), (&json!(false), &json!(true)));
+        // the ports the person let this project's tests use (`test-servers` naming them): the agent's commands bind
+        // and reach them as the step's, as a check's commands do, so Jaynes holds them for neither (the real-user's
+        // estoque, 22/11: "o agente pode o que a checagem não pode")
+        let let_use = freed(&reach, true, false, vec![6379, 5432]);
+        assert_eq!(let_use["local_ports"], json!([5432, 6379]));
     }
 
     #[test]

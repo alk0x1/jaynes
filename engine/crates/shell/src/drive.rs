@@ -1654,6 +1654,7 @@ impl<'a> Driver<'a> {
             // what the person chose for the project's ports, as its checks run with it
             servers: self.setup.servers || self.setup.any_port,
             any_port: self.setup.any_port,
+            freed_ports: if self.setup.servers { self.setup.freed_ports.clone() } else { Vec::new() },
             budget: Some(turn.tokens_left),
             model: run.manifest.steps[i].model,
             turns: run.manifest.steps[i].turns,
@@ -1715,6 +1716,7 @@ impl<'a> Driver<'a> {
             permit: None,
             servers: self.setup.servers || self.setup.any_port,
             any_port: self.setup.any_port,
+            freed_ports: if self.setup.servers { self.setup.freed_ports.clone() } else { Vec::new() },
             budget: Some(turn.tokens_left),
             model: run.manifest.steps[i].model,
             turns: None,
