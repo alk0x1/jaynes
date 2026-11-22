@@ -574,5 +574,341 @@
    "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n"
   },
   "expect": "reject"
+ },
+ {
+  "id": "sh-syntax-error",
+  "expect": "reject",
+  "hole": "the test's own shell has a syntax error after it printed what looks like an assertion",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done, got Not done"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected Done, got Not done'\nif [ -f page.html ]; then\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "sh-helper-not-there",
+  "expect": "reject",
+  "hole": "the test sources a helper of its own that is not there",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done, got Not done"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": ". tests/helpers.sh\necho 'expected Done, got Not done'\nexit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "python-type-error",
+  "expect": "reject",
+  "hole": "the test's own code calls len on nothing",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "TypeError: object of type 'NoneType' has no len()"
+  },
+  "project": {
+   "tests/test_done.py": "row = None\nprint(len(row))\n"
+  }
+ },
+ {
+  "id": "python-name-error",
+  "expect": "reject",
+  "hole": "a typo in the test: a name it never defined",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "NameError: name 'asert' is not defined"
+  },
+  "project": {
+   "tests/test_done.py": "rows = ['Not done']\nasert(rows[0] == 'Done')\n"
+  }
+ },
+ {
+  "id": "python-syntax-error",
+  "expect": "reject",
+  "hole": "the test itself does not parse",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "SyntaxError: invalid syntax"
+  },
+  "project": {
+   "tests/test_done.py": "def test_done(:\n    assert False\n"
+  }
+ },
+ {
+  "id": "python-helper-not-there",
+  "expect": "reject",
+  "hole": "the test imports a helper of its own that is not there",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "ModuleNotFoundError: No module named 'tests'"
+  },
+  "project": {
+   "tests/test_done.py": "from tests.helpers import find_row\nassert find_row() == 'Done'\n"
+  }
+ },
+ {
+  "id": "python-printed-an-assertion-then-broke",
+  "expect": "reject",
+  "hole": "the test printed a line that reads like the bug, then broke on its own code: the quote is not why it failed",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "expected Done, got Not done"
+  },
+  "project": {
+   "tests/test_done.py": "print('expected Done, got Not done')\nrows = {}\nprint(rows['row'])\n"
+  }
+ },
+ {
+  "id": "saw-one-word-off",
+  "expect": "reject",
+  "hole": "what the step says the test saw differs by a word from what it printed",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done, got Not done",
+   "saw": "Not finished"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected Done, got Not done'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "saw-paraphrased",
+  "expect": "reject",
+  "hole": "what the test saw, put in the step's own words",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "got: Buy milk, unticked",
+   "saw": "Buy milk is not ticked"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'got: Buy milk, unticked'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "saw-empty",
+  "expect": "reject",
+  "hole": "a step asked for what the test saw that gives it empty",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done, got Not done",
+   "saw": "  "
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected Done, got Not done'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
  }
 ]

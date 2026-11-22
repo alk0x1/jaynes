@@ -289,5 +289,27 @@
   "output": {
    "saw": "[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk"
   }
+ },
+ {
+  "id": "what-the-test-saw-is-json",
+  "expect": "reject",
+  "hole": "the test saw an object and the person would read code",
+  "with": {
+   "field": "saw"
+  },
+  "output": {
+   "saw": "{\"state\": \"todo\", \"done\": false}"
+  }
+ },
+ {
+  "id": "what-the-test-saw-is-a-selector",
+  "expect": "reject",
+  "hole": "the test saw a selector, which is code, even without braces",
+  "with": {
+   "field": "saw"
+  },
+  "output": {
+   "saw": "div.row.todo > span.tick"
+  }
  }
 ]

@@ -263,5 +263,16 @@
   "output": {
    "examples": []
   }
+ },
+ {
+  "id": "what-the-test-saw-is-the-page-s-words",
+  "expect": "accept",
+  "keeps": "the words the page shows, with a price and quotes",
+  "with": {
+   "field": "saw"
+  },
+  "output": {
+   "saw": "Buy milk · \"Not done\" · Total 10.00"
+  }
  }
 ]

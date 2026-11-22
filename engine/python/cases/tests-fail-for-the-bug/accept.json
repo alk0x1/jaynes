@@ -62,5 +62,357 @@
    "greeting.txt": "hi\n"
   },
   "expect": "accept"
+ },
+ {
+  "id": "sh-assertion-with-saw",
+  "expect": "accept",
+  "keeps": "a test that fails on what it asserts and shows what it got, word for word",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done, got Not done",
+   "saw": "Not done"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "grep -q '>Done<' page.html || { echo 'expected Done, got Not done'; exit 1; }\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "python-assertion-error",
+  "expect": "accept",
+  "keeps": "an AssertionError is the test asserting, never its own code breaking",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "AssertionError: got Not done",
+   "saw": "got Not done"
+  },
+  "project": {
+   "tests/test_done.py": "state = 'Not done'\nassert state == 'Done', f'got {state}'\n"
+  }
+ },
+ {
+  "id": "python-unittest-failure",
+  "expect": "accept",
+  "keeps": "unittest's own failure of an assertEqual",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "AssertionError: 'Not done' != 'Done'",
+   "saw": "'Not done' != 'Done'"
+  },
+  "project": {
+   "tests/test_done.py": "import unittest\nclass Done(unittest.TestCase):\n    def test_done(self):\n        self.assertEqual('Not done', 'Done')\nunittest.main()\n"
+  }
+ },
+ {
+  "id": "the-app-s-own-exception",
+  "expect": "accept",
+  "keeps": "the exception comes from the program under test, not from the test: that is the bug",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_total.py",
+     "each": "python3",
+     "found": "tests/test_total.py"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_total.py"
+   ],
+   "failure": "ValueError: coupon expired"
+  },
+  "project": {
+   "tests/test_total.py": "import sys\nsys.path.insert(0, '.')\nimport app\nprint(app.total())\n",
+   "app.py": "def total():\n    raise ValueError('coupon expired')\n"
+  }
+ },
+ {
+  "id": "element-not-found",
+  "expect": "accept",
+  "keeps": "an element the page should have and does not: it can be the bug itself, and the person sees it",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "no Done row on the page",
+   "saw": "no Done row on the page"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "grep -q 'data-row=\"done\"' page.html || { echo 'no Done row on the page'; exit 1; }\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "timeout-printed",
+  "expect": "accept",
+  "keeps": "a page that never turns Done, which the test says after waiting: it can be the bug itself",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "timed out after 5 s waiting for the row to turn Done"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'timed out after 5 s waiting for the row to turn Done'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "a-file-the-program-should-write",
+  "expect": "accept",
+  "keeps": "a file the program under test should write and did not: the shell's no such file is the bug, not the test's code",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "no out.csv after the export",
+   "saw": "no out.csv after the export"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "sh export.sh\ncat out.csv || { echo 'no out.csv after the export'; exit 1; }\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n",
+   "export.sh": "exit 0\n"
+  }
+ },
+ {
+  "id": "the-app-says-error",
+  "expect": "accept",
+  "keeps": "the word Error in what the program shows, which is the bug: never the test's own error",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected the total, got Error: coupon expired",
+   "saw": "Error: coupon expired"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected the total, got Error: coupon expired'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "pt-assertion",
+  "expect": "accept",
+  "keeps": "the same in Portuguese, accents and all",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "esperava Concluído, veio Pendente",
+   "saw": "Pendente"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'esperava Concluído, veio Pendente'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
+ },
+ {
+  "id": "saw-with-quotes-and-a-price",
+  "expect": "accept",
+  "keeps": "what the test saw with quotes and a price",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "got \"Total 10.00\", expected \"Total 9.00\"",
+   "saw": "\"Total 10.00\""
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'got \"Total 10.00\", expected \"Total 9.00\"'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
+  }
  }
 ]
