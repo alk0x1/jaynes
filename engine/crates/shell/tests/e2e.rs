@@ -3795,6 +3795,7 @@ fn typed_at_terminal(s: &Scratch, args: &[&str], path: Option<&str>, typed: &str
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box serves on port 0 itself)")]
 fn the_person_s_test_servers_let_a_check_serve_on_a_port_the_system_picks_and_reach_nothing_else() {
+    let _one = holding_alone();
     let s = scratch("test-servers");
     let project = s.project.to_str().expect("path");
     // a program without a terminal is an agent: it may not allow them
@@ -3888,6 +3889,7 @@ for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box serves on port 0 itself)")]
 fn continue_after_the_person_allows_test_servers_checks_the_same_change_again_and_delivers() {
+    let _one = holding_alone();
     let s = scratch("servers-continue");
     let role = port_zero_role(&s, "servers-role", None);
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
@@ -3908,6 +3910,168 @@ fn continue_after_the_person_allows_test_servers_checks_the_same_change_again_an
     assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
     // the agent did not work again: one Execute of change
     assert_eq!(e.iter().filter(|x| x["type"] == "AttemptStarted").count(), 1, "{:?}", types(&e));
+}
+
+/// A test whose checks run with the project's test servers holds the ports of the usual databases and caches while
+/// they run, as Jaynes does: one such test at a time, so no other one's hold reads as its own.
+fn holding_alone() -> std::sync::MutexGuard<'static, ()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A port free on 127.0.0.1, ::1, 0.0.0.0 and :: now, the first of `ports`.
+fn free_everywhere(ports: &[u16]) -> u16 {
+    use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
+    *ports.iter().find(|&&p| {
+        [Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into(), Ipv4Addr::UNSPECIFIED.into(), Ipv6Addr::UNSPECIFIED.into()]
+            .iter().all(|a: &std::net::IpAddr| TcpListener::bind((*a, p)).is_ok())
+    }).expect("one of the ports is free")
+}
+
+/// Databases and caches a test machine may run, whose ports Jaynes holds: the first free one is the test's.
+const DATA_PORTS: [u16; 7] = [5432, 3306, 6379, 27017, 11211, 9200, 5672];
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box has a network of its own)")]
+fn with_the_person_s_test_servers_a_test_server_cannot_take_a_free_database_port_and_a_web_port_stays_its_own() {
+    let _one = holding_alone();
+    let s = scratch("held");
+    let held = free_everywhere(&DATA_PORTS);
+    let web = free_everywhere(&[3000, 5173, 8000, 8080, 4200]);
+    let role = s.home.parent().expect("base").join("held");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), format!(r#"
+role = "held"
+version = "1.0.0"
+
+[[step]]
+name = "look"
+reach = {{ project = "read" }}
+instructions = "Look at {{{{request}}}}."
+checks = [{{ script = "checks/held.py", about = "a database's port held, a web port its own" }}]
+
+[[step]]
+name = "declared"
+reach = {{ project = "read" }}
+instructions = "Look at {{{{request}}}}."
+checks = [{{ script = "checks/held.py", about = "a port the check names is never held", local_ports = [{held}] }}]
+"#)).expect("write");
+    std::fs::write(role.join("checks/held.py"), r#"#!/usr/bin/env python3
+import errno, json, socket, sys
+said = json.load(sys.stdin)["output"]
+held, web, expect = said["held"], said["web"], said["expect"]
+# as Go's net.Listen: SO_REUSEADDR, on each address a test server may take
+for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"), (socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+    mine = socket.socket(family)
+    mine.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        mine.bind((host, held))
+        took = True
+    except OSError as e:
+        took = False
+        if e.errno != errno.EADDRINUSE:
+            print(f"{host}:{held} refused otherwise: {e}")
+            sys.exit(1)
+    finally:
+        mine.close()
+    if took != (expect == "free"):
+        print(f"{host}:{held} {'taken' if took else 'held'}, expected {expect}")
+        sys.exit(1)
+# a web port a test brings its own app up on stays its own
+app = socket.socket()
+app.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+app.bind(("127.0.0.1", web))
+app.listen()
+"#).expect("write");
+    let script = role.join("checks/held.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    let call = |step: &str, expect: &str, more: Value| {
+        let mut c = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": step, "check": "held", "request": "r",
+            "output": {"held": held, "web": web, "expect": expect}, "given": [], "project": s.project, "source": s.project, "test_servers": true});
+        for (k, v) in more.as_object().into_iter().flatten() {
+            c[k] = v.clone();
+        }
+        c
+    };
+    // with the person's yes to test servers: the database's port is held, the web port is the test's
+    assert_eq!(serve_check(&s, &role, call("look", "held", serde_json::json!({})), &[])["verdict"], "pass", "held");
+    // never a port the step names, nor one the person let the project's tests use, nor any with its open ports
+    assert_eq!(serve_check(&s, &role, call("declared", "free", serde_json::json!({})), &[])["verdict"], "pass", "declared");
+    assert_eq!(serve_check(&s, &role, call("look", "free", serde_json::json!({"freed_ports": [held]})), &[])["verdict"], "pass", "freed");
+    assert_eq!(serve_check(&s, &role, call("look", "free", serde_json::json!({"any_port": true})), &[])["verdict"], "pass", "open ports");
+    // and the hold ends with the check
+    assert_eq!(free_everywhere(&[held]), held);
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box has a network of its own)")]
+fn a_test_server_on_a_port_jaynes_holds_blocks_saying_so_and_the_person_lets_it_and_continues() {
+    let _one = holding_alone();
+    let s = scratch("held-continue");
+    let project = s.project.to_str().expect("path").to_string();
+    let held = free_everywhere(&DATA_PORTS);
+    let role = s.home.parent().expect("base").join("held-role");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "held-role"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Make the change: {{request}}"
+checks = [{ use = "field-required", field = "summary" }, { script = "checks/serves.py", about = "the project serves on a database's port" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+files = { type = "array", items = "string" }
+"#).expect("write");
+    // a suite whose test server takes a fixed port, as one standing in for the project's database
+    std::fs::write(role.join("checks/serves.py"), format!(r#"#!/usr/bin/env python3
+import socket, sys
+mine = socket.socket()
+mine.bind(("127.0.0.1", {held}))
+mine.listen()
+socket.create_connection(("127.0.0.1", {held}), timeout=3).close()
+if b"hi" not in open("greeting.txt", "rb").read():
+    print("the greeting is not hi")
+    sys.exit(1)
+"#)).expect("write");
+    let script = role.join("checks/serves.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    assert!(typed_at_terminal(&s, &["project", "test-servers", &project], None, "y\n").contains("Done."));
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let (_, out) = engine(&s, &["start", "--run", "held", "--role", role.to_str().expect("path"), "--project", &project,
+        "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")]);
+    let e = events(&s, "held");
+    let blocked = e.iter().rev().find(|x| x["type"] == "Blocked").unwrap_or_else(|| panic!("{out}\n{:?}", types(&e)));
+    assert_eq!(blocked["fault"], "jaynes", "not the code's fault: {blocked}");
+    let reason = blocked["reason"].as_str().unwrap_or("");
+    for words in ["Jaynes held a port the command tried to serve on, so its failure says nothing about the project: ",
+        &format!(" It tried held port {held}."), &format!("`jaynes project test-servers {}`", std::fs::canonicalize(&project).expect("real path").display())] {
+        assert!(reason.contains(words), "{words}: {reason}");
+    }
+    // an agent may not let it; the person does, at a terminal, for that port alone
+    let (ok, said) = engine(&s, &["project", "test-servers", &project, &held.to_string()]);
+    assert!(!ok && said.contains("only the person"), "{said}");
+    let said = typed_at_terminal(&s, &["project", "test-servers", &project, &held.to_string()], None, "y\n");
+    assert!(said.contains(&format!("Only if nothing of yours runs on {held} while the tests run")) && said.contains("Done."), "{said}");
+    let (_, ports) = engine(&s, &["project", "ports", &project]);
+    assert!(ports.contains(&format!("its tests may also use port {held}")), "{ports}");
+    let said = at_terminal(&s, &["continue", "held"], None);
+    let e = events(&s, "held");
+    let chosen = e.iter().rev().find(|x| x["type"] == "PortsChosen").unwrap_or_else(|| panic!("{:?}\n{said}", types(&e)));
+    assert_eq!(chosen["freed_ports"], serde_json::json!([held]), "{chosen}");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+    assert_eq!(e.iter().filter(|x| x["type"] == "AttemptStarted").count(), 1, "the agent did not work again: {:?}", types(&e));
+    // closing the ports closes this too
+    at_terminal(&s, &["project", "close-ports", &project], None);
+    let (_, ports) = engine(&s, &["project", "ports", &project]);
+    assert!(!ports.contains("also use"), "{ports}");
 }
 
 #[test]

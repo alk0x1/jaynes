@@ -663,6 +663,10 @@ const REACH_ONLY: &str = " A check's commands bind and reach only the ports in J
 const OPEN_DID_NOT_HELP: &str = " The person's open ports did not help here.";
 const SERVERS_DID_NOT_HELP: &str = " The project's test servers did not help here.";
 const OPEN_PORTS: &str = "`jaynes project open-ports ";
+/// The words of a check whose test server hit a port Jaynes holds (jaynes_menu.py): never the project's doing.
+const HELD_KEPT: &str = "Jaynes held a port the command tried to serve on, so its failure says nothing about the project: ";
+const HELD_TRIED: &str = " It tried held port ";
+const HELD_LET: &str = "`jaynes project test-servers ";
 
 /// A blocked run's words, with what its agent said last at the step it stopped at; None when it is not blocked.
 pub fn blocked(home: &Path, r: &Run) -> Option<BlockedSaid> {
@@ -813,6 +817,25 @@ fn boxed(said: &str) -> Option<Boxed<'_>> {
     })
 }
 
+/// A check whose test server hit ports Jaynes holds, from what the box's check said: the lines it printed for it, the
+/// ports, and the project's folder.
+struct Held<'a> {
+    lines: Vec<&'a str>,
+    ports: Vec<u16>,
+    project: Option<&'a str>,
+}
+
+fn held(said: &str) -> Option<Held<'_>> {
+    let rest = said.strip_prefix(HELD_KEPT)?;
+    let (lines, tail) = rest.split_at(rest.find(HELD_TRIED)?);
+    let ports = tail[HELD_TRIED.len()..].split('.').next().unwrap_or("").split(", ").filter_map(|p| p.trim().parse().ok()).collect();
+    Some(Held {
+        lines: lines.split("; ").map(str::trim).filter(|l| !l.is_empty()).collect(),
+        ports,
+        project: tail.split_once(HELD_LET).and_then(|(_, t)| t.split_once('`')).map(|(p, _)| p),
+    })
+}
+
 /// A word for the person's shell: as it is when it needs no quotes, else in single quotes.
 fn shell_word(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-~+@%:,=".contains(c)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
@@ -829,13 +852,25 @@ fn port_range(ports: &[u16]) -> String {
 }
 
 /// "port 5432", "ports 5432 and 6379".
-fn ports_named(ports: &[u16]) -> String {
+pub fn ports_named(ports: &[u16]) -> String {
     let p: Vec<String> = ports.iter().map(u16::to_string).collect();
     match p.as_slice() {
         [one] => format!("port {one}"),
         [rest @ .., last] => format!("ports {} and {last}", rest.join(", ")),
         [] => String::new(),
     }
+}
+
+/// What letting the project's tests use held `ports` risks, where the person lets them and on the card (the
+/// design-lead's words of 22/11): the tests reach a service of theirs there, or stand in for it.
+pub fn freed_risk(ports: &[u16]) -> String {
+    let (them, their) = if ports.len() == 1 { ("it", "its") } else { ("them", "their") };
+    format!("Only if nothing of yours runs on {} while the tests run: the tests could reach {them}, or answer in {their} place.", ports_bare(ports))
+}
+
+/// "5432", "5432 and 6379": ports named without the word.
+pub fn ports_bare(ports: &[u16]) -> String {
+    ports_named(ports).trim_start_matches("ports ").trim_start_matches("port ").to_string()
 }
 
 /// The files git ignores that a check was not given, as Details says it.
@@ -852,6 +887,55 @@ fn not_given_said(named: &str) -> String {
 /// run a command that does not exist; the commit that brings the command turns this on.
 const TEST_SERVERS: bool = true;
 
+/// The ports of the usual databases, caches and queues that macOS's box holds, where free, while a project's own test
+/// servers run, so a test cannot stand in for a service of the person's that is not running; with what each is for.
+/// The box's list (jaynes_box.py HELD_PORTS), in its order, the best known first: a test checks both say the same.
+/// The ports a test brings its own app up on (3000, 5173, 8000, 8080...) are not here.
+pub const HELD_PORTS: &[(u16, &str)] = &[
+    (5432, "database"),
+    (3306, "database"),
+    (6379, "cache"),
+    (27017, "database"),
+    (11211, "cache"),
+    (9200, "database"),
+    (5672, "queue"),
+    (9092, "queue"),
+    (1433, "database"),
+    (1521, "database"),
+    (26257, "database"),
+    (9042, "database"),
+    (5984, "database"),
+    (7687, "database"),
+    (4222, "queue"),
+    (2379, "database"),
+    (8200, "secrets"),
+];
+
+/// The ports Jaynes holds, as a person reads them: the first four, then "and 13 more".
+pub fn held_ports_said() -> String {
+    let first: Vec<String> = HELD_PORTS.iter().take(4).map(|(p, _)| p.to_string()).collect();
+    match HELD_PORTS.len().saturating_sub(4) {
+        0 => first.join(", "),
+        more => format!("{} and {more} more", first.join(", ")),
+    }
+}
+
+/// What the held `ports` stand for, in "no test stands in for …": "a database", "a cache", else "a service".
+pub fn held_kind(ports: &[u16]) -> &'static str {
+    let kinds: std::collections::BTreeSet<&str> = ports.iter().map(|p| HELD_PORTS.iter().find(|(h, _)| h == p).map(|(_, k)| *k).unwrap_or("")).collect();
+    match kinds.into_iter().collect::<Vec<_>>().as_slice() {
+        ["database"] => "a database",
+        ["cache"] => "a cache",
+        _ => "a service",
+    }
+}
+
+/// What a project's test servers say of the held ports the person let its tests use: "; its tests may also use port
+/// 5432", or nothing.
+pub fn freed_said(freed: &[u16]) -> String {
+    if freed.is_empty() { String::new() } else { format!("; its tests may also use {}", ports_named(freed)) }
+}
+
 /// What stays open while a project's tests run with their own test servers, in the person's words: on the card and
 /// where the person chooses (`jaynes project test-servers`), the same.
 pub fn test_servers_still_open() -> Vec<String> {
@@ -859,7 +943,7 @@ pub fn test_servers_still_open() -> Vec<String> {
     vec![
         format!("A test server listens on every network of {mac}, so another machine on your network could reach it."),
         format!("A service that starts on {mac} while the tests run may get a port they can reach."),
-        format!("A test server may take the port of a service of {mac} that is not running, and what then connects to that service reaches the test server instead."),
+        format!("A test server may take the port of a service of {mac} that is not running. Jaynes holds the ports of the usual databases and caches ({}) while the checks run, so a test cannot stand in for those; for any other service, it could.", held_ports_said()),
     ]
 }
 
@@ -891,6 +975,28 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
     said.what = "The change is done. Jaynes could not check it.".into();
     said.holds = Some(NO_ATTEMPT_USED.into());
     let mut details = Vec::new();
+    if let Some(h) = held(inner).filter(|h| !h.ports.is_empty()) {
+        // the design-lead's words of 22/11: it was Jaynes, which port, and how to let it
+        said.why = format!(
+            "The project's tests start a test server on {}, which Jaynes holds while the checks run so no test stands in for {}.",
+            ports_named(&h.ports),
+            held_kind(&h.ports)
+        );
+        if let Some(project) = h.project {
+            said.ways.push(Way {
+                says: format!("Let this project's tests use {}, then Continue.", ports_named(&h.ports)),
+                then: Some(freed_risk(&h.ports)),
+                command: Some(format!("jaynes project test-servers {} {}", shell_word(project), h.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(" "))),
+                still_open: Vec::new(),
+            });
+        }
+        said.ways.push(Way { says: "Or abandon: the run ends and its change is not kept. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() });
+        details.extend(once(h.lines.iter().copied()));
+        details.push(format!("It tried {}, which Jaynes holds while the checks run.", ports_named(&h.ports)));
+        details.extend(not_given.map(not_given_said));
+        said.details = details;
+        return;
+    }
     match boxed(inner) {
         Some(b) if !b.ports.is_empty() && !b.open_did_not_help => {
             let fixed: Vec<u16> = b.ports.iter().copied().filter(|&p| p != 0).collect();
@@ -1178,10 +1284,76 @@ mod blocked_tests {
             still_open: vec![
                 format!("A test server listens on every network of {}, so another machine on your network could reach it.", machine()),
                 format!("A service that starts on {} while the tests run may get a port they can reach.", machine()),
-                format!("A test server may take the port of a service of {} that is not running, and what then connects to that service reaches the test server instead.", machine()),
+                test_servers_still_open()[2].clone(),
             ],
         });
         assert_eq!(port_way("/Users/x/Projects/app", false), open_ports("/Users/x/Projects/app"));
+    }
+
+    /// The reason for a check whose command hit ports Jaynes held, as the box's check says it.
+    fn hit_held(lines: &str, ports: &str, project: &str) -> String {
+        format!(
+            "the check suite-passes of change could not judge: Jaynes held a port the command tried to serve on, so its failure says nothing about the project: {lines} It tried held port {}. The person lets this project's tests use them with `jaynes project test-servers {project}`, naming the ports.. No attempt was spent",
+            ports.replace(' ', ", ")
+        )
+    }
+
+    #[test]
+    fn a_test_server_on_a_port_jaynes_holds_says_it_was_jaynes_and_how_to_let_it() {
+        // the design-lead's words of 22/11: it was Jaynes, which port, and the command to let it
+        let bind = "listen tcp 127.0.0.1:5432: bind: address already in use";
+        let b = blocked_said(Some("change"), Fault::Jaynes, &hit_held(bind, "5432", "/Users/x/Projects/app"));
+        assert_eq!(b.what, "The change is done. Jaynes could not check it.");
+        assert_eq!(b.why, "The project's tests start a test server on port 5432, which Jaynes holds while the checks run so no test stands in for a database.");
+        assert_eq!(b.ways, [
+            Way {
+                says: "Let this project's tests use port 5432, then Continue.".into(),
+                then: Some("Only if nothing of yours runs on 5432 while the tests run: the tests could reach it, or answer in its place.".into()),
+                command: Some("jaynes project test-servers /Users/x/Projects/app 5432".into()),
+                still_open: Vec::new(),
+            },
+            abandon(),
+        ]);
+        assert_eq!(b.details, [bind.to_string(), "It tried port 5432, which Jaynes holds while the checks run.".to_string()]);
+        assert_eq!(b.holds.as_deref(), Some(NO_ATTEMPT_USED));
+        // a cache says so, and a folder with a space is quoted
+        let cache = blocked_said(Some("change"), Fault::Jaynes, &hit_held("Error: listen EADDRINUSE: address already in use :::6379", "6379", "/Users/x/my app"));
+        assert!(cache.why.ends_with("so no test stands in for a cache."), "{}", cache.why);
+        assert_eq!(cache.ways[0].command.as_deref(), Some("jaynes project test-servers '/Users/x/my app' 6379"));
+        // two ports are named together, and a database with a cache is a service
+        let two = blocked_said(Some("change"), Fault::Jaynes, &hit_held(bind, "5432 6379", "/Users/x/Projects/app"));
+        assert_eq!(two.why, "The project's tests start a test server on ports 5432 and 6379, which Jaynes holds while the checks run so no test stands in for a service.");
+        assert_eq!(two.ways[0].says, "Let this project's tests use ports 5432 and 6379, then Continue.");
+        assert_eq!(two.ways[0].then.as_deref(), Some("Only if nothing of yours runs on 5432 and 6379 while the tests run: the tests could reach them, or answer in their place."));
+        assert_eq!(two.ways[0].command.as_deref(), Some("jaynes project test-servers /Users/x/Projects/app 5432 6379"));
+        assert_eq!(two.details[1], "It tried ports 5432 and 6379, which Jaynes holds while the checks run.");
+    }
+
+    #[test]
+    fn what_stays_open_names_the_ports_jaynes_holds() {
+        let held: Vec<String> = HELD_PORTS.iter().map(|(p, _)| p.to_string()).collect();
+        assert_eq!(&held[..4], ["5432", "3306", "6379", "27017"]);
+        assert_eq!(test_servers_still_open()[2], format!(
+            "A test server may take the port of a service of {} that is not running. Jaynes holds the ports of the usual databases and caches (5432, 3306, 6379, 27017 and {} more) while the checks run, so a test cannot stand in for those; for any other service, it could.",
+            machine(), HELD_PORTS.len() - 4));
+        // none of the ports a test brings its own app up on
+        for web in [3000, 4200, 5000, 5173, 8000, 8080, 8443, 8888] {
+            assert!(HELD_PORTS.iter().all(|(p, _)| *p != web), "{web}");
+        }
+    }
+
+    #[test]
+    fn the_box_holds_the_ports_this_list_names() {
+        // the box (jaynes_box.py) holds them, the card names them: one list, written in both
+        let box_py = include_str!("../../../python/jaynes_box.py");
+        let at = box_py.find("HELD_PORTS = {").expect("HELD_PORTS in jaynes_box.py");
+        let body = &box_py[at..at + box_py[at..].find('}').expect("end")];
+        let in_box: Vec<(u16, String)> = body.lines().skip(1).filter_map(|l| {
+            let (port, kind) = l.trim().split_once(':')?;
+            Some((port.trim().parse().ok()?, kind.split('"').nth(1)?.to_string()))
+        }).collect();
+        let here: Vec<(u16, String)> = HELD_PORTS.iter().map(|(p, k)| (*p, k.to_string())).collect();
+        assert_eq!(in_box, here);
     }
 
     #[test]

@@ -221,15 +221,17 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.advance();
         }
-        Input::PortsChosen { any, servers, opened } => {
+        Input::PortsChosen { any, servers, opened, freed_ports } => {
             if c.run.finished() {
                 return refuse("the run is finished");
             }
-            let now = crate::run::Ports { any: *any, servers: *servers, opened: if *any || *servers { *opened } else { 0 } };
-            if c.run.ports == Some(now) {
+            // ports freed stand only with the test servers, each once, in order
+            let freed: Vec<u16> = if *servers { freed_ports.iter().copied().collect::<std::collections::BTreeSet<u16>>().into_iter().collect() } else { Vec::new() };
+            let now = crate::run::Ports { any: *any, servers: *servers, opened: if *any || *servers { *opened } else { 0 }, freed_ports: freed };
+            if c.run.ports.as_ref() == Some(&now) {
                 return refuse("the project's ports are already so for this run");
             }
-            c.emit(Event::PortsChosen { any: now.any, servers: now.servers, opened: now.opened });
+            c.emit(Event::PortsChosen { any: now.any, servers: now.servers, opened: now.opened, freed_ports: now.freed_ports });
         }
         Input::DeliveryEnded { digest, ok, reference } => {
             if c.run.delivering.as_ref() != Some(digest) {

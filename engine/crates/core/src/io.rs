@@ -144,14 +144,17 @@ pub enum Input {
     /// What the person chose for the project's ports since the run's setup, as the run's own process reads it from
     /// the person's file when they continue: every local port (`any`, opened at `opened`, in seconds since 1970) or
     /// only the reserved and declared ones; `servers`: the project's tests may start their own test servers on ports
-    /// the system picks (`jaynes project test-servers`). The shell's alone: nothing from outside the run's process
-    /// sends it.
+    /// the system picks (`jaynes project test-servers`); `freed_ports`: with them, the ports of the usual databases and
+    /// caches the box holds that the person let the project's tests use. The shell's alone: nothing from outside the
+    /// run's process sends it.
     PortsChosen {
         any: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         servers: bool,
         #[serde(default)]
         opened: u64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        freed_ports: Vec<u16>,
     },
     /// The person asks the agent of a stop's step something about what it shows, without sending it back: the stop
     /// stays open in the same round, with the same items, and the agent answers in a turn that only reads.

@@ -292,13 +292,16 @@ pub enum Event {
     },
     /// The person opened the project's checks to every local port (`any`, at `opened`), let its tests start their
     /// own test servers (`servers`), or closed them again, after the run's setup; the setup stays as it was, and from
-    /// here the run's commands reach what this says.
+    /// here the run's commands reach what this says; `freed_ports`: the ports Jaynes holds for test servers that the
+    /// person let the project's tests use.
     PortsChosen {
         any: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         servers: bool,
         #[serde(default)]
         opened: u64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        freed_ports: Vec<u16>,
     },
     Halted {
         by: By,

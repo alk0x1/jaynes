@@ -22,6 +22,17 @@ pub struct Ports {
     /// When the person opened them, in seconds since 1970.
     #[serde(default)]
     pub opened: u64,
+    /// With `servers`, the ports Jaynes holds for test servers that the person let the project's tests use (`jaynes
+    /// project test-servers DIR PORT`). The person's, never an agent's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub freed_ports: Vec<u16>,
+}
+
+impl Ports {
+    /// As a run records it.
+    pub fn to_run(&self) -> jaynes_core::run::Ports {
+        jaynes_core::run::Ports { any: self.any, servers: self.servers, opened: self.opened, freed_ports: self.freed_ports.clone() }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -93,10 +104,10 @@ mod tests {
         std::fs::create_dir_all(home.join(FOLDER)).expect("dir");
         std::fs::write(path(&home, &project), "[delivery]\nsign = true\n").expect("write");
         let mut prefs = load(&home, &project).expect("read");
-        prefs.ports = Some(Ports { any: true, servers: false, opened: 1_795_000_000 });
+        prefs.ports = Some(Ports { any: true, servers: false, opened: 1_795_000_000, freed_ports: Vec::new() });
         save(&home, &project, &prefs).expect("save");
         let again = load(&home, &project).expect("read");
-        assert_eq!(again.ports, Some(Ports { any: true, servers: false, opened: 1_795_000_000 }));
+        assert_eq!(again.ports, Some(Ports { any: true, servers: false, opened: 1_795_000_000, freed_ports: Vec::new() }));
         assert_eq!(again.rest["delivery"]["sign"].as_bool(), Some(true));
         // the same project by another spelling of its path is the same file
         let other = base.join("home/../project");

@@ -30,6 +30,9 @@ pub struct Setup {
     /// The person let the project's tests start their own test servers on ports the system picks (`jaynes project
     /// test-servers`), chosen as `any_port` is.
     pub servers: bool,
+    /// With `servers`, the ports the box holds for test servers that the person let the project's tests use (`jaynes
+    /// project test-servers DIR PORT`), chosen as `any_port` is.
+    pub freed_ports: Vec<u16>,
     /// The engine's home, and the person's project the run works on, when it has one.
     pub home: PathBuf,
     pub project: Option<PathBuf>,
@@ -52,10 +55,11 @@ impl Setup {
         };
         let agent = agent_in(s["agent"].as_str().unwrap_or("claude"), Some(&role.library));
         let chosen = store.state(run)?.and_then(|r| r.ports);
-        let any_port = chosen.map(|p| p.any).unwrap_or(ports_open(&s).is_some());
-        let servers = chosen.map(|p| p.servers).unwrap_or(servers_open(&s).is_some());
+        let any_port = chosen.as_ref().map(|p| p.any).unwrap_or(ports_open(&s).is_some());
+        let servers = chosen.as_ref().map(|p| p.servers).unwrap_or(servers_open(&s).is_some());
+        let freed_ports = chosen.map(|p| p.freed_ports).unwrap_or_else(|| freed_open(&s));
         let project = s["project"].as_str().map(PathBuf::from);
-        Ok(Setup { run: run.to_string(), dir, role, copy, agent, any_port, servers, home: home.to_path_buf(), project })
+        Ok(Setup { run: run.to_string(), dir, role, copy, agent, any_port, servers, freed_ports, home: home.to_path_buf(), project })
     }
 }
 
@@ -123,6 +127,15 @@ pub fn ports_open(setup: &serde_json::Value) -> Option<u64> {
 pub fn servers_open(setup: &serde_json::Value) -> Option<u64> {
     let p = setup.get("ports")?;
     if p.get("servers").and_then(serde_json::Value::as_bool) == Some(true) { p.get("opened").and_then(serde_json::Value::as_u64).or(Some(0)) } else { None }
+}
+
+/// The ports the box holds for test servers that the person let this run's project's tests use, as the run's setup
+/// recorded it at its start; none without the test servers.
+pub fn freed_open(setup: &serde_json::Value) -> Vec<u16> {
+    if servers_open(setup).is_none() {
+        return Vec::new();
+    }
+    setup["ports"]["freed_ports"].as_array().into_iter().flatten().filter_map(|p| p.as_u64().and_then(|p| u16::try_from(p).ok())).collect()
 }
 
 /// Whether `spec` names an agent program Jaynes knows: `claude`, `claude:MODEL`, `codex:MODEL` or `command:CMD`. Anything else is
@@ -1067,10 +1080,11 @@ impl<'a> Driver<'a> {
         let Some(project) = &self.setup.project else { return Ok(()) };
         let chosen = crate::project_prefs::load(&self.setup.home, project)?.ports.filter(|p| p.any || p.servers);
         let (any, servers) = chosen.as_ref().map(|p| (p.any, p.servers)).unwrap_or_default();
-        if (any, servers) == (self.setup.any_port, self.setup.servers) {
+        let freed_ports = chosen.as_ref().filter(|p| p.servers).map(|p| p.freed_ports.clone()).unwrap_or_default();
+        if (any, servers, &freed_ports) == (self.setup.any_port, self.setup.servers, &self.setup.freed_ports) {
             return Ok(());
         }
-        let input = Input::PortsChosen { any, servers, opened: chosen.map(|p| p.opened).unwrap_or(0) };
+        let input = Input::PortsChosen { any, servers, opened: chosen.map(|p| p.opened).unwrap_or(0), freed_ports: freed_ports.clone() };
         // a run that cannot take it (one finished) answers the continue itself
         let Some(run) = self.store.state(&self.setup.run)? else { return Ok(()) };
         if jaynes_core::decide(Some(&run), &input).is_err() {
@@ -1082,6 +1096,7 @@ impl<'a> Driver<'a> {
         }
         self.setup.any_port = any;
         self.setup.servers = servers;
+        self.setup.freed_ports = freed_ports;
         Ok(())
     }
 
@@ -1734,6 +1749,7 @@ impl<'a> Driver<'a> {
             source,
             any_port: self.setup.any_port,
             test_servers: self.setup.servers,
+            freed_ports: self.setup.freed_ports.clone(),
         });
         let outcome = match reply {
             Err(e) => AttemptOutcome::Fault { reason: e },
@@ -1851,6 +1867,7 @@ impl<'a> Driver<'a> {
                     start: start.clone(),
                     any_port: self.setup.any_port,
                     test_servers: self.setup.servers,
+                    freed_ports: self.setup.freed_ports.clone(),
                 }) {
                     Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict: told(name, verdict), tree: judged.clone() },
                     Ok(other) => CheckResult { tree: judged.clone(), ..blocked(name, format!("the role answered a check with {other:?}")) },
@@ -2044,7 +2061,11 @@ pub fn narrate(e: &Event, r: &Run) {
         Event::FixAsked { step, reasons, .. } => say(&format!("↻ {step} fixes in place: {}", reasons.join("; "))),
         Event::ChecksUnjudged { step, .. } => say(&format!("… {step}: a check could not judge; continue has them check the same change again")),
         Event::PortsChosen { any: true, opened, .. } => say(&format!("this project's checks reach any local port of this machine from here: opened by you on {}", crate::summary::utc(*opened))),
-        Event::PortsChosen { servers: true, opened, .. } => say(&format!("this project's tests may start their own test servers from here: allowed by you on {}", crate::summary::utc(*opened))),
+        Event::PortsChosen { servers: true, opened, freed_ports, .. } => say(&format!(
+            "this project's tests may start their own test servers from here: allowed by you on {}{}",
+            crate::summary::utc(*opened),
+            crate::listing::freed_said(freed_ports)
+        )),
         Event::PortsChosen { .. } => say("this project's checks reach only the ports the run reserves and the ones a step declares, from here: closed by you"),
         Event::StepInvalidated { step, because, .. } => say(&format!("↺ {step} runs again: {}", because.join("; "))),
         Event::Waiting { why, .. } => say(&format!("… {why}")),

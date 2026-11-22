@@ -79,6 +79,11 @@ pub enum Call {
         /// system picks, and reach the window of ports the system gives next. Left out when not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         test_servers: bool,
+        /// With `test_servers`, the ports of the usual databases and caches that macOS's box holds while the commands
+        /// run which the person let this project's tests use (`jaynes project test-servers DIR PORT`): never held, and
+        /// bound and reached as a step's own. Left out when none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        freed_ports: Vec<u16>,
     },
     Check {
         step: String,
@@ -107,6 +112,11 @@ pub enum Call {
         /// system picks, and reach the window of ports the system gives next. Left out when not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         test_servers: bool,
+        /// With `test_servers`, the ports of the usual databases and caches that macOS's box holds while the commands
+        /// run which the person let this project's tests use (`jaynes project test-servers DIR PORT`): never held, and
+        /// bound and reached as a step's own. Left out when none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        freed_ports: Vec<u16>,
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },

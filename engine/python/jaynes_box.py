@@ -246,7 +246,8 @@ def profile(box: Box) -> str:
         lines.append("(deny network-bind)")
         if box.window:
             # a port the system picks binds only under "localhost:*", which every address and port matches, so the
-            # bind is open (the page's port is held by `_page_held` meanwhile) and what it reaches stays a list
+            # bind is open (the page's port and the free ones of HELD_PORTS are held by `_holding` meanwhile) and what it
+            # reaches stays a list
             lines.append('(allow network-bind (local tcp "localhost:*"))')
         for p in sorted({*box.reserved, *box.local_ports} - {PAGE_PORT}):
             if not box.window:
@@ -946,6 +947,7 @@ class Ran:
     local_ports: tuple[int, ...] = ()  # the ports its step declared
     any_port: bool = False  # it ran with every local port open, by the person's choice for the project
     test_servers: bool = False  # it ran with the project's own test servers let, by the person's choice for the project
+    held: tuple[int, ...] = ()  # the ports of HELD_PORTS Jaynes held while it ran
 
 
 def _kill(proc: "subprocess.Popen[bytes]") -> None:
@@ -1143,41 +1145,104 @@ def servers_window() -> tuple[int, ...]:
     return tuple(p for p in after if p != PAGE_PORT and not _held(p))
 
 
-class _page_held:
-    """While a command with its own test servers runs, Jaynes holds the page's port on 127.0.0.1 and ::1 where the page
-    does not (the page down), and closes what comes there: the box binds any port then, and a bind it is denied does
-    not hold in sandbox-exec. What the page or another program holds stays theirs."""
+# The ports of the usual databases, caches and queues, which keep data or passwords: while a command with the project's
+# own test servers runs, Jaynes holds the free ones (`_holding`), so a test server cannot take one and answer in place
+# of the person's service while it is not running. The ports a test brings its own app up on (3000, 5173, 8000,
+# 8080...) stay out: a test that serves there is common. The card names them, from the same list (listing.rs
+# HELD_PORTS), in this order, the best known first.
+HELD_PORTS = {
+    5432: "database",  # PostgreSQL
+    3306: "database",  # MySQL, MariaDB
+    6379: "cache",  # Redis, Valkey
+    27017: "database",  # MongoDB
+    11211: "cache",  # Memcached
+    9200: "database",  # Elasticsearch, OpenSearch
+    5672: "queue",  # RabbitMQ
+    9092: "queue",  # Kafka
+    1433: "database",  # SQL Server
+    1521: "database",  # Oracle
+    26257: "database",  # CockroachDB
+    9042: "database",  # Cassandra, ScyllaDB
+    5984: "database",  # CouchDB
+    7687: "database",  # Neo4j
+    4222: "queue",  # NATS
+    2379: "database",  # etcd
+    8200: "secrets",  # Vault
+}
 
-    def __init__(self) -> None:
+_LOOPBACK = ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"))
+_EVERYWHERE = _LOOPBACK + ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::"))
+
+
+class _holding:
+    """While a command with its own test servers runs, Jaynes holds the page's port on 127.0.0.1 and ::1 where the page
+    does not (the page down), and each of ``ports`` on 127.0.0.1, ::1, 0.0.0.0 and ::, and closes what comes: the box
+    binds any port then, and a bind it is denied does not hold in sandbox-exec. Every socket takes SO_REUSEADDR, so a
+    test server's bind with it, as Go's, is refused on every address too (measured 22/11, probe8); the every-address
+    ones are bound and never listen, so the firewall asks nothing. A port that cannot be held on one of its addresses
+    is not held on any, since what holds it there is someone's. What the page or another program holds stays theirs.
+    ``held``: the ones of ``ports`` it holds."""
+
+    def __init__(self, ports: tuple[int, ...] = ()) -> None:
+        self.ports = ports
+        self.held: tuple[int, ...] = ()
         self.socks: list[socket.socket] = []
+        self.listening: list[socket.socket] = []
         self._done = threading.Event()
         self._watch: threading.Thread | None = None
 
-    def __enter__(self) -> "_page_held":
-        for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
-            try:
-                s = socket.socket(family, socket.SOCK_STREAM)
-            except OSError:
-                continue
-            try:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if family == socket.AF_INET6:
-                    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-                s.bind((address, PAGE_PORT))
+    @staticmethod
+    def _bind(family: int, address: str, port: int, listen: bool) -> socket.socket | None | bool:
+        """A socket bound to ``address``:``port`` (listening when ``listen``), False when another holds it, None when
+        this machine has no such address family."""
+        try:
+            s = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:
+            return None
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            s.bind((address, port))
+            if listen:
                 s.listen(16)
                 s.setblocking(False)
-            except OSError:
-                s.close()
+            return s
+        except OSError:
+            s.close()
+            return False
+
+    def __enter__(self) -> "_holding":
+        for family, address in _LOOPBACK:
+            s = self._bind(family, address, PAGE_PORT, True)
+            if isinstance(s, socket.socket):
+                self.socks.append(s)
+                self.listening.append(s)
+        held = []
+        for port in self.ports:
+            got: list[socket.socket] = []
+            for family, address in _EVERYWHERE:
+                s = self._bind(family, address, port, (family, address) in _LOOPBACK)
+                if s is False:
+                    break
+                if s is not None:
+                    got.append(s)
+            else:
+                self.socks += got
+                self.listening += [g for g, (f, a) in zip(got, _EVERYWHERE) if (f, a) in _LOOPBACK]
+                held.append(port)
                 continue
-            self.socks.append(s)
-        if self.socks:
+            for g in got:
+                g.close()
+        self.held = tuple(held)
+        if self.listening:
             self._watch = threading.Thread(target=self._close_what_comes, daemon=True)
             self._watch.start()
         return self
 
     def _close_what_comes(self) -> None:
         while not self._done.is_set():
-            ready, _, _ = select.select(self.socks, [], [], 0.2)
+            ready, _, _ = select.select(self.listening, [], [], 0.2)
             for s in ready:
                 try:
                     s.accept()[0].close()
@@ -1192,15 +1257,47 @@ class _page_held:
             s.close()
 
 
+# How a failure says a port was taken: Go's and Node's name the port on that line; Python's names it in the
+# traceback's line of the bind, above.
+_IN_USE = ("address already in use", "eaddrinuse", "address in use")
+
+
+def held_hit(ran: "Ran") -> tuple[tuple[int, ...], list[str]]:
+    """The ports Jaynes held that a failed command names where it says a port was in use (on that line or in the five
+    before it), and those lines, each once. Nothing when it did not fail or Jaynes held none."""
+    if ran.code == 0 or not ran.held:
+        return (), []
+    lines = ran.printed.splitlines()
+    hit: set[int] = set()
+    said: list[str] = []
+    for i, line in enumerate(lines):
+        if not any(w in line.lower() for w in _IN_USE):
+            continue
+        near = "\n".join(lines[max(0, i - 5):i + 1])
+        named = {p for p in ran.held if re.search(rf"(?<!\d){p}(?!\d)", near)}
+        if named:
+            hit |= named
+            if line.strip() not in said:
+                said.append(line.strip())
+    return tuple(p for p in ran.held if p in hit), said
+
+
+def in_use_said(ran: "Ran") -> bool:
+    """Whether a failed command says some port was in use."""
+    return ran.code != 0 and any(w in ran.printed.lower() for w in _IN_USE)
+
+
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
         readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False,
-        test_servers: bool = False, over: dict[str, str | None] | None = None) -> Ran:
+        test_servers: bool = False, freed_ports: Iterable[int] = (), over: dict[str, str | None] | None = None) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
     ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
     inside the hidden ones, such as the run's own copy of the role a check's script is in. Its servers bind the ports
     in ``JAYNES_PORTS`` and the step's ``local_ports``; with ``test_servers`` (macOS, the person's choice for the
-    project, in the engine's call) any port too, a port the system picks among them. ``over`` puts files back in the copy before it runs: a path
+    project, in the engine's call) any port too, a port the system picks among them, while Jaynes holds the free ones
+    of ``HELD_PORTS`` but for ``freed_ports``, the ones the person let the project's tests use, which it binds and
+    reaches as the step's. ``over`` puts files back in the copy before it runs: a path
     inside the project to the text it holds, or None to take it out. Raises ``Unavailable`` where there is no box."""
     with tempfile.TemporaryDirectory(prefix="jaynes-suite-") as tmp:
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
@@ -1220,7 +1317,8 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
             else:
                 put.parent.mkdir(parents=True, exist_ok=True)
                 put.write_text(text)
-        ports, declared = reserve(), tuple(sorted({int(p) for p in local_ports} - {PAGE_PORT}))
+        ports = reserve()
+        declared = tuple(sorted({int(p) for p in (*local_ports, *freed_ports)} - {PAGE_PORT}))
         # the run's say, from its setup, in the engine's call: the person opened this project's local ports
         anyone = any_port is True
         own = test_servers is True and not anyone
@@ -1229,13 +1327,15 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
                   local_ports=declared, any_port=anyone, window=window)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
-        with _page_held() if window else contextlib.nullcontext():
+        holds = tuple(p for p in HELD_PORTS if p not in declared and p not in ports) if window else ()
+        with _holding(holds) if window else contextlib.nullcontext() as holding:
             code, out, _, late = _wait_in_box(argv, cwd=work, env={**inherited(), **suite_environment(work, scratch), **(env or {}), **given},
                                               stdin=stdin, timeout=timeout)
         if late:
             out += f"\n(stopped after {timeout:.0f} s)".encode()
         text = out.decode(errors="replace")
-        return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone, test_servers=own)
+        return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone, test_servers=own,
+                   held=holding.held if holding is not None else ())
 
 
 # --- a role's own step ------------------------------------------------------------------------------------------

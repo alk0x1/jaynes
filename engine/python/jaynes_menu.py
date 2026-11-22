@@ -55,6 +55,11 @@ def _source(call: Call) -> Path | None:
     return Path(call["source"]) if call.get("source") else None
 
 
+def _freed(call: Call) -> tuple[int, ...]:
+    """The ports Jaynes holds that the person let this project's tests use, in the engine's call."""
+    return tuple(int(p) for p in call.get("freed_ports") or () if isinstance(p, int) and not isinstance(p, bool))
+
+
 def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None, readable: tuple[Path, ...] = (),
          alone: bool = False, over: dict[str, str | None] | None = None) -> Any:
     """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``. ``readable`` names
@@ -66,12 +71,12 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
         if call.get("project"):
             ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable,
                          local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
-                         test_servers=call.get("test_servers") is True, over=over)
+                         test_servers=call.get("test_servers") is True, freed_ports=_freed(call), over=over)
         else:
             with tempfile.TemporaryDirectory(prefix="jaynes-empty-") as empty:
                 ran = box.run(Path(empty), command, timeout=timeout, stdin=stdin, readable=readable,
                          local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
-                         test_servers=call.get("test_servers") is True)
+                         test_servers=call.get("test_servers") is True, freed_ports=_freed(call))
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
@@ -90,11 +95,20 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
                 " service listening on this machine, the Jaynes page among them.")
         return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
                        + "; ".join(box.refused(ran)[:3]) + tried + ways)
+    hit, lines = box.held_hit(ran)
+    if hit:
+        # a test server on a port Jaynes held: Jaynes's doing, never the project's, and the card offers the port
+        return Blocked("Jaynes held a port the command tried to serve on, so its failure says nothing about the project: "
+                       + "; ".join(lines[:3]) + f" It tried held port {', '.join(map(str, hit))}."
+                       " The person lets this project's tests use them with"
+                       f" `jaynes project test-servers {_source(call) or call['project']}`, naming the ports.")
     if (ran.any_port or ran.test_servers) and ran.code != 0:
         # a failure of a check that ran open says so, beside what it says about the project
         how = "every local port open" if ran.any_port else "the project's own test servers let"
+        if box.in_use_said(ran) and ran.held:
+            how += f", and Jaynes holding ports {', '.join(map(str, ran.held))} of databases and caches"
         ran = box.Ran(ran.code, ran.output + f"\n(this check ran with {how}, by the person's choice for this project)",
-                      ran.printed, ran.reserved, ran.local_ports, ran.any_port, ran.test_servers)
+                      ran.printed, ran.reserved, ran.local_ports, ran.any_port, ran.test_servers, ran.held)
     return ran
 
 

@@ -770,6 +770,16 @@
               "const": "execute",
               "type": "string"
             },
+            "freed_ports": {
+              "description": "With `test_servers`, the ports of the usual databases and caches that macOS's box holds while the commands\nrun which the person let this project's tests use (`jaynes project test-servers DIR PORT`): never held, and\nbound and reached as a step's own. Left out when none.",
+              "items": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
             "given": {
               "items": {
                 "$ref": "#/$defs/Given"
@@ -837,6 +847,16 @@
             },
             "check": {
               "type": "string"
+            },
+            "freed_ports": {
+              "description": "With `test_servers`, the ports of the usual databases and caches that macOS's box holds while the commands\nrun which the person let this project's tests use (`jaynes project test-servers DIR PORT`): never held, and\nbound and reached as a step's own. Left out when none.",
+              "items": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
             },
             "given": {
               "items": {

@@ -76,13 +76,16 @@ pub struct Run {
 
 /// The project's ports as the person chose them: every local port (`any`), test servers on ports the system picks
 /// (`servers`), opened at `opened` (seconds since 1970), or only the ones a run reserves and a step declares.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ports {
     pub any: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub servers: bool,
     #[serde(default)]
     pub opened: u64,
+    /// With `servers`, the ports Jaynes holds for test servers that the person let the project's tests use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub freed_ports: Vec<u16>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -744,7 +747,9 @@ impl Run {
                     s.unjudged = true;
                 }
             }
-            Event::PortsChosen { any, servers, opened } => self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened }),
+            Event::PortsChosen { any, servers, opened, freed_ports } => {
+                self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened, freed_ports: freed_ports.clone() })
+            }
             Event::Halted { .. } => self.halted = true,
             Event::AgentAsked { ask, question, step, round, item, text, .. } => {
                 self.asking.insert(ask.clone(), question.clone());
