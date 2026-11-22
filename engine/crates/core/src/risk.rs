@@ -38,6 +38,7 @@ pub const SMALL_FILES: usize = 5;
 pub const FLOOR: &[&str] = &[
     "**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.vscode/**", "**/.idea/**",
     "**/.zed/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules",
+    "**/GEMINI.md", "**/SKILL.md", "**/.github/copilot-instructions.md", "**/.windsurfrules",
     "**/.git*", "**/.gitattributes", "**/.gitmodules", "**/.lfsconfig", "**/.husky/**", "**/.pre-commit-config.yaml", "**/.envrc",
     "**/lefthook.yml", "**/lefthook.yaml", "**/.lefthook.yml", "**/.lefthook.yaml", "**/lefthook-local.yml", "**/lefthook-local.yaml",
     "**/.venv/**", "**/venv/**", "**/package.json", "**/.npmrc", "**/.yarnrc*", "**/pyproject.toml",
@@ -432,7 +433,7 @@ mod tests {
         let text: Vec<Changed> = (0..9).map(|i| c(&format!("docs/{i}.rst"), 50)).collect();
         assert_eq!(of_change(Target::Repository, &text).0, Risk::Low);
         assert_eq!(of_change(Target::Repository, &[c("AGENTS.md", 1)]).0, Risk::High);
-        for p in ["docs/CLAUDE.md", ".cursorrules"] {
+        for p in ["docs/CLAUDE.md", ".cursorrules", "SKILL.md", "plugin/skills/export/SKILL.md", "GEMINI.md", "app/GEMINI.md", ".github/copilot-instructions.md", ".windsurfrules"] {
             assert_eq!(of_change(Target::Repository, &[c(p, 1)]).0, Risk::High, "{p}");
         }
         // an agent's instructions still count as lines and files
