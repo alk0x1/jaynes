@@ -319,7 +319,7 @@ fn asked_one_option_with_words_is_not_chosen_yet() {
     let t = turn(&cmds);
     assert_eq!(t.keep, None, "the agent works this round");
     let notes = t.notes.join("\n");
-    assert!(notes.contains(&format!("“Python + FastAPI” is not chosen yet. The person wrote: {words}. Change it only as they ask. Give it again with its name: they decide then.")), "{notes}");
+    assert!(notes.contains(&format!("“Python + FastAPI” is not chosen yet. The person wrote: {words}. Change it only as they ask. In your reply, say what you changed and why, and answer there any question they asked, never inside the option. Give it again with its name: they decide then.")), "{notes}");
     assert!(!notes.contains("was chosen"), "{notes}");
     // nothing is held: no later round is bound to it
     assert!(run.steps[0].locks.is_empty(), "{:?}", run.steps[0].locks);

@@ -782,7 +782,6 @@ pub fn reply_text(raw: &str) -> Option<String> {
 }
 
 /// What the agent wrote to the person in this turn's exchange, as words for them.
-#[allow(dead_code)] // WIRED into Delivered.reply with the types commit, then this line goes
 fn reply_in(exchange: &Path) -> Option<String> {
     read_inside(exchange.parent().unwrap_or(exchange), &exchange.join(REPLY)).ok().and_then(|t| reply_text(&t))
 }
@@ -1587,7 +1586,9 @@ impl<'a> Driver<'a> {
             Ok(other) => return AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
             Err(e) => return AttemptOutcome::Fault { reason: e },
         };
-        AttemptOutcome::Delivered { output: digest, items, changed, usage, session, tree: tree.as_str().map(str::to_string), reply: None }
+        // the agent's words to the person, beside its output and never inside it (thread A)
+        let reply = reply_in(exchange);
+        AttemptOutcome::Delivered { output: digest, items, changed, usage, session, tree: tree.as_str().map(str::to_string), reply }
     }
 
     /// A round of a stop that chooses, when the person chose without a note: the role keeps the chosen options of

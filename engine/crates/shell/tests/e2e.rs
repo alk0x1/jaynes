@@ -367,6 +367,29 @@ fn a_failing_suite_is_fixed_in_the_same_session_without_spending_an_attempt() {
     assert_eq!(finished["cost"]["fixes"], 1);
 }
 
+/// Thread A (Alan, 21/11: "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse"): the agent
+/// answers the person in .jaynes/reply.md, beside its output and never inside it, and the attempt records those words
+/// as the person reads them; an attempt with no reply records none.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn an_agent_s_reply_beside_its_output_is_recorded_with_the_attempt() {
+    let s = scratch("reply");
+    let agent = format!(
+        "perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT} && printf 'I changed hello to hi.\\n\\n\\n\\nGo would take longer here.\\n' > .jaynes/reply.md && echo '{{\"session\":\"s1\"}}'"
+    );
+    let out = start(&s, "reply", &agent);
+    assert!(out.contains("finished: delivered"), "{out}");
+    let e = events(&s, "reply");
+    let delivered = e.iter().rfind(|e| e["type"] == "AttemptDelivered" && e["step"] == "change").expect("delivered");
+    assert_eq!(delivered["reply"].as_str(), Some("I changed hello to hi.\n\nGo would take longer here."), "{delivered}");
+    let s = scratch("no-reply");
+    let out = start(&s, "no-reply", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT} && echo '{{\"session\":\"s1\"}}'"));
+    assert!(out.contains("finished: delivered"), "{out}");
+    let e = events(&s, "no-reply");
+    let delivered = e.iter().rfind(|e| e["type"] == "AttemptDelivered" && e["step"] == "change").expect("delivered");
+    assert!(delivered.get("reply").is_none(), "{delivered}");
+}
+
 /// A process the agent left behind, out of its process group (setsid after a double fork), that writes in the copy
 /// as soon as Jaynes has measured the attempt: it waits for the engine's index beside the copy to change.
 const LATE_WRITER: &str = r#"python3 -c '

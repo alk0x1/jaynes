@@ -1670,7 +1670,7 @@ fn note(item: &Item, v: &Verdict, choose: Option<Choice>, one: bool) -> String {
             item.label
         ),
         Verdict::Change { text } if choose_one && one => {
-            format!("“{}” is not chosen yet. The person wrote: {text}. Change it only as they ask. Give it again with its name: they decide then.", item.label)
+            format!("“{}” is not chosen yet. The person wrote: {text}. Change it only as they ask. In your reply, say what you changed and why, and answer there any question they asked, never inside the option. Give it again with its name: they decide then.", item.label)
         }
         Verdict::Change { text } if choose_one => format!(
             "“{}” was chosen. Give it alone, changed as the person writes: {text}. You may take from the other options, in your previous output, what the person names.",
