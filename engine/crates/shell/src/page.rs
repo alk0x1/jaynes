@@ -945,7 +945,7 @@ impl Page {
                 Some(r) => {
                     let who = if r.halted { self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e)) } else { None };
                     let left = if gone(r) { Some(older_html(&self.home, r, crate::moved::when(&moved_list, &r.id))) } else { None };
-                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left)
+                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left, crate::listing::blocked(&self.home, r))
                 }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
@@ -1000,7 +1000,7 @@ impl Page {
                     _ => changes_html(&self.home, run, i),
                 };
                 let project = names.get(&run.id).map(|n| format!("{} · ", esc(&n.project))).unwrap_or_default();
-                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project, gone(run))
+                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project, gone(run), crate::listing::blocked(&self.home, run))
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
@@ -1200,7 +1200,7 @@ fn tokens_said(n: u64) -> String {
 
 #[cfg(test)]
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
-    run_html_of(r, changes, summary, halted_by, name, None)
+    run_html_of(r, changes, summary, halted_by, name, None, None)
 }
 
 /// What a run whose engine left the Mac says in place of its controls (motor-velho.md, row 28): why it cannot go
@@ -1222,7 +1222,10 @@ fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String 
 
 /// `run_html`, with what a run whose engine left says (`older_html`) in place of its state, its controls and its
 /// stops when `older` is given.
-fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>) -> String {
+/// `blocked`: a blocked run's words as listing::blocked reads them from the engine's home, with the hidden cases that
+/// failed; None, its record's reason alone.
+#[allow(clippy::too_many_arguments)]
+fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>, blocked: Option<crate::listing::BlockedSaid>) -> String {
     let path = r.path();
     let gone = older.is_some();
     let steps = stage_list(r, gone);
@@ -1233,7 +1236,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
             esc(&format!("Set aside by the agent that started it, at “{}”. Its work is kept: Resume brings it back, Abandon ends it.", crate::listing::halted_step(r).unwrap_or_default()))
         ),
         // in the app's words: where, why, and what Continue does
-        Phase::Blocked { step, reason, fault } => blocked_notice(step.as_deref(), *fault, reason),
+        Phase::Blocked { step, reason, fault } => blocked_notice(&blocked.unwrap_or_else(|| crate::listing::blocked_said(step.as_deref(), *fault, reason))),
         Phase::Running if r.halted => format!("<div class=\"notice\">{}</div>", esc(&crate::listing::halted_said(halted_by.unwrap_or("halted"), crate::listing::halted_step(r).as_deref()))),
         Phase::Waiting { why, .. } => format!("<div class=\"notice\">{}</div>", esc(why)),
         Phase::Finished { outcome } => format!("<div class=\"notice ok\">Finished: {}</div>", format!("{outcome:?}").to_lowercase()),
@@ -1399,10 +1402,10 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// A blocked run's notice, in the app's words (listing::blocked_said): "Blocked at “plan”", what happened, why, the
-/// ways out with their commands, and what Continue does.
-fn blocked_notice(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> String {
-    let said = crate::listing::blocked_said(step, fault, reason);
+/// A blocked run's notice, in the app's words (listing::blocked, which reads what the engine kept; blocked_said where
+/// there is no home): "Blocked at “plan”", what happened, why, the hidden cases that failed, the ways out with their
+/// commands, and what Continue does.
+fn blocked_notice(said: &crate::listing::BlockedSaid) -> String {
     let holds = said.holds.as_deref().map(|h| format!(" {}", esc(h))).unwrap_or_default();
     // each way whole, as the app lays it out: what to do, the command, what follows from it, and what stays open
     let ways: String = said
@@ -1420,7 +1423,47 @@ fn blocked_notice(step: Option<&str>, fault: jaynes_core::event::Fault, reason: 
             format!("<div class=\"way\">{}{command}{then}{still}</div>", esc(&w.says))
         })
         .collect();
-    format!("<div class=\"notice bad\"><b>{}</b> · {} {}{holds}{ways}<div class=\"way\">{}</div></div>", esc(&said.title), esc(&said.what), esc(&said.why), esc(&said.continue_does))
+    format!(
+        "<div class=\"notice bad\"><b>{}</b> · {} {}{holds}{}{ways}<div class=\"way\">{}</div></div>",
+        esc(&said.title),
+        esc(&said.what),
+        esc(&said.why),
+        cases_html(&said.cases),
+        esc(&said.continue_does)
+    )
+}
+
+/// The hidden cases that failed, for the person as the app's card shows them (the real-user, 22/11): what each says,
+/// who wrote it, what it ran in mono, what it expected and what came, what it printed as text (the first lines, the
+/// rest folded), and in how many attempts it failed. Nothing when none was kept.
+fn cases_html(cases: &[crate::listing::CaseSaid]) -> String {
+    use crate::listing::{ALL_OF_IT, CASES_HEADING, CASE_HEADING, PRINTED_SHOWN};
+    if cases.is_empty() {
+        return String::new();
+    }
+    let lines = |ls: &[String]| ls.iter().map(|l| esc(l)).collect::<Vec<_>>().join("\n");
+    let each: String = cases
+        .iter()
+        .map(|c| {
+            let printed = if c.printed.is_empty() {
+                String::new()
+            } else {
+                let (shown, rest) = c.printed.split_at(c.printed.len().min(PRINTED_SHOWN));
+                let rest = if rest.is_empty() { String::new() } else { format!("<details class=\"all\"><summary>{}</summary><pre>{}</pre></details>", esc(ALL_OF_IT), lines(rest)) };
+                format!("<pre>{}</pre>{rest}", lines(shown))
+            };
+            format!(
+                "<div class=\"case\"><b>{}</b><span class=\"by\">{}</span><p>{}</p><p>{} {}</p>{printed}<p class=\"fi\">{}</p></div>",
+                esc(&c.says),
+                esc(&c.written),
+                ticks(&c.ran),
+                esc(&c.expected),
+                esc(&c.got),
+                esc(&c.failed_in)
+            )
+        })
+        .collect();
+    format!("<div class=\"cases\"><div class=\"ch\">{}</div>{each}</div>", if cases.len() == 1 { CASE_HEADING } else { CASES_HEADING })
 }
 
 /// The title over what a step changed, as the app's diff says it: "Changes made at “directions” · 3 files".
@@ -1512,7 +1555,8 @@ fn thread_story(s: &jaynes_core::run::StepState) -> String {
 }
 
 /// `project`: the stop's project and its separator, ready to show, or "" when the run has no name yet.
-fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str, gone: bool) -> String {
+#[allow(clippy::too_many_arguments)]
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str, gone: bool, blocked: Option<crate::listing::BlockedSaid>) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
@@ -1545,7 +1589,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             if *blocked { ", blocked" } else { "" },
             esc(&crate::stop::still_redoes(run, question))
         ),
-        (None, Phase::Blocked { step, reason, fault }) => blocked_notice(step.as_deref(), *fault, reason),
+        (None, Phase::Blocked { .. }) => blocked.map(|b| blocked_notice(&b)).unwrap_or_default(),
         _ => String::new(),
     };
     // a stop that chooses: one click on an option sends the choice; a note beside it adjusts the chosen one
@@ -2697,7 +2741,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .notice.passed-q { background:var(--panel); color:var(--dim); }
 .passed { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:8px 0; font-size:13px; color:var(--dim); border-top:1px solid var(--line); }
 .passed span { color:var(--dim); } .passed a { border:1px solid var(--line-2); border-radius:8px; padding:4px 12px; color:var(--ink); white-space:nowrap; }
-.notice.bad { background:var(--red-soft); color:var(--red); } .notice .way { margin-top:8px; } .notice .way code { color:var(--ink); } .notice .then { display:block; color:var(--dim); margin-top:2px; } .notice details.still { margin-top:4px; color:var(--dim); } .notice details.still summary { cursor:pointer; } .notice details.still ul { margin:4px 0 0 18px; padding:0; } .notice.ok { background:var(--green-soft); color:var(--green); }
+.notice.bad { background:var(--red-soft); color:var(--red); } .notice .cases { margin-top:10px; color:var(--ink); } .notice .cases .ch { color:var(--red); font-size:12px; margin-bottom:4px; } .notice .case { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:10px 12px; margin-top:6px; } .notice .case .by { display:block; color:var(--dim); font-size:12px; } .notice .case p { margin:4px 0 0; } .notice .case code { color:var(--ink); } .notice .case pre { margin:6px 0 0; font-family:var(--mono); font-size:12px; color:var(--dim); white-space:pre-wrap; } .notice .case details.all summary { list-style:none; cursor:pointer; color:var(--dim); font-size:12px; margin-top:4px; } .notice .case details.all summary::-webkit-details-marker { display:none; } .notice .case .fi { color:var(--dim); font-size:12px; } .notice .way { margin-top:8px; } .notice .way code { color:var(--ink); } .notice .then { display:block; color:var(--dim); margin-top:2px; } .notice details.still { margin-top:4px; color:var(--dim); } .notice details.still summary { cursor:pointer; } .notice details.still ul { margin:4px 0 0 18px; padding:0; } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
 .steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
 .acts { display:flex; flex-wrap:wrap; gap:8px; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
@@ -2735,7 +2779,7 @@ mod tests {
         let panic = "panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted";
         for reason in [refused_port("dial tcp 127.0.0.1:5432: connect: operation not permitted", "5432"), refused_port(panic, "0, a port of its own choosing")] {
             let said = crate::listing::blocked_said(Some("change"), jaynes_core::event::Fault::Jaynes, &reason);
-            let page = blocked_notice(Some("change"), jaynes_core::event::Fault::Jaynes, &reason);
+            let page = blocked_notice(&crate::listing::blocked_said(Some("change"), jaynes_core::event::Fault::Jaynes, &reason));
             assert!(said.ways.iter().any(|w| w.then.is_some()), "a way with what follows: {:?}", said.ways);
             for w in &said.ways {
                 assert!(page.contains(&esc(&w.says)), "{}", w.says);
@@ -3365,6 +3409,64 @@ mod tests {
         assert!(asked.contains("The run went on without your answer. It is now at “fix”, blocked."), "where the run is now");
         assert!(asked.contains("“Redo” would do “reproduce” again. “Keep” changes nothing."), "what an answer still does");
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The real-user, 22/11 (r1795330821-771): "O cartão do bloqueio diz só "A check you cannot see found that this
+    // does not hold". A pessoa não vê o caso". The engineer lead, 22/11: the page shows the case that failed as the
+    // app's card does, from listing::blocked (what the engine kept), never from the reason alone.
+    #[test]
+    fn asked_a_run_blocked_by_a_hidden_case_shows_the_case_that_failed_on_the_page() {
+        use jaynes_core::event::{Fault, Usage};
+        use jaynes_core::{Digest, Event, FailedCase, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-hidden-case-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "fix-bug", "version": "4.0.0", "protocol": 1,
+            "steps": [{"name": "fix", "executor": "agent"}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "h".into(), request: "O total do recibo sai errado".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let says = "the total counts the quantity";
+        let reason = format!("A check you cannot see found that this does not hold: {says}");
+        let mut events = decide(None, &start).expect("start").events;
+        for attempt in [1, 2] {
+            events.push(Event::AttemptStarted { step: "fix".into(), round: 0, attempt, fix: 0, session: None, deadline_seconds: 60, tokens_left: 1000, key: None });
+            events.push(Event::AttemptFailed { step: "fix".into(), attempt, reasons: vec![reason.clone()], usage: Usage::default(), spent: true });
+            let printed = (1..=8).map(|n| format!("line {n} <of> it")).collect::<Vec<_>>().join("\n");
+            let case = FailedCase { says: says.into(), run: "make test TOTAL=1".into(), code: 2, printed };
+            crate::listing::keep_failed_cases(&home.join("runs/h"), "fix", attempt, "cases", &[case]).expect("keep");
+        }
+        events.push(Event::Blocked { step: Some("fix".into()), fault: Fault::Agent, reason: format!("fix spent its 2 attempts: {reason}") });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("h", &events).expect("append");
+        store.put_setup("h", &json!({"project": "/w/recibo"})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let shown = page.render(View::Run("h".into()), crate::store::now()).expect("the run");
+        let _gone = std::fs::remove_dir_all(&home);
+        // the why as the app says it, then the case: what it says, who wrote it, what ran in mono, what it expected and
+        // what came, what it printed as text (six lines, then the rest folded), and in how many attempts it failed
+        assert!(shown.contains("“fix” used its 2 attempts. Each time, a case the agent does not see failed."), "{shown}");
+        assert!(!shown.contains("A check you cannot see"), "the agent's words, never the person's");
+        let case = shown.split("<div class=\"cases\">").nth(1).unwrap_or_else(|| panic!("no case drawn: {shown}"));
+        for said in [
+            "<div class=\"ch\">The case that failed</div>",
+            "<b>“the total counts the quantity”</b>",
+            "Written at “cases”, by the agent there.",
+            "Ran: <code>make test TOTAL=1</code>",
+            "Expected: exit 0.",
+            "Got: exit 2.",
+            "line 6 &lt;of&gt; it",
+            "<summary>▸ all of it</summary>",
+            "Failed in 2 of 2 attempts.",
+        ] {
+            assert!(case.contains(said), "{said}: {case}");
+        }
+        let shown_lines = case.split("<summary>").next().unwrap_or_default();
+        assert!(!shown_lines.contains("line 7"), "six lines, then the fold: {case}");
+        // before what the person can do
+        let at = |t: &str| shown.find(t).unwrap_or_else(|| panic!("{t}"));
+        assert!(at("The case that failed") < at("Continue"), "the case before the ways out");
     }
 
     // The real-user's app, 22/11 (recibo, fix-bug): a run blocked at "fix" showed beside as "Is this the bug?", its
