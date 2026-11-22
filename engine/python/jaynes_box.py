@@ -1204,7 +1204,7 @@ def servers_window() -> tuple[int, ...]:
         given = s.getsockname()[1]
     finally:
         s.close()
-    return _window_from(given, first, last, _listening())
+    return _window_now(given, first, last)
 
 
 def _window_from(given: int, first: int, last: int, listening: frozenset[int] | None) -> tuple[int, ...]:
@@ -1224,19 +1224,30 @@ def _listening() -> frozenset[int] | None:
     person's too, with no privilege; where netstat lists no TCP socket at all, from lsof, the person's own
     processes' (netstat run from some Pythons, Homebrew's 3.14 among them, lists none: measured 22/11); None when
     neither could say."""
+    listening = _netstat_listening()
+    return listening if listening is not None else _lsof_listening()
+
+
+def _netstat_listening() -> frozenset[int] | None:
+    """The TCP ports every process listens on, from netstat; None where it lists no TCP socket at all."""
     try:
         said = subprocess.run(["/usr/sbin/netstat", "-an", "-p", "tcp"], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
-        said = None
-    if said is not None and said.returncode == 0 and "Active Internet connections" in said.stdout:
-        ports = set()
-        for line in said.stdout.splitlines():
-            fields = line.split()
-            if len(fields) >= 6 and fields[0].startswith("tcp") and fields[-1] == "LISTEN":
-                port = fields[3].rsplit(".", 1)[-1]
-                if port.isdigit():
-                    ports.add(int(port))
-        return frozenset(ports)
+        return None
+    if said.returncode != 0 or "Active Internet connections" not in said.stdout:
+        return None
+    ports = set()
+    for line in said.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 6 and fields[0].startswith("tcp") and fields[-1] == "LISTEN":
+            port = fields[3].rsplit(".", 1)[-1]
+            if port.isdigit():
+                ports.add(int(port))
+    return frozenset(ports)
+
+
+def _lsof_listening() -> frozenset[int] | None:
+    """The TCP ports the person's own processes listen on, from lsof; None when it could not say."""
     try:
         said = subprocess.run(["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "n"], capture_output=True,
                               text=True, timeout=10)
@@ -1247,6 +1258,55 @@ def _listening() -> frozenset[int] | None:
         return None
     return frozenset(int(port) for line in said.stdout.splitlines() if line.startswith("n")
                      for port in [line.rsplit(":", 1)[-1]] if port.isdigit())
+
+
+def _answering(ports: tuple[int, ...]) -> frozenset[int]:
+    """Of ``ports``, the ones a server answers on, on this machine's loopback (IPv4 or IPv6): a connection to each,
+    closed at once, with nothing sent. Every connection leaves from one end, taken once for each address and reused:
+    one end each would move the sequence macOS gives the tests' servers their ports from by one a port (measured
+    22/11: 1,004 for 500 ports, which put a test's server past the window)."""
+    found = set()
+    for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        end = 0
+        for port in ports:
+            if port in found:
+                continue
+            try:
+                s = socket.socket(family, socket.SOCK_STREAM)
+            except OSError:
+                break
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                if family == socket.AF_INET6:
+                    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                s.bind((address, end))
+                end = s.getsockname()[1]
+                s.settimeout(0.2)
+                if s.connect_ex((address, port)) == 0:
+                    found.add(port)
+            except OSError:
+                pass
+            finally:
+                s.close()
+    return frozenset(found)
+
+
+def _window_now(given: int, first: int, last: int) -> tuple[int, ...]:
+    """The window after ``given``, without the ports a server listens on now. Where only lsof lists them, which sees
+    the person's own processes alone, a server of root's or of another user's there is found by connecting to each
+    port of the window that a bind finds taken (``_answering``)."""
+    listening = _netstat_listening()
+    if listening is not None:
+        return _window_from(given, first, last, listening)
+    seen = _lsof_listening()
+    window = _window_from(given, first, last, seen)
+    if seen is None:
+        return window
+    # only a port a bind finds taken can have a server on it: a connection goes to those alone (a bind takes no
+    # port of the sequence; 0.17 s for the window's 4,000, measured 22/11)
+    found = _answering(tuple(p for p in window if _held(p)))
+    return tuple(p for p in window if p not in found)
 
 
 # The ports of the usual databases, caches and queues, which keep data or passwords: while a command with the project's
