@@ -295,11 +295,13 @@ pub fn release_of(engine: &str) -> &str {
 }
 
 /// What `jaynes update` says before it installs: the open runs it will leave behind (`left`, which is
-/// `stop::left_behind` of the version it installs: an older engine started them and its program is not kept), for
-/// each version (the newest first) how many, up to five by name with how each stands, and how to finish them. The
+/// `stop::left_behind` of the version it installs: another engine started them and its program is not kept; never a
+/// run already gone, which cannot go on before the update either), for each version (the newest first) how many, up to five by name with how each stands, and how to finish them. The
 /// design-lead's words (0.2.5, motor-velho.md); nothing when it leaves none behind.
 pub fn older_runs_said(entries: &[Entry], left: impl Fn(&Run) -> bool) -> Vec<String> {
-    let older: Vec<Entry> = entries.iter().filter(|e| !e.run.finished() && left(&e.run)).cloned().collect();
+    // a run whose engine already left the Mac cannot go on before the update either ("From an older Jaynes"): the
+    // update changes nothing for it, and the person could not finish it on that version
+    let older: Vec<Entry> = entries.iter().filter(|e| !e.run.finished() && e.gone.is_none() && left(&e.run)).cloned().collect();
     let mut versions: Vec<&str> = older.iter().map(|e| release_of(&e.run.engine)).collect();
     versions.sort_by_key(|a| std::cmp::Reverse(version_key(a)));
     versions.dedup();
@@ -307,7 +309,7 @@ pub fn older_runs_said(entries: &[Entry], left: impl Fn(&Run) -> bool) -> Vec<St
     for v in versions {
         let of: Vec<Entry> = older.iter().filter(|e| release_of(&e.run.engine) == v).cloned().collect();
         let listing = arrange(&of);
-        let rows: Vec<&Row> = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, r)| r)).collect();
+        let rows: Vec<&Row> = listing.rows().collect();
         let one = rows.len() == 1;
         let (them, their) = if one { ("it", "Its") } else { ("them", "Their") };
         said.push(format!(

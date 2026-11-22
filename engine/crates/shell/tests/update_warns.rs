@@ -80,18 +80,39 @@ impl Scratch {
     }
 }
 
+/// This engine's release, as the update says it: without its fingerprint.
+fn this_release() -> &'static str {
+    jaynes_core::ENGINE.split('+').next().unwrap_or(jaynes_core::ENGINE)
+}
+
 #[test]
 fn an_update_says_the_open_runs_it_leaves_behind_before_it_installs() {
     let s = Scratch::new("left");
-    s.open_run_of("r1", "0.2.3+0ld");
+    // a run of this engine that goes on today, whose program Jaynes did not keep: the update leaves it without one
+    s.open_run_of("r1", jaynes_core::ENGINE);
+    let kept = s.base.join("home/engines").join(jaynes_core::ENGINE).join("jaynes");
+    std::fs::remove_file(&kept).unwrap_or_else(|e| panic!("{}: {e}", kept.display()));
     let (ok, said) = s.jaynes(&["update"]);
     assert!(ok, "{said}");
-    let warned = said.find("1 run started on Jaynes 0.2.3 can't go on after this update: no answer, Halt or Abandon will reach it.")
+    let v = this_release();
+    let warned = said.find(&format!("1 run started on Jaynes {v} can't go on after this update: no answer, Halt or Abandon will reach it."))
         .unwrap_or_else(|| panic!("the run left behind is said: {said}"));
     let ran = said.find("the installer ran").unwrap_or_else(|| panic!("the release's installer runs: {said}"));
     assert!(warned < ran, "said before the install, while the person can still finish it: {said}");
-    assert!(said.contains("To finish it on 0.2.3, answer or abandon it before you update."), "{said}");
+    assert!(said.contains(&format!("To finish it on {v}, answer or abandon it before you update.")), "{said}");
     assert!(said.contains("Jaynes 99.0.0 installed"), "{said}");
+}
+
+/// A run whose older engine already left the Mac cannot go on before the update either: it is listed under "From an
+/// older Jaynes", and the update, which changes nothing for it, does not say it (nor tell the person to finish it on
+/// a version they no longer have).
+#[test]
+fn an_update_does_not_say_a_run_that_already_could_not_go_on() {
+    let s = Scratch::new("already");
+    s.open_run_of("r1", "0.2.3+0ld");
+    let (ok, said) = s.jaynes(&["update"]);
+    assert!(ok && said.contains("the installer ran"), "{said}");
+    assert!(!said.contains("can't go on after this update") && !said.contains("To finish"), "{said}");
 }
 
 #[test]
