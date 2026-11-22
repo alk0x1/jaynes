@@ -346,7 +346,12 @@ struct StopFile {
     /// something else" }`. What each one does is still said by Jaynes, under it.
     #[serde(default)]
     answers: BTreeMap<VerdictKind, String>,
+    /// A line under the question, said before the person looks: what the stop keeps, or what it leaves for later.
+    note: Option<String>,
 }
+
+/// The most characters a stop's note has: one line under the question.
+const NOTE_MOST: usize = 240;
 
 /// The most characters a role's word for a verdict has: it goes on a button, and what it does is said under it.
 const ANSWER_MOST: usize = 40;
@@ -1452,6 +1457,11 @@ impl TomlRole {
                     _ => {}
                 }
                 let offered = st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() });
+                match st.note.as_deref().map(str::trim) {
+                    Some("") => errs.push("has a stop whose note says nothing: leave note out, or write the line".into()),
+                    Some(n) if n.chars().count() > NOTE_MOST => errs.push(format!("a stop's note is a line under the question, {NOTE_MOST} characters at most")),
+                    _ => {}
+                }
                 for (v, words) in &st.answers {
                     let name = word(v);
                     let n = words.trim().chars().count();
@@ -1483,6 +1493,7 @@ impl TomlRole {
                 audit_rate: Rate(st.audit_rate.unwrap_or(0.1)),
                 about: st.ask.clone(),
                 answers: st.answers.iter().map(|(v, w)| (*v, w.trim().to_string())).collect(),
+                note: st.note.as_deref().map(str::trim).unwrap_or_default().to_string(),
             });
             // a step of Jaynes's or of the role's own is never tried again by itself
             let default_attempts = if matches!(s.by, By::Jaynes | By::Role) { 1 } else { 3 };
@@ -2171,7 +2182,8 @@ checks = ["output-follows-schema", "suite-passes"]
 # reviews it, or from one of Jaynes's own that shows it (such as quotes in their pages), to an agent's step it needs.
 stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
 # answers puts the role's words on the buttons, for verdicts the stop offers, 40 characters at most; Jaynes still
-# says under each what it does. fix-bug asks one question so:
+# says under each what it does. note = "..." is a line under the question, said before the person looks (what the
+# stop keeps, or leaves for later), 240 characters at most. fix-bug asks one question so:
 #   stop = {{ ask = "Is this the bug?", verdicts = ["keep", "redo"], answers = {{ keep = "Yes", redo = "No, it's something else" }} }}
 #   show = {{ label = "{{{{bug}}}}", aspects = [{{ label = "Now", text = "{{{{examples.0.now}}}}" }}, {{ label = "After the fix", text = "{{{{examples.0.after}}}}" }}] }}
 # A field of show reaches into a list by place from 0; a text whose fields are all empty is left out.
@@ -3789,6 +3801,21 @@ script = "requires/changelog.sh"
         assert_eq!(shown[0].label, "The total now counts the coupon once.");
         let plain = CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": "summary"}).as_object().cloned().unwrap_or_default() };
         assert_eq!(small.extras["change"].checks.get("plain-words"), Some(&plain));
+    }
+
+    #[test]
+    fn asked_a_stop_says_a_note_of_the_role_s_under_its_question() {
+        // the design-lead, 22/11: at identity's critique the person judged the layout of boards that differ only in
+        // colour and type; a line under the question says so before they look
+        let with = |note: &str| GOOD.replace("from_risk = \"high\", release = true }", &format!("from_risk = \"high\", release = true, note = \"{note}\" }}"));
+        let r = TomlRole::load(&role("note", &with("  The layout of your screens comes later. "))).expect("reads");
+        assert_eq!(r.manifest.steps[1].stop.as_ref().expect("stop").note, "The layout of your screens comes later.");
+        let r = TomlRole::load(&role("no-note", GOOD)).expect("reads");
+        assert_eq!(r.manifest.steps[1].stop.as_ref().expect("stop").note, "", "without one, nothing is said");
+        let e = errors("note-empty", &with("  "));
+        assert!(e.contains("has a stop whose note says nothing: leave note out, or write the line"), "{e}");
+        let e = errors("note-long", &with(&"é".repeat(241)));
+        assert!(e.contains("a stop's note is a line under the question, 240 characters at most"), "{e}");
     }
 
     #[test]

@@ -306,6 +306,10 @@ pub struct StopDecl {
     /// the role names no word for keeps Jaynes's name. Empty: every verdict keeps it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub answers: BTreeMap<VerdictKind, String>,
+    /// A line of the role's under the question, said before the person looks, such as "The layout of your screens
+    /// comes later." at a stop that keeps only colours and fonts. Empty: nothing is said.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {

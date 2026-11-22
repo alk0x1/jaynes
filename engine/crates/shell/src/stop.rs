@@ -61,6 +61,9 @@ pub struct Stop {
     /// something else" for redo. Only at a stop of the role's: a question of Jaynes's own (a leave, a merge) has
     /// none. What each verdict does is still Jaynes's sentence, shown under the button.
     pub answers: BTreeMap<VerdictKind, String>,
+    /// The role's line under the question, said before the person looks ("The layout of your screens comes
+    /// later."), drawn dim under it; empty at a question of Jaynes's own, and when the role says none.
+    pub note: String,
     /// Why the person is asked here, when Jaynes has more to say than the title: a leave's "Why you: ...".
     pub why: Option<String>,
     /// What each answer does, in a sentence beside its button, where Jaynes says it there (a leave's).
@@ -267,6 +270,14 @@ fn role_words(run: &Run, q: &jaynes_core::question::Question) -> BTreeMap<Verdic
     }
 }
 
+/// The role's line under a question: its stop's note at a decision, none at a question of Jaynes's own.
+pub fn role_note(run: &Run, q: &jaynes_core::question::Question) -> String {
+    match q.kind {
+        QuestionKind::Decision => run.manifest.index(&q.step).and_then(|i| run.manifest.steps[i].stop.as_ref()).map(|s| s.note.clone()).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
 /// What each answer the stop offers still makes run again, as the core says it would (jaynes_core::effects).
 pub fn still_redoes(run: &Run, q: &jaynes_core::question::Question) -> String {
     let every = |v: VerdictKind| -> Answer {
@@ -375,6 +386,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         blocked,
     });
     let answers = role_words(run, &q.question);
+    let note = role_note(run, &q.question);
     let permission = q.question.kind == QuestionKind::Permission;
     let wants = permission.then(|| crate::permit::wants_kept(home, &run.id, &q.question.id)).flatten();
     Stop {
@@ -398,6 +410,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         lands,
         passed,
         answers,
+        note,
         why: permission.then(|| WHY_YOU.to_string()),
         consequences: if permission { leave_consequences(run, &q.question.about) } else { BTreeMap::new() },
         wants,
@@ -626,7 +639,7 @@ mod tests {
         let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
         r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Default::default(), release: false, budget: None,
-            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers,
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers, note: String::new(),
         });
         let p = passed(&home, &r)[0].passed.clone().expect("it says the run went on");
         assert_eq!(p.still, "“No, it's something else” would do “reproduce” again. “Yes” changes nothing.");
@@ -745,7 +758,7 @@ mod tests {
         let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
         r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, from_risk: Default::default(), release: false, budget: None,
-            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers: answers.clone(),
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers: answers.clone(), note: String::new(),
         });
         let stop = waiting(&home, &r).expect("a stop");
         assert_eq!(stop.answers, answers);
@@ -755,6 +768,20 @@ mod tests {
         let leave = waiting(&home, &r).expect("a stop");
         assert!(leave.answers.is_empty());
         assert_eq!((leave.label(VerdictKind::Keep), leave.label(VerdictKind::Drop)), ("Allow", "Refuse"));
+    }
+
+    #[test]
+    fn asked_a_stop_carries_the_role_s_note_under_its_question_and_a_leave_none() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-note-{}", std::process::id()));
+        let mut r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
+            verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Default::default(), release: false, budget: None,
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Which colours and fonts do we keep?".into(), choose: false, redo: None, rounds: None,
+            answers: BTreeMap::new(), note: "The layout of your screens comes later.".into(),
+        });
+        assert_eq!(waiting(&home, &r).expect("a stop").note, "The layout of your screens comes later.");
+        r.questions.get_mut("q1").expect("asked").question.kind = QuestionKind::Permission;
+        assert_eq!(waiting(&home, &r).expect("a stop").note, "", "a question of Jaynes's own says no note of the role's");
     }
 
     #[test]

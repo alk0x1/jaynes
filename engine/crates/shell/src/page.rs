@@ -1666,7 +1666,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let answering = run.asking.values().any(|x| *x == question.id);
     let solo = question.choose && one;
     format!(
-        "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
+        "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{note}{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
          {rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
@@ -1676,6 +1676,11 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         title = ticks(&crate::listing::title_into(q, into)),
         // a leave says why it comes to the person, and what the agent wants to write comes before the answers
         why = if leave { format!("<p class=\"whyyou\">{}</p>", esc(crate::stop::WHY_YOU)) } else { String::new() },
+        // the role's line under its question, before the person looks (the design-lead, 22/11)
+        note = match crate::stop::role_note(run, question) {
+            n if n.is_empty() => String::new(),
+            n => format!("<p class=\"stop-note\">{}</p>", esc(&n)),
+        },
         lead = if leave { changes } else { "" },
         tail = if leave { "" } else { changes },
         strip = strip(run, gone),
@@ -2705,6 +2710,7 @@ details.earlier { margin-top:14px; border-top:1px solid var(--line); padding-top
 .changes { margin-top:22px; } .changes .qh { margin-bottom:8px; padding-left:0; }
 h1 code, .q code, .passed code, .wh code { font-family:var(--mono); font-size:.88em; font-weight:500; background:var(--panel-2); border:1px solid var(--line); border-radius:5px; padding:0 .3em; }
 .whyyou { margin:0 0 8px; font-size:12.5px; color:var(--dim); }
+.stop-note { margin:0 0 8px; font-size:12.5px; color:var(--dim); }
 details.wants { margin:0 0 16px; } details.wants > summary { cursor:pointer; color:var(--blue); font-size:13px; } details.wants .wh { margin:10px 0 8px; font-size:12.5px; color:var(--dim); }
 .seg.says { flex-direction:column; align-items:flex-start; gap:8px; } .seg.says .opt { display:flex; align-items:baseline; gap:12px; } .seg.says button { min-width:84px; } .seg.says .says { font-size:12px; color:var(--faint); }
 pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius:6px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--dim); white-space:pre; }

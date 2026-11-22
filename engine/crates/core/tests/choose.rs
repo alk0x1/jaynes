@@ -45,6 +45,7 @@ fn choosing() -> StopDecl {
         redo: None,
         rounds: None,
         answers: Default::default(),
+        note: String::new(),
     }
 }
 

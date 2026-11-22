@@ -1888,6 +1888,7 @@ mod tests {
             lands: vec![],
             passed: None,
             answers: Default::default(),
+            note: String::new(),
             why: None,
             consequences: Default::default(),
             wants: None,

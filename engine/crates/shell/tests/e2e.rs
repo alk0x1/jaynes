@@ -2552,6 +2552,16 @@ fn asked_a_screen_drawn_for_a_phone_is_photographed_whole_at_a_phone_s_window() 
     // a page shorter than the window keeps the window's height; each item's own device names its size
     let (w, h) = png_size(&std::fs::read(copy.join(".jaynes/pictures/design/short.png")).expect("photographed"));
     assert_eq!((w, h), (1440, 900));
+    // the role's line under the question is on the stop's page, dim, before the options
+    let (_page, port) = page_on_any_port(
+        jaynes().arg("page").env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y"),
+    );
+    let get = |path: &str| http(port, &format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: jaynes_key=k3y\r\n\r\n"));
+    let view = get("/run/phone");
+    let at = view.find("href=\"/q/phone/").expect("a way to the stop") + 6;
+    let stop = get(&view[at..at + view[at..].find('"').expect("its end")]);
+    let note = stop.find("<p class=\"stop-note\">Each is drawn for the device it names.</p>").expect("the note");
+    assert!(note < stop.find("data-item=\"Tall\"").expect("the options"), "{stop}");
 }
 
 /// Answer as the person, at a terminal.

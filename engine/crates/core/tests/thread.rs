@@ -33,7 +33,7 @@ fn step(name: &str, executor: Executor) -> StepDecl {
             choose: false,
             redo: None,
             rounds: None,
-            answers: Default::default(),
+            answers: Default::default(), note: String::new(),
         }),
         from_risk: Risk::Low,
         attempts: 3,

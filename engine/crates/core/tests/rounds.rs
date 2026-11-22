@@ -44,6 +44,7 @@ fn stop(choose: bool, redo: Option<&str>) -> StopDecl {
         redo: redo.map(str::to_string),
         rounds: None,
         answers: Default::default(),
+        note: String::new(),
     }
 }
 

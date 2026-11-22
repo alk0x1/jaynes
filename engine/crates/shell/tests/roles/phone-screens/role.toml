@@ -1,5 +1,5 @@
 # A test role: an agent draws screens for the device it names, each as a page, photographed whole at that device's
-# window, and the person chooses one.
+# window, and the person chooses one, told in a line under the question how they were drawn.
 
 role = "phone-screens"
 version = "1.0.0"
@@ -13,7 +13,7 @@ Draw the screen for the device the request names, each layout a page in design/:
 {{request}}
 """
 checks = ["output-follows-schema"]
-stop = { ask = "Which layout goes on?", choose = true, holds = true }
+stop = { ask = "Which layout goes on?", choose = true, holds = true, note = "Each is drawn for the device it names." }
 show = { each = "layouts", label = "{{name}}", id = "{{name}}", picture = "{{page}}", picture_size = "{{device}}", picture_full = true }
 
 [step.output]

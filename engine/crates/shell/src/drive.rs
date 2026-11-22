@@ -2442,7 +2442,7 @@ mod tests {
         look.needs = vec!["make".into()];
         look.stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![jaynes_core::question::VerdictKind::Keep], holds: true, from_risk: Default::default(), release: false, budget: None,
-            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Look?".into(), choose: false, redo: None, rounds: None, answers: Default::default(),
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Look?".into(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new(),
         });
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![first, look], target: Default::default(), delivery: Default::default() };
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
@@ -2689,7 +2689,7 @@ mod tests {
             choose: true,
             redo: None,
             rounds: None,
-            answers: Default::default(),
+            answers: Default::default(), note: String::new(),
         });
         let manifest = Manifest { role: "greenfield".into(), version: "1".into(), protocol: 1, steps: vec![stack], target: Default::default(), delivery: Default::default() };
         let start = jaynes_core::decide(None, &Input::Start {
