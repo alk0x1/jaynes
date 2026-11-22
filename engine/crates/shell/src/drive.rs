@@ -948,9 +948,9 @@ impl<'a> Driver<'a> {
         if jaynes_core::decide(Some(&run), &input).is_err() {
             return Ok(());
         }
-        let (_, events, _) = decide_and_record(self.store, &self.setup.run, &input)?;
+        let (now, events, _) = decide_and_record(self.store, &self.setup.run, &input)?;
         for e in &events {
-            narrate(e);
+            narrate(e, &now);
         }
         self.setup.any_port = any;
         Ok(())

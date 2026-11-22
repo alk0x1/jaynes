@@ -617,6 +617,10 @@ pub fn blocked(home: &Path, r: &Run) -> Option<BlockedSaid> {
     if let Some(s) = step {
         said.agent_said = agent_said(home, &r.id, s);
     }
+    // the engine keeps the change a check could not judge: Continue judges it again, the agent working no more
+    if r.checks_again().is_some() {
+        said = said.checks_again();
+    }
     Some(said)
 }
 
@@ -787,6 +791,35 @@ fn not_given_said(named: &str) -> String {
     }
 }
 
+/// Whether `jaynes project test-servers` is in this Jaynes: the rd-engineer's window for a test server on a port the
+/// system picks (macOS's box). Until it is, such a port gets the project's open ports, since a card never says to
+/// run a command that does not exist; the commit that brings the command turns this on.
+const TEST_SERVERS: bool = false;
+
+/// The way out for a command the box kept from a local port: the project's test servers (`own`, a port the system
+/// picks) or its open ports.
+fn port_way(project: &str, own: bool) -> Way {
+    let mac = this_machine();
+    if own {
+        Way {
+            says: "Let this project's tests start their own test servers, then Continue.".into(),
+            then: Some("As when you run the tests yourself, but they still cannot reach your services or the Jaynes page.".into()),
+            command: Some(format!("jaynes project test-servers {}", shell_word(project))),
+            still_open: vec![
+                format!("A test server listens on every network of {mac}, so another machine on your network could reach it."),
+                format!("A service that starts on {mac} while the tests run may get a port they can reach."),
+            ],
+        }
+    } else {
+        Way {
+            says: "Open this project's ports, then Continue.".into(),
+            then: Some(format!("Its checks may then reach any service on {mac}, the Jaynes page among them.")),
+            command: Some(format!("jaynes project open-ports {}", shell_word(project))),
+            still_open: Vec::new(),
+        }
+    }
+}
+
 /// A check that could not judge: the change is done and Jaynes could not check it. When the box kept the check's
 /// command from a local port, why in the person's words and the way out that serves what it tried; the box's own
 /// terms and the raw error go under Details.
@@ -800,31 +833,14 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
             let mac = this_machine();
             // one way out, the one that serves what the command tried, never two: a port the system picks gets the
             // project's test servers (macOS's box, the rd-engineer's), a fixed one the project's open ports
-            let own = fixed.is_empty() && cfg!(target_os = "macos");
+            let own = fixed.is_empty() && cfg!(target_os = "macos") && TEST_SERVERS;
             said.why = if fixed.is_empty() {
                 "The project's tests start a test server on a port the system picks, and the box Jaynes checks in allows only its own ports.".into()
             } else {
                 format!("The project's tests reach {} on {mac}, and the box Jaynes checks in allows only its own ports.", ports_named(&fixed))
             };
             if let Some(project) = b.project {
-                said.ways.push(if own {
-                    Way {
-                        says: "Let this project's tests start their own test servers, then Continue.".into(),
-                        then: Some("As when you run the tests yourself, but they still cannot reach your services or the Jaynes page.".into()),
-                        command: Some(format!("jaynes project test-servers {}", shell_word(project))),
-                        still_open: vec![
-                            format!("A test server listens on every network of {mac}, so another machine on your network could reach it."),
-                            format!("A service that starts on {mac} while the tests run may get a port they can reach."),
-                        ],
-                    }
-                } else {
-                    Way {
-                        says: "Open this project's ports, then Continue.".into(),
-                        then: Some(format!("Its checks may then reach any service on {mac}, the Jaynes page among them.")),
-                        command: Some(format!("jaynes project open-ports {}", shell_word(project))),
-                        still_open: Vec::new(),
-                    }
-                });
+                said.ways.push(port_way(project, own));
             }
             said.ways.push(Way { says: "Or abandon: the run ends and its change is not kept. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() });
             details.extend(once(b.refused.iter().map(|l| go_annotation_off(l))));
@@ -1006,19 +1022,7 @@ mod blocked_tests {
         assert!(!b.agent_said.iter().any(|l| ["Bash", "Read", "Edit", "Write", "Grep"].iter().any(|t| l.starts_with(t))), "{:?}", b.agent_said);
         // the ways out, one a line, the best first: for a port the system picks, the project's test servers
         // (macOS's box), never its open ports too
-        let first = if cfg!(target_os = "macos") {
-            Way {
-                says: "Let this project's tests start their own test servers, then Continue.".into(),
-                then: Some("As when you run the tests yourself, but they still cannot reach your services or the Jaynes page.".into()),
-                command: Some("jaynes project test-servers /Users/x/Projects/app".into()),
-                still_open: vec![
-                    "A test server listens on every network of this Mac, so another machine on your network could reach it.".into(),
-                    "A service that starts on this Mac while the tests run may get a port they can reach.".into(),
-                ],
-            }
-        } else {
-            open_ports("/Users/x/Projects/app")
-        };
+        let first = port_way("/Users/x/Projects/app", TEST_SERVERS && cfg!(target_os = "macos"));
         assert_eq!(b.ways, [first, abandon()]);
         assert_eq!(b.waits.as_deref(), Some("The run waits here until you continue or abandon."));
         // the raw reason under Details, the panic once
@@ -1068,9 +1072,47 @@ mod blocked_tests {
 
     #[test]
     fn continue_checks_the_same_change_again_once_the_engine_keeps_it() {
-        let b = blocked_said(Some("change"), Fault::Jaynes, &refused_port_0("/p"));
-        assert_eq!(b.continue_does, "Continue goes on from “change”.");
-        assert_eq!(b.checks_again().continue_does, "Continue: Jaynes checks the same change again. The agent does not work again.");
+        use jaynes_core::event::{Event, Usage};
+        let home = std::env::temp_dir().join(format!("jaynes-checks-again-{}", std::process::id()));
+        let mut r = super::tests::run("r1", "Filter the items by price");
+        let started = Event::AttemptStarted { step: "change".into(), round: 0, attempt: 1, fix: 0, session: None, deadline_seconds: 0, tokens_left: 0, key: None };
+        let delivered = Event::AttemptDelivered { step: "change".into(), attempt: 1, fix: 0, output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Usage::default(), session: None, tree: Some("t".into()) };
+        let blocked_at = Event::Blocked { step: Some("change".into()), fault: Fault::Jaynes, reason: refused_port_0("/p") };
+        for e in [&started, &delivered, &blocked_at] {
+            r.apply(e);
+        }
+        // a block the engine does not keep the change of: Continue as before
+        assert_eq!(r.checks_again(), None);
+        assert_eq!(blocked(&home, &r).expect("blocked").continue_does, "Continue goes on from “change”.");
+        // the check could not judge the change, which the engine keeps: Continue checks it again, the agent idle
+        let mut r = super::tests::run("r1", "Filter the items by price");
+        for e in [&started, &delivered, &Event::ChecksUnjudged { step: "change".into(), attempt: 1, fix: 0 }, &blocked_at] {
+            r.apply(e);
+        }
+        assert!(r.checks_again().is_some());
+        let b = blocked(&home, &r).expect("blocked");
+        assert_eq!(b.continue_does, "Continue: Jaynes checks the same change again. The agent does not work again.");
+        assert_eq!(b.what, "The change is done. Jaynes could not check it.");
+    }
+
+    #[test]
+    fn a_port_the_system_picks_offers_test_servers_only_once_jaynes_has_them() {
+        // `jaynes project test-servers` is the rd-engineer's, not yet in main: a card never says to run a command
+        // that does not exist, so until TEST_SERVERS a port the system picks gets the project's open ports
+        let b = blocked_said(Some("change"), Fault::Jaynes, &refused_port_0("/Users/x/Projects/app"));
+        let first = if TEST_SERVERS && cfg!(target_os = "macos") { port_way("/Users/x/Projects/app", true) } else { open_ports("/Users/x/Projects/app") };
+        assert_eq!(b.ways, [first, abandon()]);
+        // and the day it comes, its words, with what stays open
+        assert_eq!(port_way("/Users/x/Projects/app", true), Way {
+            says: "Let this project's tests start their own test servers, then Continue.".into(),
+            then: Some("As when you run the tests yourself, but they still cannot reach your services or the Jaynes page.".into()),
+            command: Some("jaynes project test-servers /Users/x/Projects/app".into()),
+            still_open: vec![
+                format!("A test server listens on every network of {}, so another machine on your network could reach it.", machine()),
+                format!("A service that starts on {} while the tests run may get a port they can reach.", machine()),
+            ],
+        });
+        assert_eq!(port_way("/Users/x/Projects/app", false), open_ports("/Users/x/Projects/app"));
     }
 
     #[test]
