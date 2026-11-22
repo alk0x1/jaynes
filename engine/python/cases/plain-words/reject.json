@@ -311,5 +311,25 @@
   "output": {
    "saw": "div.row.todo > span.tick"
   }
+ },
+ {
+  "id": "a-field-of-each-item",
+  "expect": "reject",
+  "hole": "a field of each item of a list, named with a dot, is read in every item: code in the second one's",
+  "with": {
+   "field": "stacks.idea"
+  },
+  "output": {
+   "stacks": [
+    {
+     "idea": "One server renders the pages",
+     "page": "design/a.html"
+    },
+    {
+     "idea": "Pages call render_page() on the server",
+     "page": "design/b.html"
+    }
+   ]
+  }
  }
 ]

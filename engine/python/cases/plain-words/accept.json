@@ -274,5 +274,21 @@
   "output": {
    "saw": "Buy milk · \"Not done\" · Total 10.00"
   }
+ },
+ {
+  "id": "only-the-field-named",
+  "expect": "accept",
+  "keeps": "with a dot only that field of each item is read, not a path beside it",
+  "with": {
+   "field": "stacks.idea"
+  },
+  "output": {
+   "stacks": [
+    {
+     "idea": "One server renders the pages",
+     "page": "design/architecture/go.html"
+    }
+   ]
+  }
  }
 ]

@@ -919,12 +919,25 @@ def _strings(value: Any, at: str) -> list[tuple[str, str]]:
     return []
 
 
+def _reach(call: Call, field: str) -> Any:
+    """The output's field, or with a dot a field of each item of a list: stacks.idea is every stack's idea."""
+    value: Any = call.get("output") if isinstance(call.get("output"), dict) else None
+    for key in field.split("."):
+        if isinstance(value, list):
+            value = [v.get(key) for v in value if isinstance(v, dict)]
+        elif isinstance(value, dict):
+            value = value.get(key)
+        else:
+            return None
+    return value
+
+
 def plain_words(call: Call, params: Params) -> Any:
     """What the person reads in a field is in plain words: no code in it, which they would have to read as code. Every
     text inside the field is looked at, however deep; a field that is not there passes."""
     field = str(params["field"])
     reasons = []
-    for at, text in _strings(_field(call, params), field):
+    for at, text in _strings(_reach(call, field), field):
         for what, sign in _CODE_SIGNS:
             found = sign.search(text)
             if found:
