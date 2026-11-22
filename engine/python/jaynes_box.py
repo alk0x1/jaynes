@@ -86,7 +86,25 @@ SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc",
            ".git-credentials", ".config/gh", ".config/gcloud", ".config/op", ".zsh_history", ".bash_history",
            ".claude", ".codex", "Library/Keychains", "Library/Cookies", "Library/Safari", "Library/Mail",
-           "Library/Messages", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox")
+           "Library/Messages", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
+           "Library/Application Support/Chromium", "Library/Containers/com.apple.Safari",
+           "Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge",
+           "Library/Application Support/Arc")
+# The person's browsers: no command in a box starts one (the tech-lead's rule, 22/11), only Jaynes's own headless
+# Chrome (JAYNES_CHROME) and the one a photograph's box is made for. The agent's settings in agent.rs hide the same
+# (BROWSER_APPS, BROWSER_PLACES there; a test checks both say the same).
+BROWSER_APPS = ("Google Chrome.app", "Google Chrome Beta.app", "Google Chrome Dev.app", "Google Chrome Canary.app",
+                "Chromium.app", "Safari.app", "Safari Technology Preview.app", "Firefox.app",
+                "Firefox Developer Edition.app", "Firefox Nightly.app", "Microsoft Edge.app", "Brave Browser.app",
+                "Arc.app", "Opera.app", "Vivaldi.app")
+# where macOS keeps apps for everyone, Safari's own place among them (/Applications/Safari.app links there)
+BROWSER_PLACES = ("/Applications", "/System/Cryptexes/App/System/Applications",
+                  "/System/Volumes/Preboot/Cryptexes/App/System/Applications")
+
+
+def browsers(home: Path) -> list[Path]:
+    """Every place the person's browsers' bundles are kept: for everyone, and in the person's own Applications."""
+    return [Path(place) / app for place in (*BROWSER_PLACES, str(home / "Applications")) for app in BROWSER_APPS]
 # What the engine keeps under its home that no project command reads: the page's key and log, the record. The runs'
 # folders are hidden as well, but for the run's own copy of the project, whose installed dependencies the box links.
 ENGINE_SECRETS = ("page.key", "page.log", "app-key.pub", "record.sqlite3", "record.sqlite3-wal", "record.sqlite3-shm")
@@ -132,6 +150,7 @@ class Box:
     readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
     home: Path = field(default_factory=Path.home)
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
+    browser: Path | None = None  # the one browser it may start, with its bundle's helpers: a photograph's Chrome
 
 
 def hidden_paths(box: Box) -> list[Path]:
@@ -218,6 +237,26 @@ def _chrome_socket() -> list[str]:
             f'(allow network-outbound (remote unix-socket (regex #"^{pattern}")))']
 
 
+def _browsers_denied(box: Box) -> list[str]:
+    """No command starts the person's browsers, nor what their bundles hold (Chrome starts its helpers from inside
+    its own); only Jaynes's own headless Chrome (``JAYNES_CHROME``, the person's choice) and the browser the box was
+    made for, with its bundle, are let again. A box that starts only its agent program lets nothing again."""
+    lines = [f"(deny process-exec {_subpaths(browsers(box.home))})"]
+    if box.runs:
+        return lines
+    let = []
+    for named in (os.environ.get("JAYNES_CHROME", ""), box.browser):
+        if not named:
+            continue
+        real = Path(os.path.realpath(named))
+        held = next((b for b in browsers(box.home) if real.is_relative_to(os.path.realpath(b))), None)
+        let.append(Path(os.path.realpath(held)) if held is not None else real)
+    if let:
+        lines.append("(allow process-exec " + " ".join(f"(subpath {_lit(p)})" if p.is_dir() else f"(literal {_lit(p)})"
+                                                       for p in let) + ")")
+    return lines
+
+
 def profile(box: Box) -> str:
     """The sandbox-exec profile for ``box``. Where two rules match, an allow with a filter wins over a deny."""
     lines = ["(version 1)", "(allow default)",
@@ -262,6 +301,7 @@ def profile(box: Box) -> str:
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
     if box.runs:
         lines += ["(deny process-exec)", "(allow process-exec " + " ".join(f"(literal {_lit(p)})" for p in box.runs) + ")"]
+    lines += _browsers_denied(box)
     lines.append('(deny file-read* file-write* (regex #"^/dev/ttys[0-9]"))')
     lines.append(_mach_denied())
     lines += ["(deny signal)", "(allow signal (target same-sandbox))", "(deny user-preference-write)",
@@ -373,6 +413,10 @@ def program_needs(interpreter: Path, commands: Iterable[Path] = (), home: Path |
         if _shim(real):
             raise Refused(f"{exe} is a shim that finds its program through xcrun, which reads the whole disk; declare the "
                           "real program instead (xcrun --find NAME says where it is)")
+        held = next((b for b in browsers(home) if real.is_relative_to(os.path.realpath(b))), None)
+        if held is not None:
+            raise Refused(f"{exe} is in {held}, one of the person's browsers, which no box starts; Jaynes's own "
+                          "photograph (jaynes_box.py photograph) takes pictures of pages")
         run += [Path(exe), real]
     prefix = subprocess.run([str(interpreter), "-c", "import sys; print(sys.prefix); print(sys.base_prefix)"],
                             capture_output=True, text=True, timeout=60)
@@ -1581,7 +1625,8 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
                 page]
         script = " ".join(shlex.quote(a) for a in argv)
         try:
-            argv = command_in_box(script, Box((Path(tmp),), ports=ports))
+            # the one browser it starts is the one chosen here, with its bundle's helpers: never another
+            argv = command_in_box(script, Box((Path(tmp),), ports=ports, browser=Path(program)))
             # Chrome keeps its default folders under the home macOS reports; the box lets it write none there, so
             # it is given one of its own, inside the temporary folder
             env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}

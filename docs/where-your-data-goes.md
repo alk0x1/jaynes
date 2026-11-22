@@ -99,13 +99,15 @@ your home folder beyond the run's copy, the folders the role names and the toolc
 temporary folder your Claude Code sessions share (their scratchpads and the output of their background tasks): each
 turn of the agent gets one of its own, taken away when it ends. Where you let the project's tests start their own
 servers or opened its ports, or where the step names local ports, on macOS the agent's commands may serve on and reach
-every local port of this Mac, the Jaynes page's among them. Those guards are partial (in Claude Code the sandbox
-covers shell commands only):
+every local port of this Mac, the Jaynes page's among them. Your browsers' apps are hidden from the agent's
+commands, so Chrome, Firefox and the browsers built like them do not start there; Safari is held only in Jaynes's own
+box, below. Those guards are partial (in Claude Code the sandbox covers shell commands only):
 [what the engine guarantees](guarantees.md#what-this-page-does-not-promise) says how far they go.
 
 The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS. It
-denies the network except local TCP ports and sends no UDP, and it hides what the engine keeps (the page's key and
-log, the record, other runs). The local ports are a list, closed by default: the commands bind and reach only the
+denies the network except local TCP ports and sends no UDP, it hides what the engine keeps (the page's key and
+log, the record, other runs) and your browsers' profiles, and it starts none of your browsers. Jaynes itself uses the
+Chrome you installed, with no window and a profile of its own, to photograph pages; no agent opens it. The local ports are a list, closed by default: the commands bind and reach only the
 free ports the run reserved for them (handed over in `JAYNES_PORTS`) and the ones the step or the check names in the
 role (`local_ports`), never the Jaynes page's; a suite that serves on another port is stopped, and told which port
 and how to take one of its own. **The known limits:** where you open one project's checks to every local port

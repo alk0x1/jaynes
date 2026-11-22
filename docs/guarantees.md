@@ -96,15 +96,18 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   hidden), except where you let the project's tests start their own servers or opened its ports,
   or where the step names local ports: there, on macOS, the agent's commands may serve on and
   reach every local port of this Mac, the Jaynes page's and your other programs' among them.
-  Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
+  Those commands open no app, and your browsers' apps are hidden from them, so Chrome, Firefox
+  and the browsers built like them do not start; Safari, built from macOS's own parts, is held
+  only in Jaynes's own box. Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
 - That what Jaynes runs itself is held beyond its box. On macOS, a project's test suite, a
   check's commands and a role's own scripts run in Jaynes's own box: they write only in the
   step's folders; they reach no network but the local ports the run reserved or the step
   names, and with the project's test servers the ports you let its tests use and the ports the
   system picks for them, never the Jaynes page's; where you opened a project's ports yourself,
   every local port, the page's among them; they send no UDP, cannot read the engine's folder, the other
-  runs or your secrets, cannot use your clipboard or keychain, open no app and write to no
-  terminal. They can still read your other files that are not on the list of secrets, take a
+  runs, your secrets or your browsers' profiles, cannot use your clipboard or keychain, open no
+  app, start none of your browsers and write to no terminal. Jaynes itself uses the Chrome you
+  installed, with no window and a profile of its own, to photograph pages, and no agent opens it. They can still read your other files that are not on the list of secrets, take a
   port they are allowed in a way other machines on your network can reach while they run, and
   use as much CPU, memory and disk as the step's time allows. Elsewhere there is no box yet,
   and these commands do not run.

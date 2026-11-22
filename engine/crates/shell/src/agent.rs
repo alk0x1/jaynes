@@ -410,6 +410,18 @@ impl Default for Claude {
 
 const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 
+/// The person's browsers, which no agent's command starts (the tech-lead's rule, 22/11): Claude Code's sandbox lets
+/// any program start, so their bundles are hidden from it, and a browser's program, which loads its frameworks from
+/// inside its bundle, cannot start (measured with a stand-in). Safari loads its parts from macOS's own and is held
+/// only in Jaynes's box. The same list as jaynes_box.py's, which a test checks; the person's own Applications are
+/// under the hidden home.
+pub const BROWSER_APPS: &[&str] = &["Google Chrome.app", "Google Chrome Beta.app", "Google Chrome Dev.app", "Google Chrome Canary.app",
+    "Chromium.app", "Safari.app", "Safari Technology Preview.app", "Firefox.app", "Firefox Developer Edition.app", "Firefox Nightly.app",
+    "Microsoft Edge.app", "Brave Browser.app", "Arc.app", "Opera.app", "Vivaldi.app"];
+/// Where macOS keeps apps for everyone, Safari's own place among them (/Applications/Safari.app links there).
+pub const BROWSER_PLACES: &[&str] = &["/Applications", "/System/Cryptexes/App/System/Applications",
+    "/System/Volumes/Preboot/Cryptexes/App/System/Applications"];
+
 /// The tools Claude Code makes available to a step's agent, named one by one (`--tools`), never the ones it takes
 /// away: Claude Code's default set grows with each version, and holds tools that leave the step's reach whatever its
 /// settings say, such as SendMessage and ListAgents, which reach the person's other Claude sessions, and CronCreate,
@@ -633,6 +645,10 @@ impl Claude {
         // agent's commands keep theirs in a folder of the turn's (OwnTmp)
         let shared = user().map(shared_tmp).unwrap_or_default();
         hide.extend(shared.iter().cloned());
+        // the person's browsers, which none of the agent's commands starts: where macOS keeps them
+        if cfg!(target_os = "macos") {
+            hide.extend(BROWSER_PLACES.iter().flat_map(|place| BROWSER_APPS.iter().map(move |app| format!("{place}/{app}"))));
+        }
         json!({
             "permissions": {"defaultMode": if asks { "default" } else { "dontAsk" }, "allow": allow, "deny": deny,
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
@@ -1428,6 +1444,34 @@ mod tests {
         std::fs::write(gone.join("left"), "x").expect("write");
         drop(own);
         assert!(!gone.exists(), "taken away after the turn");
+    }
+
+    #[test]
+    fn an_agent_s_commands_start_no_browser_of_the_person_and_open_no_app() {
+        // Claude Code's sandbox lets any program start, so the person's browsers' bundles are hidden from it: their
+        // programs load their frameworks from inside them, which a hidden bundle refuses (measured 22/11 with a
+        // stand-in, prototipos/box-single)
+        let c = Claude { model: "m".into(), effort: "high".into(), max_messages: 10 };
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
+        let settings = c.settings(Path::new("/w"), &reach, &[], false, true);
+        let hidden: Vec<&str> = settings["sandbox"]["filesystem"]["denyRead"].as_array().expect("denyRead").iter().filter_map(|v| v.as_str()).collect();
+        for p in ["/Applications/Google Chrome.app", "/Applications/Chromium.app", "/Applications/Firefox.app", "/Applications/Brave Browser.app",
+                  "/Applications/Safari.app", "/System/Cryptexes/App/System/Applications/Safari.app"] {
+            assert_eq!(hidden.contains(&p), cfg!(target_os = "macos"), "{p}: {hidden:?}");
+        }
+        // the person's own Applications are under the hidden home
+        assert!(hidden.contains(&"~/"), "{hidden:?}");
+        // Claude Code's sandbox opens apps and sends Apple events only when asked to
+        assert!(settings["sandbox"].get("allowAppleEvents").is_none_or(|v| v == &json!(false)), "{settings}");
+        // the box (jaynes_box.py) refuses the same browsers: one list, written in both
+        let box_py = include_str!("../../../python/jaynes_box.py");
+        let quoted = |name: &str| -> Vec<String> {
+            let at = box_py.find(&format!("{name} = (")).unwrap_or_else(|| panic!("{name} in jaynes_box.py"));
+            let body = &box_py[at..at + box_py[at..].find(')').expect("end")];
+            body.split('"').skip(1).step_by(2).map(str::to_string).collect()
+        };
+        assert_eq!(quoted("BROWSER_APPS"), super::BROWSER_APPS);
+        assert_eq!(quoted("BROWSER_PLACES"), super::BROWSER_PLACES);
     }
 
     #[test]
