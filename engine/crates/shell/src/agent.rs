@@ -694,13 +694,18 @@ pub fn box_spec(spec: &Spec<'_>, python: &Path, library: &Path) -> Value {
     let (servers, any_port) = (spec.servers, spec.any_port);
     let writable = if reach.project == ProjectAccess::Read { cwd.join(crate::project::EXCHANGE) } else { cwd.to_path_buf() };
     let hide: Vec<String> = hidden(cwd, reads).into_iter().filter(|h| h != "~/").collect();
-    json!({
+    let mut spec = json!({
         "work": cwd, "writable": [writable], "readable": reads, "hidden": hide,
         "home": std::env::var("HOME").unwrap_or_default(), "engine": crate::home(),
         "local_ports": reach.local_ports, "test_servers": servers && !any_port, "any_port": any_port,
         "pwd": cwd.join(crate::project::EXCHANGE).join("tmp").join(AGENT_PWD),
         "python": python, "box": library.join("jaynes_box.py"),
-    })
+    });
+    // a step that installs packages reaches their hosts through Jaynes's proxy, the only address its box reaches
+    if reach.network == Network::Packages {
+        spec["packages"] = json!({"hosts": PACKAGE_HOSTS, "port": 443});
+    }
+    spec
 }
 
 /// The file in the step's exchange that keeps where the agent's last shell command ended, so the next starts there.
@@ -1551,6 +1556,10 @@ mod tests {
         // a step that only reads the project writes only Jaynes's exchange in it
         let read = spec(&Reach { project: ProjectAccess::Read, ..reach.clone() }, false, false);
         assert_eq!(read["writable"], json!([cwd.join(crate::project::EXCHANGE)]));
+        // a step that installs nothing has no proxy; one that installs packages reaches their hosts through Jaynes's
+        assert!(s.get("packages").is_none(), "{s}");
+        let packages = spec(&Reach { network: Network::Packages, ..reach.clone() }, false, false);
+        assert_eq!(packages["packages"], json!({"hosts": PACKAGE_HOSTS, "port": 443}));
         // open ports are every port, with no window of the test servers' own
         let open = spec(&reach, true, true);
         assert_eq!((&open["test_servers"], &open["any_port"]), (&json!(false), &json!(true)));

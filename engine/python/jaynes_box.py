@@ -72,7 +72,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _replaced
 from pathlib import Path
 from typing import Any, cast
 
@@ -1743,6 +1743,83 @@ def _agent_start(work: Path, pwd: Path) -> Path:
     return named if named.is_dir() and named.is_relative_to(work) else work
 
 
+class PackageProxy:
+    """Jaynes's own proxy for a step that installs packages: it runs outside the box, in the process that starts the
+    command, on a port of the loopback the box may reach, and opens a tunnel (HTTP CONNECT) only to the hosts the step
+    may reach (agent.rs PACKAGE_HOSTS), on their port; any other request is refused, and it reads nothing of what the
+    tunnel carries. The box itself reaches no other address."""
+
+    def __init__(self, hosts: tuple[str, ...], port: int = 443):
+        self.hosts = frozenset(h.lower() for h in hosts)
+        self.target_port = port
+        self.server = socket.create_server(("127.0.0.1", 0))
+        self.port = self.server.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def env(self) -> dict[str, str]:
+        url = f"http://127.0.0.1:{self.port}"
+        return {"HTTPS_PROXY": url, "https_proxy": url, "HTTP_PROXY": url, "http_proxy": url,
+                "npm_config_proxy": url, "npm_config_https_proxy": url, "CARGO_HTTP_PROXY": url,
+                "NO_PROXY": "", "no_proxy": ""}
+
+    def close(self) -> None:
+        self.server.close()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._one, args=(conn,), daemon=True).start()
+
+    def _one(self, conn: socket.socket) -> None:
+        upstream = None
+        try:
+            conn.settimeout(30)
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 8192:
+                got = conn.recv(4096)
+                if not got:
+                    return
+                head += got
+            line = head.split(b"\r\n", 1)[0].decode("latin-1").split()
+            if len(line) != 3 or line[0] != "CONNECT":
+                conn.sendall(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+                return
+            host, _, port = line[1].rpartition(":")
+            if host.lower() not in self.hosts or port != str(self.target_port):
+                conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                return
+            try:
+                upstream = socket.create_connection((host, self.target_port), timeout=30)
+            except OSError:
+                conn.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                return
+            conn.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            rest = head.split(b"\r\n\r\n", 1)[1]
+            if rest:
+                upstream.sendall(rest)
+            conn.settimeout(None)
+            upstream.settimeout(None)
+            pair = {conn: upstream, upstream: conn}
+            while True:
+                ready, _, _ = select.select(list(pair), [], [], 300)
+                if not ready:
+                    return
+                for side in ready:
+                    data = side.recv(65536)
+                    if not data:
+                        return
+                    pair[side].sendall(data)
+        except OSError:
+            return
+        finally:
+            conn.close()
+            if upstream is not None:
+                upstream.close()
+
+
 def agent_box(spec: dict[str, Any]) -> tuple[Box, Path, Path, dict[str, str]]:
     """The box of one shell command of a Claude Code agent, from the turn's ``spec`` (agent.rs writes it): the step's
     folder (``work``) and what it writes and reads, the whole home hidden but for those, what else is hidden (the
@@ -1775,6 +1852,7 @@ def agent_run(spec_path: Path | str, command: str) -> int:
     The box is a file, or its text itself (a ``str``), as the leave server gives it in each command, read once as it
     started: never a file the agent's own tools may write. What the engine keeps is found from the spec's
     ``engine``, never from the command's environment."""
+    proxy = None
     try:
         spec = json.loads(spec_path if isinstance(spec_path, str) else spec_path.read_text())
         if not isinstance(spec, dict):
@@ -1782,6 +1860,12 @@ def agent_run(spec_path: Path | str, command: str) -> int:
         if spec.get("engine"):
             os.environ["JAYNES_ENGINE_HOME"] = str(spec["engine"])
         b, start, pwd, adds = agent_box(spec)
+        packages = spec.get("packages")
+        if packages:
+            # the step installs packages: its registries through Jaynes's proxy, the only address the box reaches
+            proxy = PackageProxy(tuple(str(h) for h in packages["hosts"]), int(packages.get("port", 443)))
+            b = _replaced(b, ports=(*b.ports, proxy.port))
+            adds = adds | proxy.env()
         argv = [str(SANDBOX_EXEC), "-p", profile(b), "/bin/bash", "-c", AGENT_SCRIPT, "jaynes-agent", str(start), command,
                 str(pwd)]
     except AgentRefused as e:
@@ -1792,8 +1876,12 @@ def agent_run(spec_path: Path | str, command: str) -> int:
         return 126
     env = {k: v for k, v in inherited().items() if k != "JAYNES_ENGINE_HOME"} | adds
     holds = tuple(p for p in HELD_PORTS if p not in b.local_ports and p not in b.reserved) if b.window else ()
-    with _holding(holds) if b.window else contextlib.nullcontext():
-        return subprocess.call(argv, cwd=start, env=env)
+    try:
+        with _holding(holds) if b.window else contextlib.nullcontext():
+            return subprocess.call(argv, cwd=start, env=env)
+    finally:
+        if proxy is not None:
+            proxy.close()
 
 
 if __name__ == "__main__":

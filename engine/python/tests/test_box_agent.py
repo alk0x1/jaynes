@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -128,6 +129,51 @@ class TheAgentSCommandsRunInJaynesSBox(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertNotIn("ran\n", done.stdout)
         self.assertIn("Jaynes ran none of this command", done.stderr)
+
+    def test_a_step_that_installs_packages_reaches_its_registries_through_jaynes_s_proxy_and_nothing_else(self):
+        # a stand-in registry on this machine's loopback: the proxy lets the box reach it by the name the list gives
+        registry = socket.create_server(("127.0.0.1", 0))
+        port = registry.getsockname()[1]
+        heard: list[bytes] = []
+
+        def serve():
+            while True:
+                try:
+                    conn, _ = registry.accept()
+                except OSError:
+                    return
+                with conn:
+                    conn.sendall(b"REGISTRY")
+                    conn.settimeout(2)
+                    try:
+                        heard.append(conn.recv(64))
+                    except OSError:
+                        pass
+
+        threading.Thread(target=serve, daemon=True).start()
+        ask = ("python3 -c 'import os,socket,sys; u=os.environ[\"HTTPS_PROXY\"].split(\"//\")[1].rstrip(\"/\"); "
+               "h,p=u.rsplit(\":\",1); s=socket.create_connection((h,int(p)),timeout=5); "
+               "s.sendall((\"CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n\" % (sys.argv[1], sys.argv[1])).encode()); "
+               "head=s.recv(4096).decode(); print(head.split()[1]); "
+               "head.startswith(\"HTTP/1.1 200\") and (print(s.recv(64).decode()), s.sendall(b\"hello\"))' {}")
+        try:
+            spec = self.spec(packages={"hosts": ["localhost"], "port": port})
+            code, said = self.agent_run(ask.format(f"localhost:{port}"), spec)
+            self.assertEqual((code, said), (0, "200\nREGISTRY\n"))
+            # a host the list does not name, or another port, is refused by the proxy
+            for target in (f"example.com:{port}", f"localhost:{port + 1}", "localhost:22"):
+                code, said = self.agent_run(ask.format(target), spec)
+                self.assertEqual((code, said), (0, "403\n"), target)
+            # the box itself reaches the registry by no other way
+            direct = f"python3 -c 'import socket; print(socket.socket().connect_ex((\"127.0.0.1\", {port})))'"
+            code, said = self.agent_run(direct, spec)
+            self.assertNotEqual(said.strip(), "0", said)
+            # a step that installs nothing has no proxy at all
+            code, said = self.agent_run("echo ${HTTPS_PROXY:-none}", self.spec())
+            self.assertEqual((code, said), (0, "none\n"))
+        finally:
+            registry.close()
+        self.assertIn(b"hello", heard)
 
     def test_the_command_gets_its_arguments_whole(self):
         code, said = self.agent_run("printf '%s|' \"a b\" 'c'\"'\"'d' $HOME_UNSET; echo")
