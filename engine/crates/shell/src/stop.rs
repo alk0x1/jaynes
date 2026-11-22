@@ -278,6 +278,18 @@ pub fn role_note(run: &Run, q: &jaynes_core::question::Question) -> String {
     }
 }
 
+/// The answer a stop the request settled offers in place of what the request said, on the button that opens it from
+/// the run's story: "Change" at a choice, otherwise the first verdict other than keep in the role's words ("Not this
+/// bug"), or Jaynes's name for it.
+pub fn other_answer(run: &Run, q: &jaynes_core::question::Question) -> String {
+    if q.choose {
+        return label_for(VerdictKind::Change, q.kind).to_string();
+    }
+    let words = role_words(run, q);
+    let v = q.offered.iter().copied().find(|v| *v != VerdictKind::Keep).unwrap_or(VerdictKind::Redo);
+    words.get(&v).cloned().unwrap_or_else(|| label_for(v, q.kind).to_string())
+}
+
 /// What each answer the stop offers still makes run again, as the core says it would (jaynes_core::effects).
 pub fn still_redoes(run: &Run, q: &jaynes_core::question::Question) -> String {
     let every = |v: VerdictKind| -> Answer {

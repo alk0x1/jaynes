@@ -945,7 +945,13 @@ impl Page {
                 Some(r) => {
                     let who = if r.halted { self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e)) } else { None };
                     let left = if gone(r) { Some(older_html(&self.home, r, crate::moved::when(&moved_list, &r.id))) } else { None };
-                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left, crate::listing::blocked(&self.home, r))
+                    // what each stop the request settled showed, for its line in the run's story
+                    let showed: std::collections::BTreeMap<String, String> = r
+                        .questions
+                        .values()
+                        .filter_map(|q| Some((q.question.id.clone(), crate::listing::settled_shows(&store.display(&q.question.items.first()?.digest))?)))
+                        .collect();
+                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left, crate::listing::blocked(&self.home, r), &showed)
                 }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
@@ -1200,7 +1206,7 @@ fn tokens_said(n: u64) -> String {
 
 #[cfg(test)]
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
-    run_html_of(r, changes, summary, halted_by, name, None, None)
+    run_html_of(r, changes, summary, halted_by, name, None, None, &Default::default())
 }
 
 /// What a run whose engine left the Mac says in place of its controls (motor-velho.md, row 28): why it cannot go
@@ -1225,7 +1231,7 @@ fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String 
 /// `blocked`: a blocked run's words as listing::blocked reads them from the engine's home, with the hidden cases that
 /// failed; None, its record's reason alone.
 #[allow(clippy::too_many_arguments)]
-fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>, blocked: Option<crate::listing::BlockedSaid>) -> String {
+fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>, blocked: Option<crate::listing::BlockedSaid>, showed: &std::collections::BTreeMap<String, String>) -> String {
     let path = r.path();
     let gone = older.is_some();
     let steps = stage_list(r, gone);
@@ -1293,18 +1299,34 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
     } else {
         String::new()
     };
-    // the stops the run went on without, under where it is now, each in one line with its Answer
+    // the stops the run went on without, under where it is now, each in one line with its Answer; a stop the request
+    // settled says what it holds and that the run went on, or that the merge kept it, with its other answer while it
+    // can still be given and what it showed under it (the design-lead's merge.md)
     let passed: String = r
         .questions
         .values()
-        .filter(|q| crate::stop::went_on(r, q).is_some())
-        .map(|q| {
-            format!(
+        .filter(|q| !q.superseded)
+        .filter_map(|q| {
+            let went_on = crate::stop::went_on(r, q).is_some();
+            // a stop the role says the request settles, or one a merge's touch named; any other the run went on without
+            // keeps its line with Answer (the tech-lead's rule, 21/11)
+            let settles = r.manifest.index(&q.question.step).and_then(|i| r.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.settled.is_some())
+                || r.questions.values().any(|m| m.question.rides.iter().any(|x| x.question == q.question.id));
+            if let Some(line) = crate::listing::settled_line(r, q).filter(|_| settles) {
+                let other = if went_on {
+                    format!("<a href=\"/q/{}/{}\">{}</a>", esc(&r.id), esc(&q.question.id), esc(&crate::stop::other_answer(r, &q.question)))
+                } else {
+                    String::new()
+                };
+                let under = showed.get(&q.question.id).map(|s| format!("<small>{}</small>", esc(s))).unwrap_or_default();
+                return Some(format!("<div class=\"passed settled\"><span>{}{under}</span>{other}</div>", ticks(&line)));
+            }
+            went_on.then(|| format!(
                 "<div class=\"passed\"><span>◇ {}</span><a href=\"/q/{}/{}\">Answer</a></div>",
                 ticks(&crate::listing::passed_line(&q.question.step, &crate::listing::title(q))),
                 esc(&r.id),
                 esc(&q.question.id)
-            )
+            ))
         })
         .collect();
     let (phase, answers, buttons, passed, correct) = match older {
@@ -1668,7 +1690,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     format!(
         "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{note}{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
-         {rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
+         {rides}{rows}{keeps}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
@@ -1701,6 +1723,40 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         },
         stages = stage_list(run, gone),
         data = data.replace('<', "\\u003c"),
+        rides = rides_html(&run.id, question),
+        keeps = match question.rides.len() {
+            0 => String::new(),
+            1 => "<p class=\"keeps\">Merging also keeps the answer above.</p>".to_string(),
+            n => format!("<p class=\"keeps\">Merging also keeps the {n} answers above.</p>"),
+        },
+    )
+}
+
+/// The stops a merge's touch keeps as the request settled them, each with its step, what it holds in Jaynes's words
+/// and an Open to answer it differently before the merge (the design-lead's merge.md); nothing at another question.
+fn rides_html(run: &str, question: &jaynes_core::question::Question) -> String {
+    if question.rides.is_empty() {
+        return String::new();
+    }
+    let rows: String = question
+        .rides
+        .iter()
+        .map(|r| {
+            let mut said = r.said.trim().trim_end_matches('.').to_string();
+            if let Some(c) = said.chars().next() {
+                said.replace_range(..c.len_utf8(), &c.to_uppercase().to_string());
+            }
+            format!(
+                "<div class=\"ride\"><span class=\"st\">“{}”</span><span>{}.</span><a href=\"/q/{}/{}\">Open</a></div>",
+                esc(&r.step),
+                esc(&said),
+                esc(run),
+                esc(&r.question)
+            )
+        })
+        .collect();
+    format!(
+        "<div class=\"rides\"><div class=\"qh\">Your touch also keeps these</div>{rows}<p class=\"dim\">Merging keeps each as it is. To answer one differently, open it before you merge.</p></div>"
     )
 }
 
@@ -2750,6 +2806,11 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .req .more { color:var(--blue); font-size:13px; } .req[open] .more { display:none; }
 .notice.passed-q { background:var(--panel); color:var(--dim); }
 .passed { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:8px 0; font-size:13px; color:var(--dim); border-top:1px solid var(--line); }
+.passed.settled small { display:block; margin-top:3px; font-size:12px; color:var(--faint); }
+.rides { margin:14px 0 10px; } .rides .ride { display:flex; align-items:baseline; gap:12px; padding:6px 0; font-size:13.5px; border-top:1px solid var(--line); }
+.rides .st { color:var(--dim); white-space:nowrap; } .rides .ride span:nth-child(2) { flex:1; }
+.rides .ride a { border:1px solid var(--line-2); border-radius:8px; padding:3px 12px; color:var(--ink); white-space:nowrap; }
+.rides p.dim, p.keeps { color:var(--dim); font-size:12.5px; margin:8px 0 0; }
 .passed span { color:var(--dim); } .passed a { border:1px solid var(--line-2); border-radius:8px; padding:4px 12px; color:var(--ink); white-space:nowrap; }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.blocked { color:var(--ink); } .notice.blocked > b { color:var(--red); } .notice .cases { margin-top:10px; color:var(--ink); } .notice .cases .ch { color:var(--dim); font-size:12px; margin-bottom:4px; } .notice .case { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:10px 12px; margin-top:6px; } .notice .case .by { display:block; color:var(--dim); font-size:12px; } .notice .case p { margin:4px 0 0; } .notice .case code { color:var(--ink); } .notice .case pre { margin:6px 0 0; font-family:var(--mono); font-size:12px; color:var(--faint); white-space:pre-wrap; } .notice .case details.all summary { list-style:none; cursor:pointer; color:var(--dim); font-size:12px; margin-top:4px; } .notice .case details.all summary::-webkit-details-marker { display:none; } .notice .case .fi { color:var(--dim); font-size:12px; } .notice .way { margin-top:8px; } .notice .way code { color:var(--ink); } .notice .then { display:block; color:var(--dim); margin-top:2px; } .notice details.still { margin-top:4px; color:var(--dim); } .notice details.still summary { cursor:pointer; } .notice details.still ul { margin:4px 0 0 18px; padding:0; } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
@@ -3377,6 +3438,62 @@ mod tests {
         let _gone = std::fs::remove_dir_all(&home);
     }
 
+    // The tech-lead, 22/11: one moment, the merge, one touch (the design-lead's merge.md). The merge's question on the
+    // page names each stop its touch keeps, with what it holds and an Open; the run's story says what such a stop holds
+    // and that the run went on, with the stop's other answer to open it and what it showed under it.
+    #[test]
+    fn asked_one_moment_at_the_merge_on_the_page() {
+        use jaynes_core::question::{Item, Question, Ride, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-one-moment-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs/o/project/.git")).expect("copy");
+        std::fs::write(home.join("runs/o/project/.git/jaynes-start"), "main\n").expect("start");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "fix-bug", "version": "4.0.0", "protocol": 1,
+            "steps": [
+                {"name": "reproduce", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": false, "settled": "the bug", "answers": {"keep": "Yes", "redo": "Not this bug"}}},
+                {"name": "fix", "executor": "agent", "needs": ["reproduce"]},
+            ],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "o".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let mut events = decide(None, &start).expect("start").events;
+        let bug = Question { rides: Vec::new(),
+            id: "q-bug".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
+            items: vec![Item { id: "bug".into(), label: "Exporting a note with a comma breaks the CSV".into(), digest: Digest("d-bug".into()) }],
+            offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        events.push(Event::QuestionOpened { question: bug });
+        events.push(Event::Waiting { step: Some("fix".into()), on: vec![], why: String::new() });
+        events.push(Event::QuestionOpened {
+            question: Question { rides: vec![Ride { question: "q-bug".into(), step: "reproduce".into(), said: "the bug, as your request says".into() }],
+                id: "merge-1".into(), step: "fix".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![VerdictKind::Keep, VerdictKind::Drop],
+                holds: true, about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            },
+        });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("o", &events).expect("append");
+        store.put_setup("o", &json!({})).expect("setup");
+        store.put_display(&Digest("d-bug".into()), &json!({"aspects": [
+            {"label": "Now", "text": "Exporting a note with a comma breaks the CSV."},
+            {"label": "After the fix", "text": "The comma stays inside its quotes."},
+        ]})).expect("display");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let asked = page.render(View::Question("o".into(), "merge-1".into()), now).expect("the merge");
+        assert!(asked.contains("Your touch also keeps these"), "the stops it keeps");
+        assert!(asked.contains("<span class=\"st\">“reproduce”</span><span>The bug, as your request says.</span><a href=\"/q/o/q-bug\">Open</a>"), "each with its step, what it holds, and Open");
+        assert!(asked.contains("Merging keeps each as it is. To answer one differently, open it before you merge."), "under them");
+        assert!(asked.contains("Merging also keeps the answer above."), "what the merge keeps, for one");
+        let run = page.render(View::Run("o".into()), now).expect("the run");
+        assert!(run.contains("◇ At “reproduce”: the bug, as your request says · the run went on"), "the story's line");
+        assert!(run.contains("href=\"/q/o/q-bug\">Not this bug</a>"), "the stop's other answer opens it");
+        assert!(run.contains("now: Exporting a note with a comma breaks the CSV. → after the fix: The comma stays inside its quotes."), "what it showed");
+        assert!(!run.contains("Is this the bug? · The run went on without your answer."), "never the passed stop's line too");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
     // The tech-lead's rule, 21/11 (Alan's run r1795301086-403): the stop of a step the run already passed never covers
     // where the run is now. On the page the blocked notice stays on top and the passed stop goes under it, in one line
     // with Answer; the list beside has it under "Can still answer", and its question says where the run is now.
@@ -3499,7 +3616,7 @@ mod tests {
         let start = Input::Start { run: "b".into(), request: "O total do recibo sai errado".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         events.push(Event::QuestionOpened {
-            question: Question {
+            question: Question { rides: Vec::new(),
                 id: "q-repro".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
                 items: vec![Item { id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
                 offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
@@ -3783,7 +3900,7 @@ mod tests {
                 *engine = "0.0.1+nowhere".into();
             }
         }
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
             offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
         };

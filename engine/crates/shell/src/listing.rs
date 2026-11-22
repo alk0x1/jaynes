@@ -791,6 +791,24 @@ pub fn settled_line(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<St
     Some(format!("◇ At “{}”: {} · {how}", s.step, run.settled_said(s)))
 }
 
+/// What a stop the request settled showed, under its line in the run's story: the first two parts of its first item,
+/// each with its label, the one leading to the other ("now: Exporting a note with a comma breaks the CSV. → after the
+/// fix: The comma stays inside its quotes."). `display` is how the item is shown (Store::display); none without parts.
+pub fn settled_shows(display: &serde_json::Value) -> Option<String> {
+    let parts: Vec<String> = display["aspects"]
+        .as_array()?
+        .iter()
+        .filter_map(|a| {
+            let (label, text) = (a["label"].as_str()?.trim(), a["text"].as_str()?.trim());
+            let mut l = label.chars();
+            let label: String = l.next().map(|c| c.to_lowercase().chain(l).collect()).unwrap_or_default();
+            (!label.is_empty() && !text.is_empty()).then(|| format!("{label}: {text}"))
+        })
+        .take(2)
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" → "))
+}
+
 /// A run's story: each step its agents worked, in the order they started, with what they did there, turn after turn,
 /// read from the transcripts the engine writes as the agents speak, then what was said at its stop. The app shows it
 /// in the run's tab.
@@ -2243,7 +2261,7 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
         std::fs::create_dir_all(&home).expect("home");
         let asks = |r: &mut Run| {
-            let question = Question {
+            let question = Question { rides: Vec::new(),
                 id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
                 about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
             };
@@ -2481,7 +2499,7 @@ mod tests {
     fn asked_a_blocked_run_says_it_is_blocked_before_its_open_question() {
         let mut stuck = run("r1", "O total do recibo sai errado");
         stuck.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "change spent its 3 attempts".into() };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
             about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
