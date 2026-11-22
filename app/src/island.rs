@@ -14,7 +14,7 @@ use crate::model::Runs;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_base::input::{Input, InputEditorStyle, InputEvent, InputState, Position};
-use jaynes_core::question::VerdictKind;
+use jaynes_core::question::{QuestionKind, VerdictKind};
 use jaynes_shell::stop::{self, Stop};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -38,6 +38,9 @@ pub struct Island {
     reckoned: Reckoned,
     reading: bool,
     understood: Option<Result<Understood, String>>,
+    /// At the stop before the merge, what its two ways out do, in the engine's words: the question, then Merge's and
+    /// Branch only's sentences. Read once a question.
+    merge_said: Option<(String, Vec<String>, Vec<String>)>,
     shrunk: HashSet<String>,
     sending: bool,
     said: Option<String>,
@@ -79,10 +82,65 @@ fn asks(v: VerdictKind) -> Option<&'static str> {
 /// The hint in the person's words field, in every stop's card.
 pub const WORDS_HINT: &str = "Your words: say what you think, in any language (or answer with the buttons)";
 
-/// The line over the foot when something that cannot be undone lies ahead: sending asks for the person's touch. None
-/// when nothing does, and then no touch is asked.
-pub fn ahead_line(ahead: Option<&str>) -> Option<String> {
-    ahead.map(|a| format!("Ahead: {a}. Sending asks for your touch."))
+/// The line over the foot when something lies ahead: a step that cannot be undone, whose answer asks for the
+/// person's touch, or the merge, which asks them itself before it lands. None at a leave and at the merge itself.
+pub fn ahead_line(stop: &Stop) -> Option<String> {
+    let then = if crate::answer::touch_of(stop).is_some() { "Sending asks for your touch." } else { "You look at it before it lands." };
+    stop.ahead.as_deref().map(|a| format!("Ahead: {a}. {then}"))
+}
+
+/// The Send button's words: with " · Touch ID" only where the answer asks for the touch.
+pub fn send_label(stop: &Stop, sending: bool) -> String {
+    match (crate::answer::touch_of(stop), sending) {
+        (_, true) => "Sending…".to_string(),
+        (Some(_), _) => "Send · Touch ID".to_string(),
+        (None, _) => "Send".to_string(),
+    }
+}
+
+/// The amber mark of a file in what goes in that runs later outside any box, the heading of the part that says how
+/// each runs, the line under it, and the line under the merge's two ways out (design 0.2.5 permissao.md).
+pub const RUNS_LATER: &str = "runs later outside any box";
+pub const LATER_HEAD: &str = "Runs later outside any box";
+pub const READ_THESE: &str = "Read these before you merge: they run on your machine, outside any box.";
+pub const ONE_TOUCH: &str = "Merging asks for your touch, once.";
+
+/// The most files the merge's stop lists; the rest are counted.
+const LANDS_SHOWN: usize = 8;
+
+/// What the merge lands, as its stop says it.
+#[derive(Debug, Default, PartialEq)]
+pub struct Landing {
+    /// "What goes in · 7 files · +182 −40 lines".
+    pub goes_in: String,
+    /// Each file shown: its path, its lines ("+64 −12", "+88"), and whether it runs later outside any box.
+    pub rows: Vec<(String, String, bool)>,
+    /// "… and 4 more", past the eighth.
+    pub more: Option<String>,
+    /// Each file that runs later outside any box, and how, in plain words: the amber part, empty when none does.
+    pub later: Vec<(String, String)>,
+}
+
+/// A file's lines, as the merge's stop says them: what it adds, what it removes, and only what is there.
+fn lines_said(added: u64, removed: u64) -> String {
+    match (added, removed) {
+        (a, 0) => format!("+{a}"),
+        (0, r) => format!("−{r}"),
+        (a, r) => format!("+{a} −{r}"),
+    }
+}
+
+/// What the merge's stop says lands on the person's branch, from what the engine gives (`Stop.lands`).
+pub fn landing(stop: &Stop) -> Landing {
+    let (added, removed) = stop.lands.iter().fold((0, 0), |(a, r), l| (a + l.added, r + l.removed));
+    let n = stop.lands.len();
+    let files = if n == 1 { "1 file".to_string() } else { format!("{n} files") };
+    Landing {
+        goes_in: format!("What goes in · {files} · +{added} −{removed} lines"),
+        rows: stop.lands.iter().take(LANDS_SHOWN).map(|l| (l.path.clone(), lines_said(l.added, l.removed), l.runs.is_some())).collect(),
+        more: (n > LANDS_SHOWN).then(|| format!("… and {} more", n - LANDS_SHOWN)),
+        later: stop.lands.iter().filter_map(|l| l.runs.map(|r| (l.path.clone(), format!("{r}.")))).collect(),
+    }
 }
 
 /// The caret of every field: blue, where the kit's own near-black hid it on the dark.
@@ -95,7 +153,7 @@ pub fn field_look(focused: bool) -> (u32, bool) {
     if focused { (look::blue(), true) } else { (look::line(), false) }
 }
 
-fn word(v: VerdictKind) -> &'static str {
+pub fn word(v: VerdictKind) -> &'static str {
     match v {
         VerdictKind::Keep => "keep",
         VerdictKind::Change => "change",
@@ -416,6 +474,7 @@ impl Island {
             reckoned: Reckoned::default(),
             reading: false,
             understood: None,
+            merge_said: None,
             shrunk: HashSet::new(),
             sending: false,
             said: None,
@@ -625,7 +684,7 @@ impl Island {
         self.sending = true;
         self.said = None;
         cx.notify();
-        let sent = answer::send(self.key.clone(), stop.ahead.clone(), body);
+        let sent = answer::send(self.key.clone(), answer::touch_of(&stop).map(str::to_string), body);
         cx.spawn(async move |this, cx| {
             let sent = sent.await;
             let _ = this.update(cx, |this, cx| {
@@ -662,6 +721,72 @@ impl Island {
             return;
         }
         self.send(cx);
+    }
+
+    /// The merge's answer, one for every file: Merge (keep) or Branch only (drop), with the touch once.
+    fn send_all(&mut self, v: VerdictKind, cx: &mut Context<Self>) {
+        let Some(stop) = self.stop(cx) else { return };
+        if self.sending {
+            return;
+        }
+        self.send_body(answer::all(&stop, v), cx);
+    }
+
+    /// What the merge's two ways out do, in the engine's words, read once for its question.
+    fn merge_said(&mut self, stop: &Stop) -> (Vec<String>, Vec<String>) {
+        if self.merge_said.as_ref().is_none_or(|(q, _, _)| *q != stop.question) {
+            let said = |v| answer::reckon(&answer::all(stop, v)).sentences;
+            self.merge_said = Some((stop.question.clone(), said(VerdictKind::Keep), said(VerdictKind::Drop)));
+        }
+        self.merge_said.clone().map(|(_, k, d)| (k, d)).unwrap_or_default()
+    }
+
+    /// The stop before the merge: what goes in, each file with its lines, and the files that run later outside any
+    /// box, each with how, in amber.
+    fn landing_view(&self, stop: &Stop, cx: &mut Context<Self>) -> Div {
+        let l = landing(stop);
+        let diff_stop = stop.clone();
+        let mut rows = div().flex().flex_col().gap(px(3.)).font_family(look::MONO_FONT).text_size(px(12.));
+        for (path, lines, later) in &l.rows {
+            rows = rows.child(
+                div()
+                    .flex()
+                    .gap(px(12.))
+                    .child(div().flex_1().min_w_0().truncate().text_color(rgb(look::text())).child(path.clone()))
+                    .child(div().flex_none().text_color(rgb(look::dim())).child(lines.clone()))
+                    .when(*later, |d| d.child(div().flex_none().font_family(look::UI_FONT).text_color(rgb(look::amber())).child(RUNS_LATER))),
+            );
+        }
+        let mut view = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(10.))
+                    .items_center()
+                    .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(rgb(look::dim())).child(l.goes_in.clone()))
+                    .child(button("changes".into(), "See the changes", false, look::blue()).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx)))),
+            )
+            .child(rows.when_some(l.more.clone(), |d, m| d.child(div().font_family(look::UI_FONT).text_color(rgb(look::faint())).child(m))));
+        if !l.later.is_empty() {
+            let mut later = div().flex().flex_col().gap(px(4.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(rgba((look::amber() << 8) | 0x73)).child(
+                div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::amber())).child(LATER_HEAD),
+            );
+            for (path, how) in &l.later {
+                later = later.child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .text_size(px(12.5))
+                        .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::text())).child(format!("`{path}`")))
+                        .child(div().text_color(rgb(look::dim())).child(how.clone())),
+                );
+            }
+            view = view.child(later.child(div().pt(px(2.)).text_size(px(12.)).text_color(rgb(look::amber())).child(READ_THESE)));
+        }
+        view
     }
 
     fn send(&mut self, cx: &mut Context<Self>) {
@@ -1153,9 +1278,14 @@ impl Render for Island {
         let words = self.words.clone().expect("made above");
         let judged = stop.items.iter().filter(|i| self.marks.contains_key(&i.id)).count();
         let can = self.can_send(&stop);
+        let merge = stop.kind == QuestionKind::Merge;
         let mut items = div().flex().flex_col().gap(px(10.));
-        for it in &stop.items {
-            items = items.child(self.item_view(it, &stop, false, window, cx));
+        if merge {
+            items = items.child(self.landing_view(&stop, cx));
+        } else {
+            for it in &stop.items {
+                items = items.child(self.item_view(it, &stop, false, window, cx));
+            }
         }
         let mut back = div().flex().flex_col().gap(px(8.));
         if !stop.back.is_empty() {
@@ -1214,11 +1344,7 @@ impl Render for Island {
             }
             _ => None,
         };
-        let send_label = match (&stop.ahead, self.sending) {
-            (_, true) => "Sending…".to_string(),
-            (Some(_), _) => "Send · Touch ID".to_string(),
-            (None, _) => "Send".to_string(),
-        };
+        let send_label = send_label(&stop, self.sending);
         let q = stop.question.clone();
         let diff_stop = stop.clone();
         let field = self.words_focused(window, cx);
@@ -1248,7 +1374,8 @@ impl Render for Island {
                     .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(first))
                     .child(div().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(second)),
             )
-            .child(button("diff".into(), "See the diff", false, look::blue()).track_focus(&self.first).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx))))
+            // at the merge, "See the changes" is beside what goes in
+            .when(!merge, |d| d.child(button("diff".into(), "See the diff", false, look::blue()).track_focus(&self.first).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx)))))
             // as wide as its longer words, as the compare mode's; a press on it keeps the keys where they are, so it
             // does what it says
             .child(
@@ -1278,7 +1405,7 @@ impl Render for Island {
             .pt(px(16.))
             .pb(px(10.))
             .child(head)
-            .child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED))));
+            .child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED))));
         // the middle scrolls between the fixed head and foot; while there is more below, its bottom edge fades
         let max = self.scroll.max_offset().y;
         let more_below = fades_below(max, self.scroll.offset().y);
@@ -1298,10 +1425,11 @@ impl Render for Island {
             // WORDS_ROW and READ_ROW count these children: items, back, the words, the reading
             .child(items)
             .child(back)
-            .child(div().flex().gap(px(8.)).items_center().child(div().flex_1().child(focus_field("words", &words, window, cx))).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
+            // the merge is answered with its two ways out, for every file at once: no words, no item to judge
+            .when(!merge, |d| d.child(div().flex().gap(px(8.)).items_center().child(div().flex_1().child(focus_field("words", &words, window, cx))).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx))))))
             .children(understood)
             .when(!said.is_empty(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint())).child(sentences(&said))))
-            .when_some(ahead_line(stop.ahead.as_deref()), |d, line| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(line)));
+            .when_some(ahead_line(&stop), |d, line| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(line)));
         let transparent = rgba(look::panel_2() << 8);
         // 32 px, over content: the foot's own line is already there, and 16 vanished over the gap between two rows
         let fade = div().absolute().left_0().right_0().bottom_0().h(px(FADE)).bg(linear_gradient(180., linear_color_stop(transparent, 0.), linear_color_stop(rgb(look::panel_2()), 1.)));
@@ -1319,7 +1447,28 @@ impl Render for Island {
                 let (line, refusing) = foot_line(self.said.as_deref(), judged, stop.items.len(), self.reckoned.refused.as_deref());
                 div().flex_1().min_w_0().text_size(px(12.)).text_color(rgb(if refusing { look::red() } else { look::faint() })).child(line)
             })
-            .child(primary("send", send_label, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.send(cx)))));
+            .when(!merge, |d| d.child(primary("send", send_label, can).when(can, |d| d.on_click(cx.listener(|this, _, _, cx| this.send(cx))))));
+        // the merge's foot: its two ways out, each with what it does in the engine's words, and the one touch
+        let foot = if merge {
+            let (keep, drop) = self.merge_said(&stop);
+            let going = !self.sending;
+            let way = |b: Stateful<Div>, said: Vec<String>| div().flex().gap(px(12.)).items_center().child(b.flex_none().min_w(px(150.)).flex().justify_center()).child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(rgb(look::dim())).child(said.join(" ")));
+            let merge_label = if self.sending { "Merging…".to_string() } else { format!("{} · Touch ID", stop::label_for(VerdictKind::Keep, stop.kind)) };
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(16.))
+                .py(px(12.))
+                .border_t_1()
+                .border_color(rgb(look::line()))
+                .child(way(primary("merge", merge_label, going).when(going, |d| d.on_click(cx.listener(|this, _, _, cx| this.send_all(VerdictKind::Keep, cx)))), keep))
+                .child(way(button("branch-only".into(), stop::label_for(VerdictKind::Drop, stop.kind), false, look::text()).when(going, |d| d.on_click(cx.listener(|this, _, _, cx| this.send_all(VerdictKind::Drop, cx)))), drop))
+                .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(self.said.clone().unwrap_or_else(|| ONE_TOUCH.to_string())))
+        } else {
+            foot
+        };
         let card = div()
             .id("island")
             .track_focus(&self.focus)
@@ -1344,7 +1493,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, SENT, Sent, Shows, WORDS_HINT, ahead_line, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1435,11 +1584,79 @@ mod tests {
     #[test]
     fn asked_touch_id_only_before_what_cannot_be_undone() {
         // nothing that cannot be undone ahead: no touch asked, and the card says none
-        assert_eq!(crate::answer::touch_reason(None), None);
-        assert_eq!(ahead_line(None), None);
+        let nothing = judging(&["a"]);
+        assert_eq!((crate::answer::touch_of(&nothing), ahead_line(&nothing)), (None, None));
         // ahead of “send”: macOS asks for the touch saying why, and the card says so before the person sends
-        assert_eq!(crate::answer::touch_reason(Some("“send” cannot be undone")).as_deref(), Some("send your answer to Jaynes: “send” cannot be undone"));
-        assert_eq!(ahead_line(Some("“send” cannot be undone")).as_deref(), Some("Ahead: “send” cannot be undone. Sending asks for your touch."));
+        let mut sending = judging(&["a"]);
+        sending.ahead = Some("“send” cannot be undone".into());
+        sending.touch = Some("send your answer to Jaynes: “send” cannot be undone".into());
+        assert_eq!(ahead_line(&sending).as_deref(), Some("Ahead: “send” cannot be undone. Sending asks for your touch."));
+        assert_eq!(crate::answer::touch_of(&sending), Some("send your answer to Jaynes: “send” cannot be undone"));
+    }
+
+    // Alan, 21/11: "tive que dar uma porrada de allow com o meu touchid"
+    #[test]
+    fn asked_touch_only_once_before_the_merge() {
+        use jaynes_shell::stop::Lands;
+        // a leave answered asks no touch, and says nothing of what lies ahead
+        let mut leave = judging(&["tests/conftest.py"]);
+        (leave.kind, leave.permission) = (QuestionKind::Permission, true);
+        assert_eq!((crate::answer::touch_of(&leave), ahead_line(&leave), send_label(&leave, false)), (None, None, "Send".to_string()));
+        // a decision before the merge: the merge is ahead and asks itself, so this answer asks no touch
+        let mut before = judging(&["a"]);
+        before.ahead = Some("the run merges into your branch".into());
+        assert_eq!(crate::answer::touch_of(&before), None);
+        assert_eq!(ahead_line(&before).as_deref(), Some("Ahead: the run merges into your branch. You look at it before it lands."));
+        assert_eq!(send_label(&before, false), "Send");
+        // the stop before the merge: what goes in, every file with its lines, each that runs later with its why
+        let mut merge = judging(&["src/auth/login.go", "src/auth/login_test.go", "tests/conftest.py", "Makefile"]);
+        (merge.kind, merge.offered, merge.back) = (QuestionKind::Merge, vec![VerdictKind::Keep, VerdictKind::Drop], vec![]);
+        merge.title = "Merge into “main”?".into();
+        merge.touch = Some("merge “fix-login” into main".into());
+        merge.into = "main".into();
+        let lands = |path: &str, added, removed, runs| Lands { path: path.into(), added, removed, runs };
+        merge.lands = vec![
+            lands("src/auth/login.go", 64, 12, None),
+            lands("src/auth/login_test.go", 88, 0, None),
+            lands("tests/conftest.py", 14, 0, Some("runs on its own whenever the tests run")),
+            lands("Makefile", 3, 1, Some("runs when you run make")),
+        ];
+        let l = landing(&merge);
+        assert_eq!(l.goes_in, "What goes in · 4 files · +169 −13 lines");
+        assert_eq!(l.rows, [
+            ("src/auth/login.go".to_string(), "+64 −12".to_string(), false),
+            ("src/auth/login_test.go".to_string(), "+88".to_string(), false),
+            ("tests/conftest.py".to_string(), "+14".to_string(), true),
+            ("Makefile".to_string(), "+3 −1".to_string(), true),
+        ]);
+        assert_eq!(l.more, None);
+        assert_eq!(l.later, [
+            ("tests/conftest.py".to_string(), "runs on its own whenever the tests run.".to_string()),
+            ("Makefile".to_string(), "runs when you run make.".to_string()),
+        ]);
+        assert_eq!((RUNS_LATER, LATER_HEAD, READ_THESE, ONE_TOUCH), (
+            "runs later outside any box",
+            "Runs later outside any box",
+            "Read these before you merge: they run on your machine, outside any box.",
+            "Merging asks for your touch, once.",
+        ));
+        // no "Ahead" at the merge itself; its two ways out, the engine's words
+        assert_eq!(ahead_line(&merge), None);
+        assert_eq!([label_for(VerdictKind::Keep, merge.kind), label_for(VerdictKind::Drop, merge.kind)], ["Merge", "Branch only"]);
+        // two files that run later, one answer for every file, and one touch for it
+        for v in [VerdictKind::Keep, VerdictKind::Drop] {
+            let body = crate::answer::all(&merge, v);
+            let verdicts = body["verdicts"].as_object().expect("verdicts");
+            assert_eq!(verdicts.len(), 4);
+            assert!(verdicts.values().all(|w| w == if v == VerdictKind::Keep { "keep" } else { "drop" }), "{body}");
+        }
+        assert_eq!(crate::answer::touch_of(&merge), Some("merge “fix-login” into main"));
+        // more than eight files: eight shown, the rest counted; with nothing that runs later, no amber part
+        let mut many = merge.clone();
+        many.lands = (1..=11).map(|i| lands(&format!("src/f{i}.go"), 2, 0, None)).collect();
+        let l = landing(&many);
+        assert_eq!((l.rows.len(), l.more.as_deref(), l.later.len()), (8, Some("… and 3 more"), 0));
+        assert_eq!(l.goes_in, "What goes in · 11 files · +22 −0 lines");
     }
 
     // Alan, 20/11: "o cursor no your words nao aparece quando quero escrever ai nao sei se o input ta com foco"

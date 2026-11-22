@@ -627,7 +627,7 @@ impl Compare {
         self.sending = true;
         self.said = None;
         cx.notify();
-        let sent = answer::send(self.key.clone(), stop.ahead.clone(), body);
+        let sent = answer::send(self.key.clone(), answer::touch_of(&stop).map(str::to_string), body);
         cx.spawn(async move |this, cx| {
             let sent = sent.await;
             let _ = this.update(cx, |this, cx| {
@@ -1253,7 +1253,7 @@ impl Render for Compare {
         let chosen = self.marks.chosen(&stop);
         let mut label = proposal.as_ref().map(|(l, _)| l.clone()).unwrap_or_default();
         let mut also = self.marks.also(&stop, &Self::text(self.words.as_ref(), cx)).map(|(l, _)| l);
-        if stop.ahead.is_some() {
+        if answer::touch_of(&stop).is_some() {
             label.push_str(" · Touch ID");
             if let Some(a) = also.as_mut() {
                 a.push_str(" · Touch ID");

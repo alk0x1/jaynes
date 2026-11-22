@@ -48,7 +48,7 @@ pub fn waiting(snap: &crate::model::Snapshot) -> Vec<Waiting> {
     snap.listing
         .needs
         .iter()
-        .filter_map(|r| snap.stops.get(&r.id).map(|s| Waiting { run: r.id.clone(), title: r.title.clone(), question: s.question.clone(), about: s.title.clone(), ahead: s.ahead.is_some() }))
+        .filter_map(|r| snap.stops.get(&r.id).map(|s| Waiting { run: r.id.clone(), title: r.title.clone(), question: s.question.clone(), about: s.title.clone(), ahead: s.ahead.is_some() && s.touch.is_some() }))
         .collect()
 }
 

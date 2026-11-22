@@ -87,16 +87,24 @@ pub fn engine_program() -> PathBuf {
     })
 }
 
-/// What macOS says when it asks for the person's touch: only when something that cannot be undone lies ahead.
-pub fn touch_reason(ahead: Option<&str>) -> Option<String> {
-    ahead.map(|a| format!("send your answer to Jaynes: {a}"))
+/// What macOS says when it asks for the person's touch before this stop's answer goes, as the engine says it: before
+/// an answer that leads to a step that cannot be undone, and once at the merge into their branch. None at a leave and
+/// at a decision before a merge, and then no touch is asked.
+pub fn touch_of(stop: &Stop) -> Option<&str> {
+    stop.touch.as_deref()
 }
 
-/// Sends the answer as the person's: their touch first when something that cannot be undone lies ahead, then signed
-/// with their key. Resolves to what to tell them.
-pub async fn send(key: Option<Arc<Key>>, ahead: Option<String>, body: Value) -> Result<(), String> {
+/// One answer for every item of the stop, all `v`: the merge's Merge (keep) or Branch only (drop).
+pub fn all(stop: &Stop, v: jaynes_core::question::VerdictKind) -> Value {
+    let verdicts = stop.items.iter().map(|i| (i.id.clone(), crate::island::word(v).to_string())).collect();
+    body(stop, &verdicts, &BTreeMap::new(), &BTreeMap::new(), "")
+}
+
+/// Sends the answer as the person's: their touch first when the stop asks it (`touch_of`), with its reason, then
+/// signed with their key. Resolves to what to tell them.
+pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, body: Value) -> Result<(), String> {
     let key = key.ok_or("the app has no key of yours, so it cannot answer as you")?;
-    if let Some(reason) = touch_reason(ahead.as_deref()) {
+    if let Some(reason) = touch {
         crate::presence::ask(&reason).recv().await.unwrap_or_else(|_| Err("no answer from macOS".into()))?;
     }
     let home = jaynes_shell::home();
