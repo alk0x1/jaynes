@@ -453,8 +453,8 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             }
             Command::Deliver { digest, merge, .. } => {
                 let what = if *merge { "merged" } else { "delivered" };
-                out.push(mv(Input::DeliveryEnded { digest: digest.clone(), ok: true, reference: String::new() }, what.to_string(), false));
-                out.push(mv(Input::DeliveryEnded { digest: digest.clone(), ok: false, reference: String::new() }, format!("not {what}: it fails"), true));
+                out.push(mv(Input::DeliveryEnded { digest: digest.clone(), ok: true, reference: String::new(), merged: merge.then_some(true) }, what.to_string(), false));
+                out.push(mv(Input::DeliveryEnded { digest: digest.clone(), ok: false, reference: String::new(), merged: merge.then_some(false) }, format!("not {what}: it fails"), true));
             }
             Command::Ask { .. } | Command::Permit { .. } | Command::Notify { .. } => {}
         }

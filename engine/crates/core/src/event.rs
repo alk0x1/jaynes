@@ -366,6 +366,14 @@ pub enum Event {
         #[serde(default)]
         step: Option<String>,
     },
+    /// The person asked to merge what the run delivered on a branch of its own (Input::Merge).
+    MergeAsked {
+        by: By,
+    },
+    /// The delivery `digest` landed on the person's branch: what Undo takes back.
+    Merged {
+        digest: Digest,
+    },
     /// The person reverted every merge of the run. It merges nothing again, and what it let through earns no right.
     MergeUndone {
         note: String,
@@ -461,6 +469,8 @@ impl Event {
             Event::AgentAnswered { .. } => "AgentAnswered",
             Event::AskFailed { .. } => "AskFailed",
             Event::MergeUndone { .. } => "MergeUndone",
+            Event::MergeAsked { .. } => "MergeAsked",
+            Event::Merged { .. } => "Merged",
         }
     }
 }

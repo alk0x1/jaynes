@@ -116,6 +116,10 @@ pub enum Input {
         ok: bool,
         #[serde(default)]
         reference: String,
+        /// For a delivery asked to merge: whether it landed on the person's branch. None when it was not asked to
+        /// merge, and in records of engines before this field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        merged: Option<bool>,
     },
     /// The person's abandon is final. The agent that started the run sets it aside instead: nothing goes on in it,
     /// its work is kept, and only the person brings it back or abandons it for good.
@@ -123,6 +127,11 @@ pub enum Input {
         by: By,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         starter: Option<String>,
+    },
+    /// The person merges what a finished run delivered on a branch of its own, at the stop every merge waits at
+    /// (G19): the run's role delivers on a branch, or its merge was dropped or did not land. Only the person.
+    Merge {
+        by: By,
     },
     /// The person reverted what the run merged.
     Undo {
