@@ -643,7 +643,10 @@ impl Claude {
         let hide = hidden(cwd, reads);
         let shared = user().map(shared_tmp).unwrap_or_default();
         json!({
+            // wrapped, every Bash call is asked for: without the rule, a command Claude Code reads as only reading
+            // runs in its own sandbox without asking, so never in Jaynes's box (measured 22/11, 2.1.330)
             "permissions": {"defaultMode": if asks { "default" } else { "dontAsk" }, "allow": allow, "deny": deny,
+                            "ask": if wrapped { vec!["Bash"] } else { Vec::new() },
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
             // wrapped, Claude Code's sandbox runs no command: each is Jaynes's box around it, which it runs as it is
             "sandbox": {"enabled": true, "allowUnsandboxedCommands": wrapped, "failIfUnavailable": true,
@@ -1509,6 +1512,10 @@ mod tests {
         let s = c.settings(Path::new("/w"), &reach, &[], true, true, true);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().expect("allow").iter().filter_map(Value::as_str).collect();
         assert!(!allow.iter().any(|r| r.starts_with("Bash")), "{allow:?}");
+        // and a command Claude Code reads as only reading (cat, ls, cd, git status, pwd in the step's folder) runs
+        // in its own sandbox without asking unless a rule asks for every one (measured 22/11, 2.1.330)
+        let ask: Vec<&str> = s["permissions"]["ask"].as_array().expect("ask").iter().filter_map(Value::as_str).collect();
+        assert!(ask.contains(&"Bash"), "{ask:?}");
         assert_eq!(s["sandbox"]["allowUnsandboxedCommands"], json!(true));
         assert_eq!(s["sandbox"]["autoAllowBashIfSandboxed"], json!(false));
         // the box holds the ports: Claude Code's binding, which opens every one at once, stays shut
@@ -1516,6 +1523,7 @@ mod tests {
         // where it does not, nothing changes
         let plain = c.settings(Path::new("/w"), &reach, &[], false, true, false);
         assert!(plain["permissions"]["allow"].as_array().expect("allow").iter().any(|r| r == "Bash"));
+        assert!(!plain["permissions"]["ask"].as_array().into_iter().flatten().any(|r| r == "Bash"));
         assert_eq!(plain["sandbox"]["allowUnsandboxedCommands"], json!(false));
     }
 
