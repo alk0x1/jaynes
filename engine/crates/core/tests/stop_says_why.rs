@@ -19,7 +19,7 @@ fn small_change(ask: &str) -> Manifest {
         reach: Reach { project: ProjectAccess::Write, write: vec!["**".into()], ..Reach::default() },
         effect: jaynes_core::manifest::Effect::None,
         checks: Vec::new(),
-        stop: Some(StopDecl { unheld: None,
+        stop: Some(StopDecl { settled: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo],
             holds: false,
             from_risk: Risk::High,

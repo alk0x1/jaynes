@@ -110,9 +110,9 @@ fn role(rng: &mut Rng) -> Manifest {
                 // a stop that chooses among options: an agent's, always asked, offering keep, change and drop
                 if executor == Executor::Agent && rng.chance(25) {
                     let verdicts = vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop];
-                    Some(StopDecl { unheld: None, verdicts, holds: rng.chance(50), from_risk: stop_risk, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: true, redo: maker, rounds, answers: Default::default(), note: String::new() })
+                    Some(StopDecl { settled: None, verdicts, holds: rng.chance(50), from_risk: stop_risk, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: true, redo: maker, rounds, answers: Default::default(), note: String::new() })
                 } else {
-                    Some(StopDecl { unheld: None, verdicts, holds: rng.chance(30), from_risk: stop_risk, release, budget, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: false, redo: maker, rounds, answers: Default::default(), note: String::new() })
+                    Some(StopDecl { settled: None, verdicts, holds: rng.chance(30), from_risk: stop_risk, release, budget, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: false, redo: maker, rounds, answers: Default::default(), note: String::new() })
                 }
             } else {
                 None
@@ -1286,7 +1286,7 @@ fn item(id: &str, d: &str) -> Item {
 fn g13_a_correction_reruns_only_what_used_it() {
     // look → copy (uses look) and tests (uses nothing): changing look reruns copy, not tests.
     let mut look = step("look", Executor::Agent);
-    look.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    look.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let mut copy = step("copy", Executor::Agent);
     copy.needs = vec!["look".to_string()];
     let tests = step("tests", Executor::Agent);
@@ -1323,7 +1323,7 @@ fn g13_a_correction_reruns_only_what_used_it() {
 #[test]
 fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
     let mut plan = step("plan", Executor::Agent);
-    plan.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    plan.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep], holds: false, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let mut push = step("push", Executor::Role);
     push.needs = vec!["plan".to_string()];
     push.effect = Effect::Irreversible { idempotent: true };
@@ -1340,7 +1340,7 @@ fn g14_an_irreversible_step_waits_for_the_answer_it_rests_on() {
 }
 
 fn stop_of(verdicts: Vec<VerdictKind>, holds: bool) -> StopDecl {
-    StopDecl { unheld: None, verdicts, holds, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() }
+    StopDecl { settled: None, verdicts, holds, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() }
 }
 
 fn asked_in(cmds: &[Command]) -> Option<Question> {
@@ -1986,7 +1986,7 @@ fn simulate_logged(seed: u64) {
 #[test]
 fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    change.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let mut tests = step("tests", Executor::Agent);
     tests.needs = vec!["change".to_string()];
     let mut push = step("push", Executor::Role);
@@ -2079,7 +2079,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
 fn g17_the_count_comes_from_what_happened_after_delivery() {
     use jaynes_core::attention::count;
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    change.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
     let key = stop_key(&manifest, &Digest("f".to_string()), 0);
     let lin = jaynes_core::attention::lineage(&manifest, 0);
@@ -2119,7 +2119,7 @@ fn g17_the_count_comes_from_what_happened_after_delivery() {
 fn g17_i_do_not_know_counts_for_nothing() {
     use jaynes_core::attention::count;
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    change.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
     let key = stop_key(&manifest, &Digest("f".to_string()), 0);
     let lin = jaynes_core::attention::lineage(&manifest, 0);
@@ -2224,7 +2224,7 @@ fn g17_a_stop_that_showed_a_planted_defect_is_out_of_the_count_whatever_is_answe
 
 fn released_stop() -> Manifest {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    change.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Skip], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() }
 }
 
@@ -2287,7 +2287,7 @@ fn g17_what_an_agent_lets_go_on_in_your_name_earns_nothing_until_you_confirm_it(
 #[test]
 fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    change.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Risk::Low, release: true, budget: Some(jaynes_core::manifest::Rate(0.2)), audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() };
     let f = Digest("f".to_string());
     let key = stop_key(&manifest, &f, 0);
@@ -2317,7 +2317,7 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
 #[test]
 fn the_person_s_context_reaches_the_steps_after_the_answer_and_changes_no_verdict() {
     let mut look = step("look", Executor::Agent);
-    look.stop = Some(StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    look.stop = Some(StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
     let mut copy = step("copy", Executor::Agent);
     copy.needs = vec!["look".to_string()];
     let (mut run, cmds) = start(vec![look, copy]);

@@ -32,7 +32,7 @@ fn step(name: &str, needs: &[&str]) -> StepDecl {
 }
 
 fn stop(choose: bool, redo: Option<&str>) -> StopDecl {
-    StopDecl { unheld: None,
+    StopDecl { settled: None,
         verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
         holds: true,
         from_risk: Risk::Low,

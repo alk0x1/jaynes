@@ -1304,6 +1304,13 @@
             "null"
           ]
         },
+        "settled": {
+          "description": "What the request settles at this stop when it does not hold the run, in the role's words (\"the bug\", \"Built on\n{{name}}\", the name being the option's): Jaynes says whose request it was after it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "verdicts": {
           "description": "The verdicts the person may give each item, from the closed list.",
           "items": {

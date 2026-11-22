@@ -348,6 +348,10 @@ struct StopFile {
     answers: BTreeMap<VerdictKind, String>,
     /// A line under the question, said before the person looks: what the stop keeps, or what it leaves for later.
     note: Option<String>,
+    /// What the request settles at this stop when it does not hold the run, in the role's words: `settled = "the
+    /// bug"`, or `"Built on {{name}}"` with the option's name. Jaynes says whose request it was after it, at the merge
+    /// and in the run's story.
+    settled: Option<String>,
 }
 
 /// The most characters a stop's note has: one line under the question.
@@ -1473,6 +1477,9 @@ impl TomlRole {
                         errs.push(format!("answers gives {name} {n} characters; keep it to {ANSWER_MOST}: it goes on a button, and Jaynes says under it what it does"));
                     }
                 }
+                if st.settled.as_ref().is_some_and(|w| w.trim().is_empty()) {
+                    errs.push("settled gives no words: leave it out, and Jaynes names the option as it was made".into());
+                }
                 if st.choose && s.show.as_ref().is_none_or(|sh| sh.each.is_none() || sh.id.is_none()) {
                     errs.push("chooses among options, so its show lists them with an id that stays: show = { each = \"FIELD\", id = \"{{name}}\", label = \"...\" }".into());
                 }
@@ -1481,7 +1488,7 @@ impl TomlRole {
                     errs.push("has a stop whose ask names {{risk}}, why the run's risk is high, and it asks at every risk: write from_risk = \"high\", or leave {{risk}} out".into());
                 }
             }
-            let stop = s.stop.as_ref().map(|st| StopDecl { unheld: None,
+            let stop = s.stop.as_ref().map(|st| StopDecl { settled: st.settled.clone(),
                 verdicts: st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() }),
                 choose: st.choose,
                 redo: st.redo.clone(),
@@ -2246,6 +2253,8 @@ stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
 # says under each what it does. note = "..." is a line under the question, said before the person looks (what the
 # stop keeps, or leaves for later), 240 characters at most. fix-bug asks one question so:
 #   stop = {{ ask = "Is this the bug?", verdicts = ["keep", "redo"], answers = {{ keep = "Yes", redo = "No, it's something else" }} }}
+# settled says what the request settles at a stop that does not hold the run, in the role's words ("the bug", or
+# "Built on {{{{name}}}}" with the option's name); the person's touch at the merge keeps it, and Jaynes says whose request it was.
 #   show = {{ label = "{{{{bug}}}}", aspects = [{{ label = "Now", text = "{{{{examples.0.now}}}}" }}, {{ label = "After the fix", text = "{{{{examples.0.after}}}}" }}] }}
 # A field of show reaches into a list by place from 0; a text whose fields are all empty is left out.
 # A step that makes options asks the person to choose one: stop = {{ ask = "Which one?", choose = true, holds = true }},
@@ -3895,6 +3904,17 @@ script = "requires/changelog.sh"
         assert_eq!(shown[0].label, "The total now counts the coupon once.");
         let plain = CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": "summary"}).as_object().cloned().unwrap_or_default() };
         assert_eq!(small.extras["change"].checks.get("plain-words"), Some(&plain));
+    }
+
+    // One moment at the merge: a stop that does not hold says, in the role's words, what the request settled there,
+    // and Jaynes says whose request it was after it.
+    #[test]
+    fn a_stop_says_in_the_role_s_words_what_the_request_settled_there() {
+        let with = |settled: &str| GOOD.replace("from_risk = \"high\", release = true }", &format!("from_risk = \"high\", release = true, settled = {settled} }}"));
+        let r = TomlRole::load(&role("settled", &with("\"Built on {{name}}\""))).expect("reads");
+        assert_eq!(r.manifest.steps[1].stop.as_ref().expect("stop").settled.as_deref(), Some("Built on {{name}}"));
+        let e = errors("settled-empty", &with("\" \""));
+        assert!(e.contains("settled gives no words"), "{e}");
     }
 
     #[test]

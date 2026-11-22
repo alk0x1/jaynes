@@ -30,7 +30,7 @@ fn open(name: &str) -> CheckDecl {
 }
 
 fn stop(from_risk: Risk, holds: bool) -> StopDecl {
-    StopDecl { unheld: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds, from_risk, release: false, budget: None, audit_rate: Rate(0.1), about: "Keep it?".into(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() }
+    StopDecl { settled: None, verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds, from_risk, release: false, budget: None, audit_rate: Rate(0.1), about: "Keep it?".into(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() }
 }
 
 /// small-change as it ships: Jaynes finds the suite, the agent changes, its stop asks only from high risk.
@@ -82,8 +82,10 @@ fn a_merge_that_waits_for_the_person_is_proved() {
     assert!(matches!(proofs[0], Proof::Proved { states } if states > 50), "{proofs:?}");
 }
 
+/// The tech-lead, 22/11, one moment at the merge: a stop that does not hold lets the run go on to the merge, and the
+/// person's touch there answers it, kept as it is, before anything lands.
 #[test]
-fn a_stop_that_does_not_hold_lets_the_merge_go_before_the_answer() {
+fn a_stop_that_does_not_hold_is_answered_by_the_person_s_touch_at_the_merge() {
     let mut m = small_change();
     m.delivery = DeliveryKind::Merge;
     m.steps[1].stop = Some(stop(Risk::Low, false));
@@ -92,9 +94,7 @@ fn a_stop_that_does_not_hold_lets_the_merge_go_before_the_answer() {
         unless: Condition::PersonAnswered("change".into()),
     });
     let proofs = prove(&m, &[p]);
-    let Proof::Broken { path } = &proofs[0] else { panic!("it should break: {proofs:?}") };
-    let said = path.join(" → ");
-    assert!(said.contains("change asks you") && said.ends_with("merge, with no answer of yours at change"), "{said}");
+    assert!(matches!(proofs[0], Proof::Proved { .. }), "{proofs:?}");
 }
 
 /// fix-bug's shape: hidden cases, a reproduce whose stop may be sampled, a fix checked by a hidden check.
@@ -131,11 +131,10 @@ fn fix_bug_s_own_promises_are_proved_and_its_merge_does_not_wait() {
         promise("Nothing is merged unless you answered at fix", Form::Never { on: On::Merge, unless: Condition::PersonAnswered("fix".into()) }),
     ];
     let proofs = prove(&m, &ps);
-    for (p, proof) in ps.iter().zip(&proofs).take(3) {
+    // fix's stop does not hold the run, so the merge does not wait for it: the person's touch at the merge answers it
+    for (p, proof) in ps.iter().zip(&proofs) {
         assert!(matches!(proof, Proof::Proved { .. }), "{}: {proof:?}", p.says);
     }
-    let Proof::Broken { path } = &proofs[3] else { panic!("fix's stop does not hold the run: {:?}", proofs[3]) };
-    assert!(path.join(" → ").ends_with("merge, with no answer of yours at fix"), "{path:?}");
 }
 
 #[test]
