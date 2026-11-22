@@ -3,7 +3,7 @@
 # any box), the run's risk goes up and the person sees the change.
 
 role = "small-change"
-version = "3.0.0"
+version = "4.0.0"
 
 [[step]]
 name = "runner"
@@ -21,18 +21,25 @@ it as small as the task needs.
 
 The command that runs the project's whole suite, empty when it has none: {{runner.suite}}
 
+In summary, say what changed as the person will see it, in plain words: no code, no file names; they see the
+change itself beside it.
+
 Run it yourself before you answer. Jaynes runs it again without internet and requires it to pass. Do not commit;
 Jaynes does.
 """
 checks = [
   { use = "field-required", field = "summary" },
   { use = "field-max-length", field = "summary", max = 400 },
+  { use = "plain-words", field = "summary" },
   "suite-passes",
 ]
-stop = { ask = "{{risk}} Keep it, or have it done again?", verdicts = ["keep", "redo"], from_risk = "high", release = true }
+# One question, when the change turned out not small; the person reads what changed in a sentence, and sees the
+# change itself beside it.
+stop = { ask = "{{risk}} Keep it, or have it done again?", verdicts = ["keep", "redo"], from_risk = "high", release = true, answers = { keep = "Keep it", redo = "Do it again" } }
+show = { label = "{{summary}}" }
 
 [step.output]
-summary = { type = "string", about = "what changed, in a sentence or two" }
+summary = { type = "string", about = "what changed, as the person will see it, in a sentence or two of plain words: no code, no file names" }
 files = { type = "array", items = "string" }
 
 [[promise]]

@@ -157,10 +157,10 @@ fn a_delivered_run_is_summed_up_in_markdown_by_the_command() {
     let (ok, told) = engine(&s, &["summary", "small"]);
     assert!(ok, "{told}");
     assert!(told.starts_with("## say hi instead of hello\n\n### Delivered\n\njaynes/small at "), "{told}");
-    assert!(told.contains(", in a repository. The files Jaynes measured:\n\n- `greeting.txt`: 2 lines changed\n\n### Proved by\n\n- **field-required**, on what change made\n- **field-max-length**, on what change made\n- **suite-passes**, on what change made\n"), "{told}");
+    assert!(told.contains(", in a repository. The files Jaynes measured:\n\n- `greeting.txt`: 2 lines changed\n\n### Proved by\n\n- **field-required**, on what change made\n- **field-max-length**, on what change made\n- **plain-words**, on what change made\n- **suite-passes**, on what change made\n"), "{told}");
     // nothing a person was asked: the change was small, so its stop did not ask
     assert!(told.contains("### Not proved\n\n- The stop at change asks only at high risk, and this run was low: no person looked at what change made.\n"), "{told}");
-    assert!(told.contains("- Run `small`: role small-change 3.0.0 (fingerprint "), "{told}");
+    assert!(told.contains("- Run `small`: role small-change 4.0.0 (fingerprint "), "{told}");
     // the promises were proved: what is not proved never says they were not read
     assert!(!told.contains("The role's promises:"), "{told}");
     // the agent here is a line of shell with this machine's paths: the summary keeps it out

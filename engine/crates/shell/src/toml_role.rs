@@ -2768,7 +2768,8 @@ with = {{ pages = "read.sources" }}
     /// a key made from the manifest, so a role that reads into another manifest loses what its stops earned.
     const BEFORE: &[(&str, &str)] = &[
         // its stop says why the run is risky since 18/11 ({{risk}} in its ask): a manifest of its own
-        ("small-change", "0ef3e36cfe674de226a18953af676fac66bb992d53353b66c2cac2c1208108a0"),
+        // since 21/11 it is 4.0.0: buttons in its words, the summary in plain words and shown alone: another one again
+        ("small-change", "468ec9b9df7cef331a38e16751ae4c7757bb8594b22d54ef2756cb200f260c33"),
         // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own; since
         // 21/11 it is 4.0.0, asking "Is this the bug?" with answers and checking for plain words: another one again
         ("fix-bug", "c2eb2f0ecd5403afe174b1f898fdb80aeb5b28e51c508aaec402dad818db3aeb"),
@@ -3632,6 +3633,23 @@ script = "requires/changelog.sh"
         assert_eq!(fix.extras["reproduce"].checks.get("plain-saw"), Some(&plain("saw")));
         let Some(CheckImpl::Menu { with, .. }) = fix.extras["reproduce"].checks.get("tests-fail-for-the-bug") else { panic!("tests-fail-for-the-bug") };
         assert_eq!(with.get("saw"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn small_change_asks_in_the_person_s_words() {
+        // the review of the roles written for an older Jaynes (the tech-lead, 21/11): one question, buttons in its
+        // words, and what the person reads is the summary in plain words, never the whole output
+        let small = TomlRole::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/small-change")).expect("reads");
+        let change = small.manifest.steps.iter().find(|s| s.name == "change").expect("change");
+        let stop = change.stop.as_ref().expect("a stop");
+        assert_eq!(stop.about, "{{risk}} Keep it, or have it done again?");
+        assert_eq!(stop.answers, BTreeMap::from([(VerdictKind::Keep, "Keep it".to_string()), (VerdictKind::Redo, "Do it again".to_string())]));
+        let out = json!({"summary": "The total now counts the coupon once.", "files": ["src/cart/total.rs"]});
+        let shown = items("change", small.extras["change"].show.as_ref(), &out);
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert_eq!(shown[0].label, "The total now counts the coupon once.");
+        let plain = CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": "summary"}).as_object().cloned().unwrap_or_default() };
+        assert_eq!(small.extras["change"].checks.get("plain-words"), Some(&plain));
     }
 
     #[test]

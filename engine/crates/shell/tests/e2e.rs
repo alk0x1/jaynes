@@ -1358,7 +1358,7 @@ fn a_role_is_installed_by_name_and_only_when_it_conforms() {
     let (ok, out) = engine(&s, &["add", root().join("crates/shell/tests/roles/small-change").to_str().expect("path")]);
     assert!(ok && out.contains("role small-change installed"), "{out}");
     let (ok, out) = engine(&s, &["roles"]);
-    assert!(ok && out.contains("small-change 3.0.0"), "{out}");
+    assert!(ok && out.contains("small-change 4.0.0"), "{out}");
     // a folder that is not a role is refused
     let bad = s.home.join("bad");
     std::fs::create_dir_all(&bad).expect("dir");
@@ -2194,12 +2194,12 @@ fn an_index(s: &Scratch) -> PathBuf {
     let from = root().join("crates/shell/tests/roles/small-change");
     let ok = Command::new("cp").arg("-R").arg(&from).arg(index.join("roles/small-change")).status().expect("cp").success();
     assert!(ok);
-    std::fs::write(index.join("index.toml"), "[[role]]\nname = \"small-change\"\nversion = \"3.0.0\"\nsource = \"roles/small-change\"\nfingerprint = \"\"\n").expect("write");
+    std::fs::write(index.join("index.toml"), "[[role]]\nname = \"small-change\"\nversion = \"4.0.0\"\nsource = \"roles/small-change\"\nfingerprint = \"\"\n").expect("write");
     std::fs::write(index.join("licenses.toml"), "small-change = \"Apache-2.0\"\n").expect("write");
     let (ok, out) = engine(s, &["index", "check", index.to_str().expect("path"), "--write"]);
     assert!(ok, "{out}");
     let (ok, out) = engine(s, &["index", "check", index.to_str().expect("path")]);
-    assert!(ok && out.contains("✔ small-change 3.0.0") && out.contains("proved"), "{out}");
+    assert!(ok && out.contains("✔ small-change 4.0.0") && out.contains("proved"), "{out}");
     for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "index"]] {
         assert!(Command::new("git").arg("-C").arg(&index).args(&args).status().expect("git").success());
     }

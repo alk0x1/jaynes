@@ -320,8 +320,10 @@ mod tests {
             std::fs::create_dir_all(index.join(folder)).expect("dir");
             for f in std::fs::read_dir(&from).expect("role").flatten() {
                 let text = std::fs::read_to_string(f.path()).expect("read");
-                let text = if f.file_name() == "role.toml" && version == "4.0.0" {
-                    text.replacen("version = \"3.0.0\"\n", &format!("version = \"4.0.0\"\nengine = \"{needs}\"\n"), 1)
+                // each copy says its own version, whatever the test copy is at; the newer one names its engine
+                let text = if f.file_name() == "role.toml" {
+                    let says = if version == "4.0.0" { format!("version = \"4.0.0\"\nengine = \"{needs}\"") } else { format!("version = \"{version}\"") };
+                    text.lines().map(|l| if l.starts_with("version = ") { says.clone() } else { l.to_string() }).collect::<Vec<_>>().join("\n") + "\n"
                 } else {
                     text
                 };
