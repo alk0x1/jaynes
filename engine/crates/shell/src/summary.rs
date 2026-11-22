@@ -782,7 +782,7 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 
 ### Cost
 
-- Agents: 12 min of work, 252,250 tokens, 3 attempts by the agent, 1 of them failed by its own fault.
+- Agents: 12 min of work, 252,250 tokens, 3 attempts by the agent, 1 failed through its own fault.
 - People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.
 - The run stood 11 h 0 min at its stops, waiting for an answer. That is waiting, not anyone's attention.
 

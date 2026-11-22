@@ -479,13 +479,13 @@ pub fn work(r: &Run) -> Work {
 }
 
 impl Work {
-    /// "2 attempts by the agent, 1 of them failed by its own fault, 1 fix"; a part that is none is not said, but the
+    /// "2 attempts by the agent, 1 failed through its own fault, 1 fix"; a part that is none is not said, but the
     /// attempts.
     pub fn said(&self) -> String {
         let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         let mut out = if self.attempts == 0 { "no attempt by the agent".to_string() } else { format!("{} by the agent", plural(self.attempts, "attempt", "attempts")) };
         if self.own_failures > 0 {
-            out.push_str(&format!(", {} failed by its own fault", if self.attempts == 1 { "it".to_string() } else { format!("{} of them", self.own_failures) }));
+            out.push_str(&format!(", {} failed through its own fault", if self.attempts == 1 { "it".to_string() } else { self.own_failures.to_string() }));
         }
         if self.fixes > 0 {
             out.push_str(&format!(", {}", plural(self.fixes, "fix", "fixes")));
@@ -855,7 +855,8 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
             }
         }
         Some(b) => {
-            said.why = sentence(BOX_REFUSED.trim_end().trim_end_matches(':'));
+            // the person's words for the box's own (the design-lead's, 21/11): what was not judged is the change
+            said.why = "The project's checks tried something the box Jaynes checks in does not allow, so their failure says nothing about the change.".into();
             details.extend(once(b.refused.iter().map(|l| go_annotation_off(l))));
             if b.open_did_not_help {
                 details.push(OPEN_DID_NOT_HELP.trim().into());
@@ -1162,6 +1163,13 @@ mod blocked_tests {
     }
 
     #[test]
+    fn a_box_refusal_with_no_port_says_the_change_was_not_judged() {
+        let b = blocked_said(Some("change"), Fault::Jaynes, "the check suite of change could not judge: the box refused what the command tried, so its failure says nothing about the project: deny file-write* /etc/hosts. No attempt was spent");
+        assert_eq!(b.why, "The project's checks tried something the box Jaynes checks in does not allow, so their failure says nothing about the change.");
+        assert_eq!(b.details, ["deny file-write* /etc/hosts"]);
+    }
+
+    #[test]
     fn a_label_in_curly_quotes_is_never_cut_in_the_middle() {
         // the copy-review of the scene: the agent gives back an item the person dropped, three times
         let gone = "“Footer: quieter links” was dropped by the person and may not come back";
@@ -1215,8 +1223,8 @@ mod blocked_tests {
         assert_eq!(stages(&r)[1].detail, "running, attempt 2");
         // a failure of its own is said as such, and the fixes as fixes
         let mine = Work { attempts: 3, fixes: 2, own_failures: 1 };
-        assert_eq!(mine.said(), "3 attempts by the agent, 1 of them failed by its own fault, 2 fixes");
-        assert_eq!(Work { attempts: 1, fixes: 0, own_failures: 1 }.said(), "1 attempt by the agent, it failed by its own fault");
+        assert_eq!(mine.said(), "3 attempts by the agent, 1 failed through its own fault, 2 fixes");
+        assert_eq!(Work { attempts: 1, fixes: 0, own_failures: 1 }.said(), "1 attempt by the agent, it failed through its own fault");
     }
 
     #[test]
