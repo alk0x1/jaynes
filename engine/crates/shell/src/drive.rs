@@ -163,7 +163,7 @@ pub fn agent_in(spec: &str, library: Option<&Path>) -> Box<dyn Agent> {
     if let Some(model) = spec.strip_prefix("codex:") {
         return Box::new(agent::Codex::new(model, library));
     }
-    let mut claude = agent::Claude::default();
+    let mut claude = agent::Claude { library: library.map(Path::to_path_buf), ..Default::default() };
     if let Some(model) = spec.strip_prefix("claude:").filter(|m| !m.is_empty()) {
         claude.model = model.to_string();
     }
@@ -1469,6 +1469,7 @@ impl<'a> Driver<'a> {
             }),
             // what the person chose for the project's ports, as its checks run with it
             servers: self.setup.servers || self.setup.any_port,
+            any_port: self.setup.any_port,
         };
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));
@@ -1526,6 +1527,7 @@ impl<'a> Driver<'a> {
             on_session: None,
             permit: None,
             servers: self.setup.servers || self.setup.any_port,
+            any_port: self.setup.any_port,
         };
         let done = self.setup.agent.turn(spec);
         let reply = reply_in(&exchange);

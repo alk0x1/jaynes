@@ -542,12 +542,19 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "permit" => {
             let need = |name: &str| flag(rest, name).ok_or(format!("{name} is needed"));
+            let boxed = flag(rest, "--box").map(PathBuf::from);
+            if rest.iter().any(|a| a == "--wrap-only") {
+                let boxed = boxed.ok_or("--wrap-only needs --box")?;
+                return permit::Permit { home: home(), run: String::new(), step: String::new(), attempt: 0, cwd: PathBuf::new(), boxed: Some(boxed), wrap_only: true }.serve();
+            }
             permit::Permit {
                 home: home(),
                 run: need("--run")?,
                 step: need("--step")?,
                 attempt: need("--attempt")?.parse().map_err(|_| "--attempt takes a number")?,
                 cwd: PathBuf::from(need("--cwd")?),
+                boxed,
+                wrap_only: false,
             }
             .serve()
         }

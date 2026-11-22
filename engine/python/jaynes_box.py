@@ -155,6 +155,7 @@ class Box:
     home: Path = field(default_factory=Path.home)
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
     browser: Path | None = None  # the one browser it may start, with its bundle's helpers: a photograph's Chrome
+    hide_home: bool = False  # the whole home hidden but for its readable and writable folders: an agent's commands
 
 
 def hidden_paths(box: Box) -> list[Path]:
@@ -167,7 +168,7 @@ def hidden_paths(box: Box) -> list[Path]:
     runs = [engine / "runs"] if box.local or box.readable else []
     return ([box.home / s for s in SECRETS] + [engine / f for f in ENGINE_SECRETS] + [engine / "projects"]
             + [old / f for f in OLD_ENGINE]
-            + runs + list(box.hidden))
+            + runs + list(box.hidden) + ([box.home] if box.hide_home else []))
 
 
 def engine_home() -> Path:
@@ -1660,6 +1661,79 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
     return None
 
 
+# --- an agent's shell commands (the single box) ---------------------------------------------------------------
+
+# The script every agent command runs as, inside the box: it starts where the agent's last command ended (``$1``),
+# runs the command as the agent wrote it (``$2``), and keeps where it ended in the turn's file (``$3``), even when the
+# command exits with an error or ``exit``s.
+AGENT_SCRIPT = 'trap \'pwd -P >| "$3" 2>/dev/null\' EXIT; cd -- "$1" || exit 1; eval "$2"'
+
+
+class AgentRefused(Exception):
+    """Why Jaynes runs none of an agent's commands: its box could not be set up as the turn said."""
+
+
+def _agent_start(work: Path, pwd: Path) -> Path:
+    """Where the agent's next command starts: where its last one ended, kept in ``pwd``, while that is a folder inside
+    ``work``; else ``work``'s top. The file is the agent's to write, so what it names is only a wish."""
+    try:
+        named = Path(os.path.realpath(pwd.read_text().strip()))
+    except (OSError, ValueError):
+        return work
+    return named if named.is_dir() and named.is_relative_to(work) else work
+
+
+def agent_box(spec: dict[str, Any]) -> tuple[Box, Path, Path, dict[str, str]]:
+    """The box of one shell command of a Claude Code agent, from the turn's ``spec`` (agent.rs writes it): the step's
+    folder (``work``) and what it writes and reads, the whole home hidden but for those, what else is hidden (the
+    other runs, the engine's keys, the folder Claude Code's sessions share), the ports the step names, and the
+    person's choice for the project's test servers or ports, as a check's commands get it. With the folder the
+    command starts in, the file that keeps where it ends, and what it adds to its environment."""
+    if not available():
+        raise AgentRefused(INSIDE if inside() else "Jaynes has no box for the agent's commands on this system")
+    try:
+        work = Path(os.path.realpath(spec["work"]))
+        writable = tuple(Path(p) for p in spec["writable"])
+        pwd = Path(spec["pwd"])
+        home = Path(spec.get("home") or Path.home())
+        local_ports = tuple(sorted({int(p) for p in spec.get("local_ports") or ()} - {PAGE_PORT}))
+    except (KeyError, TypeError, ValueError) as e:
+        raise AgentRefused(f"the turn's box says too little ({e})") from None
+    if not work.is_dir() or not writable or not all(p.is_absolute() for p in writable):
+        raise AgentRefused(f"the step's folder {work} is not there")
+    anyone = spec.get("any_port") is True
+    own = spec.get("test_servers") is True and not anyone
+    ports = reserve()
+    b = Box(writable, hidden=tuple(Path(p) for p in spec.get("hidden") or ()), hide_home=True, local=True,
+            readable=(work, *(Path(p) for p in spec.get("readable") or ())), reserved=ports, local_ports=local_ports,
+            any_port=anyone, window=servers_window() if own else (), home=home)
+    return b, _agent_start(work, pwd), pwd, {"JAYNES_PORTS": ",".join(map(str, ports))}
+
+
+def agent_run(spec_path: Path, command: str) -> int:
+    """Run one of an agent's shell commands in its box, with this process's standard streams, and say its exit code.
+    What the engine keeps is found from the spec's ``engine``, never from the command's environment."""
+    try:
+        spec = json.loads(spec_path.read_text())
+        if not isinstance(spec, dict):
+            raise ValueError("not an object")
+        if spec.get("engine"):
+            os.environ["JAYNES_ENGINE_HOME"] = str(spec["engine"])
+        b, start, pwd, adds = agent_box(spec)
+        argv = [str(SANDBOX_EXEC), "-p", profile(b), "/bin/bash", "-c", AGENT_SCRIPT, "jaynes-agent", str(start), command,
+                str(pwd)]
+    except AgentRefused as e:
+        print(f"Jaynes ran none of this command: {e}", file=sys.stderr)
+        return 126
+    except (OSError, ValueError) as e:
+        print(f"Jaynes ran none of this command: it could not read the turn's box ({e})", file=sys.stderr)
+        return 126
+    env = {k: v for k, v in inherited().items() if k != "JAYNES_ENGINE_HOME"} | adds
+    holds = tuple(p for p in HELD_PORTS if p not in b.local_ports and p not in b.reserved) if b.window else ()
+    with _holding(holds) if b.window else contextlib.nullcontext():
+        return subprocess.call(argv, cwd=start, env=env)
+
+
 if __name__ == "__main__":
     # jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT]: for the engine and for a role's scripts
     # jaynes_box.py program-profile < BOX.json: the profile of a role's program's box, for the engine that starts it,
@@ -1700,6 +1774,9 @@ if __name__ == "__main__":
             print(e)
             sys.exit(3)
         sys.exit(0)
+    if len(args) >= 4 and args[0] == "agent-run" and args[2] == "--":
+        # jaynes_box.py agent-run SPEC -- COMMAND: one shell command of a Claude Code agent, in its box
+        sys.exit(agent_run(Path(args[1]), " ".join(args[3:])))
     if len(args) in (3, 4) and args[0] == "photograph":
         w, _, h = (args[3] if len(args) == 4 else f"{SIZE[0]}x{SIZE[1]}").partition("x")
         why = photograph(args[1], Path(args[2]), (int(w), int(h)))

@@ -23,6 +23,46 @@ pub struct Permit {
     pub step: String,
     pub attempt: u32,
     pub cwd: PathBuf,
+    /// The turn's box for the agent's shell commands (the single box, macOS: agent.rs writes it): every Bash call is
+    /// given back as that box around the command, never as it came.
+    pub boxed: Option<PathBuf>,
+    /// A turn whose agent may ask nothing beyond its settings (an answer at a stop): only its commands are boxed,
+    /// anything else is refused, and nothing reaches the record.
+    pub wrap_only: bool,
+}
+
+/// The file beside the turn's box that says why a command could not be put in it: the turn is then Jaynes's fault.
+pub const BOX_FAILED: &str = "box-failed";
+
+/// `s` as one word of a POSIX shell's line.
+fn quoted(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// What Claude Code runs for a Bash call of the agent: Jaynes's box around the command (jaynes_box.py agent-run, from
+/// the turn's `boxed` file), outside Claude Code's own sandbox, with the call's other fields kept. Never the call as
+/// it came, even when the agent asked for no sandbox: without the box, the call is refused, and the reason is kept
+/// beside the box's file so the turn ends as Jaynes's fault.
+pub fn wrapped(boxed: &Path, input: &Value) -> Value {
+    let refuse = |why: String| {
+        let _kept = std::fs::write(boxed.with_file_name(BOX_FAILED), &why);
+        json!({"behavior": "deny", "message": format!("Jaynes ran none of this command: {why}")})
+    };
+    let spec: Value = match std::fs::read_to_string(boxed).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string())) {
+        Ok(v) => v,
+        Err(e) => return refuse(format!("it could not read the box of the agent's commands ({e})")),
+    };
+    let (Some(python), Some(script)) = (spec["python"].as_str(), spec["box"].as_str()) else {
+        return refuse("the box of the agent's commands names no interpreter or script".into());
+    };
+    let Some(command) = input["command"].as_str() else {
+        return json!({"behavior": "deny", "message": "the call names no command"});
+    };
+    let line = format!("{} -I {} agent-run {} -- {}", quoted(python), quoted(script), quoted(&boxed.display().to_string()), quoted(command));
+    let mut given = input.as_object().cloned().unwrap_or_default();
+    given.insert("command".into(), Value::String(line));
+    given.insert("dangerouslyDisableSandbox".into(), Value::Bool(true));
+    json!({"behavior": "allow", "updatedInput": given})
 }
 
 /// The file that exists while a leave of the run waits for the person.
@@ -218,6 +258,12 @@ impl Permit {
     pub fn decide(&self, args: &Value) -> Value {
         let tool = args["tool_name"].as_str().or_else(|| args["toolName"].as_str()).unwrap_or("");
         let input = if args["input"].is_object() { args["input"].clone() } else { args.clone() };
+        if let (Some(boxed), "Bash") = (&self.boxed, tool) {
+            return wrapped(boxed, &input);
+        }
+        if self.wrap_only {
+            return Self::deny("this turn may use nothing beyond its settings");
+        }
         let ask = ask_of(tool, &input, &self.cwd);
         let mut store = match Store::open(&self.home.join("record.sqlite3")) {
             Ok(s) => s,
@@ -270,6 +316,71 @@ impl Permit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A turn's box file as agent.rs writes it, with `python` as the box's interpreter.
+    fn box_file(dir: &Path, python: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).expect("dir");
+        let at = dir.join("box.json");
+        std::fs::write(&at, json!({"python": python, "box": dir.join("jaynes_box.py")}).to_string()).expect("write");
+        at
+    }
+
+    #[test]
+    fn a_bash_call_is_always_jaynes_s_box_around_its_command_never_the_call_as_it_came() {
+        // the escape: the agent asks for no sandbox, with Claude Code letting unsandboxed commands through
+        let dir = std::env::temp_dir().join(format!("jaynes-wrap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        // a stand-in for the box's interpreter: it says the command the box was given, as one word, and runs nothing
+        let python = dir.join("python-stand-in");
+        std::fs::write(&python, "#!/bin/sh\n[ \"$1\" = -I ] && [ \"$3\" = agent-run ] && [ \"$5\" = -- ] && [ $# = 6 ] && printf '%s' \"$6\"\n").expect("script");
+        std::fs::set_permissions(&python, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("mode");
+        let boxed = box_file(&dir, &python);
+        for command in ["curl https://example.com", "echo 'a b' \"c\" $HOME; touch ran", "x=$(touch ran) `touch ran` 'it''s'"] {
+            let input = json!({"command": command, "dangerouslyDisableSandbox": true, "timeout": 5000, "run_in_background": false, "description": "d"});
+            let said = wrapped(&boxed, &input);
+            assert_eq!(said["behavior"], "allow", "{said}");
+            let given = &said["updatedInput"];
+            assert_eq!(given["dangerouslyDisableSandbox"], json!(true));
+            assert_eq!((&given["timeout"], &given["run_in_background"], &given["description"]), (&json!(5000), &json!(false), &json!("d")));
+            let line = given["command"].as_str().expect("a command");
+            assert_ne!(line, command);
+            // run as Claude Code's shell runs it: the box gets the agent's command whole, and nothing of it ran outside
+            let ran = std::process::Command::new("/bin/sh").args(["-c", line]).current_dir(&dir).output().expect("ran");
+            assert_eq!(String::from_utf8_lossy(&ran.stdout), command, "{line}");
+            assert!(!dir.join("ran").exists(), "{line}");
+        }
+        assert!(!dir.join(BOX_FAILED).exists());
+        let _gone = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_its_box_a_bash_call_is_refused_and_the_turn_is_jaynes_s_fault() {
+        let dir = std::env::temp_dir().join(format!("jaynes-nobox-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let input = json!({"command": "echo hi", "dangerouslyDisableSandbox": true});
+        let said = wrapped(&dir.join("box.json"), &input);
+        assert_eq!(said["behavior"], "deny", "{said}");
+        assert!(said.get("updatedInput").is_none());
+        assert!(std::fs::read_to_string(dir.join(BOX_FAILED)).expect("kept").contains("could not read the box"));
+        // a box that names no interpreter is no box either
+        std::fs::write(dir.join("box.json"), "{}").expect("write");
+        assert_eq!(wrapped(&dir.join("box.json"), &input)["behavior"], "deny");
+        let _gone = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_turn_that_may_ask_nothing_boxes_its_commands_and_refuses_the_rest_without_the_record() {
+        let dir = std::env::temp_dir().join(format!("jaynes-wraponly-{}", std::process::id()));
+        let boxed = box_file(&dir, Path::new("/nowhere/python3"));
+        // a home with no record: a call that reached it would say so
+        let p = Permit { home: dir.join("no-home"), run: String::new(), step: String::new(), attempt: 0, cwd: PathBuf::new(), boxed: Some(boxed), wrap_only: true };
+        assert_eq!(p.decide(&json!({"tool_name": "Bash", "input": {"command": "ls"}}))["behavior"], "allow");
+        let other = p.decide(&json!({"tool_name": "Write", "input": {"file_path": "/x", "content": "y"}}));
+        assert_eq!(other["behavior"], "deny");
+        assert!(!other["message"].as_str().unwrap_or("").contains("record"), "{other}");
+        assert!(!dir.join("no-home").exists());
+        let _gone = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_read_inside_the_step_s_folder_is_relative() {

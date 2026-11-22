@@ -157,3 +157,104 @@ fn a_turn_whose_claude_code_runs_with_a_tool_it_was_not_given_does_not_count() {
     let said = format!("{out}\n{}", ended.join("\n"));
     assert!(said.contains("Claude Code gave the agent tools Jaynes did not: SendMessage, CronCreate; this turn does not count"), "{said}");
 }
+
+/// A stand-in for Claude Code that asks Jaynes's leave server for each shell command, as Claude Code asks it for a
+/// call its settings do not allow, setting dangerouslyDisableSandbox as an agent may, and runs what comes back with
+/// /bin/sh in the step's folder, as Claude Code's Bash runs it; it notes what each printed, or that it was refused.
+fn claude_asking(s: &Scratch, commands: &[String]) {
+    let bin = s.path("bin");
+    std::fs::create_dir_all(&bin).expect("dir");
+    let script = format!(
+        r#"#!/usr/bin/python3
+import json, os, subprocess, sys
+args = sys.argv[1:]
+with open({args_file:?}, "a") as f:
+    f.write(" ".join(args) + "\n")
+flag = lambda name: args[args.index(name) + 1] if name in args else ""
+sys.stdin.read()
+server = json.loads(flag("--mcp-config"))["mcpServers"]["jaynes"]
+leave = subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                         env={{**os.environ, **server.get("env", {{}})}})
+n = 0
+def call(method, params):
+    global n
+    n += 1
+    leave.stdin.write(json.dumps({{"jsonrpc": "2.0", "id": n, "method": method, "params": params}}) + "\n")
+    leave.stdin.flush()
+    return json.loads(leave.stdout.readline())
+call("initialize", {{"protocolVersion": "2025-06-18", "capabilities": {{}}, "clientInfo": {{"name": "stand-in", "version": "1"}}}})
+said = []
+for command in {commands}:
+    answer = call("tools/call", {{"name": "permit", "arguments": {{"tool_name": "Bash", "input": {{"command": command, "dangerouslyDisableSandbox": True}}}}}})
+    decision = json.loads(answer["result"]["content"][0]["text"])
+    if decision["behavior"] != "allow":
+        said.append("refused: " + decision.get("message", ""))
+        continue
+    ran = subprocess.run(["/bin/sh", "-c", decision["updatedInput"]["command"]], capture_output=True, text=True)
+    said.append(ran.stdout.strip() if ran.returncode == 0 else "failed: " + ran.stderr.strip())
+leave.stdin.close()
+with open({said_file:?}, "w") as f:
+    json.dump(said, f)
+tools = flag("--tools").split(",")
+print(json.dumps({{"type": "system", "subtype": "init", "session_id": "s1", "model": flag("--model"), "permissionMode": flag("--permission-mode"), "tools": tools}}))
+print(json.dumps({{"type": "assistant", "parent_tool_use_id": None, "session_id": "s1", "message": {{"model": flag("--model"), "content": []}}}}))
+os.makedirs(".jaynes", exist_ok=True)
+text = open("greeting.txt").read().replace("hello", "hi")
+open("greeting.txt", "w").write(text)
+open(".jaynes/output.json", "w").write(json.dumps({{"summary": "The greeting now says hi.", "files": ["greeting.txt"]}}))
+print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": "s1", "usage": {{"input_tokens": 10, "output_tokens": 5}}}}))
+"#,
+        args_file = s.path("claude.args").display().to_string(),
+        said_file = s.path("claude.said").display().to_string(),
+        commands = serde_json::to_string(commands).expect("json"),
+    );
+    std::fs::write(bin.join("claude"), script).expect("write");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "Jaynes's box is macOS's sandbox-exec")]
+fn each_shell_command_of_a_claude_code_agent_runs_in_jaynes_s_box_and_a_cd_holds_for_the_next() {
+    // the single box (the engineer lead, 22/11): the shell commands of Claude Code reach Jaynes's leave server, which
+    // gives each back wrapped in Jaynes's box, never as the agent asked for it, not even when it asks for no sandbox
+    let s = Scratch::new("box");
+    let escaped = s.path("escaped");
+    claude_asking(&s, &["mkdir -p sub && cd sub".into(), "pwd -P".into(), format!("touch {}", escaped.display()), "pwd -P".into(), "cd /usr && pwd -P".into(), "pwd -P".into()]);
+    let (out, turns) = s.start("box", &small_change());
+    assert_eq!(turns.len(), 1, "{out}");
+    let turn = &turns[0];
+    // Bash leaves the allow list, so every command comes to the leave server
+    assert!(turn.contains("--permission-prompt-tool mcp__jaynes__permit"), "{turn}");
+    let said: Vec<String> = serde_json::from_str(&std::fs::read_to_string(s.path("claude.said")).expect("said")).expect("json");
+    assert_eq!(said.len(), 6, "{said:?}");
+    // where the agent went, the next command starts
+    assert!(said[1].ends_with("/sub") && said[1].contains("/runs/box/"), "{said:?}");
+    // outside the step's folder nothing is written, however the agent asked
+    assert!(said[2].starts_with("failed:"), "{said:?}");
+    assert!(!escaped.exists());
+    assert_eq!(said[3], said[1], "{said:?}");
+    // a folder outside the step's is not kept: the next command starts at the step's top
+    assert_eq!(said[4], "/usr", "{said:?}");
+    assert_eq!(Path::new(&said[5]), Path::new(&said[1]).parent().expect("top"), "{said:?}");
+    assert!(out.contains("finished: delivered"), "{out}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "Jaynes's box is macOS's sandbox-exec")]
+fn without_its_box_a_claude_code_agent_never_starts_and_the_turn_is_jaynes_s_fault() {
+    // the engineer lead (22/11): without the box, or with the box's python3 failing, no command runs unboxed
+    let s = Scratch::new("nobox");
+    claude_asking(&s, &["pwd -P".into()]);
+    // the python3 Jaynes runs its box with fails there, as one broken would; the role's program still runs
+    std::fs::write(s.path("bin").join("python3"), "#!/bin/sh\ncase \"$*\" in *agent-run*) echo 'a broken python3' >&2; exit 1;; esac\nexec /usr/bin/python3 \"$@\"\n").expect("write");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(s.path("bin").join("python3"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let (out, turns) = s.start("nobox", &small_change());
+    assert!(turns.is_empty(), "Claude Code started: {turns:?}");
+    assert!(!s.path("claude.said").exists());
+    let e = s.events("nobox");
+    let fault = e.iter().find(|e| e.to_string().contains("a broken python3")).unwrap_or_else(|| panic!("no fault with its reason: {out}\n{e:?}"));
+    assert_eq!((&fault["type"], &fault["step"], &fault["spent"]), (&serde_json::json!("AttemptFailed"), &serde_json::json!("change"), &serde_json::json!(false)), "{fault}");
+    assert!(out.contains("blocked (Jaynes)"), "{out}");
+}
