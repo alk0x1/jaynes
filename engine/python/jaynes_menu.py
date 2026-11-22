@@ -91,6 +91,12 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
                            f" let the tests reach ({ran.window[0]} to {ran.window[-1]})."
                            f" The person may open this project's ports with `jaynes project open-ports {_source(call) or call['project']}`.")
         ports = box.ports_refused(ran)
+        started = box.browsers_refused(ran)
+        if started and not ports:
+            # a browser of the person's, which no port the person opens lets start
+            return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
+                           + "; ".join(box.refused(ran)[:3])
+                           + f" It tried to start a browser of this Mac, which no check's command starts: {', '.join(started)}.")
         tried = (f" It tried local port {', '.join('0, a port of its own choosing' if p == '0' else p for p in ports)}.")\
             if ports else ""
         given = ", ".join(map(str, ran.reserved))

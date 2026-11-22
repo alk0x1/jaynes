@@ -1657,6 +1657,57 @@ impl TomlRole {
     }
 }
 
+/// How a check's script keeps only the end of what the commands it runs said (a Python slice such as `[-15:]`, a
+/// shell `tail`), when it does and prints none of the box's refusals apart: None otherwise. A Python script that
+/// runs no command (no subprocess, os.system or os.popen) cuts only what it reads itself.
+fn end_kept(path: &str, text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    if lower.contains("operation not permitted") || lower.contains("eperm") {
+        return None;
+    }
+    if path.ends_with(".py") {
+        if !["subprocess", "os.system", "os.popen"].iter().any(|r| text.contains(r)) {
+            return None;
+        }
+        // [-N:], spaces allowed between its parts
+        let b = text.as_bytes();
+        let skip = |mut i: usize| {
+            while i < b.len() && b[i] == b' ' {
+                i += 1;
+            }
+            i
+        };
+        for (at, _) in text.match_indices('[') {
+            let mut i = skip(at + 1);
+            if b.get(i) != Some(&b'-') {
+                continue;
+            }
+            let digits = skip(i + 1);
+            i = digits;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == digits {
+                continue;
+            }
+            let n = &text[digits..i];
+            i = skip(i);
+            if b.get(i) != Some(&b':') {
+                continue;
+            }
+            i = skip(i + 1);
+            if b.get(i) == Some(&b']') {
+                return Some(format!("[-{n}:]"));
+            }
+        }
+        return None;
+    }
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .any(|l| l.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).any(|w| w == "tail"))
+        .then(|| "tail".to_string())
+}
+
 impl TomlRole {
     /// What the role's author should know before any run and is no error, a line each.
     pub fn notes(&self) -> Vec<String> {
@@ -1673,6 +1724,16 @@ impl TomlRole {
                 notes.push(format!(
                     "{} cannot be undone and is on the short path, so every run of this role starts at high risk and takes every step: from_risk = \"high\" leaves it out of small runs",
                     s.name
+                ));
+            }
+            // a check's script that keeps only the end of what its commands said may cut away the box's refusal
+            // above it, which Jaynes reads only in what the script prints
+            for c in &s.checks {
+                let Some(CheckImpl::Script { path, .. }) = self.extras.get(&s.name).and_then(|x| x.checks.get(&c.name)) else { continue };
+                let Some(cut) = std::fs::read_to_string(self.dir.join(path)).ok().and_then(|text| end_kept(path, &text)) else { continue };
+                notes.push(format!(
+                    "{}'s check {} ({path}) prints only the end of what the commands it runs said ({cut}): a line where Jaynes's box refused something (\"Operation not permitted\") above that end is lost, and the failure then reads as the project's, so the agent is told to fix the project. Print every line that says \"operation not permitted\" or \"EPERM\" whole, wherever it is, beside the end it keeps",
+                    s.name, c.name
                 ));
             }
         }
@@ -3682,6 +3743,39 @@ script = "requires/changelog.sh"
         let late = reads("notes-late", &SCRIPTED.replacen("effect = \"irreversible\"", "effect = \"irreversible\"\nfrom_risk = \"high\"", 1)).notes();
         assert!(!late.iter().any(|n| n.contains("high risk")), "left out of the short path, it raises no run by itself: {late:?}");
         assert!(!TomlRole::load(&role("notes-good", GOOD)).expect("reads").notes().iter().any(|n| n.contains("high risk")));
+    }
+
+    #[test]
+    fn a_check_s_script_that_keeps_only_the_end_of_what_its_commands_said_is_told_to_keep_the_box_s_refusals() {
+        // a suite's refusal by Jaynes's box ("operation not permitted") at the top of a long output, cut away by the
+        // script's [-15:], reads as the project's failure: the agent is told to fix the tests, and rewrites them (the
+        // real-user's runs of 22/11). Jaynes reads the refusal only in what the script prints.
+        let with = |name: &str, file: &str, script: &str| {
+            let dir = checked(name, &CHECKED.replace("checks/fits.sh", file), REJECT, ACCEPT);
+            std::fs::write(dir.join(file), script).expect("write");
+            TomlRole::load(&dir).unwrap_or_else(|e| panic!("{name}: {}", e.join("\n"))).notes()
+        };
+        let cut = "import subprocess, sys\ndone = subprocess.run('make test', shell=True, capture_output=True, text=True)\n\
+                   if done.returncode:\n    print(*(done.stdout + done.stderr).splitlines()[-15:], sep='\\n')\n    sys.exit(1)\n";
+        let notes = with("cut-py", "checks/fits.py", cut);
+        let told = notes.iter().find(|n| n.contains("checks/fits.py")).unwrap_or_else(|| panic!("{notes:?}"));
+        assert_eq!(told, "write's check fits (checks/fits.py) prints only the end of what the commands it runs said ([-15:]): \
+            a line where Jaynes's box refused something (\"Operation not permitted\") above that end is lost, and the failure \
+            then reads as the project's, so the agent is told to fix the project. Print every line that says \
+            \"operation not permitted\" or \"EPERM\" whole, wherever it is, beside the end it keeps");
+        // in a shell script, a tail
+        let notes = with("cut-sh", "checks/fits.sh", "#!/bin/sh\nmake test 2>&1 | tail -n 20\n");
+        assert!(notes.iter().any(|n| n.contains("checks/fits.sh") && n.contains("(tail)")), "{notes:?}");
+        // a script that keeps the refusals, one that runs no command, and one that prints all: nothing to say
+        let kept = format!("{cut}refused = [l for l in done.stderr.splitlines() if 'operation not permitted' in l.lower()]\n");
+        for (name, file, script) in [
+            ("kept", "checks/fits.py", kept.as_str()),
+            ("no-command", "checks/fits.py", "import json, sys\nnames = json.load(sys.stdin)['output']['files'][-3:]\n"),
+            ("whole", "checks/fits.sh", "#!/bin/sh\nmake test\n"),
+        ] {
+            let notes = with(name, file, script);
+            assert!(!notes.iter().any(|n| n.contains("prints only the end")), "{name}: {notes:?}");
+        }
     }
 
     #[test]

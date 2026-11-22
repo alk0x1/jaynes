@@ -2083,7 +2083,10 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         "# If it cannot be done as asked\n\nIf the request contradicts itself, needs something you cannot reach, or could pass \
          the checks only by gaming them, do not write an output. Write why, in a few plain sentences, to \
          .jaynes/impossible.txt. The person reads it and tells you how to go on; it costs you no attempt. Never write \
-         an output you know is wrong to get past the checks.\n\n",
+         an output you know is wrong to get past the checks.\n\nA command that fails with \"Operation not permitted\", \
+         \"Permission denied\" or EPERM was most likely refused by Jaynes's box, not by the project: never change the \
+         project's tests or code to get around it (another port, a test removed, skipped or rewritten to need less); write \
+         to .jaynes/impossible.txt the command and the error it printed instead.\n\n",
     );
     if read {
         p.push_str(
@@ -2837,6 +2840,13 @@ mod tests {
         assert!(read.find("# Your reply").expect("reply") < read.find("# Your output").expect("output"));
         let unread = compose("r", "make it", &json!({}), &turn(Vec::new()), &[], false);
         assert!(!unread.contains("reply.md"), "{unread}");
+        // what Jaynes's box refuses is said, never got around: the agent rewrote the person's tests twice to pass
+        // without a port (the real-user's runs of 22/11); the words agreed with the ai-engineer
+        assert!(unread.contains(
+            "A command that fails with \"Operation not permitted\", \"Permission denied\" or EPERM was most likely refused by \
+             Jaynes's box, not by the project: never change the project's tests or code to get around it (another port, a test \
+             removed, skipped or rewritten to need less); write to .jaynes/impossible.txt the command and the error it printed instead."
+        ), "{unread}");
     }
 
     #[test]

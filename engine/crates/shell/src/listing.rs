@@ -1052,6 +1052,8 @@ impl BlockedSaid {
 /// parts by them.
 const BOX_REFUSED: &str = "the box refused what the command tried, so its failure says nothing about the project: ";
 const TRIED_PORT: &str = " It tried local port ";
+/// The words of a check whose command tried to start a browser of the person's (jaynes_menu.py), which no port helps.
+const TRIED_BROWSER: &str = " It tried to start a browser of this Mac";
 const OWN_CHOOSING: &str = "0, a port of its own choosing";
 const REACH_ONLY: &str = " A check's commands bind and reach only the ports in JAYNES_PORTS (";
 const OPEN_DID_NOT_HELP: &str = " The person's open ports did not help here.";
@@ -1257,11 +1259,13 @@ struct Boxed<'a> {
     project: Option<&'a str>,
     open_did_not_help: bool,
     servers_did_not_help: bool,
+    /// The sentence of the person's browser it tried to start, which the box keeps every check's command from.
+    browser: Option<&'a str>,
 }
 
 fn boxed(said: &str) -> Option<Boxed<'_>> {
     let rest = said.strip_prefix(BOX_REFUSED)?;
-    let end = [TRIED_PORT, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP].iter().filter_map(|m| rest.find(m)).min().unwrap_or(rest.len());
+    let end = [TRIED_PORT, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, TRIED_BROWSER].iter().filter_map(|m| rest.find(m)).min().unwrap_or(rest.len());
     let (lines, tail) = rest.split_at(end);
     let numbers = |t: &str| t.split(", ").filter_map(|p| p.trim().parse().ok()).collect::<Vec<u16>>();
     Some(Boxed {
@@ -1271,6 +1275,7 @@ fn boxed(said: &str) -> Option<Boxed<'_>> {
         project: tail.split_once(OPEN_PORTS).and_then(|(_, t)| t.split_once('`')).map(|(p, _)| p),
         open_did_not_help: tail.contains(OPEN_DID_NOT_HELP),
         servers_did_not_help: tail.contains(SERVERS_DID_NOT_HELP),
+        browser: tail.find(TRIED_BROWSER).map(|at| tail[at..].trim()),
     })
 }
 
@@ -1537,6 +1542,7 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
             // the person's words for the box's own (the design-lead's, 21/11): what was not judged is the change
             said.why = "The project's checks tried something the box Jaynes checks in does not allow, so their failure says nothing about the change.".into();
             details.extend(once(b.refused.iter().map(|l| go_annotation_off(l))));
+            details.extend(b.browser.map(sentence));
             if b.open_did_not_help {
                 details.push(OPEN_DID_NOT_HELP.trim().into());
             }
@@ -1819,6 +1825,23 @@ mod blocked_tests {
     }
 
     #[test]
+    fn a_check_that_tried_to_start_a_browser_says_so_apart_and_offers_no_ports() {
+        // the box keeps every check's command from starting the person's browsers; no port the person opens changes
+        // that, so the card offers none, and the browser's sentence is a line of its own under Details
+        let program = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        let reason = format!(
+            "the check tests of change could not judge: the box refused what the command tried, so its failure says nothing about the project: /bin/sh: {program}: Operation not permitted It tried to start a browser of this Mac, which no check's command starts: {program}.. No attempt was spent"
+        );
+        let b = blocked_said(Some("change"), Fault::Jaynes, &reason);
+        assert_eq!(b.what, "The change is done. Jaynes could not check it.");
+        assert!(b.ways.iter().all(|w| w.command.is_none()), "{b:?}");
+        assert_eq!(b.details, [
+            format!("/bin/sh: {program}: Operation not permitted"),
+            format!("It tried to start a browser of this Mac, which no check's command starts: {program}."),
+        ]);
+    }
+
+    #[test]
     fn a_test_server_past_the_ports_the_box_lets_says_so_and_offers_to_check_again_then_to_open_the_ports() {
         // the design-lead's words of 22/11: the tests' own server, never a service of the person's
         let b = blocked_said(Some("change"), Fault::Jaynes, &past_window("/Users/x/Projects/app", false));
@@ -2046,7 +2069,7 @@ mod blocked_tests {
     fn the_words_the_card_reads_are_the_ones_the_box_check_writes() {
         // jaynes_menu.py says why the box kept a check from judging; the card finds its parts by these words
         let menu = include_str!("../../../python/jaynes_menu.py");
-        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED, PAST_TRIED, PAST_GAVE] {
+        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED, PAST_TRIED, PAST_GAVE, TRIED_BROWSER] {
             assert!(menu.contains(words.trim_start()), "jaynes_menu.py no longer says {words:?}");
         }
     }

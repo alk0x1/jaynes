@@ -169,6 +169,24 @@ class ARoleSScriptCheckStillDrawsItsPages(unittest.TestCase):
                 mock.patch.dict(os.environ, env, clear=True):
             self.assertIsInstance(menu.script({"project": str(project)}, {"path": str(check)}), menu.Pass)
 
+    def test_a_check_whose_command_starts_a_browser_says_the_box_kept_it_from_starting_and_nothing_of_ports(self):
+        # the refusal was read as one of ports, and the card offered to open the project's ports, which starts no browser
+        import jaynes_menu as menu
+        tmp = Path(tempfile.mkdtemp(prefix="jaynes-browser-said-"))
+        bundle = stand_in(tmp, "Browser")
+        project = tmp / "project"
+        project.mkdir()
+        program = shlex.quote(str(bundle / "Contents/MacOS/browser"))
+        env = {k: v for k, v in os.environ.items() if k != "JAYNES_CHROME"}
+        with mock.patch.object(box, "browsers", lambda home: [bundle]), mock.patch.dict(os.environ, env, clear=True):
+            said = menu._box({"project": str(project)}, f"{program} --headless https://example.com")
+        self.assertIsInstance(said, menu.Blocked)
+        self.assertIn("the box refused what the command tried, so its failure says nothing about the project", said.reason)
+        self.assertIn("It tried to start a browser of this Mac, which no check's command starts:", said.reason)
+        self.assertIn(str(bundle / "Contents/MacOS/browser"), said.reason)
+        for ports in ("JAYNES_PORTS", "open-ports", "local port"):
+            self.assertNotIn(ports, said.reason)
+
 
 class ARoleSProgramStartsNoBrowserOfThePerson(unittest.TestCase):
     def test_a_role_that_declares_a_browser_s_program_as_a_command_is_refused_before_it_runs(self):

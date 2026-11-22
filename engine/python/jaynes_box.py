@@ -1649,6 +1649,24 @@ def ports_refused(ran: Ran) -> list[str]:
     return named
 
 
+def browsers_refused(ran: Ran, home: Path | None = None) -> list[str]:
+    """The programs of the person's browsers (``browsers``) a refused command tried to start, as its refusals name
+    them: the path from the browser's bundle to the end of the name, before the ": " that tells the error."""
+    found: list[str] = []
+    held = [str(b) for b in browsers(home or Path.home())]
+    held += [os.path.realpath(b) for b in held if os.path.realpath(b) not in held]
+    for line in refused(ran):
+        for b in held:
+            at = line.find(b)
+            if at < 0:
+                continue
+            end = line.find(": ", at)
+            program = line[at:end if end >= 0 else len(line)].strip()
+            if program not in found:
+                found.append(program)
+    return found
+
+
 def refused(ran: Ran) -> list[str]:
     """What the box refused, when the command failed for it: then its failure says nothing about the project."""
     lines = [line.strip() for line in ran.printed.splitlines()
