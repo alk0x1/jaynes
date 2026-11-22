@@ -3305,7 +3305,7 @@ files = { type = "array", items = "string" }
     fn a_check_is_held_to_its_cases_and_what_it_got_wrong_is_said() {
         use jaynes_core::CheckVerdict::{Blocked, Fail, Pass};
         let r = TomlRole::load(&checked("held", CHECKED, REJECT, ACCEPT)).expect("reads");
-        let fails = || Fail { reasons: vec!["b.txt is not there".into()], detail: String::new() };
+        let fails = || Fail { reasons: vec!["b.txt is not there".into()], detail: String::new(), cases: vec![] };
         // a reject must fail and an accept must pass
         let (lines, held) = r.cases_told(&|script, case| {
             assert!(script.ends_with("checks/fits.sh"), "{}", script.display());

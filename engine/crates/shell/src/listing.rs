@@ -664,6 +664,9 @@ pub struct BlockedSaid {
     pub why: String,
     /// What the run keeps: "No attempt was used.", when none was.
     pub holds: Option<String>,
+    /// The hidden cases that failed at the step's last attempt, for the person: hidden from the agent, never from
+    /// them. Read by [`blocked`] from what the engine kept (see [`keep_failed_cases`]); [`blocked_said`] has none.
+    pub cases: Vec<CaseSaid>,
     /// The agent's last words at the step: only what it said, never a tool's line, in at most three lines. Read by
     /// [`blocked`] from the transcripts; [`blocked_said`] has none.
     pub agent_said: Vec<String>,
@@ -675,6 +678,49 @@ pub struct BlockedSaid {
     pub waits: Option<String>,
     /// The raw reason, each thing once: one said more than once ends with "(3 times)".
     pub details: Vec<String>,
+}
+
+/// A hidden case that failed, in the card's lines (the design-lead's words, 22/11), top to bottom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaseSaid {
+    /// What the case says, in curly quotes: "“greet says hi with the name”".
+    pub says: String,
+    /// "Written at “cases”, by the agent there.": an agent wrote it, and it may be wrong.
+    pub written: String,
+    /// "Ran: `sh greet.sh ana | grep -q hi`".
+    pub ran: String,
+    /// "Expected: exit 0."
+    pub expected: String,
+    /// "Got: exit 1."
+    pub got: String,
+    /// The end of what it printed, a line each, drawn as text: the first [`PRINTED_SHOWN`] shown, the rest under
+    /// [`ALL_OF_IT`].
+    pub printed: Vec<String>,
+    /// "Failed in 3 of 3 attempts."
+    pub failed_in: String,
+}
+
+/// The heading over the hidden cases that failed, one and more.
+pub const CASE_HEADING: &str = "The case that failed";
+pub const CASES_HEADING: &str = "The cases that failed";
+/// How many lines of what a case printed show before the fold.
+pub const PRINTED_SHOWN: usize = 6;
+/// The fold over the rest of what a case printed.
+pub const ALL_OF_IT: &str = "▸ all of it";
+
+/// Where the engine keeps the hidden cases that failed at an attempt of a step, in the run's folder: beside the
+/// folders that hold an agent's step, which no agent reads (agent.rs `beside`).
+pub fn failed_cases_file(run_dir: &Path, step: &str, attempt: u32) -> std::path::PathBuf {
+    run_dir.join("cases").join(step).join(format!("attempt-{attempt}.json"))
+}
+
+/// Keep the hidden cases that failed at `attempt` of `step`, written at the hidden step `at`, for the person's card.
+pub fn keep_failed_cases(run_dir: &Path, step: &str, attempt: u32, at: &str, cases: &[jaynes_core::FailedCase]) -> Result<(), String> {
+    let file = failed_cases_file(run_dir, step, attempt);
+    let dir = file.parent().ok_or("no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let body = serde_json::json!({"at": at, "cases": cases});
+    std::fs::write(&file, body.to_string()).map_err(|e| format!("{}: {e}", file.display()))
 }
 
 /// The heading over what the agent said, and over the ways out.
@@ -1140,6 +1186,7 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
         what: String::new(),
         why: sentence(reason),
         holds: (unspent || fault == Fault::Jaynes).then(|| NO_ATTEMPT_USED.to_string()),
+        cases: Vec::new(),
         agent_said: Vec::new(),
         ways: Vec::new(),
         continue_does: match step {
@@ -1197,6 +1244,7 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
 mod blocked_tests {
     use super::*;
     use jaynes_core::event::Fault;
+    use jaynes_core::FailedCase;
 
     /// This Mac, or the machine Jaynes runs on elsewhere.
     fn machine() -> &'static str {
@@ -1556,6 +1604,87 @@ mod blocked_tests {
         for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS] {
             assert!(menu.contains(words.trim_start()), "jaynes_menu.py no longer says {words:?}");
         }
+    }
+
+    /// A home whose run `r1` kept, for step `change`, the hidden cases that failed at each of `attempts`.
+    fn failed_cases(name: &str, attempts: &[(u32, &[(&str, &str, i32, &str)])]) -> std::path::PathBuf {
+        let home = std::env::temp_dir().join(format!("jaynes-cases-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        for (attempt, cases) in attempts {
+            let cases: Vec<FailedCase> = cases.iter().map(|(says, run, code, printed)| FailedCase { says: says.to_string(), run: run.to_string(), code: *code, printed: printed.to_string() }).collect();
+            keep_failed_cases(&home.join("runs/r1"), "change", *attempt, "cases", &cases).expect("keep");
+        }
+        home
+    }
+
+    // The real-user, 22/11 (r1795330821-771): "O cartão do bloqueio diz só "A check you cannot see found that this
+    // does not hold". A pessoa não vê o caso, não sabe o que está errado e não tem o que fazer". The case is hidden
+    // from the agent, never from the person: the card shows the case that failed, what it expected and what came.
+    #[test]
+    fn asked_a_run_blocked_by_a_hidden_case_shows_the_person_the_case_what_it_expected_and_what_came() {
+        let history = "with the old render.py of commit 8527993 the suite must fail";
+        let git = "git show 8527993:render.py > render.py && ! make test";
+        let printed = (1..=9).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
+        let other = "the total counts the quantity";
+        let home = failed_cases("each", &[
+            (1, &[(history, git, 128, "fatal: bad object 8527993")]),
+            (2, &[(history, git, 128, "fatal: bad object 8527993"), (other, "make test", 2, &printed)]),
+            (3, &[(history, git, 128, "fatal: bad object 8527993\x1b[2J")]),
+        ]);
+        let mut r = super::tests::run("r1", "Fix the total");
+        let i = r.manifest.index("change").expect("step");
+        r.steps[i].attempt = 3;
+        r.steps[i].spent = 3;
+        let reason = format!("change spent its 3 attempts: A check you cannot see found that this does not hold: {history}");
+        r.phase = Phase::Blocked { step: Some("change".into()), fault: Fault::Agent, reason };
+
+        let b = blocked(&home, &r).expect("blocked");
+        let _gone = std::fs::remove_dir_all(&home);
+
+        assert_eq!(b.what, "The agent could not finish “change”.");
+        // each of the three attempts failed at a hidden case: "Each time"
+        assert_eq!(b.why, "“change” used its 3 attempts. Each time, a case the agent does not see failed.");
+        assert!(!b.why.contains("A check you cannot see"), "{}", b.why);
+        // the case of the last attempt, in full: what it says, who wrote it, what ran, what it expected, what came
+        assert_eq!(b.cases, [CaseSaid {
+            says: format!("“{history}”"),
+            written: "Written at “cases”, by the agent there.".into(),
+            ran: format!("Ran: `{git}`"),
+            expected: "Expected: exit 0.".into(),
+            got: "Got: exit 128.".into(),
+            // what the project's code printed is drawn as text, never as the terminal's own
+            printed: vec!["fatal: bad object 8527993 [2J".into()],
+            failed_in: "Failed in 3 of 3 attempts.".into(),
+        }]);
+        let text = b.text();
+        for line in ["The case that failed", &format!("“{history}”"), "Written at “cases”, by the agent there.", &format!("Ran: `{git}`"), "Expected: exit 0.", "Got: exit 128.", "Failed in 3 of 3 attempts."] {
+            assert!(text.lines().any(|l| l == line), "{line:?} not a line of the card:\n{text}");
+        }
+        // the case comes after why, and before what the person can do
+        let at = |l: &str| text.lines().position(|x| x == l).unwrap_or_else(|| panic!("{l:?} in\n{text}"));
+        assert!(at(&b.why) < at("The case that failed") && at("The case that failed") < at(&b.continue_does), "{text}");
+
+        // two cases at the last attempt, one failing once: no "Each time", and what it printed beyond six lines folds
+        let home = failed_cases("two", &[
+            (2, &[(history, git, 128, "fatal: bad object 8527993")]),
+            (3, &[(history, git, 128, "fatal: bad object 8527993"), (other, "make test", 2, &printed)]),
+        ]);
+        let b = blocked(&home, &r).expect("blocked");
+        let _gone = std::fs::remove_dir_all(&home);
+        assert_eq!(b.why, "“change” used its 3 attempts. A case the agent does not see failed.");
+        assert_eq!(b.cases.iter().map(|c| c.failed_in.as_str()).collect::<Vec<_>>(), ["Failed in 2 of 3 attempts.", "Failed in 1 of 3 attempts."]);
+        assert_eq!(b.cases[1].printed.len(), 9);
+        let text = b.text();
+        assert!(text.lines().any(|l| l == "The cases that failed"), "{text}");
+        assert!(text.contains("line 6\n▸ all of it") && !text.contains("line 7"), "six lines, then the fold:\n{text}");
+
+        // a block whose last attempt failed elsewhere shows no case, even with cases kept from earlier attempts
+        let home = failed_cases("elsewhere", &[(2, &[(history, git, 128, "fatal")])]);
+        r.phase = Phase::Blocked { step: Some("change".into()), fault: Fault::Agent, reason: "change spent its 3 attempts: the agent exited with code 1".into() };
+        let b = blocked(&home, &r).expect("blocked");
+        let _gone = std::fs::remove_dir_all(&home);
+        assert!(b.cases.is_empty(), "{:?}", b.cases);
+        assert_eq!(b.why, "“change” used its 3 attempts. The agent exited with code 1.");
     }
 }
 

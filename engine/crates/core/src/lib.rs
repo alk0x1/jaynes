@@ -23,7 +23,7 @@ pub mod run;
 pub use decide::{decide, effects, Decided, Refusal};
 pub use digest::Digest;
 pub use event::Event;
-pub use io::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Input};
+pub use io::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, FailedCase, Input};
 pub use manifest::Manifest;
 pub use run::Run;
 

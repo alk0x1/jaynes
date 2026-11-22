@@ -384,7 +384,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
                     if !kinds.insert(format!("{:?}", kind(name))) && !named {
                         continue;
                     }
-                    let fails = all(&|j| if j == n { CheckVerdict::Fail { reasons: vec!["it does not hold".into()], detail: String::new() } } else { CheckVerdict::Pass });
+                    let fails = all(&|j| if j == n { CheckVerdict::Fail { reasons: vec!["it does not hold".into()], detail: String::new(), cases: vec![] } } else { CheckVerdict::Pass });
                     out.push(mv(ended(fails), format!("{step}'s check {name} fails"), false));
                 }
                 if let Some(first) = checks.first() {

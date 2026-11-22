@@ -250,15 +250,29 @@ impl CheckResult {
     }
 }
 
+/// A hidden case that failed, as the check ran it, for the person: what it says, the command it ran, the code it
+/// exited with (0 is what it expects) and the end of what it printed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FailedCase {
+    pub says: String,
+    pub run: String,
+    pub code: i32,
+    #[serde(default)]
+    pub printed: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "verdict", rename_all = "snake_case")]
 pub enum CheckVerdict {
     Pass,
-    /// Failed. `reasons` is what the agent is told; `detail` only the person sees.
+    /// Failed. `reasons` is what the agent is told; `detail` and `cases` only the person sees.
     Fail {
         reasons: Vec<String>,
         #[serde(default)]
         detail: String,
+        /// The hidden cases that failed, each in full: never told to the agent (G3).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cases: Vec<FailedCase>,
     },
     /// The check could not judge at all, such as a tool it runs that did not start: Jaynes's fault.
     Blocked { reason: String },

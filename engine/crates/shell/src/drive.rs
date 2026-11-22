@@ -1843,14 +1843,14 @@ impl<'a> Driver<'a> {
         let not_given = laid.as_ref().and(copy).and_then(|c| crate::project::not_given(&c.left_out()));
         let hidden = |name: &str| decl.checks.iter().any(|c| c.name == name && c.kind == jaynes_core::manifest::CheckKind::Hidden);
         let told = |name: &str, verdict: CheckVerdict| match (verdict, &not_given) {
-            (CheckVerdict::Fail { mut reasons, mut detail }, Some(n)) => {
+            (CheckVerdict::Fail { mut reasons, mut detail, cases }, Some(n)) => {
                 // a hidden check's agent gets only the sentence the check wrote (G3): the person reads it
                 if hidden(name) {
                     detail = if detail.is_empty() { n.clone() } else { format!("{detail}\n{n}") };
                 } else {
                     reasons.push(n.clone());
                 }
-                CheckVerdict::Fail { reasons, detail }
+                CheckVerdict::Fail { reasons, detail, cases }
             }
             (CheckVerdict::Blocked { reason }, Some(n)) => CheckVerdict::Blocked { reason: format!("{reason}; {n}") },
             (v, _) => v,

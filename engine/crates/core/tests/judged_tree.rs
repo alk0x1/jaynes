@@ -160,7 +160,7 @@ fn a_change_that_fails_when_it_is_checked_again_spends_its_attempt_as_any_failur
     verdicts(&mut run, attempt, CheckVerdict::Blocked { reason: "a port was refused".into() });
     assert!(run.blocked());
     feed(&mut run, Input::Continue { by: person(), starter: None });
-    let events = verdicts(&mut run, attempt, CheckVerdict::Fail { reasons: vec!["it does not hold".into()], detail: String::new() });
+    let events = verdicts(&mut run, attempt, CheckVerdict::Fail { reasons: vec!["it does not hold".into()], detail: String::new(), cases: vec![] });
     let spent = events.iter().find_map(|e| if let Event::AttemptFailed { spent, .. } = e { Some(*spent) } else { None });
     assert_eq!(spent, Some(true), "{events:?}");
     assert_eq!(run.counts.spent, 1);

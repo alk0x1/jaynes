@@ -247,7 +247,7 @@ fn agents_redoing_without_the_person_stop_at_their_ceiling_and_call_the_person_w
             outcome: AttemptOutcome::Delivered { output: Digest(format!("draw-{turns}")), items: vec![item("A", "a")], changed: Vec::new(), usage: Usage::default(), session: Some("s".into()), tree: None, reply: None },
         });
         let reasons = vec!["the director turns it down".to_string()];
-        let (_, next) = feed(&mut run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: t.fix, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Fail { reasons, detail: String::new() }, tree: None }] });
+        let (_, next) = feed(&mut run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: t.fix, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Fail { reasons, detail: String::new(), cases: vec![] }, tree: None }] });
         notified |= next.iter().any(|c| matches!(c, Command::Notify { .. }));
         cmds = next;
     }

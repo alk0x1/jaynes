@@ -759,7 +759,7 @@ impl World {
                 for name in checks {
                     let verdict = match self.rng.below(100) {
                         0..=79 => CheckVerdict::Pass,
-                        80..=95 => CheckVerdict::Fail { reasons: vec!["it does not hold".to_string()], detail: String::new() },
+                        80..=95 => CheckVerdict::Fail { reasons: vec!["it does not hold".to_string()], detail: String::new(), cases: vec![] },
                         96..=97 => CheckVerdict::Blocked { reason: "the tool did not start".to_string() },
                         _ => continue,
                     };
@@ -1527,7 +1527,7 @@ fn g14_an_act_that_repeats_safely_starts_again_after_a_stop_with_the_same_key() 
 /// their order is a second act.
 #[test]
 fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
-    for verdict in [CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new() }, CheckVerdict::Blocked { reason: "could not look".to_string() }] {
+    for verdict in [CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new(), cases: vec![] }, CheckVerdict::Blocked { reason: "could not look".to_string() }] {
         let mut send = step("send", Executor::Role);
         send.effect = Effect::Irreversible { idempotent: false };
         send.checks = vec![CheckDecl { name: "landed".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }];
@@ -1546,7 +1546,7 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
             let c = feed(&mut run, Input::Continue { by: By::Person, starter: None });
             assert!(pushes_of(&c, "send").is_empty(), "continuing acted again: {c:?}");
             assert!(c.iter().any(|c| matches!(c, Command::RunChecks { step, attempt: a, .. } if step == "send" && *a == attempt)), "{c:?}");
-            let failed = CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new() };
+            let failed = CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new(), cases: vec![] };
             feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: failed, tree: None }] });
             assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
         }
@@ -1588,7 +1588,7 @@ fn a_failed_shape_check_is_fixed_in_the_same_session() {
         step: "build".to_string(),
         attempt: 1,
         fix: 0,
-        results: vec![CheckResult { check: "short".to_string(), verdict: CheckVerdict::Fail { reasons: vec!["93 characters".to_string()], detail: String::new() }, tree: None }],
+        results: vec![CheckResult { check: "short".to_string(), verdict: CheckVerdict::Fail { reasons: vec!["93 characters".to_string()], detail: String::new(), cases: vec![] }, tree: None }],
     });
     let Some(Command::RunAgent(turn)) = c.first() else { panic!("a fix: {c:?}") };
     assert_eq!((turn.attempt, turn.fix, turn.session.as_deref()), (1, 1, Some("s")));
