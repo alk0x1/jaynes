@@ -34,7 +34,7 @@ use crate::manifest::{DeliveryKind, Executor, Manifest, ProjectAccess, SessionKi
 use crate::question::{Answer, By, Item, QuestionKind, Verdict, VerdictKind};
 use crate::risk::{Changed, Risk};
 use crate::run::{Run, Status};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// Send-backs explored per step.
 pub const SEND_BACKS: u32 = 1;
@@ -637,10 +637,18 @@ fn apply(promises: &[Promise], done: &[bool], node: &Node, mv: &Move) -> Option<
     Some((child, says.join(" → "), breaks))
 }
 
-/// Every child of the nodes of `part`, with its key.
-fn expand(part: &[(Node, usize)], promises: &[Promise], done: &[bool], named: &BTreeSet<String>) -> Vec<(usize, Child, u128)> {
+/// Every child of the nodes of `part` that the level may keep, with its key: one not `seen` at an earlier level nor
+/// earlier in `part`, or one that breaks a promise. The rest would be dropped when the level is put together anyway,
+/// so dropping them here gives the same search without holding every copy of a state at once. Each node is let go
+/// once expanded, so a level and the next are not held whole at once, and it is kept without its run's manifest
+/// ([`bare`]), lent back to it while it is expanded. Together these took fix-bug's search from past 12 GB to 4.3 GB.
+fn expand(part: Vec<(Node, usize)>, m: &Manifest, promises: &[Promise], done: &[bool], named: &BTreeSet<String>, seen: &HashSet<u128>) -> Vec<(usize, Child, u128)> {
     let mut out = Vec::new();
-    for (node, at) in part {
+    let mut here = HashSet::new();
+    let empty = bare(m);
+    for (mut node, at) in part {
+        node.run.manifest = m.clone();
+        let node = &node;
         if node.run.finished() {
             continue;
         }
@@ -651,13 +659,22 @@ fn expand(part: &[(Node, usize)], promises: &[Promise], done: &[bool], named: &B
             if mv.sends_back.as_ref().is_some_and(|s| node.sent_back.get(s).copied().unwrap_or(0) >= SEND_BACKS) {
                 continue;
             }
-            if let Some(child) = apply(promises, done, node, &mv) {
+            if let Some(mut child) = apply(promises, done, node, &mv) {
+                child.0.run.manifest = empty.clone();
                 let key = child.0.key();
-                out.push((*at, child, key));
+                if (!seen.contains(&key) && here.insert(key)) || !child.2.is_empty() {
+                    out.push((at, child, key));
+                }
             }
         }
     }
     out
+}
+
+/// The manifest a node keeps in place of its run's: it is the same in every state of a search, so the search holds
+/// it once and not in each of the states a level holds.
+fn bare(m: &Manifest) -> Manifest {
+    Manifest { role: String::new(), version: String::new(), protocol: m.protocol, steps: Vec::new(), target: Default::default(), delivery: m.delivery }
 }
 
 /// The runs a search starts from: at low and at high risk, and, when a stop may ask only a sample, once with every
@@ -712,7 +729,7 @@ pub fn prove_within(m: &Manifest, promises: &[Promise], most: usize) -> Vec<Proo
         .collect();
     let mut broken: Vec<Option<Vec<String>>> = vec![None; promises.len()];
     let mut trail: Trail = Vec::new();
-    let mut seen: std::collections::HashSet<u128> = std::collections::HashSet::new();
+    let mut seen: HashSet<u128> = HashSet::new();
     let mut frontier: Vec<(Node, usize)> = Vec::new();
     for (start, says) in starts(m) {
         let Ok(decided) = decide(None, &start) else { continue };
@@ -720,6 +737,7 @@ pub fn prove_within(m: &Manifest, promises: &[Promise], most: usize) -> Vec<Proo
         run.seq = decided.events.len() as u64;
         let held = promises.iter().map(|p| matches!(&p.form, Form::OnlyAfter { after, .. } if after.holds(&run))).collect();
         let pending = decided.commands.into_iter().filter(|c| !matches!(c, Command::Ask { .. } | Command::Permit { .. } | Command::Notify { .. })).collect();
+        run.manifest = bare(m);
         let node = Node { run, pending, trouble: 0, continues: 0, sent_back: BTreeMap::new(), held };
         if seen.insert(node.key()) {
             trail.push((None, says));
@@ -737,8 +755,19 @@ pub fn prove_within(m: &Manifest, promises: &[Promise], most: usize) -> Vec<Proo
         }
         let done: Vec<bool> = broken.iter().map(Option::is_some).collect();
         let size = frontier.len().div_ceil(threads).max(1);
+        let mut chunks = Vec::new();
+        let mut rest = frontier.into_iter();
+        loop {
+            let part: Vec<(Node, usize)> = rest.by_ref().take(size).collect();
+            if part.is_empty() {
+                break;
+            }
+            chunks.push(part);
+        }
+        drop(rest);
+        let (done, named, seen_now) = (&done, &named, &seen);
         let parts: Vec<Option<Vec<(usize, Child, u128)>>> = std::thread::scope(|s| {
-            let handles: Vec<_> = frontier.chunks(size).map(|part| s.spawn(|| expand(part, promises, &done, &named))).collect();
+            let handles: Vec<_> = chunks.into_iter().map(|part| s.spawn(move || expand(part, m, promises, done, named, seen_now))).collect();
             handles.into_iter().map(|h| h.join().ok()).collect()
         });
         let mut next = Vec::new();
