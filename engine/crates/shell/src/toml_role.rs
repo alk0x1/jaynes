@@ -344,6 +344,11 @@ struct StopFile {
     /// bug"`, or `"Built on {{name}}"` with the option's name. Jaynes says whose request it was after it, at the merge
     /// and in the run's story.
     settled: Option<String>,
+    /// The field of the option that holds the words naming it, copied from the request or the brief: the stop does
+    /// not hold the run when the one option it offers has them and the check `vouched_by` vouched for them.
+    holds_unless: Option<String>,
+    /// The step's check that vouches for those words; `named-in-request` when none is named.
+    vouched_by: Option<String>,
 }
 
 /// The most characters a role's word for a verdict has: it goes on a button, and what it does is said under it.
@@ -1419,6 +1424,15 @@ impl TomlRole {
                     _ => errs.push("a check has either use (a check on the menu) or script, not both and not neither".into()),
                 }
             }
+            if let Some(st) = s.stop.as_ref().filter(|st| st.holds_unless.is_some()) {
+                match &st.vouched_by {
+                    Some(v) if !checks.iter().any(|c| &c.name == v) => errs.push(format!("has a stop whose vouched_by names {v}, which is not a check of this step")),
+                    None if !checks.iter().any(|c| c.name == "named-in-request") => errs.push(
+                        "has a stop whose holds_unless needs a check of this step that vouches for the words: { use = \"named-in-request\", field = \"...\", words = \"...\" }, or vouched_by = \"CHECK\"".into(),
+                    ),
+                    _ => {}
+                }
+            }
             if let (Some(show), Some(o)) = (&s.show, &s.output)
                 && let Some(each) = &show.each
                 && !o.contains_key(each)
@@ -1454,7 +1468,7 @@ impl TomlRole {
                     errs.push("has a stop whose ask names {{risk}}, why the run's risk is high, and it asks at every risk: write from_risk = \"high\", or leave {{risk}} out".into());
                 }
             }
-            let stop = s.stop.as_ref().map(|st| StopDecl { settled: st.settled.clone(),
+            let stop = s.stop.as_ref().map(|st| StopDecl { settled: st.settled.clone(), holds_unless: st.holds_unless.clone(), vouched_by: st.vouched_by.clone(),
                 verdicts: st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() }),
                 choose: st.choose,
                 redo: st.redo.clone(),
@@ -2441,7 +2455,7 @@ impl TomlRole {
             },
             Call::Items { step, output } => match step_of(&step) {
                 Err(b) => b,
-                Ok((_, x)) => Body::Items { items: items(&step, x.show.as_ref(), &output) },
+                Ok((d, x)) => Body::Items { items: items(&step, x.show.as_ref(), d.stop.as_ref().and_then(|st| st.holds_unless.as_deref()), &output) },
             },
             Call::Narrow { step, output, keep } => match step_of(&step) {
                 Err(b) => b,
@@ -2466,9 +2480,15 @@ pub fn check_reach(x: &StepExtra, check: &str) -> Value {
     json!({"local_ports": x.check_ports.get(check).cloned().unwrap_or_default()})
 }
 
-/// What the person is shown of an output.
-pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownItem> {
-    let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new() };
+/// What the person is shown of an output. With `named`, the field of an option that holds the words that named it
+/// (its stop's `holds_unless`): those words, and where they were (its `from`, the request when it says none).
+pub fn items(step: &str, show: Option<&ShowFile>, named: Option<&str>, output: &Value) -> Vec<ShownItem> {
+    let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new(), named: None };
+    let named_in = |e: &Value| {
+        let words = named.and_then(|f| e[f].as_str()).map(str::trim).filter(|w| !w.is_empty())?;
+        let from = e["from"].as_str().map(str::trim).filter(|w| !w.is_empty()).unwrap_or("request");
+        Some(jaynes_core::question::Named { words: words.to_string(), from: from.to_string() })
+    };
     let Some(show) = show else { return vec![whole()] };
     let filled = |template: &Option<String>, from: &Value| template.as_deref().map(|t| label(t, from).trim().to_string()).unwrap_or_default();
     let dressed = |item: ShownItem, from: &Value| {
@@ -2493,7 +2513,7 @@ pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownIt
                 .enumerate()
                 .map(|(n, e)| {
                     let id = Some(filled(&show.id, e)).filter(|i| !i.is_empty()).unwrap_or_else(|| format!("{field}-{}", n + 1));
-                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new() }, e)
+                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new(), named: named_in(e) }, e)
                 })
                 .collect(),
             _ => vec![whole()],
@@ -2506,7 +2526,7 @@ pub fn narrow(step: &str, show: Option<&ShowFile>, output: &Value, keep: &[Strin
     let Some(field) = show.and_then(|s| s.each.as_ref()) else {
         return Err(format!("{step} shows no list, so it has no options to keep"));
     };
-    let shown = items(step, show, output);
+    let shown = items(step, show, None, output);
     let list = output[field.as_str()].as_array().cloned().unwrap_or_default();
     if shown.len() != list.len() {
         return Err(format!("{step}'s {field} is empty, so it has no options to keep"));
@@ -2757,11 +2777,11 @@ with = {{ pages = "read.sources" }}
     fn items_follow_show() {
         let out = json!({"summary": "s", "examples": [{"case": "a", "now": "b"}, {"case": "c", "now": "d"}]});
         let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() };
-        let shown = items("reproduce", Some(&each), &out);
+        let shown = items("reproduce", Some(&each), None, &out);
         assert_eq!(shown.iter().map(|i| (i.id.as_str(), i.label.as_str())).collect::<Vec<_>>(), [("examples-1", "a: now b"), ("examples-2", "c: now d")]);
-        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() }), &out);
+        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() }), None, &out);
         assert_eq!(whole[0].label, "s");
-        assert_eq!(items("fix", None, &out)[0].label, "what fix made");
+        assert_eq!(items("fix", None, None, &out)[0].label, "what fix made");
     }
 
     #[test]
@@ -2792,7 +2812,7 @@ with = {{ pages = "read.sources" }}
     fn items_take_their_id_sentence_and_picture_from_the_element() {
         let out = json!({"directions": [{"name": "Ink", "why": "dark on paper", "page": "design/ink.html"}, {"name": "Sun", "why": "", "page": ""}]});
         let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: Some("{{why}}".into()), picture: Some("{{page}}".into()), aspects: Vec::new() };
-        let shown = items("directions", Some(&show), &out);
+        let shown = items("directions", Some(&show), None, &out);
         assert_eq!((shown[0].id.as_str(), shown[0].detail.as_str(), shown[0].pictures.clone()), ("Ink", "dark on paper", vec!["design/ink.html".to_string()]));
         assert_eq!((shown[1].id.as_str(), shown[1].pictures.len()), ("Sun", 0), "an empty path is no picture");
     }
@@ -2806,7 +2826,7 @@ with = {{ pages = "read.sources" }}
             AspectFile { label: "Fonts".into(), text: "{{fonts}}".into() },
         ];
         let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects };
-        let shown = items("directions", Some(&show), &out);
+        let shown = items("directions", Some(&show), None, &out);
         let got: Vec<(&str, &str)> = shown[0].aspects.iter().map(|a| (a.label.as_str(), a.text.as_str())).collect();
         assert_eq!(got, [("Palette", "deep green, sand"), ("Money", "money in green")], "an empty one is left out");
     }
@@ -3675,13 +3695,13 @@ script = "requires/changelog.sh"
             {"case": "A cart with no coupon", "now": "Total 5.00", "after": "Total 5.00, as today"},
         ]});
         let show = fix.extras["reproduce"].show.as_ref();
-        let shown = items("reproduce", show, &out);
+        let shown = items("reproduce", show, None, &out);
         assert_eq!(shown.len(), 1, "{shown:?}");
         assert_eq!((shown[0].label.as_str(), shown[0].detail.as_str()), ("The total shows a dollar too much when the cart has a coupon.", "A cart of 10.00 with a 1.00 coupon"));
         let aspects: Vec<(&str, &str)> = shown[0].aspects.iter().map(|a| (a.label.as_str(), a.text.as_str())).collect();
         assert_eq!(aspects, [("Now", "Total 10.00"), ("After the fix", "Total 9.00"), ("What the test sees now", "Total 10.00"), ("Another example", "A cart with no coupon: now Total 5.00; after the fix Total 5.00, as today")]);
         // with no example, the bug alone, and nothing empty under it
-        let bare = items("reproduce", show, &json!({"bug": "It stops when the name is empty.", "reproduced": true}));
+        let bare = items("reproduce", show, None, &json!({"bug": "It stops when the name is empty.", "reproduced": true}));
         assert_eq!((bare.len(), bare[0].label.as_str(), bare[0].detail.as_str(), bare[0].aspects.len()), (1, "It stops when the name is empty.", "", 0));
         // what the person reads there carries no code: the bug and each example are checked for it
         let plain = |field: &str| CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": field}).as_object().cloned().unwrap_or_default() };
@@ -3704,11 +3724,52 @@ script = "requires/changelog.sh"
         assert_eq!(stop.about, "{{risk}} Keep it, or have it done again?");
         assert_eq!(stop.answers, BTreeMap::from([(VerdictKind::Keep, "Keep it".to_string()), (VerdictKind::Redo, "Do it again".to_string())]));
         let out = json!({"summary": "The total now counts the coupon once.", "files": ["src/cart/total.rs"]});
-        let shown = items("change", small.extras["change"].show.as_ref(), &out);
+        let shown = items("change", small.extras["change"].show.as_ref(), None, &out);
         assert_eq!(shown.len(), 1, "{shown:?}");
         assert_eq!(shown[0].label, "The total now counts the coupon once.");
         let plain = CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": "summary"}).as_object().cloned().unwrap_or_default() };
         assert_eq!(small.extras["change"].checks.get("plain-words"), Some(&plain));
+    }
+
+    // S2, the tech-lead, 22/11: a stop that chooses holds unless the request or the brief named the one option, and a
+    // check of the step vouched for the words; the role's output says them, and where they were.
+    #[test]
+    fn a_stop_that_chooses_holds_unless_the_one_option_was_named_and_a_check_vouched_for_it() {
+        let text = |stop: &str, checks: &str| format!(r#"
+role = "stacky"
+version = "1.0.0"
+
+[[step]]
+name = "stacks"
+reach = {{ project = "write", write = ["design/**"] }}
+instructions = "Propose stacks for: {{{{request}}}}"
+checks = [{checks}]
+stop = {stop}
+show = {{ each = "stacks", id = "{{{{name}}}}", label = "{{{{name}}}}" }}
+
+[step.output]
+stacks = {{ type = "array", items = {{ type = "object", fields = {{ name = {{ type = "string" }}, named = {{ type = "string" }}, from = {{ type = "string" }} }} }} }}
+"#);
+        let vouch = r#"{ use = "named-in-request", field = "stacks", words = "named" }"#;
+        let stop = r#"{ ask = "Which?", choose = true, holds = true, holds_unless = "named", settled = "Building on “{{name}}”" }"#;
+        let r = TomlRole::load(&role("named", &text(stop, vouch))).expect("reads");
+        let decl = r.manifest.steps[0].stop.as_ref().expect("stop");
+        assert_eq!((decl.holds_unless.as_deref(), decl.vouched_by.as_deref()), (Some("named"), None));
+        // the words, and where they were, ride on the option shown
+        let output = json!({"stacks": [{"name": "Go", "named": "in Go", "from": "brief"}]});
+        let shown = items("stacks", r.extras["stacks"].show.as_ref(), Some("named"), &output);
+        let named = jaynes_core::question::Named { words: "in Go".into(), from: "brief".into() };
+        assert_eq!(shown[0].item_with(&[]).named, Some(named));
+        // from the request when the output does not say; no words, nothing named
+        let output = json!({"stacks": [{"name": "Go", "named": "in Go"}, {"name": "Rust", "named": "  "}]});
+        let shown = items("stacks", r.extras["stacks"].show.as_ref(), Some("named"), &output);
+        assert_eq!(shown[0].named.as_ref().map(|n| n.from.as_str()), Some("request"));
+        assert_eq!(shown[1].named, None);
+        // no check vouches for the words
+        let e = errors("named-unvouched", &text(stop, ""));
+        assert!(e.contains("holds_unless needs a check of this step that vouches for the words"), "{e}");
+        let e = errors("named-other", &text(&stop.replace("holds_unless", r#"vouched_by = "device-said", holds_unless"#), vouch));
+        assert!(e.contains("vouched_by names device-said, which is not a check of this step"), "{e}");
     }
 
     // One moment at the merge: a stop that does not hold says, in the role's words, what the request settled there,

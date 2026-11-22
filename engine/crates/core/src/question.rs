@@ -63,6 +63,18 @@ pub struct Item {
     pub label: String,
     /// The fingerprint of the item's content, so a kept item can be told apart from a changed one.
     pub digest: Digest,
+    /// The words that named this option before it was made, and where they were: the stop that chooses does not hold
+    /// the run for it when the role's check vouched for them ([`crate::manifest::StopDecl::holds_unless`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named: Option<Named>,
+}
+
+/// Where an option was named before it was made: the words, copied from the request or the brief.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Named {
+    pub words: String,
+    /// "request" or "brief".
+    pub from: String,
 }
 
 impl Item {

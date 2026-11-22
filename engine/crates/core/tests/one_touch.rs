@@ -191,6 +191,8 @@ fn reproduce_then_fix(starter: Option<String>, holds: bool) -> (Run, Vec<Command
         rounds: None,
         answers: [(VerdictKind::Redo, "Not this bug".to_string())].into_iter().collect(),
         settled: Some("the bug".to_string()),
+        holds_unless: None,
+        vouched_by: None,
     };
     let reproduce = StepDecl { name: "reproduce".to_string(), stop: Some(stop), ..build() };
     let fix = StepDecl { name: "fix".to_string(), needs: vec!["reproduce".to_string()], ..build() };
@@ -204,7 +206,7 @@ fn reproduce_then_fix(starter: Option<String>, holds: bool) -> (Run, Vec<Command
             Command::Probe { step, .. } => todo.extend(feed(&mut run, Input::ProbeEnded { step: step.clone(), ok: true, reason: String::new() })),
             Command::RunAgent(t) => {
                 let (items, changed) = if t.step == "reproduce" {
-                    (vec![jaynes_core::question::Item { id: "bug".to_string(), label: "A note with a comma breaks the CSV".to_string(), digest: Digest("b".to_string()) }], vec![file("tests/test_comma.py", 9, 0, "t")])
+                    (vec![jaynes_core::question::Item { named: None, id: "bug".to_string(), label: "A note with a comma breaks the CSV".to_string(), digest: Digest("b".to_string()) }], vec![file("tests/test_comma.py", 9, 0, "t")])
                 } else {
                     (Vec::new(), vec![file("src/export.py", 3, 1, "e")])
                 };
@@ -264,4 +266,102 @@ fn branch_only_keeps_nothing_and_a_stop_that_holds_is_never_in_the_merge() {
     let (run, seen) = reproduce_then_fix(None, true);
     assert!(!seen.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "fix")), "the stop held: {seen:?}");
     assert!(run.open_questions().iter().all(|q| q.question.kind != QuestionKind::Merge && q.question.rides.is_empty()));
+}
+
+/// scaffold's shape: a stop that chooses a stack and holds, unless the request or the brief named the one option and
+/// the step's check vouched for it; then the build, and the merge.
+fn stack_then_build(options: &[(&str, Option<(&str, &str)>)], vouch: bool, braked: bool) -> (Run, Vec<Command>) {
+    use jaynes_core::manifest::{CheckDecl, CheckKind, StopDecl};
+    use jaynes_core::question::{Item, Named, VerdictKind};
+    let stop = StopDecl {
+        verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
+        holds: true,
+        from_risk: Default::default(),
+        release: false,
+        budget: None,
+        audit_rate: jaynes_core::manifest::Rate(0.1),
+        about: "Which stack?".to_string(),
+        choose: true,
+        redo: None,
+        rounds: None,
+        answers: Default::default(),
+        settled: Some("Building on “{{name}}”".to_string()),
+        holds_unless: Some("named".to_string()),
+        vouched_by: None,
+    };
+    let checks = if vouch { vec![CheckDecl { name: "named-in-request".to_string(), kind: CheckKind::Open, about: String::new(), reads: vec![] }] } else { vec![] };
+    let stacks = StepDecl { name: "stacks".to_string(), stop: Some(stop), checks, ..build() };
+    let built = StepDecl { name: "build".to_string(), needs: vec!["stacks".to_string()], ..build() };
+    let manifest = Manifest { role: "scaffold".to_string(), version: "1".to_string(), protocol: 1, steps: vec![stacks, built], target: Default::default(), delivery: DeliveryKind::Merge };
+    let attention = if braked {
+        let key = jaynes_core::attention::stop_key(&manifest, &Digest("f".to_string()), 0);
+        [("stacks".to_string(), jaynes_core::attention::Count { key, braked: true, ..Default::default() })].into_iter().collect()
+    } else {
+        BTreeMap::new()
+    };
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "a notes app in Go".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention, task: None, arm: None, never_merge: false, starter: None }).expect("start");
+    let mut run = Run::fold(&out.events).expect("run");
+    let mut todo = out.commands;
+    let mut seen = Vec::new();
+    while let Some(cmd) = (!todo.is_empty()).then(|| todo.remove(0)) {
+        match &cmd {
+            Command::Probe { step, .. } => todo.extend(feed(&mut run, Input::ProbeEnded { step: step.clone(), ok: true, reason: String::new() })),
+            Command::RunAgent(t) => {
+                let (items, changed) = if t.step == "stacks" {
+                    let items = options
+                        .iter()
+                        .map(|(name, named)| Item { id: name.to_string(), label: format!("{name}: small"), digest: Digest(name.to_string()), named: named.map(|(words, from)| Named { words: words.to_string(), from: from.to_string() }) })
+                        .collect();
+                    (items, vec![file("design/architecture/go.html", 9, 0, "s")])
+                } else {
+                    (Vec::new(), vec![file("main.go", 3, 0, "m")])
+                };
+                let outcome = AttemptOutcome::Delivered { output: Digest(format!("o-{}", t.step)), items, changed, usage: Usage::default(), session: None, tree: None, reply: None };
+                todo.extend(feed(&mut run, Input::AttemptEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, outcome }));
+            }
+            Command::RunChecks { step, attempt, fix, checks, .. } => {
+                let results = checks.iter().map(|c| jaynes_core::io::CheckResult::new(c.clone(), jaynes_core::io::CheckVerdict::Pass)).collect();
+                todo.extend(feed(&mut run, Input::ChecksEnded { step: step.clone(), attempt: *attempt, fix: *fix, results }));
+            }
+            _ => {}
+        }
+        seen.push(cmd);
+    }
+    (run, seen)
+}
+
+// The tech-lead, 22/11 (S2): a stack the request named does not hold the run. The run builds on it, the merge's
+// touch keeps it, and the story says "Building on “Go”, as your request says".
+#[test]
+fn asked_one_moment_at_the_merge_when_the_request_named_the_stack() {
+    let (run, seen) = stack_then_build(&[("Go", Some(("in Go", "request")))], true, false);
+    assert!(seen.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "build")), "{seen:?}");
+    assert_eq!(asked(&seen), [QuestionKind::Decision, QuestionKind::Merge]);
+    let stack = run.open_questions().into_iter().find(|q| q.question.step == "stacks").expect("open").question.clone();
+    assert!(!stack.holds);
+    let merge = run.open_questions().into_iter().find(|q| q.question.kind == QuestionKind::Merge).expect("merge").question.clone();
+    assert_eq!(merge.rides, vec![Ride { question: stack.id.clone(), step: "stacks".to_string(), said: "Building on “Go”, as your request says".to_string() }]);
+    // named in the brief: whose words they were
+    let (run, _) = stack_then_build(&[("Go", Some(("Go", "brief")))], true, false);
+    let stack = run.open_questions().into_iter().find(|q| q.question.step == "stacks").expect("open").question.clone();
+    assert_eq!(run.settled_said(&stack), "Building on “Go”, as your brief says");
+}
+
+#[test]
+fn a_named_stack_holds_unless_it_is_the_one_option_its_check_vouched_for_and_the_stop_is_not_braked() {
+    let holds = |options: &[(&str, Option<(&str, &str)>)], vouch, braked| {
+        let (run, seen) = stack_then_build(options, vouch, braked);
+        let stack = run.questions.values().find(|q| q.question.step == "stacks").expect("asked").question.clone();
+        assert_eq!(stack.holds, !seen.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "build")));
+        stack.holds
+    };
+    assert!(!holds(&[("Go", Some(("in Go", "request")))], true, false));
+    // nothing named: the person chooses
+    assert!(holds(&[("Go", None)], true, false));
+    // two options, one named: the person chooses
+    assert!(holds(&[("Go", Some(("in Go", "request"))), ("Rust", None)], true, false));
+    // no check of the step vouched for the words
+    assert!(holds(&[("Go", Some(("in Go", "request")))], false, false));
+    // G17: a braked stop holds and asks
+    assert!(holds(&[("Go", Some(("in Go", "request")))], true, true));
 }

@@ -300,13 +300,13 @@ struct Move {
 /// deliver the same kind of change deliver the same output, so their runs meet again.
 fn output(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     let d = Digest(format!("{step}.{round}.{what}"));
-    (d.clone(), vec![Item { id: "output".into(), label: format!("what {step} made"), digest: d }])
+    (d.clone(), vec![Item { named: None, id: "output".into(), label: format!("what {step} made"), digest: d }])
 }
 
 /// An output of options, for a stop that chooses: two of them, so a choice leaves one.
 fn options(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     let d = Digest(format!("{step}.{round}.{what}"));
-    let item = |id: &str| Item { id: id.into(), label: format!("option {id} of {step}"), digest: Digest(format!("{step}.{round}.{what}.{id}")) };
+    let item = |id: &str| Item { named: None, id: id.into(), label: format!("option {id} of {step}"), digest: Digest(format!("{step}.{round}.{what}.{id}")) };
     (d, vec![item("a"), item("b")])
 }
 

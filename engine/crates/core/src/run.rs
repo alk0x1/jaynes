@@ -977,7 +977,11 @@ impl Run {
     /// settles there (its stop's `settled`, `{{name}}` the option's name), then whose request it was; without them, the
     /// option as it was made. The merge's question says it of each stop its touch keeps, and the run's story too.
     pub fn settled_said(&self, q: &Question) -> String {
-        let whose = if self.starter.is_some() { "as the request the agent that started the run wrote says" } else { "as your request says" };
+        let whose = match (q.items.as_slice(), self.starter.is_some()) {
+            ([one], _) if one.named.as_ref().is_some_and(|n| n.from == "brief") => "as your brief says",
+            (_, true) => "as the request the agent that started the run wrote says",
+            (_, false) => "as your request says",
+        };
         let words = self.manifest.index(&q.step).and_then(|j| self.manifest.steps[j].stop.as_ref()).and_then(|s| s.settled.as_ref());
         match words {
             Some(words) => format!("{}, {whose}", words.replace("{{name}}", q.items.first().map(Item::name).unwrap_or_default())),

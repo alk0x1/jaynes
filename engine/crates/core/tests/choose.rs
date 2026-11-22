@@ -31,7 +31,7 @@ fn step(name: &str, needs: &[&str]) -> StepDecl {
 }
 
 fn choosing() -> StopDecl {
-    StopDecl { settled: None,
+    StopDecl { settled: None, holds_unless: None, vouched_by: None,
         verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
         holds: true,
         from_risk: Risk::Low,
@@ -69,7 +69,7 @@ fn refused(run: &Run, input: Input) -> String {
 }
 
 fn item(id: &str, d: &str) -> Item {
-    Item { id: id.into(), label: id.into(), digest: Digest(d.into()) }
+    Item { named: None, id: id.into(), label: id.into(), digest: Digest(d.into()) }
 }
 
 /// Pass every probe the commands ask for; the commands that follow.
@@ -295,7 +295,7 @@ fn asked_one(label: &str) -> (Run, Question) {
     let mut run = Run::fold(&out.events).expect("run");
     let (_, cmds) = feed(&mut run, Input::ProbeEnded { step: "directions".into(), ok: true, reason: String::new() });
     let t = turn(&cmds);
-    let one = Item { id: "py".into(), label: label.into(), digest: Digest("p".into()) };
+    let one = Item { named: None, id: "py".into(), label: label.into(), digest: Digest("p".into()) };
     let (events, _) = deliver(&mut run, &t, "one", vec![one]);
     let q = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked");
     (run, q)
@@ -325,7 +325,7 @@ fn asked_one_option_with_words_is_not_chosen_yet() {
     // nothing is held: no later round is bound to it
     assert!(run.steps[0].locks.is_empty(), "{:?}", run.steps[0].locks);
     // the agent gives it again and the stop asks again
-    let (events, _) = deliver(&mut run, &t, "one2", vec![Item { id: "py".into(), label: "Python + FastAPI".into(), digest: Digest("p2".into()) }]);
+    let (events, _) = deliver(&mut run, &t, "one2", vec![Item { named: None, id: "py".into(), label: "Python + FastAPI".into(), digest: Digest("p2".into()) }]);
     let q2 = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked again");
     assert!(q2.choose);
     assert_eq!(q2.items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["py"]);
@@ -349,7 +349,7 @@ fn asked_one_option_s_sentences_name_it_as_its_title_does() {
     assert!(said.contains(&"“Python + FastAPI” is chosen: no later round of directions may change it.".to_string()), "{said:?}");
     assert!(said.iter().all(|s| !s.contains("small and known")), "{said:?}");
     // a label with no colon is its own name
-    assert_eq!(Item { id: "a".into(), label: " Go ".into(), digest: Digest("d".into()) }.name(), "Go");
+    assert_eq!(Item { named: None, id: "a".into(), label: " Go ".into(), digest: Digest("d".into()) }.name(), "Go");
 }
 
 #[test]

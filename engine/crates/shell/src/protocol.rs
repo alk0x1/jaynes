@@ -197,6 +197,10 @@ pub struct ShownItem {
     /// Shown, and read with the person's words; the engine judges the item as a whole.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aspects: Vec<Aspect>,
+    /// The words that named this option before it was made, copied from the request or the brief, and where they
+    /// were: a stop with `holds_unless` does not hold the run for the one option that has them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named: Option<jaynes_core::question::Named>,
 }
 
 /// One part of an item, shown apart: its label and what it is, in plain words.
@@ -215,7 +219,7 @@ impl ShownItem {
         } else {
             jaynes_core::Digest::of_json(&serde_json::json!({"content": self.content, "pictures": pictures}))
         };
-        jaynes_core::question::Item { id: self.id.clone(), label: self.label.clone(), digest }
+        jaynes_core::question::Item { named: self.named.clone(), id: self.id.clone(), label: self.label.clone(), digest }
     }
 }
 
