@@ -324,6 +324,18 @@ pub fn takes_esc(shows: Shows, over: bool) -> bool {
 }
 
 /// The card's first line, the run's name, and the one after it: where it waits.
+/// A question's title as the stop card and the choice screen show it: its project first, dim, with " · ", then the
+/// question; the question alone without a project (design 0.2.5 quatro-itens.md, item 2).
+pub fn question_title(project: &str, title: &str) -> (Option<String>, String) {
+    ((!project.is_empty()).then(|| format!("{project} · ")), title.to_string())
+}
+
+/// The title drawn: the project in dim before the question, the question's names in mono.
+pub fn title_view(project: &str, title: &str) -> Div {
+    let (first, question) = question_title(project, title);
+    div().flex().flex_wrap().items_baseline().when_some(first, |d, p| d.child(div().flex_none().whitespace_nowrap().text_color(rgb(look::dim())).child(p))).child(look::ticked(&question))
+}
+
 pub fn card_head(run: &str, project: &str, step: &str, round: u32) -> (String, String) {
     let at = if round > 0 { format!("at “{step}” · round {round}") } else { format!("at “{step}”") };
     if run.is_empty() {
@@ -621,7 +633,8 @@ impl Island {
     /// The compare mode on `stop`, with its run's name.
     fn compare_open(&self, stop: Stop, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.run_name(&stop.run, cx);
-        self.compare.update(cx, |c, cx| c.open(stop, name, window, cx));
+        let project = self.runs.read(cx).snap.details.get(&stop.run).map(|d| d.project.clone()).unwrap_or_default();
+        self.compare.update(cx, |c, cx| c.open(stop, name, project, window, cx));
     }
 
     /// A run's name, as the column says it; empty before the record is read.
@@ -1571,7 +1584,7 @@ impl Render for Island {
                 let run = stop.run.clone();
                 d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }), cx.listener(move |this, _, _, cx| this.move_to_finished(run.clone(), cx)), self.move_said.as_deref()))
             })
-            .when(stop.gone.is_none(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::ticked(&stop.title).text_size(px(16.)).text_color(rgb(look::text()))).when_some(stop.why.clone(), |d, why| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(why))).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED)))));
+            .when(stop.gone.is_none(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(title_view(&project, &stop.title).text_size(px(16.)).text_color(rgb(look::text()))).when_some(stop.why.clone(), |d, why| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(why))).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED)))));
         // the middle scrolls between the fixed head and foot; while there is more below, its bottom edge fades
         let max = self.scroll.max_offset().y;
         let more_below = fades_below(max, self.scroll.offset().y);
@@ -1658,7 +1671,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{diff_button, leave_rows, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1693,6 +1706,14 @@ mod tests {
             wants: None,
             gone: None,
         }
+    }
+
+    // the design-lead's quatro-itens.md, item 2 (the real-user, 22/11): two kickoffs waiting read alike ("Is this the
+    // first slice?"), so the stop card's title and the choice screen's name the project first, dim
+    #[test]
+    fn asked_the_question_s_title_names_its_project_first() {
+        assert_eq!(question_title("horta", "Is this the first slice?"), (Some("horta · ".to_string()), "Is this the first slice?".to_string()));
+        assert_eq!(question_title("", "Is this the first slice?"), (None, "Is this the first slice?".to_string()), "without a project, the question alone");
     }
 
     // the engineer lead, 22/11 (row 9), in the design-lead's words: at a stop of a run whose older engine left the Mac,

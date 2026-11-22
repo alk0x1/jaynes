@@ -516,6 +516,8 @@ pub struct Compare {
     kept: HashMap<(String, String, String), Kept>,
     /// The name of the run whose stop shows, as the column says it.
     name: String,
+    /// The project of the run whose stop shows, first in the title.
+    project: String,
     /// How many times Enter pulsed the main button with nothing chosen yet: each a pulse of its own.
     pulse: usize,
     /// When a third shortlist was refused: the hint says why for a while.
@@ -568,6 +570,7 @@ impl Compare {
             go_hover: false,
             kept: HashMap::new(),
             name: String::new(),
+            project: String::new(),
             pulse: 0,
             full_at: None,
         }
@@ -584,7 +587,7 @@ impl Compare {
 
     /// Opens on a stop of the run named `name`: what the person marked and wrote there comes back as they left it,
     /// and what they marked at the stop shown before stays with that one, for when they come back to it.
-    pub fn open(&mut self, stop: Stop, name: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(&mut self, stop: Stop, name: String, project: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.stop.as_ref().is_some_and(|s| same_stop(s, &stop)) {
             if let Some(was) = self.stop.as_ref() {
                 let left = Kept { marks: std::mem::take(&mut self.marks), words: Self::text(self.words.as_ref(), cx), why: self.why.as_ref().map(|w| w.read(cx).value().to_string()) };
@@ -612,6 +615,7 @@ impl Compare {
         }
         self.stop = Some(stop);
         self.name = name;
+        self.project = project;
         self.open = true;
         self.viewer = None;
         if self.words.is_none() {
@@ -1775,7 +1779,7 @@ impl Render for Compare {
                 let run = stop.run.clone();
                 d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }), cx.listener(move |this, _, _, cx| this.move_to_finished(run.clone(), cx)), self.move_said.as_deref()).flex_1().min_w_0())
             })
-            .when(stop.gone.is_none(), |d| d.child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, under_about(&stop)), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under)))))
+            .when(stop.gone.is_none(), |d| d.child(div().flex_1().min_w_0().flex().flex_col().child(crate::island::title_view(&self.project, &stop.title).truncate().text_size(px(16.)).text_color(rgb(look::text()))).when_some(under_title(&self.name, &stop.step, under_about(&stop)), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under)))))
             .when_some(round_word(&stop), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(r)))
             // as wide as its longer words, so "round" does not move when they change; a press on it keeps the keys
             // where they are, so it does what it says
