@@ -1272,8 +1272,23 @@ fn base64(bytes: &[u8]) -> String {
 fn blocked_notice(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> String {
     let said = crate::listing::blocked_said(step, fault, reason);
     let holds = said.holds.as_deref().map(|h| format!(" {}", esc(h))).unwrap_or_default();
-    let ways: String = said.ways.iter().map(|w| format!(" {}{}", esc(&w.says), w.command.as_deref().map(|c| format!(" <code>{}</code>", esc(c))).unwrap_or_default())).collect();
-    format!("<div class=\"notice bad\"><b>{}</b> · {} {}{holds}{ways} {}</div>", esc(&said.title), esc(&said.what), esc(&said.why), esc(&said.continue_does))
+    // each way whole, as the app lays it out: what to do, the command, what follows from it, and what stays open
+    let ways: String = said
+        .ways
+        .iter()
+        .map(|w| {
+            let command = w.command.as_deref().map(|c| format!(" <code>{}</code>", esc(c))).unwrap_or_default();
+            let then = w.then.as_deref().map(|t| format!("<span class=\"then\">{}</span>", esc(t))).unwrap_or_default();
+            let still = if w.still_open.is_empty() {
+                String::new()
+            } else {
+                let lines: String = w.still_open.iter().map(|l| format!("<li>{}</li>", esc(l))).collect();
+                format!("<details class=\"still\"><summary>{}</summary><ul>{lines}</ul></details>", esc(crate::listing::STILL_OPEN_HEADING))
+            };
+            format!("<div class=\"way\">{}{command}{then}{still}</div>", esc(&w.says))
+        })
+        .collect();
+    format!("<div class=\"notice bad\"><b>{}</b> · {} {}{holds}{ways}<div class=\"way\">{}</div></div>", esc(&said.title), esc(&said.what), esc(&said.why), esc(&said.continue_does))
 }
 
 /// The title over what a step changed, as the app's diff says it: "Changes made at “directions” · 3 files".
@@ -2317,7 +2332,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .notice.passed-q { background:var(--panel); color:var(--dim); }
 .passed { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:8px 0; font-size:13px; color:var(--dim); border-top:1px solid var(--line); }
 .passed span { color:var(--dim); } .passed a { border:1px solid var(--line-2); border-radius:8px; padding:4px 12px; color:var(--ink); white-space:nowrap; }
-.notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
+.notice.bad { background:var(--red-soft); color:var(--red); } .notice .way { margin-top:8px; } .notice .way code { color:var(--ink); } .notice .then { display:block; color:var(--dim); margin-top:2px; } .notice details.still { margin-top:4px; color:var(--dim); } .notice details.still summary { cursor:pointer; } .notice details.still ul { margin:4px 0 0 18px; padding:0; } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
 .steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
 .acts { display:flex; flex-wrap:wrap; gap:8px; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
@@ -2338,6 +2353,40 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 mod tests {
     use super::*;
     use jaynes_core::question::QuestionKind;
+
+    /// The reason the core keeps for a check the box kept from a local port, as listing's tests build it.
+    fn refused_port(lines: &str, tried: &str) -> String {
+        let not_given = crate::project::not_given(&[".claude/".to_string()]).expect("a sentence");
+        format!(
+            "the check suite-passes of change could not judge: the box refused what the command tried, so its failure says nothing about the project: {lines} It tried local port {tried}. A check's commands bind and reach only the ports in JAYNES_PORTS (65520, 65521, 65522, 65523, 65524, 65525, 65526, 65527) and the ones the check names in its local_ports, never its step's. Two ways out, the first the better: (1) the suite takes its test servers' ports from JAYNES_PORTS, and the box stays closed; (2) the person opens this project with `jaynes project open-ports /p`, and its checks then reach every service listening on this machine, the Jaynes page among them.; {not_given}. No attempt was spent"
+        )
+    }
+
+    // the rd-engineer, 22/11: the card for a port Jaynes holds says under its way "Only if nothing of yours runs on
+    // 5432 while the tests run: a test there would answer in its place."; the page drew only what a way says and its
+    // command, so the warning, and what stays open, never reached the page
+    #[test]
+    fn the_page_draws_each_way_out_whole_with_what_follows_and_what_stays_open() {
+        let panic = "panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted";
+        for reason in [refused_port("dial tcp 127.0.0.1:5432: connect: operation not permitted", "5432"), refused_port(panic, "0, a port of its own choosing")] {
+            let said = crate::listing::blocked_said(Some("change"), jaynes_core::event::Fault::Jaynes, &reason);
+            let page = blocked_notice(Some("change"), jaynes_core::event::Fault::Jaynes, &reason);
+            assert!(said.ways.iter().any(|w| w.then.is_some()), "a way with what follows: {:?}", said.ways);
+            for w in &said.ways {
+                assert!(page.contains(&esc(&w.says)), "{}", w.says);
+                if let Some(c) = &w.command {
+                    assert!(page.contains(&format!("<code>{}</code>", esc(c))), "{c}");
+                }
+                if let Some(t) = &w.then {
+                    assert!(page.contains(&format!("<span class=\"then\">{}</span>", esc(t))), "what follows: {t}");
+                }
+                if !w.still_open.is_empty() {
+                    assert!(page.contains(&format!("<summary>{}</summary>", esc(crate::listing::STILL_OPEN_HEADING))), "the heading");
+                    w.still_open.iter().for_each(|l| assert!(page.contains(&format!("<li>{}</li>", esc(l))), "still open: {l}"));
+                }
+            }
+        }
+    }
 
     // Alan, 20/11, in the video of the choice screen: "o que são esses pins?" (the design-lead's checkup, item 14): the
     // star became "☆ Shortlist", saying what it does, on the page as in the app (compare.rs asked_what_are_these_pins);
