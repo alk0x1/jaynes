@@ -17,22 +17,48 @@ fn python() -> String {
 }
 
 /// A command run at a terminal, as when the person types it: what follows `tty()` is the program and its arguments.
-/// Python's pty is the same on macOS and Linux, where script(1) takes its arguments differently. Its own loop, not
-/// pty.spawn, which on macOS's Python 3.9 waits for ever once the program is done.
+/// Python's pty is the same on macOS and Linux, where script(1) takes its arguments differently. The terminal is opened
+/// here and its program's side stays open here too, so what the program wrote before it ended is read whole and never
+/// thrown away with the terminal (a test once read an empty `open-ports` on CI); the program's end is waited for, not
+/// the terminal's, so a process it left holding the terminal never keeps the test waiting. When no terminal can be
+/// had, the helper says why on its output, where the test's message shows it.
 const TTY: &str = r#"
-import os, pty, sys
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp(sys.argv[1], sys.argv[1:])
-while True:
+import fcntl, os, select, sys, termios, time
+for tried in range(10):
     try:
-        data = os.read(fd, 65536)
-    except OSError:
+        master, slave = os.openpty()
         break
-    if not data:
+    except OSError as e:
+        why = e
+        time.sleep(0.2)
+else:
+    print(f"the test's terminal could not be opened: {why}")
+    sys.exit(97)
+pid = os.fork()
+if pid == 0:
+    os.close(master)
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    for fd in (0, 1, 2):
+        os.dup2(slave, fd)
+    if slave > 2:
+        os.close(slave)
+    os.execvp(sys.argv[1], sys.argv[1:])
+# the slave stays open here too, so what the program wrote before it ended is never thrown away with the terminal
+status = None
+while True:
+    ready, _, _ = select.select([master], [], [], 0.05)
+    if ready:
+        data = os.read(master, 65536)
+        if data:
+            os.write(1, data)
+            continue
+    if status is not None:
         break
-    os.write(1, data)
-sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+    done, st = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = st
+sys.exit(os.waitstatus_to_exitcode(status))
 "#;
 
 fn tty() -> Command {
@@ -3368,10 +3394,12 @@ files = {{ type = "array", items = "string" }}
     let needs = tool.map(|t| format!("if subprocess.run([{t:?}]).returncode != 0:\n    print(\"{t}: command not found\")\n    sys.exit(1)\n")).unwrap_or_default();
     std::fs::write(role.join("checks/serves.py"), format!(r#"#!/usr/bin/env python3
 import socket, subprocess, sys
-{needs}mine = socket.socket()
-mine.bind(("127.0.0.1", 0))
-mine.listen()
-socket.create_connection(("127.0.0.1", mine.getsockname()[1]), timeout=3).close()
+{needs}# as Go's httptest.NewServer, [::1]:0 first, then 127.0.0.1:0
+for family, host in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
+    mine = socket.socket(family)
+    mine.bind((host, 0))
+    mine.listen()
+    socket.create_connection((host, mine.getsockname()[1]), timeout=3).close()
 if b"hi" not in open("greeting.txt", "rb").read():
     print("the greeting is not hi")
     sys.exit(1)
