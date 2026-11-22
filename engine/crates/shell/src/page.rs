@@ -1202,7 +1202,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
     let data = json!({"run": r.id}).to_string();
     format!(
         "<div class=\"where\">{project}{role} {version} · run {id} · {risk} risk</div><h1>{title}</h1>{request}{why}{strip}{phase}{answers}\
-         <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {work}, {back} sent back{corr}</p>\
+         <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {work}{back}{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{passed}{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
@@ -1219,10 +1219,14 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
             None => esc(&short(&r.request)),
         },
         // the whole request, under the title: two lines, and the rest behind "more"
+        // only when it says more than the title (nome-da-run.md)
         request = {
             let whole = r.request.trim();
+            let title = name.map(|n| n.title.clone()).unwrap_or_else(|| short(&r.request));
             let long = whole.chars().count() > 160 || whole.lines().count() > 2;
-            if long {
+            if title.trim() == whole {
+                String::new()
+            } else if long {
                 format!("<details class=\"req\"><summary><span class=\"clamp\">{}</span><span class=\"more\">more</span></summary></details>", esc(whole))
             } else {
                 format!("<p class=\"req\">{}</p>", esc(whole))
@@ -1236,7 +1240,8 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
         cached = r.spent.cached,
         // the agents' work as the app and the summary count it (listing::work)
         work = esc(&crate::listing::work(r).said()),
-        back = r.counts.sent_back,
+        // a count of zero is left out, as every counter (the tech-lead's rule)
+        back = if r.counts.sent_back > 0 { format!(", {} sent back", r.counts.sent_back) } else { String::new() },
         corr = if r.counts.corrections > 0 { format!(", {} corrected after delivery", r.counts.corrections) } else { String::new() },
         data = data.replace('<', "\\u003c"),
     )
@@ -1340,9 +1345,9 @@ fn entry_who(e: &jaynes_core::run::Entry, choose: bool) -> String {
     match e.kind {
         EntryKind::Change => format!("You · round {round} · a change"),
         EntryKind::Ask => format!("You · round {round} · a question"),
-        EntryKind::Answer if e.late => "Agent · answered after the stop · nothing changed".into(),
+        EntryKind::Answer if e.late => "Agent · answered after the stop closed · nothing changed".into(),
         EntryKind::Answer => "Agent · answered · nothing redone".into(),
-        EntryKind::AskFailed => "Agent · no answer".into(),
+        EntryKind::AskFailed => "Agent · could not answer".into(),
         EntryKind::Reply if e.round == 0 => format!("Agent · round {round} · what it made"),
         EntryKind::Reply => format!("Agent · round {round} · {}", if choose { "changed the option" } else { "what it changed" }),
     }
@@ -1370,7 +1375,7 @@ fn thread_html(run: &Run, q: &QuestionState) -> String {
         let who = esc(&entry_who(e, q.question.choose));
         let agent = !matches!(e.kind, EntryKind::Change | EntryKind::Ask);
         if n < whole_from {
-            out.push_str(&format!("<details class=\"te\"><summary><span class=\"who\">{who}</span> {}</summary></details>", esc(&e.text)));
+            out.push_str(&format!("<details class=\"te\"><summary><span class=\"who\">{who}</span><span class=\"tx\">{}</span></summary></details>", esc(&e.text)));
         } else {
             let new = if agent && n + 1 == entries.len() && !answering { " new" } else { "" };
             out.push_str(&format!("<div class=\"te{new}\"><div class=\"who\">{who}</div><div class=\"tx\">{}</div></div>", esc(&e.text)));
@@ -1391,7 +1396,7 @@ fn thread_story(s: &jaynes_core::run::StepState) -> String {
             let said = match e.kind {
                 EntryKind::Change => "you:",
                 EntryKind::Ask => "you asked:",
-                EntryKind::Answer if e.late => "agent answered after the stop, nothing changed:",
+                EntryKind::Answer if e.late => "agent answered after the stop closed, nothing changed:",
                 EntryKind::Answer => "agent answered, nothing redone:",
                 EntryKind::AskFailed => "agent could not answer:",
                 EntryKind::Reply => "agent:",
@@ -2485,7 +2490,7 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .askline { font-size:12.5px; color:var(--dim); margin:0 0 12px 2px; } .askline.bad { color:var(--red); }
 .thread { margin:0 0 14px; } .thread .th { font-size:12.5px; color:var(--dim); margin-bottom:6px; } .thread .tr { display:flex; align-items:center; gap:10px; font-size:11.5px; color:var(--faint); margin:8px 0 6px; } .thread .tr::after { content:""; flex:1; border-top:1px solid var(--line); }
 .thread .te { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:8px 12px; margin:0 0 6px; font-size:13.5px; } .thread .te .who { font-size:12px; color:var(--faint); margin-bottom:2px; } .thread .te .tx { white-space:pre-wrap; }
-.thread details.te > summary { cursor:pointer; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--dim); } .thread details.te > summary::-webkit-details-marker { display:none; } .thread details.te[open] > summary { white-space:normal; color:var(--ink); } .thread details.te .who { margin-right:6px; }
+.thread details.te > summary { cursor:pointer; list-style:none; color:var(--dim); } .thread details.te .who, .thread details.te .tx { display:block; } .thread details.te .tx { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .thread details.te > summary::-webkit-details-marker { display:none; } .thread details.te[open] > summary { color:var(--ink); } .thread details.te[open] .tx { white-space:pre-wrap; }
 .thread .te.new { border-color:var(--amber); } .thread .te.new .who { color:var(--amber); } .thread .te.wait { color:var(--dim); border-style:dashed; }
 .stages small.talk { font-family:inherit; font-size:12.5px; color:var(--dim); white-space:normal; }
 .say .read { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
@@ -2875,6 +2880,18 @@ mod tests {
     }
 
     // Alan, 21/11: "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse"
+    // the design-lead, 22/11: "after the stop" did not say whether the stop had closed; "could not answer" as the story
+    // says it
+    #[test]
+    fn a_late_answer_and_a_failed_ask_say_what_happened() {
+        use jaynes_core::run::{Entry, EntryKind, StepState};
+        let entry = |kind, late| Entry { round: 0, question: "q1".into(), kind, text: "t".into(), item: None, late, ask: Some("a1".into()) };
+        assert_eq!(entry_who(&entry(EntryKind::Answer, true), false), "Agent · answered after the stop closed · nothing changed");
+        assert_eq!(entry_who(&entry(EntryKind::AskFailed, false), false), "Agent · could not answer");
+        let step = StepState { thread: vec![entry(EntryKind::Answer, true), entry(EntryKind::AskFailed, false)], ..Default::default() };
+        assert_eq!(thread_story(&step), "<small class=\"talk\">agent answered after the stop closed, nothing changed: t</small><small class=\"talk\">agent could not answer: t</small>");
+    }
+
     #[test]
     fn asked_a_thread_of_conversation_at_the_stop_on_the_page() {
         let home = a_talk_at_a_stop();
@@ -2887,8 +2904,10 @@ mod tests {
         let (talk, field) = (asked.find("Conversation at “plan”").expect("the thread"), asked.find("id=\"ctx\"").expect("the field"));
         assert!(talk < field, "above the field");
         // the earlier exchange in a line each, the newest whole, and the agent answering it
-        assert!(asked.contains("<details class=\"te\"><summary><span class=\"who\">You · round 1 · a question</span> e se fosse Go só na API?</summary>"), "the first question, folded");
-        assert!(asked.contains("<span class=\"who\">Agent · answered · nothing redone</span> Daria, mas o ganho é pequeno. Não mudei nada.</summary>"), "its answer, folded");
+        assert!(asked.contains("<details class=\"te\"><summary><span class=\"who\">You · round 1 · a question</span><span class=\"tx\">e se fosse Go só na API?</span></summary>"), "the first question, folded");
+        assert!(asked.contains("<span class=\"who\">Agent · answered · nothing redone</span><span class=\"tx\">Daria, mas o ganho é pequeno. Não mudei nada.</span></summary>"), "its answer, folded");
+        // the design-lead, 22/11: the label always above the text, folded or whole, never two drawings
+        assert!(asked.contains(".thread details.te .who, .thread details.te .tx { display:block; }"), "the label above, folded too");
         assert!(asked.contains("<div class=\"te\"><div class=\"who\">You · round 1 · a question</div><div class=\"tx\">and the tests?</div></div>"), "the newest question, whole");
         assert!(asked.contains("<div class=\"te wait\">The agent is answering. Nothing is redone.</div>"), "the agent answering");
         assert!(asked.contains("Your question went to the agent at “plan”. It answers here; nothing is redone and nothing is chosen."), "under the field while it answers");
@@ -2914,6 +2933,10 @@ mod tests {
         // the run's story has the same entries, one line each
         let run = page.render(View::Run("talk".into()), now).expect("the run");
         assert!(run.contains("you asked: e se fosse Go só na API?") && run.contains("agent answered, nothing redone: Daria, mas o ganho é pequeno."), "the story");
+        // the design-lead, 22/11: the request shows under the title only when it says more (nome-da-run.md), and a
+        // count of zero is left out (the tech-lead's counters): "1 attempt by the agent", not "…, 0 sent back"
+        assert!(!run.contains("<p class=\"req\">Choose the stack</p>"), "the request said once");
+        assert!(run.contains("1 attempt by the agent</p>"), "no count of zero");
         // the page's ask goes to the engine as the person's; anyone else is refused by it
         let ask = json!({"run": "talk", "action": "ask", "question": q, "text": "and Rust?"});
         assert_eq!(act_in(&home, &page.exe, &ask, By::Agent { who: "x".into() }).err().as_deref(), Some("only you ask the agent at a stop"), "only the person asks");
