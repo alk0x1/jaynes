@@ -832,7 +832,7 @@ impl Page {
                         if on { " on" } else { "" },
                         esc(&run.id),
                         esc(&q.question.id),
-                        esc(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id))),
+                        ticks(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id))),
                         esc(&run.manifest.role),
                         where_in(run),
                         status,
@@ -928,7 +928,12 @@ impl Page {
                 };
                 let i = run.manifest.index(&q.question.step);
                 // at the merge, everything that lands, not the last step's change alone
-                let changes = if q.question.kind == jaynes_core::question::QuestionKind::Merge { delivery_html(&self.home, run) } else { changes_html(&self.home, run, i) };
+                let changes = match q.question.kind {
+                    QuestionKind::Merge => delivery_html(&self.home, run),
+                    // a leave: what the agent wants to write, which is not written yet, never what the step changed
+                    QuestionKind::Permission => crate::permit::wants_kept(&self.home, &run.id, &q.question.id).map(|w| wants_html(&w)).unwrap_or_default(),
+                    _ => changes_html(&self.home, run, i),
+                };
                 remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id))
             }
         };
@@ -1134,7 +1139,11 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
         .questions
         .values()
         .filter(|q| q.open() && crate::stop::went_on(r, q).is_none())
-        .map(|q| format!("<a class=\"answer\" href=\"/q/{}/{}\">Answer: {}</a>", esc(&r.id), esc(&q.question.id), esc(&q.question.about)))
+        .map(|q| {
+            // a leave is named as its card asks it, the file in mono; the role's stops by what they ask
+            let asks = if q.question.kind == QuestionKind::Permission { ticks(&crate::listing::title(q)) } else { esc(&q.question.about) };
+            format!("<a class=\"answer\" href=\"/q/{}/{}\">Answer: {asks}</a>", esc(&r.id), esc(&q.question.id))
+        })
         .collect();
     let finished = r.finished();
     let mut buttons = String::new();
@@ -1184,7 +1193,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
         .map(|q| {
             format!(
                 "<div class=\"passed\"><span>◇ {}</span><a href=\"/q/{}/{}\">Answer</a></div>",
-                esc(&crate::listing::passed_line(&q.question.step, &crate::listing::title(q))),
+                ticks(&crate::listing::passed_line(&q.question.step, &crate::listing::title(q))),
                 esc(&r.id),
                 esc(&q.question.id)
             )
@@ -1446,7 +1455,8 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             .collect::<String>();
         rows + FINALS_ROW + &none_row(question.items.len())
     };
-    let rows: String = if question.choose { choose_rows() } else { question
+    let leave = question.kind == QuestionKind::Permission;
+    let rows: String = if question.choose { choose_rows() } else if leave { leave_rows(run, question) } else { question
         .items
         .iter()
         .map(|it| {
@@ -1494,14 +1504,18 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let can_ask = question.kind == QuestionKind::Decision && q.open() && run.manifest.steps.get(i).is_some_and(|d| d.executor == jaynes_core::manifest::Executor::Agent);
     let answering = run.asking.values().any(|x| *x == question.id);
     format!(
-        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}\
+        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          <div class=\"say\"><label>Your words</label>{modes}<input id=\"ctx\" placeholder=\"Say what you think, in any language: what stays, what changes (or answer with the buttons)\"><button class=\"read\" id=\"read\">Read my words</button>{ask}</div>{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
-         {rows}{changes}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
+         {rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
         n = path.len(),
-        title = esc(&crate::listing::title_into(q, into)),
+        title = ticks(&crate::listing::title_into(q, into)),
+        // a leave says why it comes to the person, and what the agent wants to write comes before the answers
+        why = if leave { format!("<p class=\"whyyou\">{}</p>", esc(crate::stop::WHY_YOU)) } else { String::new() },
+        lead = if leave { changes } else { "" },
+        tail = if leave { "" } else { changes },
         strip = strip(run),
         thread = thread_html(run, q),
         modes = if can_ask { "<span class=\"mode\" hidden><button data-mode=\"ask\">Question</button><button data-mode=\"change\">Change</button></span>" } else { "" },
@@ -1516,6 +1530,110 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         stages = stage_list(run),
         data = data.replace('<', "\\u003c"),
     )
+}
+
+/// A sentence for the page with what it puts between backquotes in mono, without the backquotes, as the app draws it:
+/// "May the agent change `tests/conftest.py`?". A backquote left alone is dropped, never shown.
+fn ticks(text: &str) -> String {
+    let parts: Vec<&str> = text.split('`').collect();
+    let n = parts.len();
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, p)| if i % 2 == 1 && i + 1 < n { format!("<code>{}</code>", esc(p)) } else { esc(p) })
+        .collect()
+}
+
+/// The answers to a leave, each with the sentence of what it does beside its button (stop::leave_consequences).
+fn leave_rows(run: &Run, question: &jaynes_core::question::Question) -> String {
+    let says = crate::stop::leave_consequences(run, &question.about);
+    question
+        .items
+        .iter()
+        .map(|it| {
+            let id = esc(&it.id);
+            let buttons: String = question
+                .offered
+                .iter()
+                .map(|v| {
+                    let key = format!("{v:?}").to_lowercase();
+                    let said = says.get(v).map(|s| esc(s)).unwrap_or_default();
+                    format!("<div class=\"opt\"><button class=\"{key}\" data-i=\"{id}\" data-v=\"{key}\">{}</button><span class=\"says\">{said}</span></div>", label_for(*v, question.kind))
+                })
+                .collect();
+            format!("<div class=\"row leave\" data-item=\"{id}\"><div class=\"seg says\">{buttons}</div><input class=\"note hide\" data-i=\"{id}\"></div>")
+        })
+        .collect()
+}
+
+/// What the agent wants to write, folded under "See what it wants to write": the file as it would leave it against
+/// the step's copy, not written yet.
+fn wants_html(w: &crate::stop::Wants) -> String {
+    format!(
+        "<details class=\"wants\"><summary>See what it wants to write</summary><div class=\"wh\">What the agent wants to write in <code>{}</code> · not written yet</div><pre class=\"diff\">{}</pre></details>",
+        esc(&w.file),
+        wants_lines(w.before.as_deref(), &w.after)
+    )
+}
+
+/// The lines that go, come and stay from `before` to `after`: a new file all added; an edit as its changes, among
+/// three lines of what stays around each, a gap marked between.
+fn wants_lines(before: Option<&str>, after: &str) -> String {
+    let line = |class: &str, mark: &str, l: &str| format!("<span class=\"{class}\"><i>{mark}</i>{}</span>", if l.is_empty() { " ".to_string() } else { esc(l) });
+    let Some(before) = before else { return after.lines().map(|l| line("add", "+", l)).collect() };
+    let (a, b): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
+    let pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suf = a[pre..].iter().rev().zip(b[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
+    let (am, bm) = (&a[pre..a.len() - suf], &b[pre..b.len() - suf]);
+    let mut ops: Vec<(char, &str)> = a[..pre].iter().map(|l| (' ', *l)).collect();
+    if am.len().saturating_mul(bm.len()) <= 1_000_000 {
+        // the longest run of lines both keep, read from the end so the walk goes forward
+        let w = bm.len() + 1;
+        let mut keep = vec![0u32; (am.len() + 1) * w];
+        for i in (0..am.len()).rev() {
+            for j in (0..bm.len()).rev() {
+                keep[i * w + j] = if am[i] == bm[j] { keep[(i + 1) * w + j + 1] + 1 } else { keep[(i + 1) * w + j].max(keep[i * w + j + 1]) };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < am.len() || j < bm.len() {
+            if i < am.len() && j < bm.len() && am[i] == bm[j] {
+                ops.push((' ', am[i]));
+                (i, j) = (i + 1, j + 1);
+            } else if j == bm.len() || (i < am.len() && keep[(i + 1) * w + j] >= keep[i * w + j + 1]) {
+                ops.push(('-', am[i]));
+                i += 1;
+            } else {
+                ops.push(('+', bm[j]));
+                j += 1;
+            }
+        }
+    } else {
+        // too long to measure: what goes, then what comes
+        ops.extend(am.iter().map(|l| ('-', *l)));
+        ops.extend(bm.iter().map(|l| ('+', *l)));
+    }
+    ops.extend(a[a.len() - suf..].iter().map(|l| (' ', *l)));
+    let changed: Vec<usize> = ops.iter().enumerate().filter(|(_, (k, _))| *k != ' ').map(|(n, _)| n).collect();
+    let near = |n: usize| changed.iter().any(|&c| c.abs_diff(n) <= 3);
+    let mut out = String::new();
+    let mut gap = false;
+    for (n, (k, l)) in ops.iter().enumerate() {
+        if *k == ' ' && !near(n) {
+            gap = true;
+            continue;
+        }
+        if gap && !out.is_empty() {
+            out.push_str("<span class=\"hunk\">⋯</span>");
+        }
+        gap = false;
+        out.push_str(&match k {
+            '+' => line("add", "+", l),
+            '-' => line("del", "-", l),
+            _ => line("ctx", " ", l),
+        });
+    }
+    out
 }
 
 /// What a step changed in the project, as git shows it between where the step started and the commit its output
@@ -2421,6 +2539,10 @@ details.way { margin-top:18px; border-top:1px solid var(--line); padding-top:10p
 dl.aspects { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:6px 0 10px; font-size:13.5px; } dl.aspects dt { color:var(--dim); font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; padding-top:2px; } dl.aspects dd { margin:0; }
 details.earlier { margin-top:14px; border-top:1px solid var(--line); padding-top:10px; } details.earlier > summary { cursor:pointer; color:var(--dim); font-size:13px; } details.earlier .row { opacity:.85; } details.earlier .row:hover { opacity:1; }
 .changes { margin-top:22px; } .changes .qh { margin-bottom:8px; padding-left:0; }
+h1 code, .q code, .passed code, .wh code { font-family:var(--mono); font-size:.88em; font-weight:500; background:var(--panel-2); border:1px solid var(--line); border-radius:5px; padding:0 .3em; }
+.whyyou { margin:0 0 8px; font-size:12.5px; color:var(--dim); }
+details.wants { margin:0 0 16px; } details.wants > summary { cursor:pointer; color:var(--blue); font-size:13px; } details.wants .wh { margin:10px 0 8px; font-size:12.5px; color:var(--dim); }
+.seg.says { flex-direction:column; align-items:flex-start; gap:8px; } .seg.says .opt { display:flex; align-items:baseline; gap:12px; } .seg.says button { min-width:84px; } .seg.says .says { font-size:12px; color:var(--faint); }
 pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius:6px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--dim); white-space:pre; }
 .diff > span { display:block; padding:0 14px; min-width:max-content; }
 .diff > span > i { font-style:normal; display:inline-block; width:2ch; color:var(--faint); user-select:none; }
@@ -2463,7 +2585,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
 .steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
 .acts { display:flex; flex-wrap:wrap; gap:8px; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
-.answer { display:inline-block; margin:2px 0 14px; background:var(--blue); color:#04121f; border-radius:8px; padding:9px 18px; font-weight:600; text-decoration:none; }
+.answer code { font-family:var(--mono); font-size:.9em; } .answer { display:inline-block; margin:2px 0 14px; background:var(--blue); color:#04121f; border-radius:8px; padding:9px 18px; font-weight:600; text-decoration:none; }
 .act:hover { border-color:var(--blue); } .act.danger { color:var(--red); } .act.armed { border-color:var(--red); background:var(--red-soft); }
 select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px; font:inherit; font-size:13px; }
 .effects { position:fixed; left:280px; right:0; bottom:0; background:rgba(14,18,24,.97); border-top:1px solid var(--line-2); padding:14px 32px; display:flex; gap:24px; align-items:flex-start; }
@@ -2798,6 +2920,94 @@ mod tests {
         assert_eq!(act_in(&home, &page.exe, &ask, By::Person).expect("asked")["recorded"], "now");
         let taken = Store::open(&home.join("record.sqlite3")).expect("store").inbox_take("talk").expect("inbox");
         assert!(matches!(taken, Some(Input::AskAgent { ref question, ref text, item: None, by: By::Person }) if *question == q && text == "and Rust?"), "the ask waits for the run: {taken:?}");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    /// A home with three runs at a leave the agent asked: "new" to write tests/conftest.py, which does not exist yet,
+    /// in a run that merges; "edit" to change src/a.py; "peek" to read /etc/hosts, with nothing to write.
+    fn at_a_leave() -> PathBuf {
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-leave-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        for (run, about, wants) in [
+            ("new", "change tests/conftest.py", Some(crate::stop::Wants { file: "tests/conftest.py".into(), before: None, after: "import pytest\n".into() })),
+            ("edit", "change src/a.py", Some(crate::stop::Wants { file: "src/a.py".into(), before: Some("x = 1\ny = 1\n".into()), after: "x = 2\ny = 1\n".into() })),
+            ("peek", "read /etc/hosts", None),
+        ] {
+            std::fs::create_dir_all(home.join("runs").join(run)).expect("dir");
+            let manifest: Manifest = serde_json::from_value(json!({
+                "role": "build", "version": "1", "protocol": 1, "delivery": "merge",
+                "steps": [{"name": "build", "executor": "agent"}],
+            }))
+            .expect("manifest");
+            let start = Input::Start { run: run.into(), request: format!("Build the {run} thing"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+            let mut events = decide(None, &start).expect("start").events;
+            events.push(Event::QuestionOpened {
+                question: Question {
+                    id: "q1".into(), step: "build".into(), round: 1, kind: QuestionKind::Permission,
+                    items: vec![Item { id: "leave".into(), label: about.into(), digest: Digest(format!("d-{run}")) }],
+                    offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: about.into(), choose: false, pass: 0, passes: 0, back: vec![],
+                },
+            });
+            store.append(run, &events).expect("append");
+            store.put_setup(run, &json!({})).expect("setup");
+            if let Some(w) = wants {
+                crate::permit::keep_wants(&home, run, "q1", &w).expect("kept");
+            }
+        }
+        home
+    }
+
+    /// What the person sees of a page: its html without the script and the style, which may hold backquotes of their own.
+    fn seen(html: &str) -> String {
+        let (mut out, mut rest) = (String::new(), html);
+        while let Some(at) = [rest.find("<script"), rest.find("<style")].into_iter().flatten().min() {
+            out.push_str(&rest[..at]);
+            let close = if rest[at..].starts_with("<script") { "</script>" } else { "</style>" };
+            rest = rest[at..].find(close).map_or("", |e| &rest[at + e + close.len()..]);
+        }
+        out + rest
+    }
+
+    // Alan, 21/11: "pq to sendo chamado aqui? a role?"
+    #[test]
+    fn asked_permission_says_why_you_on_the_page() {
+        let home = at_a_leave();
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let asked = page.render(View::Question("new".into(), "q1".into()), now).expect("the leave");
+        // the title asks in words, the file in mono, never a backquote in what the person reads
+        assert!(asked.contains("<h1>May the agent change <code>tests/conftest.py</code>?</h1>"), "the title, the file in mono");
+        assert!(!seen(&asked).contains('`'), "no backquote anywhere on the page");
+        assert!(asked.contains("<p class=\"whyyou\">Why you: the agent asked for something its step&#39;s settings do not allow.</p>"), "why you");
+        assert!(!asked.contains("Ahead:"), "no line of what lies ahead");
+        // a sentence beside each answer
+        assert!(asked.contains(">Allow</button><span class=\"says\">It writes the file and goes on. Before it lands in your branch, the merge asks you again.</span>"), "allow and what it does");
+        assert!(asked.contains(">Refuse</button><span class=\"says\">It goes on without writing it.</span>"), "refuse and what it does");
+        // what it wants to write, not written yet: a new file, all of it added
+        assert!(asked.contains("<summary>See what it wants to write</summary>"), "the way to see it");
+        assert!(asked.contains("What the agent wants to write in <code>tests/conftest.py</code> · not written yet"), "its heading");
+        assert!(asked.contains("<span class=\"add\"><i>+</i>import pytest</span>"), "the new file, added");
+        // an edit: what goes and what comes, among the lines that stay
+        let edit = page.render(View::Question("edit".into(), "q1".into()), now).expect("the edit");
+        assert!(edit.contains("<span class=\"del\"><i>-</i>x = 1</span><span class=\"add\"><i>+</i>x = 2</span><span class=\"ctx\"><i> </i>y = 1</span>"), "the edit as a diff");
+        // a file that runs nowhere later: the merge has no more to ask about it
+        assert!(edit.contains("<span class=\"says\">It writes the file and goes on.</span>"));
+        // a leave to read: its own verb, nothing to see written
+        let peek = page.render(View::Question("peek".into(), "q1".into()), now).expect("the read");
+        assert!(peek.contains("<h1>May the agent read <code>/etc/hosts</code>?</h1>"));
+        assert!(peek.contains("<span class=\"says\">It reads it and goes on.</span>") && peek.contains("<span class=\"says\">It goes on without reading it.</span>"));
+        assert!(!peek.contains("See what it wants to write"), "nothing to write, nothing to see");
+        // beside, and on the run's page, the title has no backquote either
+        let on_run = page.render(View::Run("new".into()), now).expect("the run");
+        assert!(on_run.contains("Answer: May the agent change <code>tests/conftest.py</code>?</a>"), "the run names the leave as its card does");
+        for view in [View::Run("new".into()), View::Overview] {
+            let html = page.render(view, now).expect("a page");
+            assert!(!seen(&html).contains('`'), "no backquote beside nor on the run");
+        }
         let _gone = std::fs::remove_dir_all(&home);
     }
 
