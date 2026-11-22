@@ -4413,7 +4413,7 @@ fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_at_its_start_before_any_
     // known beforehand: letting the test servers says the project names a port Jaynes holds, and the line that lets it
     let said = typed_at_terminal(&s, &["project", "test-servers", &project], None, "y\n");
     let real = std::fs::canonicalize(&project).expect("real path").display().to_string();
-    assert!(said.contains(&format!("name port {held}, which Jaynes holds while checks run")), "{said}");
+    assert!(said.contains(&format!("The files of {real} mention port {held}, which Jaynes holds while the checks run. If its tests start a server on it, let them:")), "{said}");
     assert!(said.contains(&format!("  jaynes project test-servers {real} {held}")), "{said}");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     start(&s, "held-start", &agent);

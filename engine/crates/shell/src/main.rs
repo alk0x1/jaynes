@@ -855,7 +855,7 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
             // port Jaynes holds fail at every check, and the run would stop at its start saying so
             if !named.is_empty() {
                 let ports = named.iter().map(u16::to_string).collect::<Vec<_>>().join(" ");
-                println!("The files of {name} name {}, which Jaynes holds while checks run. If its tests serve on {}, let them:", listing::ports_named(&named), if named.len() == 1 { "it" } else { "them" });
+                println!("The files of {name} mention {}, which Jaynes holds while the checks run. If its tests start a server on {}, let them:", listing::ports_named(&named), if named.len() == 1 { "it" } else { "them" });
                 println!("  jaynes project test-servers {} {ports}", listing::shell_word(&name.to_string()));
             }
             Ok(())

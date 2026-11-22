@@ -1094,6 +1094,12 @@ pub fn blocked(home: &Path, r: &Run) -> Option<BlockedSaid> {
             said.cases = cases;
         }
     }
+    // stopped at its start for a held port: Continue names the step the run goes on to
+    if said.continue_does == HELD_GOES_ON
+        && let Some(next) = step.as_deref().and_then(|s| r.manifest.index(s)).and_then(|i| r.manifest.steps.get(i + 1))
+    {
+        said.continue_does = format!("{} to “{}”.", HELD_GOES_ON.trim_end_matches('.'), next.name);
+    }
     // the engine keeps the change a check could not judge: Continue judges it again, the agent working no more
     if r.checks_again().is_some() {
         said = said.checks_again();
@@ -1500,10 +1506,18 @@ fn port_way(project: &str, own: bool) -> Way {
 /// A step of Jaynes's own that ran the project's tests before any agent worked and found they serve on ports Jaynes
 /// holds while the checks run (the tech-lead's, 22/11): every check would fail for that, whatever the change, so the
 /// run stopped there; the way out is one line, and Continue runs the tests again.
+/// What Continue does at a run stopped at its start for a held port; [`blocked`] names the step it goes on to.
+const HELD_GOES_ON: &str = "Continue: Jaynes runs the project's tests again. If they start, the run goes on.";
+
 fn held_at_start(said: &mut BlockedSaid, h: &Held<'_>) {
-    said.what = format!("Your tests serve on {}, which Jaynes holds while checks run.", ports_named(&h.ports));
-    said.why = "So every check would fail, whatever the change. The run stopped before any agent worked.".into();
-    said.continue_does = "Continue runs the tests again, then the run goes on.".into();
+    // the design-lead's words (bloqueada.md, 22/11): what happened first, then the port as the check's card says it
+    said.what = "The run stopped before any agent worked.".into();
+    said.why = format!(
+        "This project's tests start a test server on {}, which Jaynes holds while the checks run so no test stands in for {}. Every check would fail, whatever the change.",
+        ports_named(&h.ports),
+        held_kind(&h.ports)
+    );
+    said.continue_does = HELD_GOES_ON.into();
     if let Some(project) = h.project {
         said.ways.push(Way {
             says: format!("Let this project's tests use {}, then Continue.", ports_named(&h.ports)),
@@ -1983,8 +1997,9 @@ mod blocked_tests {
         let bind = "E       OSError: [Errno 48] Address already in use";
         let inner = format!("Jaynes held a port the command tried to serve on, so its failure says nothing about the project: {bind} It tried held port 5432. The person lets this project's tests use them with `jaynes project test-servers /Users/x/Projects/estoque`, naming the ports.");
         let b = blocked_said(Some("runner"), Fault::Jaynes, &format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent"));
-        assert_eq!(b.what, "Your tests serve on port 5432, which Jaynes holds while checks run.");
-        assert_eq!(b.why, "So every check would fail, whatever the change. The run stopped before any agent worked.");
+        // the design-lead's words (bloqueada.md, 22/11): what happened first, the port in why, as the check's card says it
+        assert_eq!(b.what, "The run stopped before any agent worked.");
+        assert_eq!(b.why, "This project's tests start a test server on port 5432, which Jaynes holds while the checks run so no test stands in for a database. Every check would fail, whatever the change.");
         assert_eq!(b.ways, [
             Way {
                 says: "Let this project's tests use port 5432, then Continue.".into(),
@@ -1996,7 +2011,20 @@ mod blocked_tests {
         ]);
         assert_eq!(b.details, [bind.to_string(), "It tried port 5432, which Jaynes holds while the checks run.".to_string()]);
         assert_eq!(b.holds.as_deref(), Some(NO_ATTEMPT_USED));
-        assert_eq!(b.continue_does, "Continue runs the tests again, then the run goes on.");
+        assert_eq!(b.continue_does, "Continue: Jaynes runs the project's tests again. If they start, the run goes on.");
+        assert_eq!(b.waits.as_deref(), Some(BLOCKED_WAITS));
+        // with the run, Continue names the step it goes on to
+        let mut r = super::tests::run("r1", "Say hi");
+        r.phase = Phase::Blocked { step: Some("runner".into()), fault: Fault::Jaynes, reason: format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent") };
+        r.manifest.steps.insert(0, jaynes_core::manifest::StepDecl { name: "runner".into(), ..r.manifest.steps[0].clone() });
+        let next = r.manifest.steps[1].name.clone();
+        let home = std::env::temp_dir().join(format!("jaynes-held-start-{}", std::process::id()));
+        let carded = blocked(&home, &r).expect("blocked");
+        let _gone = std::fs::remove_dir_all(&home);
+        assert_eq!(carded.continue_does, format!("Continue: Jaynes runs the project's tests again. If they start, the run goes on to “{next}”."));
+        // a cache says so, two ports are named together
+        let cache = blocked_said(Some("runner"), Fault::Jaynes, &format!("a fault of Jaynes or of the machine stopped runner: {}. No attempt was spent", inner.replace("5432", "6379")));
+        assert!(cache.why.contains("on port 6379, which Jaynes holds while the checks run so no test stands in for a cache."), "{}", cache.why);
         // any other fault of Jaynes at a step of its own keeps its words
         let other = blocked_said(Some("runner"), Fault::Jaynes, "a fault of Jaynes or of the machine stopped runner: the disk is full. No attempt was spent");
         assert_eq!(other.why, "The disk is full.");
