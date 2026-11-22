@@ -11,7 +11,7 @@ use crate::drive::{self, say};
 use crate::listing::{short, where_in};
 use crate::stop::label_for;
 use crate::store::Store;
-use jaynes_core::question::{Answer, By, Verdict};
+use jaynes_core::question::{Answer, By, QuestionKind, Verdict};
 use jaynes_core::run::{Phase, QuestionState, Run};
 use jaynes_core::{decide, Input};
 use serde_json::{json, Value};
@@ -752,6 +752,13 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
                 let reverted = drive::undo(&mut store, home, run_id, body["note"].as_str().unwrap_or("").to_string(), by)?;
                 return Ok(json!({"ok": true, "recorded": reverted}));
             }
+            // the person asks the stop's agent something: nothing is redone and nothing is chosen (thread A)
+            "ask" => Input::AskAgent {
+                question: body["question"].as_str().ok_or("which stop?")?.to_string(),
+                item: body["item"].as_str().filter(|i| !i.is_empty()).map(str::to_string),
+                text: body["text"].as_str().unwrap_or("").to_string(),
+                by,
+            },
             "correct" => Input::Correct {
                 note: body["note"].as_str().unwrap_or("").to_string(),
                 by,
@@ -1027,7 +1034,7 @@ fn stage_list(r: &Run) -> String {
                 })
                 .collect();
             let detail = if checks.is_empty() { detail } else { format!("{detail}<small class=\"checks\">checks: {}</small>", esc(&checks.join(" · "))) };
-            format!("<li class=\"{class}\"><span class=\"dot\"></span><div><div class=\"r\"><b>{}{mark}</b></div>{about}{detail}</div></li>", esc(&d.name))
+            format!("<li class=\"{class}\"><span class=\"dot\"></span><div><div class=\"r\"><b>{}{mark}</b></div>{about}{detail}{}</div></li>", esc(&d.name), thread_story(s))
         })
         .collect();
     format!("<ul class=\"stages told\">{rows}</ul>")
@@ -1316,6 +1323,75 @@ fn shortlist_button(id: &str) -> String {
 /// The row that sends the shortlist, shown once two are shortlisted.
 const FINALS_ROW: &str = "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the shortlisted</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>";
 
+/// Who said an entry of a stop's conversation, and what it was: "You · round 2 · a question".
+fn entry_who(e: &jaynes_core::run::Entry, choose: bool) -> String {
+    use jaynes_core::run::EntryKind;
+    // the step counts its rounds from 0; the person reads the first as round 1
+    let round = e.round + 1;
+    match e.kind {
+        EntryKind::Change => format!("You · round {round} · a change"),
+        EntryKind::Ask => format!("You · round {round} · a question"),
+        EntryKind::Answer if e.late => "Agent · answered after the stop · nothing changed".into(),
+        EntryKind::Answer => "Agent · answered · nothing redone".into(),
+        EntryKind::AskFailed => "Agent · no answer".into(),
+        EntryKind::Reply if e.round == 0 => format!("Agent · round {round} · what it made"),
+        EntryKind::Reply => format!("Agent · round {round} · {}", if choose { "changed the option" } else { "what it changed" }),
+    }
+}
+
+/// The conversation at a stop's step, above where the person writes: round by round, the newest exchange whole (from
+/// the person's last words on), each earlier entry in a line that opens; the agent's newest answer in amber; and,
+/// while it answers, that it does.
+fn thread_html(run: &Run, q: &QuestionState) -> String {
+    use jaynes_core::run::EntryKind;
+    let Some(i) = run.manifest.index(&q.question.step) else { return String::new() };
+    let entries = &run.steps[i].thread;
+    let answering = run.asking.values().any(|x| *x == q.question.id);
+    if entries.is_empty() && !answering {
+        return String::new();
+    }
+    let whole_from = entries.iter().rposition(|e| matches!(e.kind, EntryKind::Change | EntryKind::Ask)).unwrap_or(0);
+    let mut out = format!("<div class=\"thread\"><div class=\"th\">Conversation at “{}”</div>", esc(&q.question.step));
+    let mut round = None;
+    for (n, e) in entries.iter().enumerate() {
+        if round != Some(e.round) {
+            round = Some(e.round);
+            out.push_str(&format!("<div class=\"tr\">Round {}</div>", e.round + 1));
+        }
+        let who = esc(&entry_who(e, q.question.choose));
+        let agent = !matches!(e.kind, EntryKind::Change | EntryKind::Ask);
+        if n < whole_from {
+            out.push_str(&format!("<details class=\"te\"><summary><span class=\"who\">{who}</span> {}</summary></details>", esc(&e.text)));
+        } else {
+            let new = if agent && n + 1 == entries.len() && !answering { " new" } else { "" };
+            out.push_str(&format!("<div class=\"te{new}\"><div class=\"who\">{who}</div><div class=\"tx\">{}</div></div>", esc(&e.text)));
+        }
+    }
+    if answering {
+        out.push_str("<div class=\"te wait\">The agent is answering. Nothing is redone.</div>");
+    }
+    out + "</div>"
+}
+
+/// A stop's conversation in the run's story, one line each: "you asked: …", "agent answered, nothing redone: …".
+fn thread_story(s: &jaynes_core::run::StepState) -> String {
+    use jaynes_core::run::EntryKind;
+    s.thread
+        .iter()
+        .map(|e| {
+            let said = match e.kind {
+                EntryKind::Change => "you:",
+                EntryKind::Ask => "you asked:",
+                EntryKind::Answer if e.late => "agent answered after the stop, nothing changed:",
+                EntryKind::Answer => "agent answered, nothing redone:",
+                EntryKind::AskFailed => "agent could not answer:",
+                EntryKind::Reply => "agent:",
+            };
+            format!("<small class=\"talk\">{said} {}</small>", esc(&e.text))
+        })
+        .collect()
+}
+
 fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
@@ -1414,9 +1490,12 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let items: Vec<&str> = question.items.iter().map(|x| x.id.as_str()).collect();
     let earlier: Vec<&str> = question.back.iter().map(|x| x.id.as_str()).collect();
     let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items, "earlier": earlier}).to_string();
+    // a stop about what an agent's step made may be asked about, while it is open; the agent's answer joins the thread
+    let can_ask = question.kind == QuestionKind::Decision && q.open() && run.manifest.steps.get(i).is_some_and(|d| d.executor == jaynes_core::manifest::Executor::Agent);
+    let answering = run.asking.values().any(|x| *x == question.id);
     format!(
-        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}\
-         <div class=\"say\"><label>Your words</label><input id=\"ctx\" placeholder=\"Say what you think, in any language: what stays, what changes (or answer with the buttons)\"><button class=\"read\" id=\"read\">Read my words</button></div><div class=\"understood\" id=\"understood\" hidden></div>\
+        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}\
+         <div class=\"say\"><label>Your words</label>{modes}<input id=\"ctx\" placeholder=\"Say what you think, in any language: what stays, what changes (or answer with the buttons)\"><button class=\"read\" id=\"read\">Read my words</button>{ask}</div>{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
          {rows}{changes}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
@@ -1424,6 +1503,16 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         n = path.len(),
         title = esc(&crate::listing::title_into(q, into)),
         strip = strip(run),
+        thread = thread_html(run, q),
+        modes = if can_ask { "<span class=\"mode\" hidden><button data-mode=\"ask\">Question</button><button data-mode=\"change\">Change</button></span>" } else { "" },
+        ask = if can_ask { "<button class=\"go\" id=\"ask\" hidden>Ask the agent ↵</button>" } else { "" },
+        askline = if answering {
+            format!("<div class=\"askline\" id=\"askline\">Your question went to the agent at “{}”. It answers here; nothing is redone and nothing is chosen.</div>", esc(&question.step))
+        } else if can_ask {
+            "<div class=\"askline\" id=\"askline\" hidden>The agent answers here. Nothing is redone and nothing is chosen.</div>".to_string()
+        } else {
+            String::new()
+        },
         stages = stage_list(run),
         data = data.replace('<', "\\u003c"),
     )
@@ -1957,7 +2046,8 @@ const base = el ? JSON.parse(el.textContent) : null;
 if (!el || base.choose) document.getElementById("fxbar").classList.add("hide");
 // a stop that chooses: the answer one click on an option sends, and what it will do, written under each option
 const noteOf = id => ((document.querySelector(`.adjust[data-i="${CSS.escape(id)}"]`) || {}).value || "").trim();
-const ctxOf = () => (document.getElementById("ctx") || {}).value || "";
+// a question to the agent is not context (thread A)
+const ctxOf = () => mode === "ask" ? "" : (document.getElementById("ctx") || {}).value || "";
 // one option: kept as it is, or adjusted with its note
 function choice(id) {
   const note = noteOf(id), v = {}, n = {};
@@ -2016,7 +2106,36 @@ document.addEventListener("click", async e => {
     else { b.disabled = false; document.getElementById("understood").insertAdjacentHTML("beforeend", `<div class="refused">${esc(r.refused || "")}</div>`); }
   }
 });
-document.addEventListener("keydown", e => { if (e.target.id === "ctx" && e.key === "Enter" && e.target.value.trim()) { e.preventDefault(); readWords(e.target.value.trim(), null); } });
+// a question to the stop's agent or words for a change: a guess without a model, which a click turns (thread A)
+// var: read by ctxOf, which comes before it
+var mode = null, picked = false;
+const guessMode = t => /\?\s*$/.test(t) || /^(e se|what if|por ?que|why|how|como|what|qual|quais|o que|será)\b/i.test(t) ? "ask" : "change";
+function showMode() {
+  const box = document.querySelector(".say .mode"), ctx = document.getElementById("ctx"); if (!box || !ctx) return;
+  const t = ctx.value.trim(); if (!t) picked = false;
+  mode = t ? (picked ? mode : guessMode(t)) : null;
+  box.hidden = !t; box.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.mode === mode));
+  document.getElementById("ask").hidden = mode !== "ask";
+  document.getElementById("read").hidden = mode === "ask";
+  const line = document.getElementById("askline"); if (line && !line.dataset.answering) { line.hidden = mode !== "ask"; line.classList.remove("bad"); line.textContent = "The agent answers here. Nothing is redone and nothing is chosen."; }
+}
+async function askAgent() {
+  const ctx = document.getElementById("ctx"), b = document.getElementById("ask"), t = ctx.value.trim(); if (!t || !base) return;
+  b.disabled = true;
+  await window.jaynesKey;
+  const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: base.run, action: "ask", question: base.question, text: t }) })).json();
+  b.disabled = false;
+  if (r.ok) { ctx.value = ""; location.reload(); return; }
+  const line = document.getElementById("askline"); line.hidden = false; line.classList.add("bad"); line.textContent = r.refused || "";
+}
+{ const line = document.getElementById("askline"); if (line && !line.hidden) line.dataset.answering = "1"; }
+document.addEventListener("input", e => { if (e.target.id === "ctx") showMode(); });
+document.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.mode) { picked = true; mode = b.dataset.mode; showMode(); if (base && !base.choose) refresh(); return; }
+  if (b.id === "ask") askAgent();
+});
+document.addEventListener("keydown", e => { if (e.target.id === "ctx" && e.key === "Enter" && e.target.value.trim()) { e.preventDefault(); if (mode === "ask") askAgent(); else readWords(e.target.value.trim(), null); } });
 async function said(id, body, ulId, btn) {
   // asked as the person, with the key a link brought, once the page knows it: asked before, the engine reads it as
   // an agent's answer, refuses it, and the person's buttons go off
@@ -2063,7 +2182,7 @@ if (base && base.choose) {
   });
 }
 const verdicts = {}, notes = {}, back = {};
-function body() { return JSON.stringify({ ...base, verdicts, notes, back, context: (document.getElementById("ctx") || {}).value || "" }); }
+function body() { return JSON.stringify({ ...base, verdicts, notes, back, context: ctxOf() }); }
 async function post(path) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body() });
   return r.json();
@@ -2243,6 +2362,14 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .say { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; padding:6px 12px; margin-bottom:6px; }
 .say label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
 .say input { flex:1; background:transparent; border:0; color:var(--ink); font:inherit; font-size:14px; outline:none; padding:6px 0; }
+.say .mode[hidden], .say .read[hidden] { display:none; } .say .mode { display:inline-flex; border:1px solid var(--line-2); border-radius:7px; overflow:hidden; flex:none; } .say .mode button { background:transparent; border:0; color:var(--faint); font:inherit; font-size:12.5px; padding:4px 10px; cursor:pointer; } .say .mode button.on { background:var(--panel-2); color:var(--ink); }
+.say .go { background:var(--blue); color:#06101c; border:1px solid var(--blue); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; } .say .go:disabled { opacity:.5; }
+.askline { font-size:12.5px; color:var(--dim); margin:0 0 12px 2px; } .askline.bad { color:var(--red); }
+.thread { margin:0 0 14px; } .thread .th { font-size:12.5px; color:var(--dim); margin-bottom:6px; } .thread .tr { display:flex; align-items:center; gap:10px; font-size:11.5px; color:var(--faint); margin:8px 0 6px; } .thread .tr::after { content:""; flex:1; border-top:1px solid var(--line); }
+.thread .te { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:8px 12px; margin:0 0 6px; font-size:13.5px; } .thread .te .who { font-size:12px; color:var(--faint); margin-bottom:2px; } .thread .te .tx { white-space:pre-wrap; }
+.thread details.te > summary { cursor:pointer; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--dim); } .thread details.te > summary::-webkit-details-marker { display:none; } .thread details.te[open] > summary { white-space:normal; color:var(--ink); } .thread details.te .who { margin-right:6px; }
+.thread .te.new { border-color:var(--amber); } .thread .te.new .who { color:var(--amber); } .thread .te.wait { color:var(--dim); border-style:dashed; }
+.stages small.talk { font-family:inherit; font-size:12.5px; color:var(--dim); white-space:normal; }
 .say .read { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
 .understood { background:var(--panel); border:1px solid var(--line-2); border-left:3px solid var(--blue); border-radius:10px; padding:12px 16px; margin:8px 0 12px; font-size:14px; }
 .understood .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px; }
@@ -2577,6 +2704,101 @@ mod tests {
             store.put_setup(run, &json!({})).expect("setup");
         }
         home
+    }
+
+    /// A run waiting at plan's stop, whose agent said what it made, where the person asked it twice: "e se fosse Go só
+    /// na API?", answered, then "and the tests?", which the agent is answering.
+    fn a_talk_at_a_stop() -> PathBuf {
+        use jaynes_core::question::Item;
+        use jaynes_core::{AttemptOutcome, Command, Digest, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-talk-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs/talk")).expect("home");
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "r", "version": "1", "protocol": 1,
+            "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true, "about": "Is the plan right?"}}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "talk".into(), request: "Choose the stack".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let out = decide(None, &start).expect("start");
+        let mut events = out.events.clone();
+        let mut run = Run::fold(&out.events).expect("run");
+        let mut feed = |run: &mut Run, input: Input| -> Vec<Command> {
+            let out = decide(Some(run), &input).unwrap_or_else(|r| panic!("refused {input:?}: {r}"));
+            out.events.iter().for_each(|e| run.apply(e));
+            events.extend(out.events);
+            out.commands
+        };
+        let cmds = feed(&mut run, Input::ProbeEnded { step: "plan".into(), ok: true, reason: String::new() });
+        let t = cmds.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.clone()) } else { None }).expect("a turn");
+        let item = Item { id: "a".into(), label: "Python, Postgres and Qdrant".into(), digest: Digest("d-a".into()) };
+        let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: vec![item], changed: vec![], usage: Default::default(), session: Some("s1".into()), tree: None, reply: Some("One Python package over Postgres and Qdrant.".into()) };
+        let cmds = feed(&mut run, Input::AttemptEnded { step: "plan".into(), attempt: t.attempt, fix: t.fix, outcome });
+        if cmds.iter().any(|c| matches!(c, Command::RunChecks { .. })) {
+            feed(&mut run, Input::ChecksEnded { step: "plan".into(), attempt: t.attempt, fix: t.fix, results: vec![] });
+        }
+        if let Some(digest) = run.delivering.clone() {
+            feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/talk".into() });
+        }
+        let q = run.questions.keys().next().expect("the stop").clone();
+        let ask = |text: &str| Input::AskAgent { question: q.clone(), item: None, text: text.into(), by: By::Person };
+        feed(&mut run, ask("e se fosse Go só na API?"));
+        let first = run.asking.keys().next().expect("asking").clone();
+        feed(&mut run, Input::AskEnded { ask: first, outcome: jaynes_core::io::AskOutcome::Answered { text: "Daria, mas o ganho é pequeno. Não mudei nada.".into(), usage: Default::default(), session: None } });
+        feed(&mut run, ask("and the tests?"));
+        store.append("talk", &events).expect("append");
+        store.put_setup("talk", &json!({})).expect("setup");
+        home
+    }
+
+    // Alan, 21/11: "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse"
+    #[test]
+    fn asked_a_thread_of_conversation_at_the_stop_on_the_page() {
+        let home = a_talk_at_a_stop();
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let run = Store::open(&home.join("record.sqlite3")).expect("store").state("talk").expect("read").expect("run");
+        let (q, second) = (run.questions.keys().next().expect("the stop").clone(), run.asking.keys().next().expect("asking").clone());
+        let asked = page.render(View::Question("talk".into(), q.clone()), now).expect("the stop");
+        // the conversation at the step, above where the person writes
+        let (talk, field) = (asked.find("Conversation at “plan”").expect("the thread"), asked.find("id=\"ctx\"").expect("the field"));
+        assert!(talk < field, "above the field");
+        // the earlier exchange in a line each, the newest whole, and the agent answering it
+        assert!(asked.contains("<details class=\"te\"><summary><span class=\"who\">You · round 1 · a question</span> e se fosse Go só na API?</summary>"), "the first question, folded");
+        assert!(asked.contains("<span class=\"who\">Agent · answered · nothing redone</span> Daria, mas o ganho é pequeno. Não mudei nada.</summary>"), "its answer, folded");
+        assert!(asked.contains("<div class=\"te\"><div class=\"who\">You · round 1 · a question</div><div class=\"tx\">and the tests?</div></div>"), "the newest question, whole");
+        assert!(asked.contains("<div class=\"te wait\">The agent is answering. Nothing is redone.</div>"), "the agent answering");
+        assert!(asked.contains("Your question went to the agent at “plan”. It answers here; nothing is redone and nothing is chosen."), "under the field while it answers");
+        // the field asks or changes, and asking says what it does
+        assert!(asked.contains("<button data-mode=\"ask\">Question</button><button data-mode=\"change\">Change</button>"), "the switch");
+        assert!(asked.contains("<button class=\"go\" id=\"ask\" hidden>Ask the agent ↵</button>"), "the ask button");
+        // the switch shows only once the field has text (fio.md 1), Question puts "Ask the agent" where "Read my words"
+        // was, and the ask goes as the person's: it waits for the key a link brought, as an answer does
+        assert!(asked.contains(".say .mode[hidden], .say .read[hidden] { display:none; }"), "nothing overrides hidden");
+        let script = &SCRIPT[SCRIPT.find("async function askAgent").expect("the ask")..];
+        assert!(script[..script.find("fetch(").expect("its post")].contains("await window.jaynesKey"), "the ask waits for the key");
+        assert!(SCRIPT.contains("document.getElementById(\"read\").hidden = mode === \"ask\";"), "one button at a time");
+        // a question is not context: what the answer says and sends leaves it out, and turning the switch says so again
+        assert!(SCRIPT.contains("const ctxOf = () => mode === \"ask\" ? \"\" : (document.getElementById(\"ctx\") || {}).value || \"\";"), "a question is not context");
+        assert!(SCRIPT.contains("back, context: ctxOf() });"), "Send reads the same");
+        assert!(SCRIPT.contains("if (b.dataset.mode) { picked = true; mode = b.dataset.mode; showMode(); if (base && !base.choose) refresh(); return; }"), "the switch redraws what it does");
+        // once it answered: its answer whole and in amber, nothing answering, and under the field what asking does
+        Store::open(&home.join("record.sqlite3")).expect("store").append("talk", &[jaynes_core::Event::AgentAnswered { ask: second, text: "They stay in Python.".into(), usage: Default::default(), session: None, late: false }]).expect("answered");
+        let answered = page.render(View::Question("talk".into(), q.clone()), now).expect("the stop");
+        assert!(answered.contains("<div class=\"te new\"><div class=\"who\">Agent · answered · nothing redone</div><div class=\"tx\">They stay in Python.</div></div>"), "the answer, new");
+        assert!(!answered.contains("The agent is answering."), "nothing answering");
+        assert!(answered.contains("<div class=\"askline\" id=\"askline\" hidden>The agent answers here. Nothing is redone and nothing is chosen.</div>"), "what asking does");
+        // the run's story has the same entries, one line each
+        let run = page.render(View::Run("talk".into()), now).expect("the run");
+        assert!(run.contains("you asked: e se fosse Go só na API?") && run.contains("agent answered, nothing redone: Daria, mas o ganho é pequeno."), "the story");
+        // the page's ask goes to the engine as the person's; anyone else is refused by it
+        let ask = json!({"run": "talk", "action": "ask", "question": q, "text": "and Rust?"});
+        assert_eq!(act_in(&home, &page.exe, &ask, By::Agent { who: "x".into() }).err().as_deref(), Some("only you ask the agent at a stop"), "only the person asks");
+        assert_eq!(act_in(&home, &page.exe, &ask, By::Person).expect("asked")["recorded"], "now");
+        let taken = Store::open(&home.join("record.sqlite3")).expect("store").inbox_take("talk").expect("inbox");
+        assert!(matches!(taken, Some(Input::AskAgent { ref question, ref text, item: None, by: By::Person }) if *question == q && text == "and Rust?"), "the ask waits for the run: {taken:?}");
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     /// A home with three runs that wait for the person: "asks" at a question, "stuck" blocked, "paused" halted.

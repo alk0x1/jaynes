@@ -30,7 +30,7 @@ pub struct Refusal {
 
 /// What the page's actions are called: a refused action is kept by one of these names, or as "an unknown action",
 /// never by what the request called it.
-pub const ACTIONS: &[&str] = &["halt", "resume", "continue", "abandon", "raise-risk", "raise-ceiling", "undo", "correct"];
+pub const ACTIONS: &[&str] = &["halt", "resume", "continue", "abandon", "raise-risk", "raise-ceiling", "undo", "correct", "ask"];
 
 /// What was tried, in the page's words: an action it knows, by its name; any other, as an unknown action.
 pub fn action(said: &str) -> String {
