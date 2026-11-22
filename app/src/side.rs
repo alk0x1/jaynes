@@ -216,6 +216,14 @@ fn asking_line(a: &Agent) -> Option<String> {
     }
 }
 
+/// A run's name in the column, as listing::name gives it, in the three parts the row draws: its project with the
+/// " · " after it (never cut), its title (cut when there is no room), and what tells it apart, with the " · " before
+/// it. Without a project, the title alone.
+pub fn name_parts(row: &Row) -> (String, String, Option<String>) {
+    let project = if row.project.is_empty() { String::new() } else { format!("{} · ", row.project) };
+    (project, row.title.clone(), row.apart.as_ref().map(|a| format!(" · {a}")))
+}
+
 /// What a run's dot on the narrow rail says on hovering: its name and what it waits for, in the column's words.
 fn rail_tip(row: &Row, halted: Option<&String>) -> String {
     let what = match row.mark {
@@ -225,7 +233,8 @@ fn rail_tip(row: &Row, halted: Option<&String>) -> String {
         Mark::Halted => halted.cloned().unwrap_or_else(|| "halted".into()),
         _ => row.line.clone(),
     };
-    format!("{} · {what}", row.title)
+    let (project, title, apart) = name_parts(row);
+    format!("{project}{title}{} · {what}", apart.unwrap_or_default())
 }
 
 /// A thing on the rail: centred, its name on a tooltip.
@@ -609,7 +618,18 @@ impl Side {
                         div()
                             .flex()
                             .gap(px(8.))
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(row.title.clone()))
+                            .child({
+                                // the project and what tells the run apart stay whole; the title gives way
+                                let (project, title, apart) = name_parts(row);
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .text_size(px(13.))
+                                    .when(!project.is_empty(), |d| d.child(div().flex_none().whitespace_nowrap().text_color(rgb(look::dim())).child(project)))
+                                    .child(div().min_w_0().truncate().text_color(rgb(look::text())).child(title))
+                                    .children(apart.map(|a| div().flex_none().whitespace_nowrap().text_color(rgb(look::dim())).child(a)))
+                            })
                             .children(tag.map(|(t, c)| div().flex_none().text_size(px(11.5)).text_color(rgb(c)).child(t))),
                     )
                     .when(line, |d| d.child(div().truncate().text_size(px(11.5)).text_color(rgb(if row.mark == Mark::Needs { look::amber() } else { look::dim() })).child(row.line.clone()))),
@@ -948,7 +968,24 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agent_word, older_line, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, rail_tip, seen_from};
+    use super::{Agent, Mark, Order, Row, State, agent_word, older_line, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, name_parts, needs_line, needs_tag, order, rail_tip, seen_from};
+
+    /// The tech-lead and the design-lead (22/11, quatro-itens.md, item 8): two runs of the same title read alike in
+    /// the column. A run is named there as the page names it (listing::name): its project first, always, then its
+    /// title, then what tells it apart when its project has another of the same title ("at “fix”", "started 11:49").
+    /// The project and the " · " before the title are never cut; the title is.
+    #[test]
+    fn asked_the_column_names_a_run_by_its_project_and_what_tells_it_apart() {
+        let row = |project: &str, apart: Option<&str>| Row { id: "r".into(), project: project.into(), apart: apart.map(str::to_string), title: "Monta o começo".into(), line: String::new(), mark: Mark::Working };
+        assert_eq!(name_parts(&row("horta", None)), ("horta · ".to_string(), "Monta o começo".to_string(), None));
+        assert_eq!(name_parts(&row("horta", Some("at “fix”"))), ("horta · ".to_string(), "Monta o começo".to_string(), Some(" · at “fix”".to_string())));
+        // a run with no project: its title alone
+        assert_eq!(name_parts(&row("", None)), (String::new(), "Monta o começo".to_string(), None));
+        // the narrow rail's tip says the whole name too
+        let mut asks = row("horta", Some("started 11:49"));
+        asks.mark = Mark::Needs;
+        assert_eq!(rail_tip(&asks, None), "horta · Monta o começo · started 11:49 · asks you");
+    }
 
     #[test]
     fn an_agent_that_waits_says_in_the_column_what_it_asks_in_the_inbox_s_words() {
