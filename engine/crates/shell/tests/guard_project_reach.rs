@@ -96,6 +96,8 @@ const REFUSED: &[&str] = &[
     "script -q /dev/null jaynes project test-servers .",
     "printf 'y\\n' | script -q /dev/null jaynes project test-servers /Users/someone/thing",
     "sh -c 'jaynes project test-servers .'",
+    "jaynes project test-servers . 5432 6379",
+    "script -q /dev/null jaynes project test-servers /Users/someone/thing 5432",
 ];
 
 #[test]
