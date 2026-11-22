@@ -1,6 +1,6 @@
 # What the engine guarantees
 
-**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. G19 added by the owner on 2026-11-18. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
+**Status**: approved by the owner on 2026-11-12; G9 amended and G17 approved by the owner on 2026-11-13; G12 amended by the owner on 2026-11-16, so the person can bring back what they dropped. G17 amended, and a limit added below, by the owner on 2026-11-18. G14 amended by the owner on 2026-11-18, so an act happens at most once. G19 added by the owner on 2026-11-18. G5 amended on 2026-11-22 in the tech-lead's words, so an attempt that dies or passes the ceiling counts what it spent. Each sentence is a promise of the engine's core, whatever role runs on it. Each has a number, and the test that proves it carries the same number (`engine/crates/core/tests/guarantees.rs`). The agent that writes the engine's code may not change this page: a change here is the owner's.
 
 What the page does not promise is said at the end, so nobody reads more into it.
 
@@ -22,8 +22,13 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   start, a check that cannot judge) never spends one of the agent's attempts. The run stops at
   once and says the fault is Jaynes's.
 - **G5.** Every run has a ceiling of time and of tokens, written down before its first step.
-  No attempt starts once either is reached, and the time and tokens of every attempt are
-  recorded.
+  No attempt starts once either is reached, and an attempt that passes either while it runs is
+  stopped there, counted from its agent's stream as it goes. Every attempt's time and tokens
+  are recorded as its agent program reported them, an attempt that died before its end
+  included. Tokens read back from the cache are recorded apart and do not count toward the
+  ceiling. An attempt whose program died before reporting what it spent shows "not counted
+  yet", never 0. Codex reports what an attempt spent only when the attempt ends, so a Codex
+  attempt is not stopped midway for its tokens: the ceiling stops the attempt after it.
 - **G6.** Every attempt ends with exactly one recorded outcome, and a late report from an
   older attempt changes nothing.
 
