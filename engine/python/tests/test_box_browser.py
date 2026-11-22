@@ -70,23 +70,48 @@ class TheBoxStartsNoBrowserOfThePerson(unittest.TestCase):
         code, said = self.run_in(b, self.other / "Contents/MacOS/browser")
         self.assertNotEqual(code, 0, said)
 
-    def test_jaynes_s_own_headless_chrome_starts_in_every_box(self):
+    def test_a_headless_chrome_outside_every_browser_starts_in_every_box_and_a_browser_named_inside_one_does_not(self):
         headless = self.tmp / "headless" / "chrome-headless-shell"
         headless.parent.mkdir()
         headless.write_text("#!/bin/sh\necho 'headless ran'\n")
         headless.chmod(0o755)
-        # outside any browser's bundle, and named inside one: JAYNES_CHROME is the person's own choice
-        for named in (headless, self.mine / "Contents/MacOS/browser"):
-            code, said = self.run_in(box.Box((self.work,), local=True), named, {"JAYNES_CHROME": str(named)})
-            self.assertEqual(code, 0, f"{named}: {said}")
-        # named inside a browser's bundle, its helpers start with it, as a photograph's do
-        code, said = self.run_in(box.Box((self.work,), local=True), self.mine / "Contents/Frameworks/Helper/helper",
-                                 {"JAYNES_CHROME": str(self.mine / "Contents/MacOS/browser")})
+        # the tests' own headless shell, outside any browser's bundle
+        code, said = self.run_in(box.Box((self.work,), local=True), headless, {"JAYNES_CHROME": str(headless)})
         self.assertEqual(code, 0, said)
-        # what JAYNES_CHROME names never opens another browser
-        code, said = self.run_in(box.Box((self.work,), local=True), self.other / "Contents/MacOS/browser",
-                                 {"JAYNES_CHROME": str(self.mine / "Contents/MacOS/browser")})
-        self.assertNotEqual(code, 0, said)
+        # the person's browser named in JAYNES_CHROME: a project's suite and a check's commands still start none of it
+        named = {"JAYNES_CHROME": str(self.mine / "Contents/MacOS/browser")}
+        for b in (box.Box((self.work,), local=True), box.Box((self.work,), local=True, any_port=True)):
+            for program in (self.mine / "Contents/MacOS/browser", self.mine / "Contents/Frameworks/Helper/helper"):
+                code, said = self.run_in(b, program, named)
+                self.assertNotEqual(code, 0, f"{program}: {said}")
+                self.assertNotIn("ran", said)
+
+    def test_a_role_s_own_scripts_start_the_chrome_jaynes_photographs_with_and_a_suite_starts_none(self):
+        # a Mac without JAYNES_CHROME, its Chrome where macOS keeps apps (a stand-in here): a role's script check
+        # draws its pages with it, as Helm's pages.py does, and the project's suite in the same box starts none
+        installed = self.mine / "Contents/MacOS/browser"
+        script = self.tmp / "pages.sh"
+        script.write_text(f"#!/bin/sh\n{shlex.quote(str(installed))} && {shlex.quote(str(self.mine / 'Contents/Frameworks/Helper/helper'))}\n")
+        script.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k != "JAYNES_CHROME"}
+        with mock.patch.object(box, "CHROMES", (str(installed),)), mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(box.chrome(), str(installed))
+            ran = box.run(self.work, shlex.quote(str(script)), browser=True)
+            self.assertEqual((ran.code, ran.printed), (0, "Browser ran\nBrowser's helper ran\n"))
+            ran = box.run(self.work, shlex.quote(str(script)))
+            self.assertNotEqual(ran.code, 0, ran.printed)
+            self.assertNotIn("ran", ran.printed)
+            done = box.run_step(shlex.quote(str(script)), project=None)
+            self.assertEqual((done.ran.code, done.ran.printed), (0, "Browser ran\nBrowser's helper ran\n"))
+
+    def test_jaynes_chrome_wins_over_the_installed_chrome_in_a_role_s_scripts_and_a_photograph(self):
+        installed, named = self.mine / "Contents/MacOS/browser", self.other / "Contents/MacOS/browser"
+        with mock.patch.object(box, "CHROMES", (str(installed),)), mock.patch.dict(os.environ, {"JAYNES_CHROME": str(named)}):
+            self.assertEqual(box.chrome(), str(named))
+            self.assertEqual(box.run(self.work, shlex.quote(str(named)), browser=True).code, 0)
+            ran = box.run(self.work, shlex.quote(str(installed)), browser=True)
+            self.assertNotEqual(ran.code, 0, ran.printed)
+            self.assertNotEqual(box.run_step(shlex.quote(str(installed)), project=None).ran.code, 0)
 
     def test_a_box_that_starts_only_its_agent_program_starts_no_headless_chrome_either(self):
         agent = self.tmp / "agent"
@@ -124,6 +149,25 @@ class TheBoxStartsNoBrowserOfThePerson(unittest.TestCase):
             lines = box.profile(b).splitlines()
             for rule in ("(deny lsopen)", "(deny appleevent-send)"):
                 self.assertIn(rule, lines)
+
+
+@unittest.skipUnless(box.available(), "Jaynes's box is macOS's sandbox-exec")
+class ARoleSScriptCheckStillDrawsItsPages(unittest.TestCase):
+    def test_a_script_check_of_a_role_starts_the_installed_chrome_on_a_mac_without_jaynes_chrome(self):
+        import jaynes_menu as menu
+        tmp = Path(tempfile.mkdtemp(prefix="jaynes-browser-check-"))
+        bundle = stand_in(tmp, "Browser")
+        project = tmp / "project"
+        project.mkdir()
+        check = tmp / "role" / "checks" / "pages.sh"
+        check.parent.mkdir(parents=True)
+        check.write_text(f"#!/bin/sh\n{shlex.quote(str(bundle / 'Contents/MacOS/browser'))} || exit 3\n")
+        check.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k != "JAYNES_CHROME"}
+        with mock.patch.object(box, "browsers", lambda home: [bundle]), \
+                mock.patch.object(box, "CHROMES", (str(bundle / "Contents/MacOS/browser"),)), \
+                mock.patch.dict(os.environ, env, clear=True):
+            self.assertIsInstance(menu.script({"project": str(project)}, {"path": str(check)}), menu.Pass)
 
 
 class ARoleSProgramStartsNoBrowserOfThePerson(unittest.TestCase):

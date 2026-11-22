@@ -243,18 +243,23 @@ def _chrome_socket() -> list[str]:
 
 def _browsers_denied(box: Box) -> list[str]:
     """No command starts the person's browsers, nor what their bundles hold (Chrome starts its helpers from inside
-    its own); only Jaynes's own headless Chrome (``JAYNES_CHROME``, the person's choice) and the browser the box was
-    made for, with its bundle, are let again. A box that starts only its agent program lets nothing again."""
-    lines = [f"(deny process-exec {_subpaths(browsers(box.home))})"]
+    its own). Let again: the browser the box was made for, with its bundle (a photograph's, a role's own script's:
+    the Chrome Jaynes photographs with), and a headless Chrome named in ``JAYNES_CHROME`` that is in no browser's
+    bundle, as the tests' own is; one named inside a browser's bundle starts only as the box's browser. A box that
+    starts only its agent program lets nothing again."""
+    held = browsers(box.home)
+    lines = [f"(deny process-exec {_subpaths(held)})"]
     if box.runs:
         return lines
-    let = []
-    for named in (os.environ.get("JAYNES_CHROME", ""), box.browser):
-        if not named:
-            continue
+    def bundle(named: str) -> Path | None:
         real = Path(os.path.realpath(named))
-        held = next((b for b in browsers(box.home) if real.is_relative_to(os.path.realpath(b))), None)
-        let.append(Path(os.path.realpath(held)) if held is not None else real)
+        return next((Path(os.path.realpath(b)) for b in held if real.is_relative_to(os.path.realpath(b))), None)
+    let = []
+    headless = os.environ.get("JAYNES_CHROME", "")
+    if headless and bundle(headless) is None:
+        let.append(Path(os.path.realpath(headless)))
+    if box.browser is not None:
+        let.append(bundle(str(box.browser)) or Path(os.path.realpath(box.browser)))
     if let:
         lines.append("(allow process-exec " + " ".join(f"(subpath {_lit(p)})" if p.is_dir() else f"(literal {_lit(p)})"
                                                        for p in let) + ")")
@@ -1388,7 +1393,8 @@ def in_use_said(ran: "Ran") -> bool:
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
         readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False,
-        test_servers: bool = False, freed_ports: Iterable[int] = (), over: dict[str, str | None] | None = None) -> Ran:
+        test_servers: bool = False, freed_ports: Iterable[int] = (), over: dict[str, str | None] | None = None,
+        browser: bool = False) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
     ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
     inside the hidden ones, such as the run's own copy of the role a check's script is in. Its servers bind the ports
@@ -1422,7 +1428,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         own = test_servers is True and not anyone
         window = servers_window() if own and sys.platform == "darwin" else ()
         box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *installed, *readable), reserved=ports,
-                  local_ports=declared, any_port=anyone, window=window)
+                  local_ports=declared, any_port=anyone, window=window, browser=_browser() if browser else None)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
         holds = tuple(p for p in HELD_PORTS if p not in declared and p not in ports) if window else ()
@@ -1511,7 +1517,9 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
         # what it reads is said, so the engine's runs are hidden from it but for its role's folder
         reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
         reads += installed
-        argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads))
+        # a role's own script starts the Chrome Jaynes photographs with, as a photograph does
+        argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads,
+                                           browser=_browser()))
         env = {**inherited(), **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
         code, said, _, late = _wait_in_box(argv, cwd=work, env=env, stdin=stdin, timeout=timeout)
         if late:
@@ -1610,6 +1618,12 @@ def chrome() -> str | None:
         if os.access(path, os.X_OK):
             return path
     return next((found for name in CHROME_NAMES if (found := shutil.which(name))), None)
+
+
+def _browser() -> Path | None:
+    """The Chrome a role's own script may start in its box: the one Jaynes photographs with (``chrome``)."""
+    program = chrome()
+    return Path(program) if program else None
 
 
 def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tuple[int, ...] = ()) -> str | None:

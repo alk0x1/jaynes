@@ -61,22 +61,24 @@ def _freed(call: Call) -> tuple[int, ...]:
 
 
 def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None, readable: tuple[Path, ...] = (),
-         alone: bool = False, over: dict[str, str | None] | None = None) -> Any:
+         alone: bool = False, over: dict[str, str | None] | None = None, browser: bool = False) -> Any:
     """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``. ``readable`` names
     more folders the command may read. ``alone``: a command that needs no project runs in an empty folder when its
-    step reaches none. ``over``: files put back in the copy first (see ``box.run``)."""
+    step reaches none. ``over``: files put back in the copy first (see ``box.run``). ``browser``: a role's own
+    script, which may start the Chrome Jaynes photographs with; a project's commands start none."""
     if not call.get("project") and not alone:
         return Blocked("the check has no copy of the project to run commands on")
     try:
         if call.get("project"):
             ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable,
                          local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
-                         test_servers=call.get("test_servers") is True, freed_ports=_freed(call), over=over)
+                         test_servers=call.get("test_servers") is True, freed_ports=_freed(call), over=over,
+                         browser=browser)
         else:
             with tempfile.TemporaryDirectory(prefix="jaynes-empty-") as empty:
                 ran = box.run(Path(empty), command, timeout=timeout, stdin=stdin, readable=readable,
                          local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
-                         test_servers=call.get("test_servers") is True, freed_ports=_freed(call))
+                         test_servers=call.get("test_servers") is True, freed_ports=_freed(call), browser=browser)
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
@@ -1041,7 +1043,8 @@ def script(call: Call, params: Params) -> Any:
     folder (its other files, the modules it imports) and to write none of it."""
     path = str(params["path"])
     given = json.dumps({"output": call.get("output"), "given": call.get("given") or [], "project": "."})
-    ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given, readable=_own_role(path), alone=True)
+    ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given, readable=_own_role(path), alone=True,
+               browser=True)
     if isinstance(ran, Blocked):
         return ran
     said = [line for line in ran.printed.splitlines() if line.strip()]
