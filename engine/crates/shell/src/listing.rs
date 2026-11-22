@@ -872,6 +872,28 @@ pub fn settled_shows(display: &serde_json::Value) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" → "))
 }
 
+/// The person's tests a diff changes: the test files ([`jaynes_core::risk::test_file`]) that were there before, in
+/// the diff's order. A test the run wrote anew is not one: it shows among the files as any other.
+pub fn changed_tests(diff: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    let mut push = |file: Option<String>, out: &mut Vec<String>| {
+        if let Some(f) = file.filter(|f| jaynes_core::risk::test_file(f)) {
+            out.push(f);
+        }
+    };
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            push(current.take(), &mut out);
+            current = rest.split(" b/").last().map(str::to_string);
+        } else if line.starts_with("new file mode") {
+            current = None;
+        }
+    }
+    push(current, &mut out);
+    out
+}
+
 /// A run's story: each step its agents worked, in the order they started, with what they did there, turn after turn,
 /// read from the transcripts the engine writes as the agents speak, then what was said at its stop. The app shows it
 /// in the run's tab.
