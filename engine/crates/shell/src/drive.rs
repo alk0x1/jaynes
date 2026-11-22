@@ -239,6 +239,18 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         let said = act_elsewhere(home, run, &json!({"submit": input}))?;
         return Ok(if said["recorded"] == "inbox" { "inbox" } else { "now" });
     }
+    // a run whose process is gone says so in the record before the person resumes it
+    let settled;
+    let run = match &input {
+        Input::Resume { .. } if !run.halted => match settle_left_running(home, &run.id)? {
+            Some(now) => {
+                settled = now;
+                &settled
+            }
+            None => run,
+        },
+        _ => run,
+    };
     // what the person chose for the project's ports, the run's own process reads from their file: nobody else says it
     if matches!(input, Input::PortsChosen { .. }) {
         return Err("only the run's own process records the project's ports, read from what the person chose".into());
@@ -292,6 +304,124 @@ const HALTED_BOX: &str = "box-halted";
 /// (`JAYNES_BOX_GROUPS`, a file named by the number): such a command runs in a session of its own, which stopping
 /// the role's group never reaches.
 pub const BOX_GROUPS: &str = "box-groups";
+
+/// The rule a halt is recorded by when the process driving the run was stopped by a signal (a TERM or an INT from
+/// outside Jaynes): the run is halted, as by the person, and only the person resumes it.
+pub const JAYNES_STOPPED: &str = "jaynes-was-stopped";
+
+/// What the person reads of a run whose process was stopped while it ran.
+pub const JAYNES_STOPPED_SAID: &str = "Jaynes stopped while it ran";
+
+/// The signal that stopped this process while it drove a run, 0 while none came.
+static STOPPED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// Set once the halt that signal asked for is in the run's inbox and its agent is stopped.
+static STOPPED_SETTLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The run this process drives: where its record and its folder are.
+static DRIVING: std::sync::Mutex<Option<(PathBuf, String, PathBuf)>> = std::sync::Mutex::new(None);
+
+/// The signal that stopped this process while it drove a run, if one did: it then ends as that signal says.
+pub fn stopped_by() -> Option<i32> {
+    match STOPPED.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        sig => Some(sig),
+    }
+}
+
+/// A process driving a run that is told to stop (a TERM or an INT, from outside Jaynes) does what a halt does: the halt
+/// goes in the run's inbox, by Jaynes's own rule, and the agent and the box's commands are stopped, so no agent goes on
+/// working, and spending, with nobody listening to it. The process then records the halt and ends; a second signal
+/// ends it at once. A hangup is left as it was: a start under `nohup` keeps going when its terminal closes.
+fn stop_on_signals(home: &Path, run: &str, dir: &Path) {
+    use std::sync::atomic::Ordering;
+    if let Ok(mut d) = DRIVING.lock() {
+        *d = Some((home.to_path_buf(), run.to_string(), dir.to_path_buf()));
+    }
+    // the unit tests drive runs in the test process, which keeps the signals it has
+    if cfg!(test) {
+        return;
+    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        use signal_hook::consts::{SIGINT, SIGTERM};
+        let Ok(mut signals) = signal_hook::iterator::Signals::new([SIGTERM, SIGINT]) else { return };
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for sig in signals.forever() {
+                if STOPPED.swap(sig, Ordering::SeqCst) != 0 {
+                    std::process::exit(128 + sig);
+                }
+                let driving = DRIVING.lock().ok().and_then(|d| d.clone());
+                let Some((home, run, dir)) = driving else { std::process::exit(128 + sig) };
+                let name = signal_hook::low_level::signal_name(sig).unwrap_or("a signal");
+                let _said = writeln!(std::io::stderr(), "{name} came from outside Jaynes: run {run} is halted and its agent stopped; resume it to go on");
+                let halt = Input::Halt { by: jaynes_core::question::By::Rule { rule: JAYNES_STOPPED.to_string() } };
+                match Store::open(&home.join("record.sqlite3")).and_then(|s| s.inbox_put(&run, &halt)) {
+                    Ok(()) => stop_agent_for(&dir, &halt),
+                    // nothing to record the halt in: the process cannot say it, and ends as the signal asks
+                    Err(_) => std::process::exit(128 + sig),
+                }
+                STOPPED_SETTLED.store(true, Ordering::SeqCst);
+            }
+        });
+    });
+}
+
+/// Where the process driving a run notes its pid, once it takes the run.
+const DRIVER_PID: &str = "driver.pid";
+
+/// A run that says it runs while the process that last drove it is gone (killed outright, or stopped before it
+/// handled anything): nobody works on it, and whoever reads it says "Jaynes stopped while it ran". A run with no note
+/// of its driver is not judged; a pid that lives, whatever process it is now, is taken as its driver.
+pub fn left_running(home: &Path, r: &Run) -> bool {
+    if r.finished() || r.halted || !matches!(r.phase, jaynes_core::run::Phase::Running) {
+        return false;
+    }
+    let Some(pid) = std::fs::read_to_string(home.join("runs").join(&r.id).join(DRIVER_PID)).ok().and_then(|t| t.trim().parse::<u32>().ok()) else {
+        return false;
+    };
+    !std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
+/// Before the person resumes a run left running with nobody driving it, record what happened to it: Jaynes stopped
+/// while it ran, a halt by Jaynes's own rule, so their resume goes on from there as from any halt. Only while no
+/// process holds the run; what the gone process left running (its agent, the box's commands) is stopped now, so it
+/// spends nothing more. The run as it stands after, when it was so left.
+pub fn settle_left_running(home: &Path, run: &str) -> Result<Option<Run>, String> {
+    let dir = home.join("runs").join(run);
+    let Ok(lock) = File::create(dir.join("lock")) else { return Ok(None) };
+    if lock.try_lock().is_err() {
+        return Ok(None);
+    }
+    let mut store = Store::open(&home.join("record.sqlite3"))?;
+    let Some(state) = store.state(run)? else { return Ok(None) };
+    if !left_running(home, &state) {
+        return Ok(None);
+    }
+    let _stopped = agent::stop_left(&dir.join("agent.pid"));
+    let _stopped = stop_box_groups(&dir);
+    let _stopped = agent::stop_left(&dir.join("role.pid"));
+    let _halted = decide_and_record(&mut store, run, &Input::Halt { by: jaynes_core::question::By::Rule { rule: JAYNES_STOPPED.to_string() } })?;
+    // what was under way is settled as at any halt: interrupted, spending no attempt, or held if it may have acted
+    let (now, _, _) = decide_and_record(&mut store, run, &Input::Recovered)?;
+    drop(lock);
+    Ok(Some(now))
+}
+
+/// Once a signal stopped this process, wait (a few seconds at most) until its halt is in the inbox: true when one
+/// came and has not been taken yet, so the drive takes it before it ends.
+fn halt_to_take(taken: &mut bool) -> bool {
+    if *taken || stopped_by().is_none() {
+        return false;
+    }
+    for _ in 0..50 {
+        if STOPPED_SETTLED.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    *taken = true;
+    true
+}
 
 /// Stop the agent of a run left an abandon or a halt, once that input is in its inbox, so its process starts
 /// no other turn: nothing the agent would do from here is wanted, and it costs tokens. A halt or an abandon stops
@@ -825,6 +955,8 @@ impl<'a> Driver<'a> {
         std::fs::create_dir_all(&setup.dir).map_err(|e| e.to_string())?;
         let lock = File::create(setup.dir.join("lock")).map_err(|e| e.to_string())?;
         lock.try_lock().map_err(|_| "another process is driving this run".to_string())?;
+        stop_on_signals(&setup.home, &setup.run, &setup.dir);
+        std::fs::write(setup.dir.join(DRIVER_PID), std::process::id().to_string()).map_err(|e| format!("Jaynes could not note the process driving the run: {e}"))?;
         // macOS tells no child that its parent died: an agent the last process started may still be writing.
         if agent::stop_left(&setup.dir.join("agent.pid")) {
             say("stopped an agent program that a process which died had left running");
@@ -854,6 +986,7 @@ impl<'a> Driver<'a> {
         // A recovery settles what was under way when Jaynes stopped before anything from outside acts on the run.
         let mut recovering = matches!(first, Input::Recovered);
         let mut queue: VecDeque<Input> = VecDeque::from([first]);
+        let mut halt_taken = false;
         let mut last = self.store.state(&self.setup.run)?;
         if let Some(run) = &last {
             self.catch_up_ledger(run)?;
@@ -870,7 +1003,13 @@ impl<'a> Driver<'a> {
             for input in came.into_iter().rev() {
                 queue.push_front(input);
             }
-            let Some(mut input) = queue.pop_front() else { break };
+            let Some(mut input) = queue.pop_front() else {
+                // a signal that stopped the process left its halt for the drive to record before it ends
+                if halt_to_take(&mut halt_taken) {
+                    continue;
+                }
+                break;
+            };
             // the person continues as the project's ports stand now: what they chose since the start goes on record first
             if matches!(input, Input::Continue { .. } | Input::SendBack { .. }) {
                 self.ports_now()?;
@@ -2340,6 +2479,30 @@ mod tests {
         store.append("old", &events).expect("append");
         std::fs::create_dir_all(home.join("runs/old")).expect("dir");
         store.state("old").expect("state").expect("run")
+    }
+
+    #[test]
+    fn a_run_is_left_running_only_when_the_process_noted_as_its_driver_is_gone() {
+        let home = std::env::temp_dir().join(format!("jaynes-left-running-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let run = old_run(&home);
+        assert!(matches!(run.phase, jaynes_core::run::Phase::Running), "{:?}", run.phase);
+        // no note of its driver: not judged, as a run from before the note
+        assert!(!left_running(&home, &run));
+        // a driver that lives
+        std::fs::write(home.join("runs/old").join(DRIVER_PID), std::process::id().to_string()).expect("write");
+        assert!(!left_running(&home, &run));
+        // one that is gone
+        let mut gone = std::process::Command::new("true").spawn().expect("true");
+        let pid = gone.id();
+        let _ended = gone.wait();
+        std::fs::write(home.join("runs/old").join(DRIVER_PID), pid.to_string()).expect("write");
+        assert!(left_running(&home, &run));
+        // a halted run is not left running: its halt says what it is
+        let mut halted = run.clone();
+        halted.halted = true;
+        assert!(!left_running(&home, &halted));
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     #[test]

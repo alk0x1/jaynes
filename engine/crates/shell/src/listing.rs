@@ -105,6 +105,9 @@ pub struct Entry {
     pub gone: Option<String>,
     /// When the person moved it to Finished, if they did (`moved`).
     pub moved: Option<u64>,
+    /// Jaynes stopped while it ran: a signal stopped the process driving it, which halted it, or that process is gone
+    /// and the run still says it runs (`drive::left_running`). The person resumes it.
+    pub stopped: bool,
 }
 
 /// Every run of the record, as `jaynes runs` lists them, in the list.
@@ -135,7 +138,8 @@ pub fn entry_of(home: &Path, run: Run) -> Entry {
     let into = into_of(home, &run.id);
     let gone = crate::stop::left_behind(home, &run, jaynes_core::ENGINE).then(|| engine_version(&run.engine).to_string());
     let moved = gone.as_ref().and_then(|_| crate::moved::when(&crate::moved::read(home).unwrap_or_default(), &run.id));
-    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into, gone, moved }
+    let stopped = stopped_by_jaynes(&run) || crate::drive::left_running(home, &run);
+    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into, gone, moved, stopped }
 }
 
 /// An engine's version, without the build after its "+": "0.2.3" of "0.2.3+5a1c0de".
@@ -501,6 +505,7 @@ fn standing(e: &Entry) -> (Mark, String) {
         Phase::Finished { outcome: Outcome::Delivered } if e.merged => (Mark::Merged, "merged".into()),
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
         _ if r.set_aside.is_some() => (Mark::Halted, format!("{}, set aside by the agent that started it", where_in(r))),
+        _ if e.stopped => (Mark::Halted, format!("{}, {}", where_in(r), crate::drive::JAYNES_STOPPED_SAID)),
         _ if r.halted => (Mark::Halted, format!("{}, halted", where_in(r))),
         Phase::Blocked { step, fault, reason } => (Mark::Blocked, format!("{}, {}", where_in(r), blocked_words(step.as_deref(), *fault, reason))),
         Phase::Waiting { step: None, .. } => (Mark::Delivered, "delivered, answers open".into()),
@@ -2334,6 +2339,11 @@ mod blocked_tests {
     }
 }
 
+/// Halted by Jaynes's own rule: the process driving it was stopped while it ran, by nobody's halt.
+pub fn stopped_by_jaynes(r: &Run) -> bool {
+    matches!(&r.halted_by, Some(jaynes_core::question::By::Rule { rule }) if rule == crate::drive::JAYNES_STOPPED)
+}
+
 /// Who halted a run, from its entries: the last halt's author, as the column says it.
 pub fn halted_by(events: &[jaynes_core::event::Event]) -> String {
     use jaynes_core::question::By;
@@ -2344,6 +2354,7 @@ pub fn halted_by(events: &[jaynes_core::event::Event]) -> String {
     match by {
         Some(By::Person) => "halted by you",
         Some(By::Agent { .. }) => "halted by an agent",
+        Some(By::Rule { rule }) if rule == crate::drive::JAYNES_STOPPED => crate::drive::JAYNES_STOPPED_SAID,
         Some(By::Rule { .. }) => "halted by a rule",
         None => "halted",
     }
@@ -2381,7 +2392,7 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new(), gone: None, moved: None }
+        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new(), gone: None, moved: None, stopped: false }
     }
 
     // The engineer lead and the tech-lead, 22/11 (row 28): a run whose engine left the Mac never waits for the person
