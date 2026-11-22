@@ -124,6 +124,70 @@ pub const NOT_YET: &str = "Not yet: send my words";
 /// How long that hint shows.
 pub const FULL_FOR: Duration = Duration::from_secs(3);
 
+/// With words that ask: the main button, and the line under the field.
+pub const ASK_ONE: &str = "Ask the agent ↵";
+pub const ASK_FOOT: &str = "The agent answers here. Nothing is redone and nothing is chosen.";
+/// In the conversation while the agent answers a question.
+pub const ANSWERING: &str = "The agent is answering. Nothing is redone.";
+/// The two ways the person's words go, in the field once it has words: a question, or a change.
+pub const QUESTION: &str = "Question";
+pub const CHANGE: &str = "Change";
+
+/// The line under the field while the agent answers.
+pub fn asked_foot(step: &str) -> String {
+    format!("Your question went to the agent at “{step}”. It answers here; nothing is redone and nothing is chosen.")
+}
+
+/// The line under the field when the words ask for a change of the one option: it is not chosen.
+pub fn change_foot(name: &str, step: &str) -> String {
+    format!("“{name}” is not chosen yet: your words go to the agent at “{step}”, and it asks you again.")
+}
+
+/// Whether words read as a question, guessed without a model: they end in "?" or open as one does ("e se", "what
+/// if", "why", "como"…). A click on Question or Change overrides it.
+pub fn looks_like_question(words: &str) -> bool {
+    let w = words.trim().to_lowercase();
+    if w.is_empty() {
+        return false;
+    }
+    const OPENS: [&str; 16] =
+        ["e se ", "what if ", "por que", "porque ", "why ", "how ", "como ", "what about ", "and if ", "o que ", "qual ", "quais ", "which ", "what ", "is it ", "does "];
+    w.ends_with('?') || OPENS.iter().any(|o| w.starts_with(o))
+}
+
+/// One entry of a stop's conversation as the column beside the option shows it: what it was, its words, and whether
+/// the agent said it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Said {
+    pub round: u32,
+    pub head: String,
+    pub text: String,
+    pub agent: bool,
+}
+
+/// The conversation of a stop's step (`StepState.thread`) about one option: the entries about it and those about the
+/// whole, in order, each with what it was ("You · round 2 · a question", "Agent · answered · nothing redone").
+pub fn conversation(thread: &[jaynes_core::run::Entry], item: Option<&str>) -> Vec<Said> {
+    use jaynes_core::run::EntryKind;
+    thread
+        .iter()
+        .filter(|e| e.item.is_none() || item.is_none() || e.item.as_deref() == item)
+        .map(|e| {
+            // the stop's round, as its head says it ("round 2"): the engine counts the step's from 0
+            let round = e.round + 1;
+            let (head, agent) = match e.kind {
+                EntryKind::Change => (format!("You · round {round} · a change"), false),
+                EntryKind::Ask => (format!("You · round {round} · a question"), false),
+                EntryKind::Answer if e.late => ("Agent · answered late · it changed nothing".to_string(), true),
+                EntryKind::Answer => ("Agent · answered · nothing redone".to_string(), true),
+                EntryKind::AskFailed => ("No answer".to_string(), true),
+                EntryKind::Reply => (format!("Agent · round {round} · changed the option"), true),
+            };
+            Said { round, head, text: e.text.clone(), agent }
+        })
+        .collect()
+}
+
 /// Whether a stop chooses with one option only: there is nothing to choose among, so it asks yes or not yet, by the
 /// option's name ("Go with “Python + FastAPI”?"), and the role's question goes on the line under it.
 pub fn one_option(stop: &Stop) -> bool {
@@ -410,6 +474,12 @@ struct Viewer {
 }
 
 pub struct Compare {
+    /// The record as the app reads it: the stop's conversation comes from it, and is drawn again as it changes.
+    runs: Entity<crate::model::Runs>,
+    /// The person's click on Question or Change in the field; None goes by the guess (`looks_like_question`).
+    ask_kind: Option<bool>,
+    /// A question went: the field empties as it is drawn next.
+    clear_words: bool,
     /// Whether every sentence of what the answer does shows, over the bar, or only the first.
     all_said: bool,
     key: Option<Arc<Key>>,
@@ -460,8 +530,12 @@ struct Kept {
 }
 
 impl Compare {
-    pub fn new(key: Option<Arc<Key>>, cx: &mut Context<Self>) -> Self {
+    pub fn new(key: Option<Arc<Key>>, runs: Entity<crate::model::Runs>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&runs, |_, _, cx| cx.notify()).detach();
         Compare {
+            runs,
+            ask_kind: None,
+            clear_words: false,
             all_said: false,
             key,
             stop: None,
@@ -648,7 +722,54 @@ impl Compare {
         .detach();
     }
 
+    /// The stop's conversation as the record has it now; empty while the record shows another question.
+    fn thread(&self, cx: &App) -> crate::model::Thread {
+        let Some(stop) = self.stop.as_ref() else { return Default::default() };
+        let snap = &self.runs.read(cx).snap;
+        let same = snap.stops.get(&stop.run).is_some_and(|s| s.question == stop.question);
+        snap.threads.get(&stop.run).filter(|_| same).cloned().unwrap_or_default()
+    }
+
+    /// Whether the person's words go as a question to the agent: one option, words, and Question picked or guessed.
+    fn asks(&self, stop: &Stop, cx: &App) -> bool {
+        let words = Self::text(self.words.as_ref(), cx);
+        one_option(stop) && !words.trim().is_empty() && self.ask_kind.unwrap_or_else(|| looks_like_question(&words))
+    }
+
+    /// Sends the words as a question about the option shown: the agent answers in the conversation beside it.
+    fn ask(&mut self, cx: &mut Context<Self>) {
+        let Some(stop) = self.stop.clone() else { return };
+        let words = Self::text(self.words.as_ref(), cx);
+        if self.sending || words.trim().is_empty() || self.thread(cx).asking {
+            return;
+        }
+        let item = stop.items.get(self.marks.dir).map(|i| i.id.clone());
+        self.sending = true;
+        self.said = None;
+        cx.notify();
+        let asked = answer::ask(self.key.clone(), stop.run.clone(), stop.question.clone(), item, words.trim().to_string());
+        cx.spawn(async move |this, cx| {
+            let asked = asked.await;
+            let _ = this.update(cx, |this, cx| {
+                this.sending = false;
+                match asked {
+                    // the words are in the conversation now: the field is free for the next, emptied as it is drawn
+                    Ok(()) => {
+                        this.clear_words = true;
+                        this.ask_kind = None;
+                    }
+                    Err(e) => this.said = Some(format!("Not asked: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn go(&mut self, cx: &mut Context<Self>) {
+        if self.stop.as_ref().is_some_and(|s| self.asks(s, cx)) {
+            return self.ask(cx);
+        }
         if self.sending || self.reckoned.refused.is_some() {
             return;
         }
@@ -961,6 +1082,11 @@ impl Compare {
             }
             "go" => self.go(cx),
             "also" => self.go_also(cx),
+            // a click on Question or Change in the field
+            "ask-kind" => {
+                self.ask_kind = Some(rest == "question");
+                cx.notify();
+            }
             // Enter on the mode, as the keyboard's reaches it with the keys on the mode
             "enter" => self.enter(cx),
             "close" => self.close(cx),
@@ -1247,19 +1373,29 @@ impl Render for Compare {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(stop) = self.stop.clone().filter(|_| self.open) else { return div().into_any_element() };
         let Some(item) = stop.items.get(self.marks.dir).cloned() else { return div().into_any_element() };
+        if std::mem::take(&mut self.clear_words)
+            && let Some(w) = self.words.clone()
+        {
+            w.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        let thread = self.thread(cx);
+        let asks = self.asks(&stop, cx);
         let n = stop.items.len();
         let names: Vec<String> = stop.items.iter().map(|i| name(&i.label)).collect();
         let proposal = self.proposal(cx);
         let chosen = self.marks.chosen(&stop);
         let mut label = proposal.as_ref().map(|(l, _)| l.clone()).unwrap_or_default();
         let mut also = self.marks.also(&stop, &Self::text(self.words.as_ref(), cx)).map(|(l, _)| l);
-        if answer::touch_of(&stop).is_some() {
+        if asks {
+            // a question asks no touch: it chooses nothing
+            label = ASK_ONE.trim_end_matches(" ↵").to_string();
+        } else if answer::touch_of(&stop).is_some() {
             label.push_str(" · Touch ID");
             if let Some(a) = also.as_mut() {
                 a.push_str(" · Touch ID");
             }
         }
-        let can = !self.sending && self.reckoned.refused.is_none() && proposal.is_some();
+        let can = if asks { !self.sending && !thread.asking } else { !self.sending && self.reckoned.refused.is_none() && proposal.is_some() };
         let field = self.some_field_focused(window, cx);
         // the line over the stage: the screens, the direction's name and idea, and the two ways to see it larger
         let mut head = div().flex().gap(px(6.)).items_center();
@@ -1403,9 +1539,47 @@ impl Render for Compare {
                     }))),
             );
         }
+        // the conversation at the stop about this option, round by round: the newest whole, lit in amber while it is the
+        // agent's and the person has not answered; the earlier on a line each
+        let said = conversation(&thread.entries, Some(item.id.as_str()));
+        let talk = (!said.is_empty() || thread.asking).then(|| {
+            let mut list = div().flex().flex_col().gap(px(8.)).child(look::label(&format!("Conversation at “{}”", stop.step), look::faint()));
+            let (last, mut round) = (said.len().saturating_sub(1), 0);
+            for (k, s) in said.iter().enumerate() {
+                if s.round != round {
+                    round = s.round;
+                    list = list.child(div().text_size(px(11.5)).text_color(rgb(look::faint())).child(format!("Round {round}")));
+                }
+                let newest = k == last && !thread.asking;
+                let lit = newest && s.agent;
+                let (who, rest) = s.head.split_once(" · ").map(|(a, b)| (a.to_string(), format!(" · {b}"))).unwrap_or((s.head.clone(), String::new()));
+                let text = div().text_size(px(12.5)).text_color(rgb(look::text())).child(s.text.clone());
+                list = list.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.))
+                        .px(px(10.))
+                        .py(px(8.))
+                        .rounded(px(8.))
+                        .bg(rgb(look::panel_2()))
+                        .border_1()
+                        .border_color(rgb(if lit { look::amber() } else { look::line() }))
+                        .child(div().flex().text_size(px(11.5)).child(div().text_color(rgb(if lit { look::amber() } else { look::faint() })).child(who)).child(div().text_color(rgb(look::faint())).child(rest)))
+                        .child(if newest { text } else { text.truncate() }),
+                );
+            }
+            if thread.asking {
+                list = list.child(
+                    div().px(px(10.)).py(px(8.)).rounded(px(8.)).bg(rgb(look::panel_2())).border_1().border_color(rgb(look::amber())).text_size(px(12.5)).text_color(rgb(look::dim())).child(ANSWERING),
+                );
+            }
+            list
+        });
         let side = div()
             .id("compare-side")
-            .w(px(300.))
+            // wider with a conversation in it, as the design's column A (fio.md)
+            .w(px(if talk.is_some() { 380. } else { 300. }))
             .flex_none()
             .h_full()
             .overflow_y_scroll()
@@ -1418,7 +1592,8 @@ impl Render for Compare {
             .gap(px(14.))
             .when(!item.aspects.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label(PARTS, look::faint())).child(parts)))
             .when(!stop.back.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("You dropped earlier · only you bring it back", look::faint())).child(back)))
-            .when(!item.detail.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("What was said of it", look::faint())).child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(item.detail.clone()))));
+            .when(!item.detail.is_empty(), |d| d.child(div().flex().flex_col().gap(px(6.)).child(look::label("What was said of it", look::faint())).child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(item.detail.clone()))))
+            .children(talk);
         // the bar: none, the person's words, what the answer does, and the button that sends it
         let words = self.words.clone();
         let understood = match (&self.understood, self.reading) {
@@ -1465,6 +1640,26 @@ impl Render for Compare {
             })))
         };
         let words_field = words.map(|w| focus_field("words-field", &w, window, cx));
+        // with one option and words: whether they go as a question or a change, guessed and changed by a click
+        let has_words = !Self::text(self.words.as_ref(), cx).trim().is_empty();
+        let kind = (one_option(&stop) && has_words).then(|| {
+            let pick = |id: &'static str, word: &'static str, on: bool, q: bool| {
+                tabbed(div().id(id))
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .text_size(px(12.5))
+                    .cursor_pointer()
+                    .text_color(rgb(if on { look::text() } else { look::faint() }))
+                    .when(on, |d| d.bg(rgb(look::selected())))
+                    .child(word)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ask_kind = Some(q);
+                        cx.notify();
+                    }))
+            };
+            div().flex().flex_none().p(px(2.)).rounded(px(8.)).border_1().border_color(rgb(look::line_2())).child(pick("kind-question", QUESTION, asks, true)).child(pick("kind-change", CHANGE, !asks, false))
+        });
         let panel = said_panel(&self.reckoned.sentences, self.all_said).map(|all| {
             let mut list = div().flex().flex_col().gap(px(4.)).child(look::label("What this does", look::faint()));
             for s in all {
@@ -1511,14 +1706,20 @@ impl Render for Compare {
             .border_t_1()
             .border_color(rgb(look::line()))
             .bg(rgb(look::panel()))
-            .child(div().flex().gap(px(8.)).items_center().child(none_part).child(div().flex_1().children(words_field)).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
+            .child(div().flex().gap(px(8.)).items_center().child(none_part).children(kind).child(div().flex_1().children(words_field)).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
             .children(understood)
             .child(
                 div()
                     .flex()
                     .gap(px(12.))
                     .items_end()
-                    .child(div().flex_1().min_w_0().child(self.consequences(cx)))
+                    .child(div().flex_1().min_w_0().child(if thread.asking {
+                        div().text_size(px(12.5)).text_color(rgb(look::dim())).child(asked_foot(&stop.step)).into_any_element()
+                    } else if asks {
+                        div().text_size(px(12.5)).text_color(rgb(look::dim())).child(ASK_FOOT).into_any_element()
+                    } else {
+                        self.consequences(cx)
+                    }))
                     .when_some(self.reckoned.refused.clone(), |d, r| d.child(div().max_w(px(360.)).text_size(px(12.)).text_color(rgb(look::red())).child(r)))
                     .when_some(self.said.clone(), |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(s)))
                     .when_some(also.filter(|_| !self.sending), |d, a| d.child(button("also".into(), &a, false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.go_also(cx)))))
@@ -1584,7 +1785,7 @@ impl Render for Compare {
 
 #[cfg(test)]
 mod tests {
-    use super::{Enter, Esc, FULL, HINT, Marks, PARTS, Starred, WORDS_HINT, card_label, chip, esc, invite, keep_word, mix_note, none_word, one_option, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_about, under_title, words_hint};
+    use super::{ANSWERING, ASK_FOOT, ASK_ONE, Said, asked_foot, change_foot, conversation, looks_like_question, Enter, Esc, FULL, HINT, Marks, PARTS, Starred, WORDS_HINT, card_label, chip, esc, invite, keep_word, mix_note, none_word, one_option, part_word, parts_phrase, said_panel, said_row, same_stop, shortlist_note, star_word, strip, under_about, under_title, words_hint};
 
     #[test]
     fn the_notes_name_the_parts_as_a_sentence_does_from_the_labels_the_stop_has() {
@@ -1884,5 +2085,62 @@ mod tests {
         assert_eq!(stop.items[0].aspects.len(), 2);
         assert!(PARTS.starts_with("Its parts"));
         assert_eq!(keep_word(false), "Keep this part");
+    }
+
+    // Alan, 21/11: "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse". A question gets
+    // its answer beside the option, nothing redone; his words and the agent's stay in view round by round (design
+    // 0.2.5 fio.md, A, the column beside the option)
+    #[test]
+    fn asked_question_is_answered_without_redoing_the_step() {
+        use jaynes_core::run::{Entry, EntryKind};
+        let e = |round: u32, kind: EntryKind, text: &str, item: Option<&str>| Entry {
+            round,
+            question: if kind == EntryKind::Reply { String::new() } else { "q-stacks".into() },
+            kind,
+            text: text.into(),
+            item: item.map(str::to_string),
+            late: false,
+            ask: matches!(kind, EntryKind::Ask | EntryKind::Answer | EntryKind::AskFailed).then(|| "q-stacks-a1".into()),
+        };
+        let thread = [
+            // the engine counts a step's rounds from 0 (StepState.thread's round), the stop from 1 (its pass, "round 2"
+            // at the top): the column says the stop's, so a change at round 0 is "round 1"
+            e(0, EntryKind::Change, "entender onde o Python entra antes de decidir", Some("python")),
+            e(1, EntryKind::Reply, "Python entra em 7 das 9 peças. Mantive Python.", None),
+            e(1, EntryKind::Ask, "e se fosse Go só na API?", Some("python")),
+            e(1, EntryKind::Answer, "Daria, com o fatiador saindo da API. Não mudei nada.", Some("python")),
+            // about another option: not in this one's column
+            e(1, EntryKind::Ask, "and Rust?", Some("rust")),
+        ];
+        let said = conversation(&thread, Some("python"));
+        let heads: Vec<(&str, &str, bool)> = said.iter().map(|s| (s.head.as_str(), s.text.as_str(), s.agent)).collect();
+        assert_eq!(heads, [
+            ("You · round 1 · a change", "entender onde o Python entra antes de decidir", false),
+            ("Agent · round 2 · changed the option", "Python entra em 7 das 9 peças. Mantive Python.", true),
+            ("You · round 2 · a question", "e se fosse Go só na API?", false),
+            ("Agent · answered · nothing redone", "Daria, com o fatiador saindo da API. Não mudei nada.", true),
+        ]);
+        assert_eq!(said.iter().map(|s| s.round).collect::<Vec<_>>(), [1, 2, 2, 2]);
+        // an answer that came after the stop was answered, and a question with no answer
+        let late = Entry { late: true, ..thread[3].clone() };
+        let failed = e(1, EntryKind::AskFailed, "Jaynes stopped while the agent answered: ask again", Some("python"));
+        let said = conversation(&[late, failed], Some("python"));
+        assert_eq!(said[0].head, "Agent · answered late · it changed nothing");
+        assert_eq!((said[1].head.as_str(), said[1].agent), ("No answer", true));
+        let _: Option<&Said> = said.first();
+
+        // the guess without a model: a question ends in "?" or opens as one; a click changes it
+        for q in ["e se fosse Go?", "what if it were Go", "Por que Qdrant", "why not Go", "How fast is it", "como fica a API"] {
+            assert!(looks_like_question(q), "{q}");
+        }
+        for c in ["usa Go na API", "make the API async", "  "] {
+            assert!(!looks_like_question(c), "{c}");
+        }
+        // the words under the field, and while the agent answers
+        assert_eq!(ASK_ONE, "Ask the agent ↵");
+        assert_eq!(ASK_FOOT, "The agent answers here. Nothing is redone and nothing is chosen.");
+        assert_eq!(change_foot("Python, Postgres and Qdrant", "stacks"), "“Python, Postgres and Qdrant” is not chosen yet: your words go to the agent at “stacks”, and it asks you again.");
+        assert_eq!(ANSWERING, "The agent is answering. Nothing is redone.");
+        assert_eq!(asked_foot("stacks"), "Your question went to the agent at “stacks”. It answers here; nothing is redone and nothing is chosen.");
     }
 }

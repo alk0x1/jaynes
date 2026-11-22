@@ -37,6 +37,16 @@ pub struct Snapshot {
     pub files: HashMap<String, usize>,
     /// Who halted each halted run, in the column's words: "halted by you" only when it was the person.
     pub halted: HashMap<String, String>,
+    /// The conversation at each waiting stop, by run: its step's thread, and whether the agent answers a question of
+    /// it now (`Run.asking`).
+    pub threads: HashMap<String, Thread>,
+}
+
+/// A stop's conversation, as the record keeps it on its step.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Thread {
+    pub entries: Vec<jaynes_core::run::Entry>,
+    pub asking: bool,
 }
 
 pub use jaynes_shell::listing::halted_by;
@@ -159,6 +169,7 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
     let mut stops = HashMap::new();
     let mut files = HashMap::new();
     let mut halted = HashMap::new();
+    let mut threads = HashMap::new();
     let halts: Vec<&str> = listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == Mark::Halted).map(|r| r.id.as_str()).collect();
     if !halts.is_empty() {
         let store = jaynes_shell::store::Store::open(&home.join("record.sqlite3"))?;
@@ -171,6 +182,9 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
             files.insert(e.run.id.clone(), delivered_files(&e.run));
         }
         if let Some(s) = stop::waiting(home, &e.run) {
+            let at = e.run.manifest.steps.iter().position(|st| st.name == s.step);
+            let entries = at.and_then(|i| e.run.steps.get(i)).map(|st| st.thread.clone()).unwrap_or_default();
+            threads.insert(e.run.id.clone(), Thread { entries, asking: e.run.asking.values().any(|q| *q == s.question) });
             stops.insert(e.run.id.clone(), s);
         }
         let Some(row) = rows.get(e.run.id.as_str()) else { continue };
@@ -193,7 +207,7 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
             },
         );
     }
-    Ok(Snapshot { listing, details, stops, files, halted })
+    Ok(Snapshot { listing, details, stops, files, halted, threads })
 }
 
 /// Sends the runs at once, then whenever they change; looks once a second.

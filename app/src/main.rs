@@ -2280,7 +2280,7 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), state.cleared.clone(), state.seen.clone(), cx));
         let key = the_key();
         let lightbox = cx.new(lightbox::Lightbox::new);
-        let compare = cx.new(|cx| compare::Compare::new(key.clone(), cx));
+        let compare = cx.new(|cx| compare::Compare::new(key.clone(), runs.clone(), cx));
         let island = cx.new(|cx| island::Island::new(runs.clone(), key, lightbox.clone(), compare.clone(), cx));
         island.update(cx, |i, _| i.tabs = Some(tabs.clone()));
         let rail = cx.new(|cx| rail::Rail::new(runs.clone(), tabs.clone(), island.clone(), cx));
