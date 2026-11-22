@@ -946,8 +946,8 @@ def plain_words(call: Call, params: Params) -> Any:
     return Fail(*reasons) if reasons else Pass()
 
 
-_REFUSES = re.compile(r"\b(not|no|never|without|but|except|instead|rather|avoid|don't|dont|do not|nor|não|nao|nem|sem|nada|exceto|menos|evite|evitar|fora|nunca)\b", re.I)
-_UNDECIDED = re.compile(r"\?|\b(or|either|whichever|maybe|perhaps|might|could|should we|unsure|not sure|ou|talvez|tanto faz|qualquer|não sei|nao sei|quem sabe|será)\b", re.I)
+_REFUSES = re.compile(r"\b(not|no|never|without|but|except|instead|rather|avoid|don't|dont|do not|nor|n\u00e3o|nao|nem|sem|nada|exceto|menos|evite|evitar|fora|nunca)\b", re.I)
+_UNDECIDED = re.compile(r"\?|\b(or|either|whichever|maybe|perhaps|might|could|should we|unsure|not sure|ou|talvez|tanto faz|qualquer|n\u00e3o sei|nao sei|quem sabe|ser\u00e1)\b", re.I)
 
 def _as_compared(text: str) -> str:
     """Text as it is compared to the request: lower case, one space, straight quotes."""
@@ -957,7 +957,7 @@ def _as_compared(text: str) -> str:
 
 def named_in_request(call: Call, params: Params) -> Any:
     """An option that says the request already named it (its words field) quotes the request word for word, shares a
-    word with the option's name, is not refused there ("anything but Rust", "Next não"), and is the only option: the
+    word with the option's name, is not refused there ("anything but Rust", "Next n\u00e3o"), and is the only option: the
     request decided, so nothing else is invented. An option with no words passes. In doubt it fails, and the agent
     offers options the person chooses from."""
     field, words = str(params["field"]), str(params["words"])
@@ -989,7 +989,7 @@ def named_in_request(call: Call, params: Params) -> Any:
         turn = r"(?<!anything )(?<!everything )(?<!all )(?<!coisa )\b(?:but|mas)\b"
         own = [c for part in re.split(r"[,;]", said) for c in re.split(turn, part) if set(re.findall(r"\w+", c)) & names]
         before = re.split(turn, before)[-1]
-        if _REFUSES.search(" ".join(before.split()[-4:])) or any(_REFUSES.search(c) for c in own) or re.match(r"^\s*(not|no|never|não|nao|nunca|nem)\b", after, re.I):
+        if _REFUSES.search(" ".join(before.split()[-4:])) or any(_REFUSES.search(c) for c in own) or re.match(r"^\s*(not|no|never|n\u00e3o|nao|nunca|nem)\b", after, re.I):
             reasons.append(f"{name}: the request may refuse \"{o[words].strip()}\" rather than ask for it, so the person chooses")
         elif _UNDECIDED.search(sentence):
             reasons.append(f"{name}: the request asks or leaves it open where it says \"{o[words].strip()}\", so it did not decide; the person chooses")
