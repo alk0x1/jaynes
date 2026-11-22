@@ -205,9 +205,18 @@ pub fn test_file(path: &str) -> bool {
     TESTS.iter().any(|g| glob::matches(path, g))
 }
 
+/// Text that nothing runs: Markdown, plain text, reStructuredText. It counts neither as lines nor as files of a change,
+/// but what is on the floor ([`FLOOR`]): the instructions an agent obeys (`CLAUDE.md`, `AGENTS.md`) count, and hold.
+pub const TEXT: &[&str] = &["**/*.md", "**/*.markdown", "**/*.txt", "**/*.rst"];
+
+/// Whether `path` is text that nothing runs ([`TEXT`]), and not on the floor.
+pub fn text_file(path: &str) -> bool {
+    TEXT.iter().any(|g| glob::matches(&path.to_lowercase(), g)) && floor([path]).is_empty()
+}
+
 /// The risk of a run's change so far on its target, with the reason for each rule that raised it. The same rules for
-/// every target: what is on the floor, the size of the change, and how many things it touches, its tests left out
-/// of the size and the count ([`TESTS`]). A measure may mark more as on the floor than the core knows, and never
+/// every target: what is on the floor, the size of the change, and how many things it touches, its tests and its text
+/// left out of the size and the count ([`TESTS`], [`TEXT`]). A measure may mark more as on the floor than the core knows, and never
 /// less: on a repository, a path on [`FLOOR`] is on it whatever the measure said. Each reason names the files on the
 /// floor as a stop names them, so it reads the same wherever it is shown.
 pub fn of_change(target: Target, changed: &[Changed]) -> (Risk, Vec<String>) {
@@ -225,10 +234,17 @@ pub fn of_change(target: Target, changed: &[Changed]) -> (Risk, Vec<String>) {
     let counted: Vec<&Changed> = changed
         .iter()
         .filter(|c| match target {
-            Target::Repository => !test_file(&c.what),
+            Target::Repository => !test_file(&c.what) && !text_file(&c.what),
         })
         .collect();
-    let outside = if counted.len() < changed.len() { " outside its tests" } else { "" };
+    let tests = changed.iter().any(|c| test_file(&c.what));
+    let text = changed.iter().any(|c| !test_file(&c.what) && text_file(&c.what));
+    let outside = match (tests, text) {
+        (true, true) => " outside its tests and text",
+        (true, false) => " outside its tests",
+        (false, true) => " outside its text",
+        (false, false) => "",
+    };
     let lines: u64 = counted.iter().map(|c| c.size).sum();
     if lines > SMALL_LINES {
         reasons.push(format!("the change has {lines} changed lines{outside}, more than a small change's {SMALL_LINES}"));
@@ -406,6 +422,36 @@ mod tests {
         assert_eq!(of_change(Target::Repository, &[c("src/a.py", 31)]).0, Risk::High);
         let many: Vec<Changed> = (0..6).map(|i| c(&format!("src/{i}.py"), 1)).collect();
         assert_eq!(of_change(Target::Repository, &many).0, Risk::High);
+    }
+
+    // The real-user, 22/11: a kickoff of two text files went high for 41 lines of Markdown. Text counts neither as
+    // lines nor as files, but the instructions an agent obeys, which are on the floor.
+    #[test]
+    fn text_files_count_neither_as_lines_nor_as_files_but_an_agent_s_instructions_hold() {
+        assert_eq!(of_change(Target::Repository, &[c("docs/brief.md", 41), c("NOTES.txt", 3)]), (Risk::Low, Vec::new()));
+        let text: Vec<Changed> = (0..9).map(|i| c(&format!("docs/{i}.rst"), 50)).collect();
+        assert_eq!(of_change(Target::Repository, &text).0, Risk::Low);
+        assert_eq!(of_change(Target::Repository, &[c("AGENTS.md", 1)]).0, Risk::High);
+        for p in ["docs/CLAUDE.md", ".cursorrules"] {
+            assert_eq!(of_change(Target::Repository, &[c(p, 1)]).0, Risk::High, "{p}");
+        }
+        // an agent's instructions still count as lines and files
+        assert_eq!(
+            of_change(Target::Repository, &[c("CLAUDE.md", 31)]).1,
+            vec!["the change touches `CLAUDE.md`, which runs later outside any box".to_string(), "the change has 31 changed lines, more than a small change's 30".to_string()]
+        );
+        assert_eq!(
+            of_change(Target::Repository, &[c("src/a.go", 31), c("README.md", 40), c("src/a_test.go", 9)]),
+            (Risk::High, vec!["the change has 31 changed lines outside its tests and text, more than a small change's 30".to_string()])
+        );
+        assert_eq!(
+            of_change(Target::Repository, &[c("src/a.go", 31), c("README.md", 40)]).1,
+            vec!["the change has 31 changed lines outside its text, more than a small change's 30".to_string()]
+        );
+        // a name that only looks like text is not
+        for p in ["src/md.py", "docs/notes.txt.py", "src/rst.go"] {
+            assert!(!text_file(p), "{p}");
+        }
     }
 
     #[test]
