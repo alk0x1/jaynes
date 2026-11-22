@@ -1055,6 +1055,58 @@ fn asked_a_run_blocked_by_a_hidden_case_shows_the_person_the_case_and_never_the_
     assert!(told >= 2, "the fixes after the first were told the case's sentence");
 }
 
+// The real-user, 22/11 (r1795330821-771): "o Continue devolve as tentativas e bate no mesmo caso de novo". The person
+// continues a run blocked at a hidden case with their words: the attempts come back and the agent's next attempt
+// reads them. Only the person, at a terminal: a program without one is refused, and the record keeps the words.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_continue_with_the_person_s_words_sends_them_to_the_agent_that_works_again() {
+    const WORDS: &str = "The case needs git history the copy lacks: say so in your reply instead of changing greet again";
+    let s = bug_project("sendback");
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let role = root().join("crates/shell/tests/roles/fix-bug");
+    let out = jaynes()
+        .args(["start", "--run", "sendback", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("PROMPTS", &prompts)
+        .env("NEVER_RIGHT", "1")
+        .output()
+        .expect("start");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(said.contains("blocked"), "{said}");
+    let before = std::fs::read_dir(&prompts).expect("prompts").count();
+    // a program without a terminal: refused, nothing recorded, no agent runs
+    let (_, refused) = engine(&s, &["continue", "sendback", "--note", WORDS]);
+    assert!(refused.contains("refused: only you"), "{refused}");
+    assert_eq!(std::fs::read_dir(&prompts).expect("prompts").count(), before);
+    // the person, at a terminal
+    let out = tty()
+        .args([BIN, "continue", "sendback", "--note", WORDS])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("PROMPTS", &prompts)
+        .env("NEVER_RIGHT", "1")
+        .output()
+        .expect("continue");
+    let said = String::from_utf8_lossy(&out.stdout).to_string();
+    let continued: Vec<Value> = events(&s, "sendback").into_iter().filter(|e| e["type"] == "Continued").collect();
+    assert_eq!(continued.len(), 1, "{said}");
+    assert_eq!((continued[0]["by"]["by"].as_str(), continued[0]["words"].as_str()), (Some("person"), Some(WORDS)), "{continued:?}");
+    let mut after: Vec<String> = Vec::new();
+    for n in before..std::fs::read_dir(&prompts).expect("prompts").count() {
+        after.push(std::fs::read_to_string(prompts.join(format!("{n}.txt"))).expect("read"));
+    }
+    assert!(after.iter().any(|p| p.contains("# Your step: fix") && p.contains(WORDS)), "the next attempt reads the words:\n{said}\n{after:?}");
+    // the hidden case still stays hidden (G3)
+    assert!(after.iter().all(|p| !p.contains("grep -q")), "{after:?}");
+}
+
 fn http(port: u16, raw: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");

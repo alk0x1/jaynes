@@ -1920,7 +1920,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Acted => hit("an act held, not done again"),
                 Event::ActKept { .. } => hit("an act kept as it acted"),
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Merge => hit("a merge held for the person"),
-                Event::Continued { by: By::Agent { .. } } => hit("continued by the agent that started the run"),
+                Event::Continued { by: By::Agent { .. }, .. } => hit("continued by the agent that started the run"),
                 Event::SetAside { .. } => hit("set aside by the agent that started the run"),
                 Event::AgentAnswered { late: false, .. } => hit("an ask answered in time"),
                 Event::AgentAnswered { late: true, .. } => hit("an ask answered late"),

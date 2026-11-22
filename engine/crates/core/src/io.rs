@@ -105,6 +105,12 @@ pub enum Input {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         starter: Option<String>,
     },
+    /// The person sends a run the agent's attempts left blocked back to the agent with their words: its attempts
+    /// come back and its next attempt reads them (the person's, never an agent's; never without words).
+    SendBack {
+        by: By,
+        words: String,
+    },
     DeliveryEnded {
         digest: Digest,
         ok: bool,

@@ -2034,7 +2034,7 @@ mod blocked_tests {
         assert!(!stages(&r).iter().any(|s| s.name == "plan" && s.detail.contains("attempt")), "{:?}", stages(&r));
 
         for e in [
-            Event::Continued { by: By::Person },
+            Event::Continued { by: By::Person, words: None },
             started("change", 2),
             Event::FixAsked { step: "change".into(), attempt: 2, fix: 1, reasons: vec!["the suite fails".into()] },
         ] {

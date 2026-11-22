@@ -210,7 +210,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                     "only you continue a blocked run"
                 });
             }
-            c.emit(Event::Continued { by: by.clone() });
+            c.emit(Event::Continued { by: by.clone(), words: None });
             if let Some(i) = again.filter(|_| starts && !by.person()) {
                 let text = format!("The agent that started the run continued it: Jaynes judges again what “{}” made, which it could not judge before. Nothing is redone.", c.name(i));
                 c.command(Command::Notify { text });
@@ -221,6 +221,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.advance();
         }
+        Input::SendBack { .. } => return refuse("not yet"),
         Input::PortsChosen { any, servers, opened, freed_ports } => {
             if c.run.finished() {
                 return refuse("the run is finished");

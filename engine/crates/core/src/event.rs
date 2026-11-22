@@ -311,6 +311,9 @@ pub enum Event {
     },
     Continued {
         by: By,
+        /// The person's words, when they sent the run back to the agent with them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        words: Option<String>,
     },
     /// A check of the attempt could not judge its output: the attempt is not over, it waits at its checks, and the
     /// person's continue has them judge the same output again, the agent working no more.

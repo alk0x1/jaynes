@@ -152,7 +152,7 @@ pub fn person(events: &[(u64, Event)], looks: &[crate::presence::Look]) -> Perso
                     }
                 }
             }
-            Event::Halted { by } | Event::Resumed { by } | Event::Continued { by } | Event::RiskRaised { by, .. } | Event::CeilingRaised { by, .. }
+            Event::Halted { by } | Event::Resumed { by } | Event::Continued { by, .. } | Event::RiskRaised { by, .. } | Event::CeilingRaised { by, .. }
             | Event::DeliveryCorrected { by, .. } | Event::MergeUndone { by, .. } if by.person() => p.acts += 1,
             _ => {}
         }
