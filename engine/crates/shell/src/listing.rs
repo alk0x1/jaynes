@@ -474,6 +474,24 @@ pub fn in_words(reason: &str) -> String {
     out.trim_end().trim_end_matches(':').trim_end().to_string()
 }
 
+/// What a blocked run's line says after its step: the reason in words, or, for a run stopped at its start for a held
+/// port, the case (the design-lead's of 22/11): "blocked: its tests need port 3306".
+pub fn blocked_words(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &str) -> String {
+    if let Some(h) = held_at_start_of(step, fault, reason) {
+        return format!("blocked: its tests need {}", ports_named(&h.ports));
+    }
+    format!("blocked: {}", in_words(reason))
+}
+
+/// The held port of a run stopped at its start: a fault of Jaynes at a menu step whose reason is the box's held port.
+fn held_at_start_of<'a>(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &'a str) -> Option<Held<'a>> {
+    if fault != jaynes_core::event::Fault::Jaynes {
+        return None;
+    }
+    let inner = reason.strip_prefix(&format!("a fault of Jaynes or of the machine stopped {}: ", step?))?;
+    held(inner).filter(|h| !h.ports.is_empty())
+}
+
 /// The mark and the line of a run nothing waits on.
 fn standing(e: &Entry) -> (Mark, String) {
     let r = &e.run;
@@ -484,7 +502,7 @@ fn standing(e: &Entry) -> (Mark, String) {
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
         _ if r.set_aside.is_some() => (Mark::Halted, format!("{}, set aside by the agent that started it", where_in(r))),
         _ if r.halted => (Mark::Halted, format!("{}, halted", where_in(r))),
-        Phase::Blocked { reason, .. } => (Mark::Blocked, format!("{}, blocked: {}", where_in(r), in_words(reason))),
+        Phase::Blocked { step, fault, reason } => (Mark::Blocked, format!("{}, {}", where_in(r), blocked_words(step.as_deref(), *fault, reason))),
         Phase::Waiting { step: None, .. } => (Mark::Delivered, "delivered, answers open".into()),
         Phase::Waiting { why, .. } => (Mark::Working, format!("{}, {why}", where_in(r))),
         Phase::Running => (Mark::Working, format!("{}, running", where_in(r))),
@@ -1520,6 +1538,8 @@ fn held_at_start(said: &mut BlockedSaid, h: &Held<'_>) {
         held_kind(&h.ports)
     );
     said.continue_does = HELD_GOES_ON.into();
+    // what already says no agent worked (the design-lead's of 22/11)
+    said.holds = None;
     if let Some(project) = h.project {
         said.ways.push(Way {
             says: format!("Let this project's tests use {}, then Continue.", ports_named(&h.ports)),
@@ -1700,8 +1720,7 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
             Some((inner, not_given)) => judged(&mut said, inner, not_given),
             None => {
                 said.what = format!("Jaynes or {} stopped {at}. It is not the agent's fault.", this_machine());
-                let inner = step.and_then(|s| reason.strip_prefix(&format!("a fault of Jaynes or of the machine stopped {s}: ")));
-                if let Some(h) = inner.and_then(held).filter(|h| !h.ports.is_empty()) {
+                if let Some(h) = held_at_start_of(step, fault, reason) {
                     held_at_start(&mut said, &h);
                 } else if let Some(why) = after(step.map(|s| format!("a fault of Jaynes or of the machine stopped {s}: "))) {
                     said.why = why;
@@ -2013,9 +2032,17 @@ mod blocked_tests {
             Way { says: "Or abandon: the run ends. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() },
         ]);
         assert_eq!(b.details, [bind.to_string(), "It tried port 5432, which Jaynes holds while the checks run.".to_string()]);
-        assert_eq!(b.holds.as_deref(), Some(NO_ATTEMPT_USED));
         assert_eq!(b.continue_does, "Continue: Jaynes runs the project's tests again. If they start, the run goes on.");
         assert_eq!(b.waits.as_deref(), Some(BLOCKED_WAITS));
+        // the design-lead's of 22/11: what already says no agent worked, so the card keeps no "No attempt was used."
+        assert_eq!(b.holds, None);
+        // the line of the Inbox and the column says the case, one port or several
+        let reason = format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent");
+        assert_eq!(blocked_words(Some("runner"), Fault::Jaynes, &reason), "blocked: its tests need port 5432");
+        let two = reason.replace("held port 5432.", "held port 3306, 5432.");
+        assert_eq!(blocked_words(Some("runner"), Fault::Jaynes, &two), "blocked: its tests need ports 3306 and 5432");
+        // any other block keeps its reason in words
+        assert_eq!(blocked_words(Some("change"), Fault::Agent, "change exited with Some(2): "), "blocked: change exited with code 2");
         // with the run, Continue names the step it goes on to
         let mut r = super::tests::run("r1", "Say hi");
         r.phase = Phase::Blocked { step: Some("runner".into()), fault: Fault::Jaynes, reason: format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent") };

@@ -850,13 +850,17 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
             let named: Vec<u16> = listing::held_named(&dir).into_iter().filter(|p| !freed_ports.contains(p)).collect();
             prefs.ports = Some(project_prefs::Ports { any, servers: true, opened, freed_ports });
             project_prefs::save(&home(), &dir, &prefs)?;
-            println!("Done. Go back to the run and press Continue.");
             // known beforehand where the project's files name one (the tech-lead's, 22/11): tests that serve on a
-            // port Jaynes holds fail at every check, and the run would stop at its start saying so
-            if !named.is_empty() {
+            // port Jaynes holds fail at every check, and the run would stop at its start saying so; Continue comes
+            // after the command still to run (the design-lead's, 22/11)
+            if named.is_empty() {
+                println!("Done. Go back to the run and press Continue.");
+            } else {
                 let ports = named.iter().map(u16::to_string).collect::<Vec<_>>().join(" ");
+                println!("Done.");
                 println!("The files of {name} mention {}, which Jaynes holds while the checks run. If its tests start a server on {}, let them:", listing::ports_named(&named), if named.len() == 1 { "it" } else { "them" });
                 println!("  jaynes project test-servers {} {ports}", listing::shell_word(&name.to_string()));
+                println!("Then go back to the run and press Continue.");
             }
             Ok(())
         }

@@ -4414,7 +4414,10 @@ fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_at_its_start_before_any_
     let said = typed_at_terminal(&s, &["project", "test-servers", &project], None, "y\n");
     let real = std::fs::canonicalize(&project).expect("real path").display().to_string();
     assert!(said.contains(&format!("The files of {real} mention port {held}, which Jaynes holds while the checks run. If its tests start a server on it, let them:")), "{said}");
-    assert!(said.contains(&format!("  jaynes project test-servers {real} {held}")), "{said}");
+    // the design-lead's of 22/11: Continue only after the command still to run
+    assert!(said.contains(&format!("Done.\r\nThe files of {real} mention port {held}")) || said.contains(&format!("Done.\nThe files of {real} mention port {held}")), "{said}");
+    assert!(said.contains(&format!("  jaynes project test-servers {real} {held}\r\nThen go back to the run and press Continue.")) || said.contains(&format!("  jaynes project test-servers {real} {held}\nThen go back to the run and press Continue.")), "{said}");
+    assert!(!said.contains("Done. Go back"), "{said}");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
     start(&s, "held-start", &agent);
     let e = events(&s, "held-start");
@@ -4432,6 +4435,7 @@ fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_at_its_start_before_any_
     let run = store.state("held-start").expect("state").expect("run");
     let b = jaynes_shell::listing::blocked(&s.home, &run).unwrap_or_else(|| panic!("not blocked: {:?}", run.phase));
     assert_eq!(b.what, "The run stopped before any agent worked.", "{reason}");
+    assert_eq!(b.holds, None, "what already says no agent worked");
     assert!(b.why.starts_with(&format!("This project's tests start a test server on port {held}, which Jaynes holds")), "{}", b.why);
     assert_eq!(b.continue_does, "Continue: Jaynes runs the project's tests again. If they start, the run goes on to “change”.");
     let way = b.ways.first().expect("a way");
