@@ -1467,6 +1467,8 @@ impl<'a> Driver<'a> {
                 ];
                 (argv, vec![("JAYNES_ENGINE_HOME".to_string(), home.display().to_string())])
             }),
+            // what the person chose for the project's ports, as its checks run with it
+            servers: self.setup.servers || self.setup.any_port,
         };
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));
@@ -1523,6 +1525,7 @@ impl<'a> Driver<'a> {
             paused: None,
             on_session: None,
             permit: None,
+            servers: self.setup.servers || self.setup.any_port,
         };
         let done = self.setup.agent.turn(spec);
         let reply = reply_in(&exchange);

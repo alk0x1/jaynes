@@ -92,13 +92,17 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   Claude Code's own guards for each step and records the settings it applied: the tools it may
   use and the paths they may touch, and Claude Code's sandbox around its shell commands
   (writing only in the step's folder, no network but what the step declares, the engine's
-  folder, the other runs and your secrets hidden). Claude Code's file tools are held by its
-  permission rules, not by the operating system, and Jaynes claims no more than those guards.
+  folder, the other runs, your secrets and the temporary folder your Claude Code sessions share
+  hidden), except where you let the project's tests start their own servers or opened its ports,
+  or where the step names local ports: there, on macOS, the agent's commands may serve on and
+  reach every local port of this Mac, the Jaynes page's and your other programs' among them.
+  Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
 - That what Jaynes runs itself is held beyond its box. On macOS, a project's test suite, a
   check's commands and a role's own scripts run in Jaynes's own box: they write only in the
   step's folders; they reach no network but the local ports the run reserved or the step
-  names, never the Jaynes page's, and where you opened a project's ports yourself, every local
-  port, the page's among them; they send no UDP, cannot read the engine's folder, the other
+  names, and with the project's test servers the ports you let its tests use and the ports the
+  system picks for them, never the Jaynes page's; where you opened a project's ports yourself,
+  every local port, the page's among them; they send no UDP, cannot read the engine's folder, the other
   runs or your secrets, cannot use your clipboard or keychain, open no app and write to no
   terminal. They can still read your other files that are not on the list of secrets, take a
   port they are allowed in a way other machines on your network can reach while they run, and

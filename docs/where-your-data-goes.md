@@ -92,8 +92,12 @@ A role declares, per step, what the step may reach on the network:
   PyPI and its files, crates.io), and nothing else.
 
 Jaynes sets these as the agent program's own guards, for each step: they also keep a step's commands from reading
-your home folder beyond the run's copy, the folders the role names and the toolchains' folders. Those guards are
-partial (in Claude Code the sandbox covers shell commands only):
+your home folder beyond the run's copy, the folders the role names and the toolchains' folders, and from the
+temporary folder your Claude Code sessions share (their scratchpads and the output of their background tasks): each
+turn of the agent gets one of its own, taken away when it ends. Where you let the project's tests start their own
+servers or opened its ports, or where the step names local ports, on macOS the agent's commands may serve on and reach
+every local port of this Mac, the Jaynes page's among them. Those guards are partial (in Claude Code the sandbox
+covers shell commands only):
 [what the engine guarantees](guarantees.md#what-this-page-does-not-promise) says how far they go.
 
 The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS. It

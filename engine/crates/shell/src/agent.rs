@@ -32,6 +32,10 @@ pub struct Spec<'a> {
     /// How to start Jaynes's leave server for this turn, so what the agent asks beyond its settings comes to
     /// Jaynes instead of being refused.
     pub permit: Option<Server>,
+    /// The person let this project's tests start their own test servers (`jaynes project test-servers`) or opened
+    /// its ports (`open-ports`): only then may the agent's commands serve on and reach this Mac's local ports, which
+    /// Claude Code opens all at once.
+    pub servers: bool,
     /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
     /// it counts neither towards the deadline nor in the turn's time.
     pub paused: Option<PathBuf>,
@@ -520,6 +524,61 @@ fn whole_paths(folder: &Path) -> Vec<String> {
     out
 }
 
+/// The user Jaynes runs as, as the system says it; None when it cannot tell.
+fn user() -> Option<u32> {
+    static USER: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *USER.get_or_init(|| {
+        let said = Command::new("/usr/bin/id").arg("-u").stderr(Stdio::null()).output().ok()?;
+        if !said.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&said.stdout).trim().parse().ok()
+    })
+}
+
+/// The temporary folder every Claude Code session of this user shares, its scratchpads and the output of its
+/// background tasks, which Claude Code's sandbox opens to the agent's commands by itself: as given, and as macOS
+/// resolves it.
+fn shared_tmp(uid: u32) -> Vec<String> {
+    let shared = format!("/tmp/claude-{uid}");
+    if cfg!(target_os = "macos") { vec![format!("/private{shared}"), shared] } else { vec![shared] }
+}
+
+/// Claude Code's own temporary folder for one turn, in place of the shared one: Claude Code gives it to the agent's
+/// commands only when `<it>/claude-UID` is short enough for its sockets (44 bytes, read in 2.1.330), and otherwise
+/// falls back to the shared one, so it sits in the system's temporary folder, never in the step's, whose path is
+/// longer. Only this user reads it, and it is taken away when the turn ends.
+struct OwnTmp(PathBuf);
+
+impl OwnTmp {
+    fn make() -> std::io::Result<OwnTmp> {
+        use std::os::unix::fs::DirBuilderExt;
+        let base = if cfg!(target_os = "macos") { "/private/tmp" } else { "/tmp" };
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let mut last = std::io::Error::other("no name was free");
+        for n in 0..100u128 {
+            let name = format!("jy-{:08x}", (seed ^ (u128::from(std::process::id()) << 20)).wrapping_add(n * 7919) & 0xffff_ffff);
+            let path = Path::new(base).join(name);
+            match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => return Ok(OwnTmp(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = e,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for OwnTmp {
+    fn drop(&mut self) {
+        let _gone = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn binary(name: &str) -> Option<PathBuf> {
     let path = std::env::var("PATH").unwrap_or_default();
     let mut dirs: Vec<PathBuf> = path.split(':').map(PathBuf::from).collect();
@@ -531,7 +590,7 @@ fn binary(name: &str) -> Option<PathBuf> {
 
 impl Claude {
     /// The settings for one step, generated from what it may reach. Ported from the Python engine's runtime.
-    pub fn settings(&self, cwd: &Path, reach: &Reach, reads: &[PathBuf], asks: bool) -> Value {
+    pub fn settings(&self, cwd: &Path, reach: &Reach, reads: &[PathBuf], asks: bool, servers: bool) -> Value {
         let web = reach.network == Network::Web;
         // Claude Code reads a rule's ./ from the folder the agent's shell is in now, which follows every cd the agent
         // runs: after `cd src/engram`, Edit(./**) asked the person for each file under tests/ (21/11). So a rule names
@@ -570,14 +629,22 @@ impl Claude {
         for p in beside(&home.join("runs"), cwd) {
             hide.extend(around(&p, reads).iter().map(|p| p.display().to_string()));
         }
+        // the folder every Claude Code session of this user shares, which Claude Code's sandbox opens by itself: the
+        // agent's commands keep theirs in a folder of the turn's (OwnTmp)
+        let shared = user().map(shared_tmp).unwrap_or_default();
+        hide.extend(shared.iter().cloned());
         json!({
             "permissions": {"defaultMode": if asks { "default" } else { "dontAsk" }, "allow": allow, "deny": deny,
                             "blockReadsOutsideWorkingDirectories": true, "disableBypassPermissionsMode": "disable"},
             "sandbox": {"enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
                         "autoAllowBashIfSandboxed": true,
-                        "network": {"allowedDomains": if reach.network == Network::Packages { PACKAGE_HOSTS.to_vec() } else { Vec::new() }, "strictAllowlist": true, "allowLocalBinding": true},
+                        "network": {"allowedDomains": if reach.network == Network::Packages { PACKAGE_HOSTS.to_vec() } else { Vec::new() }, "strictAllowlist": true,
+                                    // it binds and reaches every local port at once: the sessions' own, the memory
+                                    // proxies, the page. Only where the checks serve too, or the step names its ports
+                                    "allowLocalBinding": servers || !reach.local_ports.is_empty()},
                         "filesystem": {"denyRead": hide, "allowRead": read,
-                                       "allowWrite": [cwd.join(crate::project::EXCHANGE).join("tmp").display().to_string()]}},
+                                       "allowWrite": [cwd.join(crate::project::EXCHANGE).join("tmp").display().to_string()],
+                                       "denyWrite": shared}},
             "disableAllHooks": true, "autoMemoryEnabled": false, "disableClaudeAiConnectors": true,
             "syncClaudeAiPlugins": false, "syncClaudeAiSkills": false, "disableBundledSkills": true
         })
@@ -604,12 +671,21 @@ impl Agent for Claude {
     }
 
     fn turn(&self, spec: Spec<'_>) -> Turn {
-        let settings = self.settings(spec.cwd, spec.reach, spec.reads, spec.permit.is_some());
+        let settings = self.settings(spec.cwd, spec.reach, spec.reads, spec.permit.is_some(), spec.servers);
         let Some(claude) = binary("claude") else {
             return Turn { ended: Ended::Fault { reason: "Claude Code is not installed".to_string() }, applied: settings };
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
+        // without the user the settings could not hide the shared folder, and without a folder of its own Claude Code
+        // would give the agent's commands the shared one: a fault of Jaynes's, never a turn with it open
+        if user().is_none() {
+            return Turn { ended: Ended::Fault { reason: "Jaynes could not tell which user it runs as, so it could not keep the agent's commands out of the temporary folder Claude Code's sessions share".to_string() }, applied: settings };
+        }
+        let own_tmp = match OwnTmp::make() {
+            Ok(own) => own,
+            Err(e) => return Turn { ended: Ended::Fault { reason: format!("Jaynes could not make Claude Code a temporary folder of its own: {e}") }, applied: settings },
+        };
         // What the agent asks beyond its settings goes to Jaynes's leave server; without one, it is refused.
         let (servers, mode) = match &spec.permit {
             Some((argv, env)) => {
@@ -635,7 +711,8 @@ impl Agent for Claude {
                 cmd.args(["--permission-prompt-tool", "mcp__jaynes__permit"]);
             }
             // a leave waits for the person as long as they take: Claude Code must not give up on the call meanwhile
-            cmd.current_dir(spec.cwd).env("TMPDIR", &tmp).env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1").env("MCP_TOOL_TIMEOUT", LEAVE_PATIENCE_MS);
+            cmd.current_dir(spec.cwd).env("TMPDIR", &tmp).env("CLAUDE_CODE_TMPDIR", own_tmp.path())
+                .env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1").env("MCP_TOOL_TIMEOUT", LEAVE_PATIENCE_MS);
             for (k, v) in &spec.env {
                 cmd.env(k, v);
             }
@@ -1162,7 +1239,7 @@ mod tests {
         // (Write, Edit, NotebookEdit); a Write(path), NotebookEdit(path) or Glob(path) rule matches nothing
         for project in [ProjectAccess::Read, ProjectAccess::Write] {
             let reach = Reach { project, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
-            let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
+            let s = Claude::default().settings(Path::new("/w"), &reach, &[], false, false);
             for list in ["allow", "deny", "ask"] {
                 for rule in s["permissions"][list].as_array().into_iter().flatten().filter_map(Value::as_str) {
                     for never in ["Write(", "NotebookEdit(", "Glob("] {
@@ -1199,7 +1276,7 @@ mod tests {
         // wrote tests/conftest.py and six more files under tests/, and Claude Code asked the person for each one,
         // though the step may write them all: the rule read ./ from the folder the agent's shell had gone into.
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
-        let s = Claude::default().settings(Path::new("/w"), &reach, &[], true);
+        let s = Claude::default().settings(Path::new("/w"), &reach, &[], true, false);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         for shell in ["/w", "/w/src/engram", "/w/tests", "/w/.jaynes/tmp"] {
             for file in ["/w/tests/conftest.py", "/w/tests/fakes.py", "/w/src/engram/api.py", "/w/pyproject.toml"] {
@@ -1225,7 +1302,7 @@ mod tests {
         std::os::unix::fs::symlink(base.join("real"), base.join("link")).expect("link");
         let real = std::fs::canonicalize(base.join("real")).expect("real");
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
-        let s = Claude::default().settings(&base.join("link"), &reach, &[], true);
+        let s = Claude::default().settings(&base.join("link"), &reach, &[], true, false);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         for folder in [base.join("link"), real] {
             let file = folder.join("tests/conftest.py").display().to_string();
@@ -1237,7 +1314,7 @@ mod tests {
     #[test]
     fn a_read_only_step_writes_only_its_exchange_folder() {
         let reach = Reach { project: ProjectAccess::Read, write: vec![], network: Network::None, commands: false, local_ports: vec![] };
-        let s = Claude::default().settings(Path::new("/w"), &reach, &[], false);
+        let s = Claude::default().settings(Path::new("/w"), &reach, &[], false, false);
         let allow: Vec<&str> = s["permissions"]["allow"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         // wherever its agent's shell went
         for shell in ["/w", "/w/src"] {
@@ -1302,11 +1379,55 @@ mod tests {
     fn a_step_that_installs_packages_reaches_only_their_registries() {
         let c = Claude { model: "m".into(), effort: "high".into(), max_messages: 10 };
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::Packages, commands: true, local_ports: vec![] };
-        let s = c.settings(Path::new("/w"), &reach, &[], false);
+        let s = c.settings(Path::new("/w"), &reach, &[], false, false);
         assert_eq!(s["sandbox"]["network"]["allowedDomains"], json!(PACKAGE_HOSTS));
         assert!(s["permissions"]["deny"].as_array().into_iter().flatten().any(|v| v == "WebFetch"), "no web tools");
-        let none = c.settings(Path::new("/w"), &Reach { network: Network::None, ..reach }, &[], false);
+        let none = c.settings(Path::new("/w"), &Reach { network: Network::None, ..reach }, &[], false, false);
         assert_eq!(none["sandbox"]["network"]["allowedDomains"], json!([]));
+    }
+
+    #[test]
+    fn an_agent_s_commands_reach_this_mac_s_local_ports_only_where_the_person_let_the_project_s_tests_serve() {
+        // Claude Code's local binding opens every local port at once, the bind and the connect: the sessions' own
+        // ports, the memory proxies, the page. Only where the person let the project's tests start their own servers
+        // or opened its ports, or the step names the ports it reaches
+        let c = Claude { model: "m".into(), effort: "high".into(), max_messages: 10 };
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
+        let binding = |reach: &Reach, servers| c.settings(Path::new("/w"), reach, &[], false, servers)["sandbox"]["network"]["allowLocalBinding"].clone();
+        assert_eq!(binding(&reach, false), json!(false));
+        assert_eq!(binding(&reach, true), json!(true));
+        assert_eq!(binding(&Reach { local_ports: vec![5432], ..reach.clone() }, false), json!(true));
+    }
+
+    #[test]
+    fn an_agent_s_commands_neither_read_nor_write_the_temporary_folder_every_claude_code_session_of_this_user_shares() {
+        // Claude Code's sandbox opens /tmp/claude-UID by itself, where every session of this user keeps its
+        // scratchpads and the output of its background tasks (measured 22/11): a channel from an agent to them
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let c = Claude { model: "m".into(), effort: "high".into(), max_messages: 10 };
+        let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![] };
+        let fs = c.settings(Path::new("/w"), &reach, &[], false, false)["sandbox"]["filesystem"].clone();
+        let uid = super::user().expect("the user is known");
+        let shared = format!("/tmp/claude-{uid}");
+        for key in ["denyWrite", "denyRead"] {
+            let listed: Vec<&str> = fs[key].as_array().expect(key).iter().filter_map(|v| v.as_str()).collect();
+            assert!(listed.contains(&shared.as_str()), "{key}: {listed:?}");
+            if cfg!(target_os = "macos") {
+                assert!(listed.contains(&format!("/private{shared}").as_str()), "{key}: {listed:?}");
+            }
+        }
+        // so Claude Code keeps its own in a folder of the step's: only one short enough for its sockets, which it
+        // otherwise leaves for the shared one
+        let own = super::OwnTmp::make().expect("made");
+        let meta = std::fs::metadata(own.path()).expect("there");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+        assert_eq!(meta.uid(), uid);
+        assert!(own.path().join(format!("claude-{uid}")).as_os_str().len() <= 44, "{}", own.path().display());
+        assert!(!own.path().starts_with(&shared) && !own.path().starts_with(format!("/private{shared}")));
+        let gone = own.path().to_path_buf();
+        std::fs::write(gone.join("left"), "x").expect("write");
+        drop(own);
+        assert!(!gone.exists(), "taken away after the turn");
     }
 
     #[test]
