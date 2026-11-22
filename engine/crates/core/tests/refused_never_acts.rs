@@ -69,7 +69,7 @@ fn running(effect: Effect) -> (Run, u32) {
 /// The run of [`running`], its step done and its delivery asked: the digest of the delivery under way.
 fn delivering() -> (Run, Digest) {
     let (mut run, attempt) = running(Effect::None);
-    let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None };
+    let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None };
     let (_, cmds) = feed(&mut run, Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome });
     assert!(delivers(&cmds), "the delivery is asked: {cmds:?}");
     let digest = run.delivering.clone().expect("delivering");

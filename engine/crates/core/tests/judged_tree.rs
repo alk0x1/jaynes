@@ -63,6 +63,7 @@ fn checking(tree: Option<&str>) -> (Run, u32) {
         usage: Usage::default(),
         session: None,
         tree: tree.map(str::to_string),
+        reply: None,
     };
     let (events, cmds) = feed(&mut run, Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome });
     let recorded = events.iter().find_map(|e| if let Event::AttemptDelivered { tree, .. } = e { Some(tree.clone()) } else { None });

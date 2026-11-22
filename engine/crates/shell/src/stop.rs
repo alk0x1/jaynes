@@ -458,7 +458,7 @@ mod tests {
             }
         }
         let attempt = turn.iter().find_map(|c| if let jaynes_core::Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
-        let outcome = jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed, usage: Default::default(), session: None, tree: None };
+        let outcome = jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed, usage: Default::default(), session: None, tree: None, reply: None };
         feed(&mut r, Input::AttemptEnded { step: "build".into(), attempt, fix: 0, outcome });
         std::fs::create_dir_all(home.join("runs/r1/project.git")).expect("copy");
         std::fs::write(home.join("runs/r1/project.git/jaynes-start"), "main\n").expect("start");

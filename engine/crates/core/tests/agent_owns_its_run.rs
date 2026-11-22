@@ -78,7 +78,7 @@ fn started(starter: Option<&str>) -> (Run, u32) {
 /// Blocked by Jaynes on a change its check could not judge: going on judges the same change again.
 fn check_could_not_judge(starter: Option<&str>) -> Run {
     let (mut run, attempt) = started(starter);
-    let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: Some("s".into()), tree: None };
+    let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: Some("s".into()), tree: None, reply: None };
     feed(&mut run, Input::AttemptEnded { step: "change".into(), attempt, fix: 0, outcome });
     let blocked = CheckResult::new("tests", CheckVerdict::Blocked { reason: "the test runner did not start".into() });
     feed(&mut run, Input::ChecksEnded { step: "change".into(), attempt, fix: 0, results: vec![blocked] });

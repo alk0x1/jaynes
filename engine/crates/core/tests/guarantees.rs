@@ -647,6 +647,8 @@ impl World {
     fn respond(&mut self, c: Command) {
         let run = self.run().clone();
         match c {
+            // the core takes no ask yet, so it never sends one
+            Command::AnswerAsk(_) => {}
             Command::Probe { step, .. } => {
                 let ok = self.rng.chance(95);
                 self.send(Input::ProbeEnded { step, ok, reason: "the box refused /tmp".to_string() });
@@ -674,6 +676,7 @@ impl World {
                         usage: Usage::default(),
                         session: None,
                         tree: None,
+                        reply: None,
                     },
                     0..=71 => AttemptOutcome::Delivered {
                         output: digest_pool(&mut self.rng),
@@ -682,6 +685,7 @@ impl World {
                         usage: usage(&mut self.rng),
                         session: Some(format!("session-{}", turn.step)),
                         tree: None,
+                        reply: None,
                     },
                     72..=85 => AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: usage(&mut self.rng) },
                     86..=88 => AttemptOutcome::Impossible { reason: "the request contradicts itself".to_string(), usage: usage(&mut self.rng), session: Some(format!("session-{}", turn.step)) },
@@ -699,6 +703,7 @@ impl World {
                         usage: Usage::default(),
                         session: None,
                         tree: None,
+                        reply: None,
                     },
                     80..=91 => AttemptOutcome::NeedsInput {
                         items: vec![Item { id: "which".to_string(), label: "which test".to_string(), digest: Digest("w".to_string()) }],
@@ -903,7 +908,7 @@ impl World {
                     step,
                     attempt: s.attempt - 1,
                     fix: 0,
-                    outcome: AttemptOutcome::Delivered { output: Digest("late".to_string()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None },
+                    outcome: AttemptOutcome::Delivered { output: Digest("late".to_string()), items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None },
                 });
                 assert!(self.log.len() <= before + 1, "seed {}: G6 a late report did more than being recorded", self.seed);
             }
@@ -1211,6 +1216,7 @@ fn deliver(run: &mut Run, step: &str, attempt: u32, output: &str, items: Vec<Ite
             usage: Usage { seconds: 5, tokens: 100, cached: 0 },
             session: Some("s".to_string()),
             tree: None,
+            reply: None,
         },
     })
 }
@@ -1570,7 +1576,7 @@ fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
             step: "change".to_string(),
             attempt: t,
             fix: 0,
-            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false, ..Default::default() }], usage: Usage::default(), session: None, tree: None },
+            outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed { what: path.to_string(), size: 1, floor: false, ..Default::default() }], usage: Usage::default(), session: None, tree: None, reply: None },
         });
         assert_eq!(run.risk, Risk::High, "G7 {path} left the run at low risk");
     }
@@ -1586,7 +1592,7 @@ fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
-    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None } });
+    let c = feed(&mut run, Input::AttemptEnded { step: "change".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None, reply: None } });
     (run, c)
 }
 
@@ -1659,6 +1665,7 @@ fn g7_touching_ci_raises_the_risk_and_owes_the_full_path() {
             usage: Usage::default(),
             session: None,
             tree: None,
+            reply: None,
         },
     });
     assert_eq!(run.risk, Risk::High);

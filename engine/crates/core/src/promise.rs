@@ -321,14 +321,14 @@ fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> V
         let done = i.and_then(|i| r.steps[i].done.as_ref()).map(|d| d.items.clone()).unwrap_or_default();
         let items: Vec<Item> = done.into_iter().filter(|x| keep.contains(&x.id)).collect();
         let d = Digest(format!("{step}.{round}.kept"));
-        out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None }), format!("{step} keeps only what you chose"), false));
+        out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None }), format!("{step} keeps only what you chose"), false));
         out.push(mv(ended(AttemptOutcome::Fault { reason: "the role could not keep it".into() }), format!("{step} cannot keep what you chose"), true));
         return out;
     }
     let choose = i.and_then(|i| r.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.choose);
     let delivered = |what: &str, changed: Vec<Changed>| {
         let (d, items) = if choose { options(step, round, what) } else { output(step, round, what) };
-        AttemptOutcome::Delivered { output: d, items, changed, usage: Usage::default(), session: Some(format!("session-{step}")), tree: None }
+        AttemptOutcome::Delivered { output: d, items, changed, usage: Usage::default(), session: Some(format!("session-{step}")), tree: None, reply: None }
     };
     if turn.reach.project == ProjectAccess::Write {
         out.push(mv(ended(delivered("small", vec![Changed::file("src/a".into(), 1)])), format!("{step} delivers a small change"), false));
@@ -357,6 +357,8 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
                 out.push(mv(Input::ProbeEnded { step: step.clone(), ok: true, reason: String::new() }, format!("{step}'s reach is tested"), false));
                 out.push(mv(Input::ProbeEnded { step: step.clone(), ok: false, reason: "the box refused".into() }, format!("{step}'s reach is refused"), true));
             }
+            // the person's ask is never sent here: the search asks nothing of the agent
+            Command::AnswerAsk(_) => {}
             Command::RunAgent(turn) => {
                 let round = r.manifest.index(&turn.step).map(|i| r.steps[i].round).unwrap_or(0);
                 out.extend(agent_moves(turn, round, r.risk, k, r));
@@ -364,7 +366,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             Command::RunRole { step, round, attempt, .. } => {
                 let (d, items) = output(step, *round, "role");
                 let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: *attempt, fix: 0, outcome };
-                out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None }), format!("{step} done"), false));
+                out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None }), format!("{step} done"), false));
                 out.push(mv(ended(AttemptOutcome::Refused { reason: "refused".into() }), format!("{step} refuses"), true));
                 out.push(mv(ended(AttemptOutcome::Fault { reason: "the role crashed".into() }), format!("{step}'s role program crashes"), true));
             }

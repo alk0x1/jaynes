@@ -206,6 +206,9 @@ pub struct Pending {
     /// The state of the project the output was measured at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<String>,
+    /// The agent's few words beside the output, which go to the stop's thread once the output is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -370,7 +373,7 @@ impl Run {
                     }
                 }
             }
-            Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session, tree } => {
+            Event::AttemptDelivered { step, attempt, fix, output, items, changed, usage, session, tree, reply } => {
                 self.spent.add(*usage);
                 let acts = self.manifest.index(step).is_some_and(|i| self.manifest.steps[i].effect.acts() && !self.manifest.steps[i].repeats_safely());
                 if let Some(s) = self.step_mut(step) {
@@ -378,7 +381,7 @@ impl Run {
                     s.dropped_all = false;
                     s.acted |= acts;
                     s.resume = None;
-                    s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone(), tree: tree.clone() });
+                    s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone(), tree: tree.clone(), reply: reply.clone() });
                     s.unjudged = false;
                     s.status = Status::Checking { attempt: *attempt, fix: *fix };
                     if session.is_some() {
@@ -660,6 +663,8 @@ impl Run {
             }
             Event::PortsChosen { any, servers, opened } => self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened }),
             Event::Halted { .. } => self.halted = true,
+            // the thread of a stop: folded with the asking, which the core does not take yet
+            Event::AgentAsked { .. } | Event::AgentAnswered { .. } | Event::AskFailed { .. } => {}
             Event::SetAside { by } => {
                 self.halted = true;
                 self.set_aside = Some(by.clone());

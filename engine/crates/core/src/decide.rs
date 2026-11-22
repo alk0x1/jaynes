@@ -125,6 +125,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
     match input {
         Input::Start { .. } => return refuse("the run already started"),
         Input::Tick => c.advance(),
+        Input::AskAgent { .. } | Input::AskEnded { .. } => return refuse("asking the agent at a stop is not built yet"),
         Input::ProbeEnded { step, ok, reason } => c.probe_ended(step, *ok, reason)?,
         Input::AttemptEnded { step, attempt, fix, outcome } => c.attempt_ended(step, *attempt, *fix, outcome)?,
         Input::ChecksEnded { step, attempt, fix, results } => c.checks_ended(step, *attempt, *fix, results)?,
@@ -891,7 +892,7 @@ impl Ctx {
         let decl = self.run.manifest.steps[i].clone();
         let role = decl.executor == Executor::Role;
         match outcome {
-            AttemptOutcome::Delivered { output, items, changed, usage, session, tree } => {
+            AttemptOutcome::Delivered { output, items, changed, usage, session, tree, reply } => {
                 self.emit(Event::AttemptDelivered {
                     step: step.to_string(),
                     attempt,
@@ -902,6 +903,7 @@ impl Ctx {
                     usage: *usage,
                     session: session.clone(),
                     tree: tree.clone(),
+                    reply: reply.clone(),
                 });
                 self.reassess(i, changed);
                 if decl.checks.is_empty() {

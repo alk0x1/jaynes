@@ -156,6 +156,9 @@ pub enum Event {
         /// The state of the project the output was measured at: what its checks must judge.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tree: Option<String>,
+        /// The agent's few words beside the output: what it changed and why, and what it answers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<String>,
     },
     AttemptFailed {
         step: String,
@@ -340,6 +343,35 @@ pub enum Event {
     SetAside {
         by: By,
     },
+    /// The person asked the agent of a stop's step something, without sending it back: the stop stays open in the
+    /// same round, with the same items.
+    AgentAsked {
+        ask: String,
+        question: String,
+        step: String,
+        round: u32,
+        #[serde(default)]
+        item: Option<String>,
+        text: String,
+        by: By,
+    },
+    /// The agent answered the person's ask in a turn that only read. `late`: the stop was answered or replaced
+    /// meanwhile, so the answer changes nothing.
+    AgentAnswered {
+        ask: String,
+        text: String,
+        usage: Usage,
+        #[serde(default)]
+        session: Option<String>,
+        #[serde(default, skip_serializing_if = "crate::manifest::is_false")]
+        late: bool,
+    },
+    /// No answer to the person's ask, and why.
+    AskFailed {
+        ask: String,
+        reason: String,
+        usage: Usage,
+    },
 }
 
 impl Event {
@@ -382,6 +414,9 @@ impl Event {
             Event::DeliveryCorrected { .. } => "DeliveryCorrected",
             Event::StopSkipped { .. } => "StopSkipped",
             Event::SetAside { .. } => "SetAside",
+            Event::AgentAsked { .. } => "AgentAsked",
+            Event::AgentAnswered { .. } => "AgentAnswered",
+            Event::AskFailed { .. } => "AskFailed",
             Event::MergeUndone { .. } => "MergeUndone",
         }
     }

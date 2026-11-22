@@ -76,7 +76,7 @@ fn delivered_merge(c: &[Command]) -> Option<bool> {
 }
 
 fn ends(run: &mut Run, attempt: u32, changed: Vec<Changed>) -> Vec<Command> {
-    let outcome = AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None };
+    let outcome = AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None, reply: None };
     feed(run, Input::AttemptEnded { step: "build".to_string(), attempt, fix: 0, outcome })
 }
 

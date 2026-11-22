@@ -477,6 +477,7 @@ mod tests {
         events.push(Event::AttemptDelivered {
             step: "plan".into(), attempt: 1, fix: 0, output: Digest("o".into()), items: vec![item.clone()],
             changed: vec![jaynes_core::risk::Changed::file("plan.md".into(), 4)], usage: Usage { seconds: 70, tokens: 900, cached: 0 }, session: None, tree: None,
+            reply: None,
         });
         let question = Question {
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![item],

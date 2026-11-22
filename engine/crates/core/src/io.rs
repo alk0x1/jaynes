@@ -153,6 +153,35 @@ pub enum Input {
         #[serde(default)]
         opened: u64,
     },
+    /// The person asks the agent of a stop's step something about what it shows, without sending it back: the stop
+    /// stays open in the same round, with the same items, and the agent answers in a turn that only reads.
+    AskAgent {
+        question: String,
+        /// The item the words are about, when they are about one.
+        #[serde(default)]
+        item: Option<String>,
+        text: String,
+        by: By,
+    },
+    /// The agent's answer to the person's ask `ask`, or why there is none.
+    AskEnded {
+        ask: String,
+        outcome: AskOutcome,
+    },
+}
+
+/// How a turn that answers the person's ask ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum AskOutcome {
+    Answered {
+        text: String,
+        usage: Usage,
+        #[serde(default)]
+        session: Option<String>,
+    },
+    /// No answer: the agent did not start, wrote nothing, changed the project, or Jaynes stopped meanwhile.
+    Failed { reason: String, usage: Usage },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -172,6 +201,10 @@ pub enum AttemptOutcome {
         /// and what the delivery carries.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tree: Option<String>,
+        /// The agent's few words beside its output, never inside it: what it changed and why, and the answer to
+        /// what the person asked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<String>,
     },
     /// The agent's fault: no output, an output that does not parse, a write outside its reach, its deadline.
     Failed { reasons: Vec<String>, usage: Usage },
@@ -267,6 +300,31 @@ pub enum Command {
     },
     /// Tell the person something holds the run.
     Notify { text: String },
+    /// A turn that only reads, in the session of the step that made what the stop shows, to answer the person's ask.
+    /// It is not an attempt: it spends tokens of the run, never an attempt of the step.
+    AnswerAsk(AskTurn),
+}
+
+/// The person's ask, as the agent answering it is given it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AskTurn {
+    /// `{question}-a{n}`: what the answer comes back as.
+    pub ask: String,
+    pub question: String,
+    pub step: String,
+    pub round: u32,
+    /// The output the stop shows: the agent answers about it, and it does not change.
+    pub output: Digest,
+    pub item: Option<String>,
+    /// The item's label, or empty when the words are about the whole output.
+    pub label: String,
+    pub text: String,
+    /// The session of the step that made the output; none when it cannot be resumed, and a new one reads the output.
+    pub session: Option<String>,
+    /// Read only: no write in the project, no network.
+    pub reach: Reach,
+    pub deadline_seconds: u64,
+    pub tokens_left: u64,
 }
 
 /// Something the person dropped in an earlier round and now brings back: the item, the step's output it was in, and

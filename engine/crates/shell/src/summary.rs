@@ -688,7 +688,7 @@ mod tests {
     }
 
     fn delivered(step: &str, attempt: u32, seconds: u64, tokens: u64) -> Event {
-        Event::AttemptDelivered { step: step.into(), attempt, fix: 0, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage { seconds, tokens, cached: 0 }, session: None, tree: None }
+        Event::AttemptDelivered { step: step.into(), attempt, fix: 0, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage { seconds, tokens, cached: 0 }, session: None, tree: None, reply: None }
     }
 
     fn done(step: &str) -> Event {

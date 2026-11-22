@@ -1158,6 +1158,8 @@ impl<'a> Driver<'a> {
                 Some(Input::ProbeEnded { step, ok: result.is_ok(), reason: result.err().unwrap_or_default() })
             }
             Command::RunAgent(turn) => Some(self.agent_turn(run, turn)),
+            // the person's ask to a stop's agent: the core takes none yet, so it never sends one
+            Command::AnswerAsk(_) => None,
             Command::RunRole { step, round, attempt, given, previous, answers, key } => {
                 Some(self.role_step(run, step, round, attempt, given, previous, answers, key))
             }
@@ -1462,7 +1464,7 @@ impl<'a> Driver<'a> {
             Ok(other) => return AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
             Err(e) => return AttemptOutcome::Fault { reason: e },
         };
-        AttemptOutcome::Delivered { output: digest, items, changed, usage, session, tree: tree.as_str().map(str::to_string) }
+        AttemptOutcome::Delivered { output: digest, items, changed, usage, session, tree: tree.as_str().map(str::to_string), reply: None }
     }
 
     /// A round of a stop that chooses, when the person chose without a note: the role keeps the chosen options of
@@ -1490,7 +1492,7 @@ impl<'a> Driver<'a> {
         }
         let items = self.keep_items(&shown, &self.cwd(run, i, turn.attempt))?;
         let changed = run.steps[i].done.as_ref().map(|d| d.changed.clone()).unwrap_or_default();
-        Ok(AttemptOutcome::Delivered { output: digest, items, changed, usage: Default::default(), session: None, tree: object["tree"].as_str().map(str::to_string) })
+        Ok(AttemptOutcome::Delivered { output: digest, items, changed, usage: Default::default(), session: None, tree: object["tree"].as_str().map(str::to_string), reply: None })
     }
 
     /// The items as the core knows them, after keeping a copy of each picture by its fingerprint and how each item
@@ -1645,6 +1647,7 @@ impl<'a> Driver<'a> {
                             usage: Default::default(),
                             session: None,
                             tree: tree.as_str().map(str::to_string),
+                            reply: None,
                         },
                         Ok(other) => AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
                         Err(e) => AttemptOutcome::Fault { reason: e },
@@ -2142,7 +2145,7 @@ mod tests {
         let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };
         store.decide("w", &probe).expect("probe");
         let attempt = store.state("w").expect("state").expect("run").steps[0].attempt;
-        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None, tree: None } };
+        let done = Input::AttemptEnded { step: "make".into(), attempt, fix: 0, outcome: jaynes_core::AttemptOutcome::Delivered { output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Default::default(), session: None, tree: None, reply: None } };
         store.decide("w", &done).expect("done");
         let _ = run;
         let waiting = store.state("w").expect("state").expect("run");

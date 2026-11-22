@@ -179,6 +179,7 @@ mod tests {
             step: step.clone(), attempt: 2, fix: 0, output: Digest("o".into()), items: vec![item.clone()],
             changed: vec![Changed::file(format!("src/{PLANTED}.rs"), 3)], usage: Usage { seconds: 90, tokens: 3_321, cached: 0 }, session: Some(format!("{PLANTED}-session")),
             tree: None,
+            reply: None,
         });
         let question = Question {
             id: format!("{PLANTED}-q"), step: step.clone(), round: 0, kind: QuestionKind::Decision, items: vec![item],

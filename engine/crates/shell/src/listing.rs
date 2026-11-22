@@ -1140,7 +1140,7 @@ mod blocked_tests {
         let home = std::env::temp_dir().join(format!("jaynes-checks-again-{}", std::process::id()));
         let mut r = super::tests::run("r1", "Filter the items by price");
         let started = Event::AttemptStarted { step: "change".into(), round: 0, attempt: 1, fix: 0, session: None, deadline_seconds: 0, tokens_left: 0, key: None };
-        let delivered = Event::AttemptDelivered { step: "change".into(), attempt: 1, fix: 0, output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Usage::default(), session: None, tree: Some("t".into()) };
+        let delivered = Event::AttemptDelivered { step: "change".into(), attempt: 1, fix: 0, output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Usage::default(), session: None, tree: Some("t".into()), reply: None };
         let blocked_at = Event::Blocked { step: Some("change".into()), fault: Fault::Jaynes, reason: refused_port_0("/p") };
         for e in [&started, &delivered, &blocked_at] {
             r.apply(e);
