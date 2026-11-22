@@ -331,5 +331,65 @@
     }
    ]
   }
+ },
+ {
+  "id": "underscore-name-the-person-did-not-write",
+  "expect": "reject",
+  "hole": "a name with an underscore near the one the person wrote, but not theirs",
+  "with": {
+   "field": "summary"
+  },
+  "request": "O ping do banco tem que ler o endereço de ESTOQUE_DB, e cair no 127.0.0.1:5432 quando ela não existir.",
+  "output": {
+   "summary": "O ping do banco lê o endereço de ESTOQUE_URL; sem ela, usa o de sempre."
+  }
+ },
+ {
+  "id": "longer-name-around-the-person-s-word",
+  "expect": "reject",
+  "hole": "the person's word is only a part of a longer code name",
+  "with": {
+   "field": "summary"
+  },
+  "request": "O ping do ESTOQUE tem que ler o endereço do ambiente.",
+  "output": {
+   "summary": "O ping lê o endereço de ESTOQUE_DB."
+  }
+ },
+ {
+  "id": "person-s-word-beside-code-they-did-not-write",
+  "expect": "reject",
+  "hole": "one word of the person's lets nothing else through: a JSON object beside it",
+  "with": {
+   "field": "summary"
+  },
+  "request": "O ping do banco tem que ler o endereço de ESTOQUE_DB, e cair no 127.0.0.1:5432 quando ela não existir.",
+  "output": {
+   "summary": "Lê ESTOQUE_DB e devolve {\"ok\": true}."
+  }
+ },
+ {
+  "id": "person-s-file-but-another-file",
+  "expect": "reject",
+  "hole": "another code file than the one the person wrote",
+  "with": {
+   "field": "bug"
+  },
+  "request": "O total em recibo/render.py sai errado quando há desconto.",
+  "output": {
+   "bug": "O total em recibo/totals.py ignora o desconto."
+  }
+ },
+ {
+  "id": "the-name-is-in-no-request",
+  "expect": "reject",
+  "hole": "the same summary with a request that does not name it",
+  "with": {
+   "field": "summary"
+  },
+  "request": "O ping do banco tem que ler o endereço de uma variável de ambiente.",
+  "output": {
+   "summary": "O ping do banco lê o endereço de ESTOQUE_DB; sem ela, usa o de sempre."
+  }
  }
 ]
