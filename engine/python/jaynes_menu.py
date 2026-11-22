@@ -933,6 +933,47 @@ def plain_words(call: Call, params: Params) -> Any:
     return Fail(*reasons) if reasons else Pass()
 
 
+_NOT_BEFORE = re.compile(r"\b(not|no|never|without|but|except|instead of|rather than|avoid|don't|do not|nor|não|nao|nem|sem|nada de|exceto|menos|evite|evitar|fora)\s*$", re.I)
+_NOT_AFTER = re.compile(r"^\s*(not|no|never|não|nao|nunca|nem)\b", re.I)
+
+
+def _as_compared(text: str) -> str:
+    """Text as it is compared to the request: lower case, one space, straight quotes."""
+    text = text.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+    return " ".join(text.casefold().split())
+
+
+def named_in_request(call: Call, params: Params) -> Any:
+    """An option that says the request already named it (its words field) quotes the request word for word, shares a
+    word with the option's name, is not refused there ("anything but Rust", "Next não"), and is the only option: the
+    request decided, so nothing else is invented. An option with no words passes. In doubt it fails, and the agent
+    offers options the person chooses from."""
+    field, words = str(params["field"]), str(params["words"])
+    options = _field(call, params)
+    if not isinstance(options, list):
+        return Pass()
+    request = _as_compared(str(call.get("request") or ""))
+    reasons = []
+    named = [o for o in options if isinstance(o, dict) and isinstance(o.get(words), str) and o.get(words).strip()]
+    for o in named:
+        said = _as_compared(o[words])
+        name = str(o.get("name", ""))
+        at = request.find(said)
+        if len(said) < 2 or at < 0:
+            reasons.append(f"{name}: the request does not say \"{o[words].strip()}\" word for word, so it did not name this option")
+            continue
+        if not set(re.findall(r"\w+", said)) & set(re.findall(r"\w+", _as_compared(name))):
+            reasons.append(f"{name}: \"{o[words].strip()}\" shares no word with the option's name, so it does not name it")
+            continue
+        before = re.split(r"[.;!?,\n]", request[:at])[-1]
+        after = re.split(r"[.;!?,\n]", request[at + len(said):])[0]
+        if _NOT_BEFORE.search(" ".join(before.split()[-4:])) or _NOT_AFTER.search(after):
+            reasons.append(f"{name}: the request may refuse \"{o[words].strip()}\" rather than ask for it, so the person chooses")
+    if named and len(options) > 1:
+        reasons.append(f"{field} has {len(options)} options though the request named one: give it alone")
+    return Fail(*reasons) if reasons else Pass()
+
+
 def _own_role(path: str) -> tuple[Path, ...]:
     """The folder a check's script may read beyond the project: its run's own copy of the role, which the box hides
     with the rest of the runs. Only when the menu was started there (the engine starts it in the role's folder),
@@ -2134,6 +2175,7 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "files-within": files_within,
     "quotes-found": quotes_found,
     "plain-words": plain_words,
+    "named-in-request": named_in_request,
     "script": script,
 }
 

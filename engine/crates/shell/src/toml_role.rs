@@ -585,6 +585,14 @@ const MENU_CHECKS: &[MenuCheck] = &[
         about: |t| format!("what {} says is in plain words: no braces or JSON, no file name or path, no name() and no name_with_underscores", text(t, "field")),
         runs: false,
     },
+    MenuCheck {
+        name: "named-in-request",
+        kind: CheckKind::Open,
+        params: &[("field", Param::Text, true), ("words", Param::Text, true)],
+        auto: &[],
+        about: |t| format!("an option of {} whose {} says the request named it quotes the request word for word, is not refused there, and is the only one", text(t, "field"), text(t, "words")),
+        runs: false,
+    },
 ];
 
 fn network_name(n: Network) -> &'static str {
@@ -646,6 +654,7 @@ fn menu_cases(name: &str) -> Option<(&'static str, &'static str)> {
         "files-within" => cases!("files-within"),
         "quotes-found" => cases!("quotes-found"),
         "plain-words" => cases!("plain-words"),
+        "named-in-request" => cases!("named-in-request"),
         _ => return None,
     })
 }

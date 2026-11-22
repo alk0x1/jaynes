@@ -1,0 +1,93 @@
+[
+ {
+  "id": "not-in-request",
+  "expect": "reject",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "request": "Build the notes app.",
+  "output": {
+   "stacks": [
+    {
+     "name": "Go and HTML templates",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": "Go and HTML templates"
+    }
+   ]
+  },
+  "hole": "words the request never said"
+ },
+ {
+  "id": "negated",
+  "expect": "reject",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "request": "Anything but Rust, please.",
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust and Axum",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": "Rust"
+    }
+   ]
+  },
+  "hole": "a stack the request refuses"
+ },
+ {
+  "id": "named-among-several",
+  "expect": "reject",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "request": "Use Python and Postgres.",
+  "output": {
+   "stacks": [
+    {
+     "name": "Python and Postgres",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": "Python and Postgres"
+    },
+    {
+     "name": "Go",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": ""
+    }
+   ]
+  },
+  "hole": "the request decided, yet more options are offered"
+ },
+ {
+  "id": "not-its-name",
+  "expect": "reject",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "request": "Make it fast.",
+  "output": {
+   "stacks": [
+    {
+     "name": "Go and HTML templates",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": "Make it fast"
+    }
+   ]
+  },
+  "hole": "words of the request that do not name the option"
+ }
+]

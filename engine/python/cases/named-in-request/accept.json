@@ -1,0 +1,51 @@
+[
+ {
+  "id": "named-alone",
+  "expect": "accept",
+  "keeps": "the request names the stack and it is the only option",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "request": "We want Python, Postgres and Qdrant for this.",
+  "output": {
+   "stacks": [
+    {
+     "name": "Python, Postgres and Qdrant",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": "Python, Postgres and Qdrant"
+    }
+   ]
+  }
+ },
+ {
+  "id": "nothing-named",
+  "expect": "accept",
+  "keeps": "no option says the request named it",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "request": "Build the notes app.",
+  "output": {
+   "stacks": [
+    {
+     "name": "Go",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": ""
+    },
+    {
+     "name": "Next.js",
+     "idea": "x",
+     "tradeoffs": "y",
+     "page": "design/architecture/a.html",
+     "named": ""
+    }
+   ]
+  }
+ }
+]
