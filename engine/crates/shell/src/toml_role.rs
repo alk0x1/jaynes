@@ -1423,7 +1423,7 @@ impl TomlRole {
                     let name = word(v);
                     let n = words.trim().chars().count();
                     if !offered.contains(v) {
-                        errs.push(format!("answers names {name}, which this stop does not offer ({})", offered.iter().map(|o| word(o)).collect::<Vec<_>>().join(", ")));
+                        errs.push(format!("answers names {name}, which this stop does not offer ({})", offered.iter().map(word).collect::<Vec<_>>().join(", ")));
                     } else if n == 0 {
                         errs.push(format!("answers gives {name} no words: leave it out, and the button says Jaynes's name for it"));
                     } else if n > ANSWER_MOST {

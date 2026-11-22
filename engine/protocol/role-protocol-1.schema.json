@@ -1126,6 +1126,13 @@
           "default": "",
           "type": "string"
         },
+        "answers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The role's words for its verdicts at this stop, such as \"Yes\" for keep and \"No, it's something else\" for redo:\nthe person reads them on the buttons, and what each one does is still said by Jaynes under it. A verdict\nthe role names no word for keeps Jaynes's name. Empty: every verdict keeps it.",
+          "type": "object"
+        },
         "audit_rate": {
           "$ref": "#/$defs/Rate",
           "default": 0.1,
