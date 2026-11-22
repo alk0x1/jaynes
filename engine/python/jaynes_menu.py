@@ -1024,12 +1024,21 @@ def _reach(call: Call, field: str) -> Any:
 
 def plain_words(call: Call, params: Params) -> Any:
     """What the person reads in a field is in plain words: no code in it, which they would have to read as code. Every
-    text inside the field is looked at, however deep; a field that is not there passes."""
+    text inside the field is looked at, however deep; a field that is not there passes. A word the person wrote in
+    the request is theirs, never code to them: what a sign found passes when the request has it, spelled the same and
+    as a whole word (the real-user, 22/11: "ESTOQUE_DB" cost a round of fixing though the person wrote it); one such
+    word lets nothing else through."""
     field = str(params["field"])
+    request = str(call.get("request") or "")
+
+    def theirs(found: "re.Match[str]") -> bool:
+        said = found.group(0).strip()
+        return bool(said) and re.search(rf"(?<![\w]){re.escape(said)}(?![\w])", request) is not None
+
     reasons = []
     for at, text in _strings(_reach(call, field), field):
         for what, sign in _CODE_SIGNS:
-            found = sign.search(text)
+            found = next((m for m in sign.finditer(text) if not theirs(m)), None)
             if found:
                 reasons.append(f"{at} has {what} ({found.group(0).strip()!r}): the person reads it, so write what they see, in plain words, with no code")
                 break

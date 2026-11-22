@@ -290,5 +290,71 @@
     }
    ]
   }
+ },
+ {
+  "id": "underscore-name-the-person-wrote-in-the-summary",
+  "expect": "accept",
+  "keeps": "a name with an underscore that the person wrote in the request (the real-user, 22/11: ESTOQUE_DB cost a round of fixing, 14838 tokens and 50 s, though it is the name they will type)",
+  "with": {
+   "field": "summary"
+  },
+  "request": "O ping do banco tem que ler o endereço de ESTOQUE_DB, e cair no 127.0.0.1:5432 quando ela não existir.",
+  "output": {
+   "summary": "O ping do banco lê o endereço de ESTOQUE_DB; sem ela, usa o de sempre."
+  }
+ },
+ {
+  "id": "underscore-name-the-person-wrote-in-an-example",
+  "expect": "accept",
+  "keeps": "the person's own name in now and after",
+  "with": {
+   "field": "examples"
+  },
+  "request": "O ping do banco tem que ler o endereço de ESTOQUE_DB, e cair no 127.0.0.1:5432 quando ela não existir.",
+  "output": {
+   "examples": [
+    {
+     "case": "Com ESTOQUE_DB apontando para outro banco",
+     "now": "O ping vai sempre ao banco de sempre",
+     "after": "O ping vai ao banco de ESTOQUE_DB"
+    }
+   ]
+  }
+ },
+ {
+  "id": "file-the-person-wrote-in-the-bug",
+  "expect": "accept",
+  "keeps": "a file name with a code extension that the person wrote in the request",
+  "with": {
+   "field": "bug"
+  },
+  "request": "O total em recibo/render.py sai errado quando há desconto.",
+  "output": {
+   "bug": "O total em recibo/render.py ignora o desconto."
+  }
+ },
+ {
+  "id": "call-the-person-wrote-in-the-bug",
+  "expect": "accept",
+  "keeps": "a call with its parentheses that the person wrote in the request",
+  "with": {
+   "field": "bug"
+  },
+  "request": "calcular_total() soma o frete duas vezes",
+  "output": {
+   "bug": "calcular_total() soma o frete duas vezes num pedido com dois itens."
+  }
+ },
+ {
+  "id": "name-the-person-wrote-between-backquotes",
+  "expect": "accept",
+  "keeps": "a name the person wrote between backquotes, said in the output without them",
+  "with": {
+   "field": "summary"
+  },
+  "request": "Make `MAX_ITEMS` come from the settings",
+  "output": {
+   "summary": "MAX_ITEMS comes from the settings, 20 when they say nothing."
+  }
  }
 ]
