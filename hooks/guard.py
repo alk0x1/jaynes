@@ -74,19 +74,20 @@ def configured_owners(data: dict[str, object]) -> list[str] | None:
     return None
 
 
-def run_quiet(argv: list[str], cwd: str | None, timeout: float) -> str | None:
-    """stdout of argv, or None if it fails, is missing or takes longer than timeout; it never waits past it."""
+def run_quiet(argv: list[str], cwd: str | None, timeout: float, data: bytes | None = None) -> str | None:
+    """stdout of argv, given data on its stdin, or None if it fails, is missing or takes longer than timeout; it never
+    waits past it."""
     # imported here: subprocess is most of the guard's own start, and most commands need no program run
     import signal
     import subprocess
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GH_PROMPT_DISABLED="1", GIT_OPTIONAL_LOCKS="0")
     try:
-        proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL if data is None else subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, env=env, start_new_session=True)
     except OSError:
         return None
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        out, _ = proc.communicate(input=data, timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -390,6 +391,50 @@ class Kept(str):
     """A branch deletion that loses nothing, as the line the guard says: another ref holds every commit."""
 
 
+SAME_CHANGES_MOST = 50  # lost commits the guard looks for elsewhere by their change; more, and it asks
+
+
+def patch_ids(git: list[str], where: str, commits: list[str]) -> dict[str, str] | None:
+    """Each commit's patch id (its change, whatever its hash), or None if git cannot say."""
+    if not commits:
+        return {}
+    diffs = run_quiet([*git, "show", "--no-walk", "--format=commit %H", "-p", "--no-color", "--no-ext-diff", *commits],
+                      where, GIT_TIMEOUT)
+    if diffs is None:
+        return None
+    ids = run_quiet([*git, "patch-id", "--stable"], where, GIT_TIMEOUT, diffs.encode())
+    if ids is None:
+        return None
+    return {c: p for p, c in (line.split() for line in ids.splitlines() if len(line.split()) == 2)}
+
+
+def same_changes(git: list[str], where: str, tip: str, lost: list[str], others: list[str]) -> tuple[str, list[str]] | None:
+    """A ref that holds the same change as every lost commit (as a cherry-pick leaves it), with those commits' hashes
+    there, newest first; None when some lost commit has no same change in any one ref, or the guard cannot tell."""
+    if not lost or len(lost) > SAME_CHANGES_MOST:
+        return None
+    mine = patch_ids(git, where, lost)
+    if not mine or len(mine) != len(lost):  # a merge has no change of its own to find
+        return None
+    order = sorted(others, key=lambda r: (r not in ("refs/heads/main", "refs/heads/master"),
+                                          r not in ("refs/remotes/origin/main", "refs/remotes/origin/master"),
+                                          not r.startswith("refs/heads/"), not r.startswith("refs/remotes/"), r))
+    for ref in order[:30]:
+        theirs_out = run_quiet([*git, "rev-list", "--no-merges", f"{tip}..{ref}"], where, GIT_TIMEOUT)
+        theirs = (theirs_out or "").split()
+        if not theirs or len(theirs) > 2000:
+            continue
+        ids = patch_ids(git, where, theirs)
+        if ids is None:
+            continue
+        by_id: dict[str, str] = {}
+        for commit in reversed(theirs):  # the newest with that change wins
+            by_id[ids.get(commit, "")] = commit
+        if all(mine[c] in by_id for c in lost):
+            return ref, [by_id[mine[c]] for c in lost]
+    return None
+
+
 def short_ref(ref: str) -> str:
     for prefix in ("refs/heads/", "refs/remotes/", "refs/tags/"):
         if ref.startswith(prefix):
@@ -421,8 +466,15 @@ def branch_holds(where: str, gitdir: list[str], names: list[str], gone: set[str]
             found.append((Kept(f"git branch -D {name}: nothing is lost: its commits stay in {short_ref(holders[0])}."),
                           target))
             continue
-        count = run_quiet([*git, "rev-list", "--count", tip, "--not", *others], where, GIT_TIMEOUT) if holding is not None \
-            else None
+        lost_out = run_quiet([*git, "rev-list", tip, "--not", *others], where, GIT_TIMEOUT) if holding is not None else None
+        lost = (lost_out or "").split()
+        picked = same_changes(git, where, tip, lost, others) if lost_out is not None else None
+        if picked:
+            ref, hashes = picked
+            found.append((Kept(f"git branch -D {name}: nothing is lost: its changes are in {short_ref(ref)} as "
+                               f"{', '.join(h[:7] for h in hashes)}; the old commits stay in the reflog."), target))
+            continue
+        count = str(len(lost)) if lost_out is not None else None
         short = tip[:7]
         lost = (f"{count.strip()} commits" if count and count.strip() != "1" else "1 commit") if count else "commits"
         found.append((f"git branch -D deletes the branch {name} in {{where}}, and {lost} of it no other branch, tag or "

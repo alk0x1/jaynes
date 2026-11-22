@@ -4,7 +4,9 @@
 //! "nothing is lost: its commits stay in <ref>" (the tech-lead's decision of 21/11, after the desktop-engineer and the
 //! engineer lead stood still at the person's question with the person away from the Mac). When some commit would stay
 //! only in the reflog, which expires, it goes on asking, and the question says how many commits are lost and the tip's
-//! hash to bring them back. Run as Claude Code runs it, on a real repository with a home of its own.
+//! hash to bring them back; unless every such commit has its same change in another ref (the same patch, as a
+//! cherry-pick leaves it), which the guard says as it is: the changes are there under other hashes, the old commits
+//! stay in the reflog. Run as Claude Code runs it, on a real repository with a home of its own.
 
 use serde_json::{json, Value};
 use std::io::Write;
@@ -194,4 +196,49 @@ fn a_kept_branch_beside_something_else_held_asks_for_that_and_says_the_branch_is
     assert!(asks(&said), "{said:?}");
     let why = why(&said);
     assert!(why.contains("git reset --hard") && why.contains("nothing is lost: its commits stay in new"), "{why}");
+}
+
+/// The rd-engineer's case (tty-and-v6, its patch in main under another commit): every commit only the branch holds is
+/// in another ref as the same change.
+#[test]
+fn a_branch_whose_changes_were_picked_into_another_is_deleted_saying_where_they_are() {
+    let w = World::new("picked");
+    w.git(&["switch", "-q", "-c", "tty-and-v6"]);
+    std::fs::write(w.project().join("tty.txt"), "v6\n").expect("write");
+    w.git(&["add", "tty.txt"]);
+    w.git(&["commit", "-q", "-m", "tty"]);
+    std::fs::write(w.project().join("v6.txt"), "v6\n").expect("write");
+    w.git(&["add", "v6.txt"]);
+    w.git(&["commit", "-q", "-m", "v6"]);
+    w.git(&["switch", "-q", "main"]);
+    w.commit("main moves on");
+    w.git(&["cherry-pick", "tty-and-v6~1", "tty-and-v6"]);
+    let picked = w.git(&["rev-parse", "--short", "HEAD"]);
+    let first = w.git(&["rev-parse", "--short", "HEAD~1"]);
+    for command in ["git branch -D tty-and-v6", "git update-ref -d refs/heads/tty-and-v6"] {
+        let said = w.bash(command);
+        assert!(!asks(&said), "{command}: {said:?}");
+        let line = line(&said);
+        assert!(line.contains("nothing is lost: its changes are in main as") && line.contains(&picked) && line.contains(&first)
+            && line.contains("the old commits stay in the reflog"), "{command}: {line}");
+    }
+}
+
+#[test]
+fn one_commit_without_its_same_change_elsewhere_asks_as_before() {
+    let w = World::new("half-picked");
+    w.git(&["switch", "-q", "-c", "half"]);
+    std::fs::write(w.project().join("a.txt"), "a\n").expect("write");
+    w.git(&["add", "a.txt"]);
+    w.git(&["commit", "-q", "-m", "a"]);
+    std::fs::write(w.project().join("b.txt"), "b\n").expect("write");
+    w.git(&["add", "b.txt"]);
+    w.git(&["commit", "-q", "-m", "b"]);
+    let tip = w.git(&["rev-parse", "--short", "HEAD"]);
+    w.git(&["switch", "-q", "main"]);
+    w.commit("main moves on"); // else the pick, same parent and same second, is the very same commit
+    w.git(&["cherry-pick", "half~1"]);
+    let said = w.bash("git branch -D half");
+    assert!(asks(&said), "b is nowhere else: {said:?}");
+    assert!(why(&said).contains(&tip) && why(&said).contains("2 commits"), "{}", why(&said));
 }
