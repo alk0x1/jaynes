@@ -351,7 +351,28 @@ def git_hold(sub: list[str]) -> str | None:
             return "branch"
     if name == "tag" and ("--delete" in args or "d" in flags):
         return "tag"
+    if name == "update-ref" and ("-d" in args or "--stdin" in args):
+        return "branch" if deleted_branches(sub) else "ref"
     return None
+
+
+def deleted_branches(sub: list[str]) -> list[str] | None:
+    """The local branches a branch deletion or an update-ref -d names, or None when the guard cannot tell which (a
+    remote-tracking branch, refs other than refs/heads, a name it cannot read, refs read from stdin)."""
+    name, args = sub[0], sub[1:]
+    if name == "update-ref":
+        if "--stdin" in args:
+            return None
+        rest = [a for k, a in enumerate(args) if not a.startswith("-") and (k == 0 or args[k - 1] != "-m")]
+        ref = rest[0] if rest else ""
+        names = [ref[len("refs/heads/"):]] if ref.startswith("refs/heads/") else []
+    else:
+        if "r" in short_flags(args) or "a" in short_flags(args) or "--remotes" in args or "--all" in args:
+            return None
+        names = [a for a in args if not a.startswith("-")]
+    if not names or any(not re.fullmatch(r"[A-Za-z0-9._/+-]+", n) or n.startswith("-") for n in names):
+        return None
+    return names
 
 
 GIT_SAYS = {
@@ -361,7 +382,53 @@ GIT_SAYS = {
     "clean": "git clean deletes untracked files in {where}",
     "branch": "git branch -D deletes a branch that may hold unmerged commits in {where}",
     "tag": "git tag -d deletes a tag in {where}",
+    "ref": "git update-ref -d deletes a ref in {where}",
 }
+
+
+class Kept(str):
+    """A branch deletion that loses nothing, as the line the guard says: another ref holds every commit."""
+
+
+def short_ref(ref: str) -> str:
+    for prefix in ("refs/heads/", "refs/remotes/", "refs/tags/"):
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+    return ref
+
+
+def branch_holds(where: str, gitdir: list[str], names: list[str], gone: set[str], target: "Target") -> list[tuple[str, "Target"]]:
+    """For each branch deleted: Kept when another ref (another branch, a tag or a remote-tracking ref, never one deleted
+    in the same command) reaches its tip, else what is lost with the tip's hash; a branch the guard cannot read asks
+    as before."""
+    git = ["git", *([f"--git-dir={gitdir[0]}"] if gitdir else [])]
+    found: list[tuple[str, Target]] = []
+    refs_out = run_quiet([*git, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"], where,
+                         GIT_TIMEOUT) if os.path.isdir(where) else None
+    others = [r for r in (refs_out or "").split() if r not in gone and not r.endswith("/HEAD")]
+    for name in names:
+        tip = run_quiet([*git, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}^{{commit}}"], where, GIT_TIMEOUT) \
+            if refs_out is not None else None
+        tip = (tip or "").strip()
+        if not tip:
+            found.append((GIT_SAYS["branch"], target))
+            continue
+        holding = run_quiet([*git, "for-each-ref", "--contains", tip, "--format=%(refname)", *others], where, GIT_TIMEOUT) \
+            if others else ""
+        holders = [r for r in (holding or "").split() if r in others]
+        if holding is not None and holders:
+            holders.sort(key=lambda r: (not r.startswith("refs/heads/"), not r.startswith("refs/remotes/"), r))
+            found.append((Kept(f"git branch -D {name}: nothing is lost: its commits stay in {short_ref(holders[0])}."),
+                          target))
+            continue
+        count = run_quiet([*git, "rev-list", "--count", tip, "--not", *others], where, GIT_TIMEOUT) if holding is not None \
+            else None
+        short = tip[:7]
+        lost = (f"{count.strip()} commits" if count and count.strip() != "1" else "1 commit") if count else "commits"
+        found.append((f"git branch -D deletes the branch {name} in {{where}}, and {lost} of it no other branch, tag or "
+                      f"remote holds (its tip is {short}: while the reflog keeps it, `git branch {name} {short}` brings "
+                      "it back)", target))
+    return found
 GH_SAYS = {
     ("pr", "create"): "gh pr create opens a pull request on {where}, which others see at once",
     ("pr", "merge"): "gh pr merge merges a pull request on {where}",
@@ -451,8 +518,10 @@ PASSABLE = {GIT_SAYS["push"]: "git push", GH_SAYS[("pr", "create")]: "gh pr crea
 SETUP = "http://localhost:8750/"
 
 
-def holds(cmd: Simple) -> list[tuple[str, Target]]:
-    """The irreversible actions in one simple command, each with where it lands."""
+def holds(cmd: Simple, gone: set[str] | None = None) -> list[tuple[str, Target]]:
+    """The irreversible actions in one simple command, each with where it lands. gone: the refs every branch deletion
+    of the whole command names, which never hold one another's commits."""
+    gone = gone or set()
     parts = git_parts(cmd.words)
     if parts is not None:
         dirs, gitdir, sub = parts
@@ -464,7 +533,12 @@ def holds(cmd: Simple) -> list[tuple[str, Target]]:
             where = resolve(where, d)
         if gitdir:
             gitdir = [resolve(where, gitdir[0])]
-        return [(GIT_SAYS[what], remote_target(where, gitdir, push_remote(sub[1:]) if what == "push" else "origin"))]
+        target = remote_target(where, gitdir, push_remote(sub[1:]) if what == "push" else "origin")
+        if what == "branch":
+            names = deleted_branches(sub)
+            if names:
+                return branch_holds(where, gitdir, names, gone, target)
+        return [(GIT_SAYS[what], target)]
     if not cmd.words or os.path.basename(cmd.words[0]) != "gh":
         return []
     repo_flag: str | None = None
@@ -635,7 +709,8 @@ def own_reason(path: str) -> str:
     return (SWITCH_REASON if switch.is_switch(path) else OWN_REASON).format(path=path)
 
 
-Verdict = tuple[str, "list[dict[str, object]] | None"]
+# the reason to ask ("" when nothing asks), what a watching guard notes instead, and the branch deletions that lose nothing
+Verdict = tuple[str, "list[dict[str, object]] | None", "list[str]"]
 
 
 def decide(event: dict[str, object]) -> Verdict | None:
@@ -653,7 +728,7 @@ def decide(event: dict[str, object]) -> Verdict | None:
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
         if isinstance(path, str) and path and is_own(resolve(cwd, path)):
-            return own_reason(path), None
+            return own_reason(path), None, []
         return None
     if tool != "Bash":
         return None
@@ -664,10 +739,16 @@ def decide(event: dict[str, object]) -> Verdict | None:
     for cmd in commands:
         own = writes_own(cmd)
         if own:
-            return own_reason(own), None
-    held = [h for cmd in commands for h in holds(cmd)]
+            return own_reason(own), None, []
+    gone = {f"refs/heads/{n}" for cmd in commands if (p := git_parts(cmd.words)) and git_hold(p[2]) == "branch"
+            for n in (deleted_branches(p[2]) or [])}
+    held = [h for cmd in commands for h in holds(cmd, gone)]
     if not held or switch.off_in(cwd, settings):
         return None  # off in this project is the person's word, in their settings; a project's file cannot say it
+    kept = [str(says) for says, _ in held if isinstance(says, Kept)]
+    held = [h for h in held if not isinstance(h[0], Kept)]
+    if not held:
+        return "", None, kept
     project = switch.read(cwd)
     strict = project["guard"] == "strict"
     owners: list[str] | None = [] if strict else None
@@ -698,11 +779,11 @@ def decide(event: dict[str, object]) -> Verdict | None:
                         "free owners.")
             notes.append({"action": PASSABLE[says], "where": target.words, "owner": None})
     if not said:
-        return None
+        return ("", None, kept) if kept else None
     offer = "".join(f" To let pushes and pull requests to {o} pass from now on, add {o} to Free owners in Setup: "
                     f"{SETUP} (an organization frees all its repositories)." for o in offers)
-    return " ".join(said) + " The guard asks you first." + offer + " The switch is on the Setup page of Jaynes.", \
-        (None if must_ask else notes)
+    return " ".join(said + kept) + " The guard asks you first." + offer + " The switch is on the Setup page of Jaynes.", \
+        (None if must_ask else notes), kept
 
 
 def note(event: dict[str, object], held: list[dict[str, object]]) -> str | None:
@@ -752,8 +833,13 @@ def main() -> int:
                 answer("deny", refusal)
                 return 0
             verdict = decide(event)
+            if verdict and not verdict[0]:
+                # only deletions that lose nothing: a line for the person, never a decision, so Claude Code's own
+                # permissions still apply
+                print(json.dumps({"systemMessage": "jaynes guard: " + " ".join(verdict[2])}))
+                return 0
             if verdict:
-                reason, held = verdict
+                reason, held, _ = verdict
                 if held is not None and is_watching(read_settings()):
                     failed = note(event, held)
                     if failed is None:
