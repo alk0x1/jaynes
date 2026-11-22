@@ -852,14 +852,17 @@ impl Page {
         let reads = |run: &Run, q: &QuestionState| (names.get(&run.id).map(|n| n.project.clone()), crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id)));
         // two items that read the same are told apart after the project, faint (the design-lead's quatro-itens.md,
         // item 8): by the run's title when the titles differ, by what listing::name tells apart when they are the
-        // same; the question gives way first
+        // same
         let head = |run: &Run, q: &QuestionState, list: &[(Run, QuestionState)]| -> String {
             let question = ticks(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id)));
             let me = reads(run, q);
             let same: Vec<&Run> = list.iter().filter(|(o, oq)| !(o.id == run.id && oq.question.id == q.question.id) && reads(o, oq) == me).map(|(o, _)| o).collect();
             let (Some(row), false) = (names.get(&run.id), same.is_empty()) else { return format!("{}{question}", whose(run)) };
             let one_title = same.iter().any(|o| names.get(&o.id).is_some_and(|n| n.title == row.title));
-            let apart = if one_title { row.apart.clone().unwrap_or_else(|| row.title.clone()) } else { row.title.clone() };
+            // the title gives way first, to 16 characters; then the question, with "…"; the project and when a run
+            // started, never
+            let cut = |t: &str| if t.chars().count() > 16 { format!("{}…", t.chars().take(16).collect::<String>().trim_end()) } else { t.to_string() };
+            let apart = if one_title { row.apart.clone().unwrap_or_else(|| cut(&row.title)) } else { cut(&row.title) };
             format!(
                 "<span class=\"nm\"><span class=\"proj\">{}</span><span class=\"sep\"> · </span><span class=\"apart\">{}</span><span class=\"sep\"> · </span><span class=\"tt\">{question}</span></span>",
                 esc(&row.project),
@@ -3627,9 +3630,10 @@ mod tests {
         let both = waits("same", &|_| json!({"project": "/w/tidepool", "title": "Fix the export"}));
         assert_eq!(both.matches("<span class=\"nm\"><span class=\"proj\">tidepool</span><span class=\"sep\"> · </span><span class=\"apart\">started ").count(), 2, "{both}");
         assert_eq!(both.matches("</span><span class=\"sep\"> · </span><span class=\"tt\">Is the plan right?</span></span><small>").count(), 2, "{both}");
-        // two titles asking the same: each run's title
+        // two titles asking the same: each run's title, which gives way first, to 16 characters, before the question
+        // does (the design-lead's second word on item 8, after the photo at 1440 left "I…" of the question)
         let titled = waits("titles", &|run| json!({"project": "/w/tidepool", "title": if run == "w1" { "Fix the export" } else { "Rename the footer link" }}));
-        assert!(titled.contains(&item("Fix the export")) && titled.contains(&item("Rename the footer link")), "{titled}");
+        assert!(titled.contains(&item("Fix the export")) && titled.contains(&item("Rename the foote…")), "{titled}");
         // another project: nothing reads the same, today's item
         let other = waits("projects", &|run| json!({"project": if run == "w1" { "/w/tidepool" } else { "/w/harbor" }, "title": "Fix the export"}));
         assert!(!other.contains("class=\"apart\""), "{other}");
