@@ -178,9 +178,9 @@ pub fn conversation(thread: &[jaynes_core::run::Entry], item: Option<&str>) -> V
             let (head, agent) = match e.kind {
                 EntryKind::Change => (format!("You · round {round} · a change"), false),
                 EntryKind::Ask => (format!("You · round {round} · a question"), false),
-                EntryKind::Answer if e.late => ("Agent · answered late · it changed nothing".to_string(), true),
+                EntryKind::Answer if e.late => ("Agent · answered after the stop closed · nothing changed".to_string(), true),
                 EntryKind::Answer => ("Agent · answered · nothing redone".to_string(), true),
-                EntryKind::AskFailed => ("No answer".to_string(), true),
+                EntryKind::AskFailed => ("Agent · could not answer".to_string(), true),
                 EntryKind::Reply => (format!("Agent · round {round} · changed the option"), true),
             };
             Said { round, head, text: e.text.clone(), agent }
@@ -2129,8 +2129,9 @@ mod tests {
         let late = Entry { late: true, ..thread[3].clone() };
         let failed = e(1, EntryKind::AskFailed, "Jaynes stopped while the agent answered: ask again", Some("python"));
         let said = conversation(&[late, failed], Some("python"));
-        assert_eq!(said[0].head, "Agent · answered late · it changed nothing");
-        assert_eq!((said[1].head.as_str(), said[1].agent), ("No answer", true));
+        // the page's words for them (the design-lead, 22/11, 53df0eb)
+        assert_eq!(said[0].head, "Agent · answered after the stop closed · nothing changed");
+        assert_eq!((said[1].head.as_str(), said[1].agent), ("Agent · could not answer", true));
         let _: Option<&Said> = said.first();
 
         // the guess without a model: a question ends in "?" or opens as one; a click changes it
