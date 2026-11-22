@@ -14,5 +14,6 @@ answer and pass through the checks of 800 random runs of the core, and requires 
 proofs use no `sorry`; `#print axioms` shows only Lean's standard `propext` and `Quot.sound`.
 
 What is proved is about the model. That the core is the model rests on the comparison, which covers the states the
-random runs reach, not every state. What the model takes as given: which steps a step reads, and the facts the core
+random runs reach, not every state. What the model takes as given: which steps a step reads, which checks a pass through the gate takes (those whose
+every step read has an output), and the facts the core
 computes about a question (such as whether its fingerprint matches).

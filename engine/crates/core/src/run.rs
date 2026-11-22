@@ -2,7 +2,7 @@
 
 use crate::digest::Digest;
 use crate::event::{Cost, Effects, Event, Fault, Outcome, Read, Usage};
-use crate::manifest::{Executor, Manifest, ProjectAccess};
+use crate::manifest::{CheckDecl, Executor, Manifest, ProjectAccess};
 use crate::question::{Answer, By, Item, Question, QuestionKind, Verdict};
 use crate::risk::{Ceiling, Ceilings, Changed, Risk};
 use serde::{Deserialize, Serialize};
@@ -859,6 +859,15 @@ impl Run {
         }
         out.sort_unstable();
         out
+    }
+
+    /// The checks of step `i` a pass through its gate takes, in the role's order: each one whose every step it reads
+    /// has an output. A step the run does not take at its risk has none, so the checks that read it do not run, as
+    /// fix-bug's proof on its hidden cases at low risk. Once that step is there (the risk went up), step `i` reads it
+    /// and is stale, so it runs again and is judged by them.
+    pub fn checks_taken(&self, i: usize) -> Vec<&CheckDecl> {
+        let there = |r: &String| self.manifest.index(r).is_some_and(|j| self.output(j).is_some());
+        self.manifest.steps[i].checks.iter().filter(|c| c.reads.iter().all(there)).collect()
     }
 
     /// What step `i` would read now.

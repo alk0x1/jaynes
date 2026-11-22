@@ -40,8 +40,53 @@ impl Rng {
 const ALL_VERDICTS: [VerdictKind; 5] =
     [VerdictKind::Keep, VerdictKind::Change, VerdictKind::Redo, VerdictKind::Drop, VerdictKind::Skip];
 
+/// Hidden cases from high risk, a fix judged by an open check and by a hidden one reading them, and sometimes a
+/// step after it that reviews the fix and asks the person.
+fn cases_from_high(rng: &mut Rng) -> Manifest {
+    let (attempts, fixes) = (1 + rng.below(3) as u32, rng.below(3) as u32);
+    let step = |name: &str, needs: Vec<String>, reach: Reach, checks: Vec<CheckDecl>| StepDecl {
+        name: name.to_string(),
+        needs,
+        executor: Executor::Agent,
+        session: SessionKind::Fresh,
+        reach,
+        effect: Effect::None,
+        checks,
+        stop: None,
+        from_risk: Risk::Low,
+        attempts,
+        fixes,
+        hidden: false,
+        idempotent: false,
+        about: String::new(),
+    };
+    let mut cases = step("s0", Vec::new(), Reach { project: ProjectAccess::Read, commands: true, ..Reach::default() }, Vec::new());
+    cases.hidden = true;
+    cases.from_risk = Risk::High;
+    let check = |name: &str, kind: CheckKind, reads: Vec<String>| CheckDecl { name: name.to_string(), kind, about: String::new(), reads };
+    let fix = step("s1", Vec::new(), Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], commands: true, ..Reach::default() }, vec![
+        check("shapecheck1x0", CheckKind::Open, Vec::new()),
+        check("hiddencheck1x1", CheckKind::Hidden, vec!["s0".to_string()]),
+    ]);
+    let mut steps = vec![cases, fix];
+    if rng.chance(50) {
+        let mut look = step("s2", vec!["s1".to_string()], Reach::default(), vec![check("shapecheck2x0", CheckKind::Open, Vec::new())]);
+        look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: rng.chance(50), from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default() });
+        steps.push(look);
+    }
+    let delivery = if rng.chance(50) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };
+    let m = Manifest { role: "cases-from-high".to_string(), version: "1".to_string(), protocol: 1, steps, target: Default::default(), delivery };
+    m.validate().unwrap_or_else(|e| panic!("fix-bug's shape does not read: {e:?}"));
+    m
+}
+
 /// A random role that keeps every rule of `Manifest::validate`.
 fn role(rng: &mut Rng) -> Manifest {
+    // fix-bug's shape, which random roles almost never reach: hidden cases only from high risk, read by a hidden
+    // check of the step that changes the project, so a low run leaves the check out and a raised one takes it
+    if rng.chance(8) {
+        return cases_from_high(rng);
+    }
     for _ in 0..200 {
         let n = 1 + rng.below(6);
         let mut steps: Vec<StepDecl> = Vec::new();
@@ -123,6 +168,8 @@ fn role(rng: &mut Rng) -> Manifest {
                 _ => Effect::None,
             };
             let hidden = executor == Executor::Agent && needs.is_empty() && project != ProjectAccess::Write && rng.chance(20);
+            // hidden cases are often only from high risk, as fix-bug's, so a low run leaves out the checks reading them
+            let from_risk = if hidden && from_risk == Risk::Low && rng.chance(50) { Risk::High } else { from_risk };
             let session = if executor == Executor::Agent && rng.chance(30) { SessionKind::Continue } else { SessionKind::Fresh };
             steps.push(StepDecl {
                 name: format!("s{i}"),
@@ -332,18 +379,26 @@ impl World {
                             "seed {seed}: G12 dropped item {} came back in {step}", gone.id
                         );
                     }
-                    // G2: an output is done only once every check passed.
+                    // G2: an output is done only once every check the pass takes passed; one it does not take reads a
+                    // step with no output, which the run did not take at its risk
                     if decl.executor != Executor::Person {
+                        let taken: Vec<&str> = pre.checks_taken(i).iter().map(|c| c.name.as_str()).collect();
+                        for c in decl.checks.iter().filter(|c| !taken.contains(&c.name.as_str())) {
+                            assert!(
+                                c.reads.iter().any(|r| pre.manifest.index(r).is_some_and(|j| pre.output(j).is_none())),
+                                "seed {seed}: G2 {step} left out check {}, though every step it reads has an output", c.name
+                            );
+                        }
                         match input {
                             Input::ChecksEnded { results, step: s, .. } if s == step => {
-                                for c in &decl.checks {
+                                for c in &taken {
                                     assert!(
-                                        results.iter().any(|r| r.check == c.name && r.verdict == CheckVerdict::Pass),
-                                        "seed {seed}: G2 {step} done without check {} passing", c.name
+                                        results.iter().any(|r| r.check == *c && r.verdict == CheckVerdict::Pass),
+                                        "seed {seed}: G2 {step} done without check {c} passing"
                                     );
                                 }
                             }
-                            _ => assert!(decl.checks.is_empty(), "seed {seed}: G2 {step} done without its checks"),
+                            _ => assert!(taken.is_empty(), "seed {seed}: G2 {step} done without its checks"),
                         }
                         let attempt = match pre.steps[i].status {
                             Status::Checking { attempt, .. } => attempt,
@@ -531,7 +586,9 @@ impl World {
             Input::ProbeEnded { ok: false, .. } => true,
             Input::ChecksEnded { results, step, .. } => {
                 let i = post.manifest.index(step).expect("step");
-                post.manifest.steps[i].checks.iter().any(|c| {
+                // the checks the pass took: one reading a step the run did not take was never asked
+                let taken = before.map(|b| b.checks_taken(i)).unwrap_or_default();
+                taken.iter().any(|c| {
                     results.iter().find(|r| r.check == c.name).is_none_or(|r| matches!(r.verdict, CheckVerdict::Blocked { .. }))
                 })
             }
@@ -578,7 +635,9 @@ fn really_fresh(run: &Run, i: usize) -> bool {
     let Some(done) = (s.status == Status::Done).then_some(s.done.as_ref()).flatten() else { return false };
     let decl = &run.manifest.steps[i];
     let mut used: BTreeSet<String> = decl.needs.iter().cloned().collect();
-    used.extend(decl.checks.iter().flat_map(|c| c.reads.iter().cloned()));
+    // what its checks read, of the steps the run takes at its risk: one it does not take leaves the check out of it
+    let path = run.manifest.path(run.risk);
+    used.extend(decl.checks.iter().flat_map(|c| c.reads.iter()).filter(|r| run.manifest.index(r).is_some_and(|j| path.contains(&j))).cloned());
     if decl.reach.project != ProjectAccess::None {
         for j in run.manifest.path(run.risk) {
             if j < i && run.manifest.steps[j].reach.project == ProjectAccess::Write {
@@ -1900,6 +1959,10 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         if w.asked > 0 {
             hit("a stop's agent asked");
         }
+        // a step done without a check that reads a step the run did not take at its risk
+        if (0..run.steps.len()).any(|i| run.steps[i].status == Status::Done && run.checks_taken(i).len() < run.manifest.steps[i].checks.len()) {
+            hit("a check the run did not take");
+        }
         for e in &w.log {
             match e {
                 Event::StepInvalidated { because, .. } if because.iter().any(|b| b.contains("second act")) => hit("a second act ordered"),
@@ -1938,6 +2001,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
         "a change judged again on the person's continue", "continued by the agent that started the run", "set aside by the agent that started the run",
         "a stop's agent asked", "an ask answered in time", "an ask answered late", "an ask that got no answer",
+        "a check the run did not take",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -2500,11 +2564,23 @@ fn gate_case(pre: &Run, input: &Input, events: &[Event]) -> Option<String> {
     let dropped: Vec<_> = s.dropped.iter().map(&mut item).collect();
     let items: Vec<_> = s.pending.as_ref().map(|p| p.items.iter().map(&mut item).collect()).unwrap_or_default();
     let verdict = |name: &str| results.iter().find(|r| r.check == name).map(|r| &r.verdict);
-    let fails = |kind: CheckKind| d.checks.iter().filter(|c| c.kind == kind).any(|c| matches!(verdict(&c.name), Some(CheckVerdict::Fail { .. })));
-    let blocked = d.checks.iter().any(|c| matches!(verdict(&c.name), None | Some(CheckVerdict::Blocked { .. })));
+    // the model is given which checks the pass takes (every step a check reads has an output) and decides the rest
+    let taken: Vec<&str> = pre.checks_taken(i).iter().map(|c| c.name.as_str()).collect();
+    let checks: Vec<_> = d
+        .checks
+        .iter()
+        .map(|c| {
+            let v = verdict(&c.name);
+            serde_json::json!({
+                "hidden": c.kind == CheckKind::Hidden,
+                "taken": taken.contains(&c.name.as_str()),
+                "gave": matches!(v, Some(CheckVerdict::Pass | CheckVerdict::Fail { .. })),
+                "passed": matches!(v, Some(CheckVerdict::Pass)),
+            })
+        })
+        .collect();
     let case = serde_json::json!({
-        "locks": locks, "dropped": dropped, "items": items,
-        "openFails": fails(CheckKind::Open), "hiddenFails": fails(CheckKind::Hidden), "blocked": blocked,
+        "locks": locks, "dropped": dropped, "items": items, "checks": checks,
         "roleStep": d.executor == Executor::Role || s.narrow.is_some(), "fixesLeft": *fix < d.fixes, "session": s.session.is_some(),
     });
     let expected = if events.iter().any(|e| matches!(e, Event::StepDone { .. })) {
@@ -2615,4 +2691,5 @@ fn the_lean_model_decides_as_the_core_does() {
     eprintln!("{} states: {}", cases.len(), said.lines().find(|l| l.contains("agreed")).unwrap_or(""));
     assert!(out.status.success(), "{said}");
 }
+
 

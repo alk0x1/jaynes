@@ -211,6 +211,41 @@ pub fn has_file(project: &Path, pattern: &str) -> Need {
     if walk(project, project, pattern) { Need::Met } else { Need::Unmet(format!("the project has no file {pattern}")) }
 }
 
+/// What `jaynes check` adds to a claim or a promise that a run at low risk does not take.
+fn not_taken_told(not_taken: &Option<String>) -> String {
+    not_taken.as_ref().map(|t| format!("; a run at low risk does not take it: {t}")).unwrap_or_default()
+}
+
+/// Whether a claim or a promise says not_taken where it must and only there: when a run at low risk does not take
+/// what its condition rests on (a step from high risk, a check reading one, a stop asking only from high risk), the
+/// role says what holds on such a run; otherwise a not_taken would tell of a run that never is. Err: the rest of the
+/// sentence after the claim or promise's own words.
+fn not_taken(rests: Option<&Condition>, said: &Option<String>, m: &jaynes_core::Manifest) -> Result<(), String> {
+    let said = said.as_ref().is_some_and(|t| !t.trim().is_empty());
+    let skipped = rests.and_then(|c| skipped_at_low(c, m));
+    match (rests, skipped, said) {
+        (None, _, true) => Err("says not_taken, and nothing a run takes or skips proves it: leave not_taken out".to_string()),
+        (Some(_), Some(what), false) => Err(format!("rests on {what}, which a run at low risk does not take: say in not_taken what holds on such a run")),
+        (Some(_), None, true) => Err("says not_taken, and every run that can deliver takes what it rests on".to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// What a condition rests on that a run at low risk does not take, named as the author wrote it, if anything.
+fn skipped_at_low(c: &Condition, m: &jaynes_core::Manifest) -> Option<String> {
+    let of = |s: &str| m.index(s).map(|i| &m.steps[i]);
+    let high = |s: &str| of(s).is_some_and(|d| d.from_risk > Risk::Low);
+    match c {
+        Condition::StepDone(s) => high(s).then(|| s.clone()),
+        Condition::PersonAnswered(s) if high(s) => Some(s.clone()),
+        Condition::PersonAnswered(s) => of(s).and_then(|d| d.stop.as_ref()).is_some_and(|st| st.from_risk > Risk::Low).then(|| format!("the stop of {s}")),
+        Condition::CheckPassed { step, .. } if high(step) => Some(step.clone()),
+        Condition::CheckPassed { check, step } => {
+            of(step).and_then(|d| d.checks.iter().find(|k| &k.name == check)).and_then(|k| k.reads.iter().find(|r| high(r)).cloned())
+        }
+    }
+}
+
 /// A claim of the role about what a run delivers, and what proves it in a run: a condition, or nothing, with why.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1585,8 +1620,24 @@ impl TomlRole {
                     (None, None, None, None, Some(a), Some(b)) => Form::never_sees(a, b, m),
                     _ => Err("a promise is never with unless, event with only_after, or agent_of with never_sees".to_string()),
                 };
+                // what holds on a run that does not take what the condition rests on, said where it is needed only
+                if let Ok(form) = &form {
+                    let rests = match form {
+                        Form::Never { unless: c, .. } | Form::OnlyAfter { after: c, .. } => Some(c),
+                        Form::NeverSees { .. } => None,
+                    };
+                    // one that rests on what a low run skips and says nothing of it is left to the proof, which breaks
+                    // it with the path that skips it and says how to tell (prove_lines)
+                    if let Err(e) = not_taken(rests, &p.not_taken, m)
+                        && p.not_taken.as_ref().is_some_and(|t| !t.trim().is_empty())
+                    {
+                        errors.push(at(Some(line), FILE, format!("the promise {:?} {e}", p.says)));
+                        continue;
+                    }
+                }
+                let told = p.not_taken.as_ref().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
                 match form {
-                    Ok(form) if !p.says.trim().is_empty() => promises.push((line, Promise { says: p.says.clone(), form, not_taken: None })),
+                    Ok(form) if !p.says.trim().is_empty() => promises.push((line, Promise { says: p.says.clone(), form, not_taken: told })),
                     Ok(_) => errors.push(at(Some(line), FILE, "the promise says nothing: write what it promises in says")),
                     Err(e) => errors.push(at(Some(line), FILE, format!("the promise {:?}: {e}", p.says))),
                 }
@@ -1624,7 +1675,16 @@ impl TomlRole {
                         continue;
                     }
                 };
-                claims.push(Claim { line, says, by, not_taken: None });
+                let rests = match &by {
+                    ClaimBy::Condition(cond) => Some(cond),
+                    ClaimBy::Unchecked(_) => None,
+                };
+                if let Err(e) = not_taken(rests, &c.not_taken, &manifest) {
+                    errors.push(at(Some(line), FILE, format!("the claim {says:?} {e}")));
+                    continue;
+                }
+                let not_taken = c.not_taken.as_ref().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                claims.push(Claim { line, says, by, not_taken });
             }
         }
         let mut requires: Vec<Requirement> = Vec::new();
@@ -1975,12 +2035,19 @@ impl TomlRole {
     /// the role's reason; one whose condition did not hold in the run, as `holds` says (on a run,
     /// [`Condition::holds`]); and one proved by a check that comes with no cases, since a check never seen to refuse
     /// anything proves nothing by passing. What is not here was proved.
-    pub fn claims_told(&self, _risk: Risk, holds: &dyn Fn(&Condition) -> bool) -> Vec<String> {
+    pub fn claims_told(&self, risk: Risk, holds: &dyn Fn(&Condition) -> bool) -> Vec<String> {
         let untested = self.untested();
         self.claims
             .iter()
             .filter_map(|c| {
                 let says = &c.says;
+                match (&c.by, &c.not_taken) {
+                    // a run that did not take what proves it: the role's words for what holds then
+                    (ClaimBy::Condition(cond), Some(instead)) if cond.from_risk(&self.manifest) > risk => {
+                        return Some(format!("{says:?}: not checked in this run: {instead}"));
+                    }
+                    _ => {}
+                }
                 match &c.by {
                     ClaimBy::Unchecked(why) => Some(format!("{says:?}: not checked: {why}")),
                     ClaimBy::Condition(Condition::CheckPassed { check, step }) if untested.contains(&format!("check {check} of {step}")) => {
@@ -2025,13 +2092,14 @@ impl TomlRole {
             .map(|c| match &c.by {
                 ClaimBy::Unchecked(why) => format!("claim {:?}: nothing checks it: {why}", c.says),
                 ClaimBy::Condition(cond) => format!(
-                    "claim {:?}: proved in a run when {}",
+                    "claim {:?}: proved in a run when {}{}",
                     c.says,
                     match cond {
                         Condition::CheckPassed { check, step } => format!("the check {check} of {step} passes"),
                         Condition::PersonAnswered(step) => format!("the person answers at {step}"),
                         Condition::StepDone(step) => format!("{step} is done"),
-                    }
+                    },
+                    not_taken_told(&c.not_taken),
                 ),
             })
             .collect()
@@ -2150,10 +2218,20 @@ impl TomlRole {
         let mut all = true;
         for ((line, p), proof) in self.promises.iter().zip(proofs) {
             match proof {
-                Proof::Proved { states } => lines.push(format!("✔ {:?}: proved ({} states)", p.says, thousands(*states))),
+                Proof::Proved { states } => lines.push(format!("✔ {:?}: proved ({} states){}", p.says, thousands(*states), not_taken_told(&p.not_taken))),
                 Proof::Broken { path } => {
                     all = false;
-                    lines.push(format!("✘ {:?} ({FILE}:{line}): fails\n   {}", p.says, path.join(" → ")));
+                    // a run at low risk skips what it rests on: if the role means it, it says what holds there
+                    let rests = match &p.form {
+                        Form::Never { unless: c, .. } | Form::OnlyAfter { after: c, .. } => Some(c),
+                        Form::NeverSees { .. } => None,
+                    };
+                    let hint = rests
+                        .and_then(|c| skipped_at_low(c, &self.manifest))
+                        .filter(|_| p.not_taken.is_none())
+                        .map(|what| format!("\n   a run at low risk does not take {what}: if the role means that, say in not_taken what holds on such a run"))
+                        .unwrap_or_default();
+                    lines.push(format!("✘ {:?} ({FILE}:{line}): fails\n   {}{hint}", p.says, path.join(" → ")));
                 }
                 Proof::Unfinished { states } => {
                     all = false;
@@ -3680,19 +3758,28 @@ unchecked = "only the person can say, and the role asks them only whether it is 
     const ON_THE_CASES: &str = "The fix holds on the cases written from the request alone, by an agent whose work the fix's maker never read";
     const MERGED_AFTER: &str = "Nothing is merged before the hidden cases passed on the fix";
 
-    /// Both the promise and the claim that rest on the cases say what holds on a run that does not take them.
-    fn saying_not_taken(text: String) -> String {
+    /// The promise that rests on the cases says what holds on a run that does not take them.
+    fn promise_not_taken(text: String) -> String {
         text.replacen("unless = \"check proof of fix passed\"\n", &format!("unless = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), 1)
-            .replacen("proved_by = \"check proof of fix passed\"\n", &format!("proved_by = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), 1)
+    }
+
+    /// Both the promise and the claim that rest on the cases say it.
+    fn saying_not_taken(text: String) -> String {
+        promise_not_taken(text).replacen("proved_by = \"check proof of fix passed\"\n", &format!("proved_by = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), 1)
     }
 
     #[test]
     fn a_claim_or_a_promise_resting_on_what_a_low_run_skips_says_what_holds_there() {
-        // without not_taken: both are refused at their line, naming what a run at low risk does not take
-        let e = TomlRole::load(&cases_from_high("not-taken-none", &|t| t)).expect_err("refused").join("\n");
-        assert!(e.contains(&format!("the promise {MERGED_AFTER:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
-        assert!(e.contains(&format!("the claim {ON_THE_CASES:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
-        assert!(e.contains("role.toml:"), "{e}");
+        // without not_taken: each is refused at its line, naming what a run at low risk does not take (the claims
+        // are read once the promises read)
+        let e = TomlRole::load(&cases_from_high("not-taken-claim", &promise_not_taken)).expect_err("refused").join("\n");
+        assert!(e.contains(&format!("role.toml:129: the claim {ON_THE_CASES:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
+        // a promise is left to its proof, which breaks it on a low run and says how to tell what holds there
+        let r = TomlRole::load(&cases_from_high("not-taken-promise", &|t| saying_not_taken(t).replacen(&format!("not_taken = \"{NOT_TAKEN}\"\n"), "", 1))).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let broken: Vec<Proof> = r.promises.iter().map(|(_, p)| if p.says == MERGED_AFTER { Proof::Broken { path: vec!["low risk".into(), "merge, before the check proof of fix passed".into()] } } else { Proof::Proved { states: 7 } }).collect();
+        let (lines, all) = r.prove_lines(&broken);
+        assert!(!all);
+        assert!(lines.contains(&format!("✘ {MERGED_AFTER:?} (role.toml:114): fails\n   low risk → merge, before the check proof of fix passed\n   a run at low risk does not take cases: if the role means that, say in not_taken what holds on such a run")), "{lines:?}");
         // with it: the role reads, and says it where the author and the person read the claim
         let r = TomlRole::load(&cases_from_high("not-taken", &saying_not_taken)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
         let promise = &r.promises.iter().find(|(_, p)| p.says == MERGED_AFTER).expect("promise").1;
@@ -3715,10 +3802,11 @@ unchecked = "only the person can say, and the role asks them only whether it is 
     #[test]
     fn not_taken_where_every_run_takes_what_it_rests_on_is_refused() {
         // fix-bug as it ships takes the cases at every risk: a not_taken there would tell of a run that never is
-        let dir = cases_from_high("not-taken-needless", &|t| saying_not_taken(t).replacen("from_risk = \"high\"\n", "", 1));
-        let e = TomlRole::load(&dir).expect_err("refused").join("\n");
-        assert!(e.contains(&format!("the claim {ON_THE_CASES:?} says not_taken, and every run that can deliver takes what it rests on")), "{e}");
+        let every = |t: String| t.replacen("from_risk = \"high\"\n", "", 1);
+        let e = TomlRole::load(&cases_from_high("not-taken-needless", &|t| every(promise_not_taken(t)))).expect_err("refused").join("\n");
         assert!(e.contains(&format!("the promise {MERGED_AFTER:?} says not_taken, and every run that can deliver takes what it rests on")), "{e}");
+        let e = TomlRole::load(&cases_from_high("not-taken-needless-claim", &|t| every(saying_not_taken(t)).replacen(&format!("unless = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), "unless = \"check proof of fix passed\"\n", 1))).expect_err("refused").join("\n");
+        assert!(e.contains(&format!("the claim {ON_THE_CASES:?} says not_taken, and every run that can deliver takes what it rests on")), "{e}");
     }
 
     #[test]

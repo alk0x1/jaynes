@@ -119,8 +119,22 @@ impl On {
 impl Condition {
     /// The lowest risk at which a run takes everything the condition rests on: the step it names, the steps its check
     /// reads, and the risk its stop asks from.
-    pub fn from_risk(&self, _m: &Manifest) -> Risk {
-        Risk::Low
+    pub fn from_risk(&self, m: &Manifest) -> Risk {
+        let of = |s: &str| m.index(s).map(|i| &m.steps[i]);
+        let step = |s: &str| of(s).map_or(Risk::Low, |d| d.from_risk);
+        match self {
+            Condition::StepDone(s) => step(s),
+            Condition::PersonAnswered(s) => step(s).max(of(s).and_then(|d| d.stop.as_ref()).map_or(Risk::Low, |st| st.from_risk)),
+            Condition::CheckPassed { check, step: s } => {
+                let reads = of(s).and_then(|d| d.checks.iter().find(|c| &c.name == check)).map(|c| c.reads.clone()).unwrap_or_default();
+                reads.iter().map(|r| step(r)).fold(step(s), Risk::max)
+            }
+        }
+    }
+
+    /// Whether `r`, at its risk now, takes everything the condition rests on.
+    pub fn taken(&self, r: &Run) -> bool {
+        self.from_risk(&r.manifest) <= r.risk
     }
 
     pub fn parse(text: &str, m: &Manifest) -> Result<Condition, String> {
@@ -592,6 +606,9 @@ fn apply(promises: &[Promise], done: &[bool], node: &Node, mv: &Move) -> Option<
                     Form::OnlyAfter { on: o, after } => (o, held[p] || after.holds(&run), after),
                     Form::NeverSees { .. } => continue,
                 };
+                // a promise its role says does not hold on a run that does not take what it rests on is held only on
+                // the runs that take it
+                let ok = ok || (promise.not_taken.is_some() && !cond.taken(&run));
                 if *want == on && !ok {
                     let mut tail = says.clone();
                     tail.push(format!("{}, {}", on.says(), cond.says()));

@@ -382,9 +382,8 @@ impl Manifest {
                             if self.steps[j].hidden && c.kind != CheckKind::Hidden {
                                 errors.push(format!("{at}: the check {} reads hidden {r}, so it must be hidden", c.name));
                             }
-                            if self.steps[j].from_risk > s.from_risk {
-                                errors.push(format!("{at}: the check {} reads {r}, which a run at its risk does not take", c.name));
-                            }
+                            // a step the run does not take at its risk leaves the check out of that run
+                            // (Run::checks_taken), so a check may read one
                         }
                         _ => errors.push(format!("{at}: the check {} reads {r}, which is not an earlier step", c.name)),
                     }

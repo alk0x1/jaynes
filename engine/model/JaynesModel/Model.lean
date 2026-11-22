@@ -283,16 +283,25 @@ structure Item where
   digest : Nat
   deriving DecidableEq, Repr, FromJson, ToJson, Inhabited
 
+/-- A check of the step, as one pass through the gate meets it. -/
+structure GateCheck where
+  hidden : Bool
+  /-- every step it reads has an output, so the pass takes it: one that reads a step the run does not take at its
+      risk (fix-bug's hidden cases at low risk) is not a check of that run (`Run::checks_taken`) -/
+  taken : Bool
+  /-- it gave a verdict, pass or fail: not one that could not judge, nor none -/
+  gave : Bool
+  passed : Bool
+  deriving Repr, FromJson, ToJson, Inhabited
+
 structure GateCase where
   /-- what the person kept, and what they dropped -/
   locks : List Item
   dropped : List Item
   /-- the items of the output under check -/
   items : List Item
-  openFails : Bool
-  hiddenFails : Bool
-  /-- a check could not judge, or gave no verdict -/
-  blocked : Bool
+  /-- the step's checks, in the role's order -/
+  checks : List GateCheck
   roleStep : Bool
   fixesLeft : Bool
   session : Bool
@@ -304,6 +313,17 @@ inductive Gate where
 
 def Gate.render : Gate → String
   | .done => "done" | .fix => "fix" | .spent => "spent" | .jaynes => "jaynes" | .role => "role"
+
+/-- A check the pass takes failed: an open one, a hidden one. -/
+def GateCase.openFails (g : GateCase) : Bool :=
+  g.checks.any fun c => c.taken && !c.hidden && c.gave && !c.passed
+
+def GateCase.hiddenFails (g : GateCase) : Bool :=
+  g.checks.any fun c => c.taken && c.hidden && c.gave && !c.passed
+
+/-- A check the pass takes could not judge, or gave no verdict. -/
+def GateCase.blocked (g : GateCase) : Bool :=
+  g.checks.any fun c => c.taken && !c.gave
 
 /-- Whether the output breaks what the person kept or dropped. -/
 def GateCase.breaks (g : GateCase) : Bool :=

@@ -323,20 +323,37 @@ theorem g12_kept (g : GateCase) (h : g.outcome = .done) :
     have := this x hx
     simpa [not_or] using this
 
-/-- **G2** and **G3.** An output passes only when every check passed; a hidden check that failed is never sent
-    back to be fixed in place, where the agent would be told more than its sentence. -/
+/-- **G2** and **G3.** An output passes only when every check the pass takes gave its verdict and passed; a hidden
+    check that failed is never sent back to be fixed in place, where the agent would be told more than its
+    sentence. A check the pass does not take reads a step the run did not take at its risk: it is no check of that
+    run, and once that step is there the step reads it, so it runs again and is judged by it (`Run::fresh`). -/
 theorem g2_g3_gate (g : GateCase) :
-    (g.outcome = .done → g.openFails = false ∧ g.hiddenFails = false ∧ g.blocked = false) ∧
-      (g.outcome = .fix → g.hiddenFails = false) := by
+    (g.outcome = .done → ∀ c ∈ g.checks, c.taken = true → c.gave = true ∧ c.passed = true) ∧
+      (g.outcome = .fix → ∀ c ∈ g.checks, c.taken = true → c.hidden = true → c.gave = true ∧ c.passed = true) := by
+  have hb : g.outcome = .done ∨ g.outcome = .fix → g.blocked = false ∧ g.hiddenFails = false := by
+    intro h
+    rcases h with h | h <;>
+    · unfold GateCase.outcome at h
+      repeat' (split at h <;> try simp at h)
+      all_goals simp_all
   constructor
-  · intro h
-    unfold GateCase.outcome at h
-    repeat' (split at h <;> try simp at h)
-    all_goals simp_all
-  · intro h
-    unfold GateCase.outcome at h
-    repeat' (split at h <;> try simp at h)
-    all_goals simp_all
+  · intro h c hc ht
+    have ho : g.openFails = false := by
+      unfold GateCase.outcome at h
+      repeat' (split at h <;> try simp at h)
+      all_goals simp_all
+    obtain ⟨hbl, hhid⟩ := hb (Or.inl h)
+    simp only [GateCase.blocked, GateCase.openFails, GateCase.hiddenFails, List.any_eq_false] at hbl ho hhid
+    have h1 := hbl c hc
+    have h2 := ho c hc
+    have h3 := hhid c hc
+    cases hh : c.hidden <;> cases hg : c.gave <;> cases hp : c.passed <;> simp_all
+  · intro h c hc ht hh
+    obtain ⟨hbl, hhid⟩ := hb (Or.inr h)
+    simp only [GateCase.blocked, GateCase.hiddenFails, List.any_eq_false] at hbl hhid
+    have h1 := hbl c hc
+    have h3 := hhid c hc
+    cases hg : c.gave <;> cases hp : c.passed <;> simp_all
 
 end Jaynes
 

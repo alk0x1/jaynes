@@ -939,11 +939,11 @@ impl Ctx {
                     reply: reply.clone(),
                 });
                 self.reassess(i, changed);
-                if decl.checks.is_empty() {
+                let checks: Vec<String> = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
+                if checks.is_empty() {
                     self.checks_ended(step, attempt, fix, &[])?;
                 } else {
                     let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
-                    let checks = decl.checks.iter().map(|c| c.name.clone()).collect();
                     self.command(Command::RunChecks { step: step.to_string(), attempt, fix, output: output.clone(), given, checks });
                 }
             }
@@ -1130,8 +1130,9 @@ impl Ctx {
             }
         };
         let sources: Vec<String> = self.run.sources(i).into_iter().map(|j| self.name(j)).collect();
-        let checks = decl
-            .checks
+        // the checks this pass takes: one that reads a step the run did not take is not a check of it
+        let taken: Vec<crate::manifest::CheckDecl> = self.run.checks_taken(i).into_iter().cloned().collect();
+        let checks = taken
             .iter()
             .filter_map(|c| {
                 let result = results.iter().find(|r| r.check == c.name)?;
@@ -1151,7 +1152,7 @@ impl Ctx {
         self.emit(Event::ChecksJudged { step: step.to_string(), attempt, fix, checks });
         let mut shape = Vec::new();
         let mut behaviour = Vec::new();
-        for c in &decl.checks {
+        for c in &taken {
             match results.iter().find(|r| r.check == c.name).map(|r| &r.verdict) {
                 None => {
                     let reason = format!("the check {} of {step} gave no verdict. No attempt was spent", c.name);
@@ -1218,7 +1219,7 @@ impl Ctx {
         let Some(p) = self.run.steps[i].pending.clone() else { return };
         let Status::Checking { attempt, fix } = self.run.steps[i].status else { return };
         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
-        let checks = self.run.manifest.steps[i].checks.iter().map(|c| c.name.clone()).collect();
+        let checks = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
         self.command(Command::RunChecks { step: self.name(i), attempt, fix, output: p.output, given, checks });
     }
 
@@ -1352,7 +1353,7 @@ impl Ctx {
                 Status::Checking { attempt, fix } => {
                     if let Some(p) = self.run.steps[i].pending.clone() {
                         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
-                        let checks = decl.checks.iter().map(|c| c.name.clone()).collect();
+                        let checks = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
                         self.command(Command::RunChecks { step: name, attempt, fix, output: p.output, given, checks });
                     }
                 }
