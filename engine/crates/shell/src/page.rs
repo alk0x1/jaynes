@@ -3194,10 +3194,12 @@ mod tests {
 
     /// A home with three runs at a leave the agent asked: "new" to write tests/conftest.py, which does not exist yet,
     /// in a run that merges; "edit" to change src/a.py; "peek" to read /etc/hosts, with nothing to write.
-    fn at_a_leave() -> PathBuf {
+    /// A folder of its own for each test that calls it (`test`): two tests in one folder at once removed each
+    /// other's record (asked_whose_stop_waits fell with "run new exists").
+    fn at_a_leave(test: &str) -> PathBuf {
         use jaynes_core::question::{Item, Question, VerdictKind};
         use jaynes_core::{Digest, Event, Manifest};
-        let home = std::env::temp_dir().join(format!("jaynes-page-leave-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("jaynes-page-leave-{test}-{}", std::process::id()));
         let _gone = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("home");
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
@@ -3245,7 +3247,7 @@ mod tests {
     // Alan, 21/11: "pq to sendo chamado aqui? a role?"
     #[test]
     fn asked_permission_says_why_you_on_the_page() {
-        let home = at_a_leave();
+        let home = at_a_leave("asked_permission_says_why_you_on_the_page");
         let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
         let now = crate::store::now();
         let asked = page.render(View::Question("new".into(), "q1".into()), now).expect("the leave");
@@ -3556,7 +3558,7 @@ mod tests {
     // dim, as a run's name does (the design-lead's nome-da-run.md, item 7), and so does the stop's where line.
     #[test]
     fn asked_whose_stop_waits() {
-        let home = at_a_leave();
+        let home = at_a_leave("asked_whose_stop_waits");
         let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
         let now = crate::store::now();
         let listed = page.render(View::Overview, now).expect("home");
