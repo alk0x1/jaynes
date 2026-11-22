@@ -181,7 +181,7 @@ mod tests {
             tree: None,
             reply: None,
         });
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: format!("{PLANTED}-q"), step: step.clone(), round: 0, kind: QuestionKind::Decision, items: vec![item],
             offered: vec![VerdictKind::Keep, VerdictKind::Change], holds: true, about: format!("{PLANTED} about"), choose: false, pass: 0, passes: 0, back: vec![],
         };

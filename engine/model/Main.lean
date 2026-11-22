@@ -23,6 +23,12 @@ def main : IO UInt32 := do
               let c ← j.getObjValAs? EffectCase "case"
               let fmt := fun (l : List Nat) => ",".intercalate ((l.mergeSort (· ≤ ·)).eraseDups.map toString)
               pure s!"{fmt c.said}|{fmt c.did}"
+          | "rides" => do
+              let opens ← j.getObjValAs? (List Open) "opens"
+              pure (",".intercalate ((ridesOf opens).map toString))
+          | "touch" => do
+              let t ← j.getObjValAs? TouchCase "case"
+              pure (",".intercalate (t.kept.map toString))
           | other => (throw s!"no kind {other}" : Except String String)
         pure (got, expected) with
     | .error e =>

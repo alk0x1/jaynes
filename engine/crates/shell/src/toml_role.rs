@@ -1608,7 +1608,7 @@ impl TomlRole {
                     errs.push("has a stop whose ask names {{risk}}, why the run's risk is high, and it asks at every risk: write from_risk = \"high\", or leave {{risk}} out".into());
                 }
             }
-            let stop = s.stop.as_ref().map(|st| StopDecl {
+            let stop = s.stop.as_ref().map(|st| StopDecl { unheld: None,
                 verdicts: st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() }),
                 choose: st.choose,
                 redo: st.redo.clone(),

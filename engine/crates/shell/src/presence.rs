@@ -75,7 +75,7 @@ mod tests {
         .expect("manifest");
         let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = jaynes_core::decide(None, &start).expect("start").events;
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
             offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
         };

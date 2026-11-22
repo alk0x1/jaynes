@@ -350,6 +350,10 @@ pub struct StopDecl {
     /// of a new project: only the person, and only while the stop is open.
     #[serde(default, skip_serializing_if = "Offers::is_empty")]
     pub offers: Offers,
+    /// What the request settles at this stop when it does not hold the run, in the role's words ("the bug", "Built on
+    /// {{name}}", the name being the option's): Jaynes says whose request it was after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unheld: Option<String>,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {

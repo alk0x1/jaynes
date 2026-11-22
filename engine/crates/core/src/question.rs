@@ -112,6 +112,19 @@ pub struct Question {
     /// What the person dropped at this stop in earlier rounds, kept in view: an answer may bring any of it back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub back: Vec<Item>,
+    /// At the merge: the stops still open that do not hold the run, which the person's touch that merges keeps, each
+    /// with its own answer in the record. Part of what is shown, so the touch counts only for these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rides: Vec<Ride>,
+}
+
+/// A stop still open that the merge's touch keeps: its question, its step, and what it holds now, in Jaynes's words
+/// ("the bug, as your request says").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Ride {
+    pub question: String,
+    pub step: String,
+    pub said: String,
 }
 
 fn is_zero(n: &u32) -> bool {
