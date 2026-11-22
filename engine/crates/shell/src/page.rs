@@ -424,6 +424,8 @@ impl Page {
                 ["home"] => View::Overview,
                 ["new"] => View::New,
                 ["setup"] => View::Setup,
+                // after a Send, the next question with where the answer went
+                [""] if req.query.get("sent").is_some_and(|r| !r.is_empty()) => View::Sent(req.query["sent"].clone()),
                 _ => View::Home,
             };
             let mut headers = vec![("Content-Security-Policy".to_string(), POLICY.to_string())];
@@ -967,7 +969,7 @@ impl Page {
         }
         // at a pause of the person's (the page opened, or the page they land on after an answer), the questions they
         // were told of a day ago or more and that nobody answered
-        let remind = if matches!(view, View::Home | View::Overview) {
+        let remind = if matches!(view, View::Home | View::Sent(_) | View::Overview) {
             let on = current.as_ref().map(|(r, q)| (r.id.as_str(), q.question.id.as_str()));
             reminders_html(&drive::reminders_due(&self.home, &store, now).unwrap_or_default(), &runs, on, &names)
         } else {
@@ -1055,7 +1057,39 @@ impl Page {
             View::Run(id) => Some(id.as_str()),
             _ => current.as_ref().map(|(r, _)| r.id.as_str()),
         };
-        let tab = shown.and_then(|id| names.get(id)).map(|row| format!("{} · Jaynes", crate::listing::name(row).join(" · "))).unwrap_or_else(|| "Jaynes".into());
+        // after a Send, where it went, on top of what comes next (quatro-itens.md, 3)
+        let main = match &view {
+            View::Sent(sent) => {
+                let project = |id: &str| names.get(id).map(|n| n.project.clone()).filter(|p| p != "no project");
+                let said = match &current {
+                    None => "Sent. Nothing else waits for you.".to_string(),
+                    Some((r, q)) => {
+                        let asks = ticks(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &r.id)));
+                        match (project(sent), project(&r.id)) {
+                            (from, Some(to)) if from.as_deref() != Some(to.as_str()) => match from {
+                                Some(from) => format!("Sent to <span class=\"proj\">{}</span>. Next: <span class=\"proj\">{}</span> · {asks}", esc(&from), esc(&to)),
+                                None => format!("Sent. Next: <span class=\"proj\">{}</span> · {asks}", esc(&to)),
+                            },
+                            _ => format!("Sent. Next: {asks}"),
+                        }
+                    }
+                };
+                format!("<div class=\"sent\" id=\"sent\">{said}</div>{main}")
+            }
+            _ => main,
+        };
+        let tab = match (&view, &current) {
+            // a question: its project, then what it asks (quatro-itens.md, 2)
+            (View::Run(_) | View::New | View::Setup, _) | (_, None) => shown.and_then(|id| names.get(id)).map(|row| format!("{} · Jaynes", crate::listing::name(row).join(" · "))),
+            (_, Some((r, q))) => {
+                let asks = crate::listing::title_into(q, &crate::listing::into_of(&self.home, &r.id)).replace('`', "");
+                Some(match names.get(&r.id).map(|n| n.project.as_str()).filter(|p| *p != "no project") {
+                    Some(p) => format!("{p} · {asks} · Jaynes"),
+                    None => format!("{asks} · Jaynes"),
+                })
+            }
+        }
+        .unwrap_or_else(|| "Jaynes".into());
         Ok(PAGE.replacen("<title>Jaynes</title>", &format!("<title>{}</title>", esc(&tab)), 1).replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", &format!("{}<div id=\"nokey\"></div>", banner())).replace("{{version}}", env!("CARGO_PKG_VERSION")))
     }
 }
@@ -1166,6 +1200,9 @@ fn stage_list(r: &Run, gone: bool) -> String {
 /// Where a run is, in words: the step it is on, of how many.
 enum View {
     Home,
+    /// What the person lands on after a Send: the next question, as home, with a line saying where the answer to
+    /// run `.0` went.
+    Sent(String),
     Overview,
     New,
     Setup,
@@ -1767,7 +1804,11 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         step = esc(&question.step),
         // the same count as its item in Waiting for you: the step that asks
         asked = crate::listing::asked_at(run, &question.step),
-        title = ticks(&crate::listing::title_into(q, into)),
+        // the project before what it asks, dim, so two questions alike tell apart (quatro-itens.md, 2); none without one
+        title = match project.strip_suffix(" · ").filter(|p| !p.is_empty() && *p != "no project") {
+            Some(p) => format!("<span class=\"proj\">{p}</span> · {}", ticks(&crate::listing::title_into(q, into))),
+            None => ticks(&crate::listing::title_into(q, into)),
+        },
         // a leave says why it comes to the person, and what the agent wants to write comes before the answers
         why = if leave { format!("<p class=\"whyyou\">{}</p>", esc(crate::stop::WHY_YOU)) } else { String::new() },
         // the role's line under its question, before the person looks (the design-lead, 22/11)
@@ -1932,7 +1973,28 @@ fn delivery_html(home: &std::path::Path, run: &Run) -> String {
         text.push_str(&format!("\n[{more} more bytes not shown: read the branch before it lands]"));
     }
     let into = crate::listing::into_of(home, &run.id);
-    format!("<div class=\"changes\"><div class=\"qh\">{}</div><pre class=\"diff\">{}</pre></div>", esc(&delivery_title(&into, n)), diff_html(&text))
+    format!(
+        "{}<div class=\"changes\"><div class=\"qh\">{}</div><pre class=\"diff\">{}</pre></div>",
+        tests_changed_html(&crate::listing::changed_tests(&text)),
+        esc(&delivery_title(&into, n)),
+        diff_html(&text)
+    )
+}
+
+/// The person's tests the delivery changes, said at the merge, with See them, which shows only those files in what
+/// lands: "It changed your tests: `a`, `b`" (four, then how many more), and why to read them (quatro-itens.md, 1).
+/// Nothing when it changed none.
+fn tests_changed_html(files: &[String]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<String> = files.iter().take(4).map(|f| format!("<code>{}</code>", esc(f))).collect();
+    let more = if files.len() > 4 { format!(" and {} more", files.len() - 4) } else { String::new() };
+    let data = esc(&serde_json::to_string(files).unwrap_or_default());
+    format!(
+        "<div class=\"tests-changed\"><div class=\"r\"><span>It changed your tests: {}{more}</span><button class=\"seethem\" data-files=\"{data}\">See them</button></div><p class=\"dim\">A fix can pass by changing what a test expects. Read these before you merge.</p></div>",
+        shown.join(", ")
+    )
 }
 
 /// The heading over what a merge lands: "What lands on “main” · 3 files".
@@ -1943,7 +2005,10 @@ fn delivery_title(into: &str, files: usize) -> String {
 
 /// A unified diff, escaped: each file's header set apart, added lines green, removed lines red.
 fn diff_html(text: &str) -> String {
-    text.lines()
+    // each file's lines in a block of its own, named by its path, so See them can show only some
+    let mut open = false;
+    let mut html: String = text
+        .lines()
         .map(|l| {
             let (class, mark, rest) = if l.starts_with("diff --git ") {
                 ("file", "", l.trim_start_matches("diff --git ").split(" b/").last().unwrap_or(l))
@@ -1962,9 +2027,19 @@ fn diff_html(text: &str) -> String {
                 return String::new();
             }
             let mark = if mark.is_empty() { String::new() } else { format!("<i>{mark}</i>") };
-            format!("<span class=\"{class}\">{mark}{}</span>", if rest.is_empty() { " ".to_string() } else { esc(rest) })
+            let line = format!("<span class=\"{class}\">{mark}{}</span>", if rest.is_empty() { " ".to_string() } else { esc(rest) });
+            if class == "file" {
+                let close = if std::mem::replace(&mut open, true) { "</span>" } else { "" };
+                format!("{close}<span class=\"fb\" data-f=\"{}\">{line}", esc(rest))
+            } else {
+                line
+            }
         })
-        .collect()
+        .collect();
+    if open {
+        html.push_str("</span>");
+    }
+    html
 }
 
 /// A newer Jaynes: installed since the page started, so the page should restart; or a release newer than the program
@@ -2417,7 +2492,21 @@ window.jaynesKey = (async () => {
 "##;
 
 /// The page's own script, served from /page.js: the policy lets no other script run, inline or from elsewhere.
-const SCRIPT: &str = r##"const el = document.getElementById("data");
+const SCRIPT: &str = r##"// after a Send, where it went: one line, gone at the next action, and not again on a reload
+if (location.search.includes("sent=")) history.replaceState(null, "", location.pathname + location.hash);
+for (const t of ["pointerdown", "keydown"]) addEventListener(t, () => { const s = document.getElementById("sent"); if (s) s.remove(); }, { once: true, capture: true });
+// See them: what lands, only the person's tests it changed; again, every file
+document.addEventListener("click", e => {
+  const b = e.target.closest("button.seethem"); if (!b) return;
+  const pre = document.querySelector(".changes pre.diff"); if (!pre) return;
+  const files = new Set(JSON.parse(b.dataset.files || "[]"));
+  const only = !pre.classList.contains("only");
+  pre.classList.toggle("only", only);
+  pre.querySelectorAll(".fb").forEach(f => f.classList.toggle("on", files.has(f.dataset.f)));
+  b.textContent = only ? "See every file" : "See them";
+  if (only) pre.scrollIntoView({ block: "start", behavior: "smooth" });
+});
+const el = document.getElementById("data");
 const base = el ? JSON.parse(el.textContent) : null;
 if (!el || base.choose) document.getElementById("fxbar").classList.add("hide");
 // a stop that chooses: the answer one click on an option sends, and what it will do, written under each option
@@ -2483,7 +2572,7 @@ document.addEventListener("click", async e => {
     const body = b.id === "sendread" ? JSON.stringify({ ...base, ...readBody }) : pressedBody;
     b.disabled = true;
     const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
-    if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/", 900); }
+    if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
     else { b.disabled = false; document.getElementById("understood").insertAdjacentHTML("beforeend", `<div class="refused">${esc(r.refused || "")}</div>`); }
   }
 });
@@ -2563,7 +2652,7 @@ if (base && base.choose) {
     const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : b.dataset.keep ? keepWith(b.dataset.keep) : choice(b.dataset.choose);
     document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
     const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
-    if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/", 900); }
+    if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
     else { const ul = b.closest(".row").querySelector(".fx-row"); if (ul) ul.innerHTML = `<li class="bad">${esc(r.refused || "")}</li>`; document.querySelectorAll("button.choose").forEach(x => x.disabled = false); }
   });
 }
@@ -2604,7 +2693,7 @@ document.addEventListener("click", async e => {
   if (b.id === "send" && !b.disabled) {
     b.disabled = true;
     const r = await post("/api/answer");
-    if (r.ok) { b.textContent = r.recorded === "inbox" ? "Sent; the run takes it after the work under way" : "Sent"; setTimeout(() => location.href = "/", 900); }
+    if (r.ok) { b.textContent = r.recorded === "inbox" ? "Sent; the run takes it after the work under way" : "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
     else { document.getElementById("refused").textContent = r.refused; b.disabled = false; }
   }
 });
@@ -2761,6 +2850,13 @@ main { padding:22px 32px 240px; max-width:900px; }
 .foot { margin-top:40px; padding-top:12px; border-top:1px solid var(--line); font-family:var(--mono); font-size:11px; color:var(--faint); }
 .where { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
 h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; } .sub { margin:0 0 20px; }
+h1 .proj { color:var(--dim); font-weight:500; }
+.sent { margin:0 0 16px; padding:9px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--ink); }
+.sent .proj { color:var(--dim); }
+.tests-changed { margin:14px 0 10px; font-size:13.5px; } .tests-changed .r { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.tests-changed code { font-family:var(--mono); font-size:.88em; } .tests-changed p.dim { color:var(--dim); font-size:12.5px; margin:6px 0 0; }
+.tests-changed button { border:1px solid var(--line-2); border-radius:8px; padding:3px 12px; background:none; color:var(--ink); white-space:nowrap; cursor:pointer; }
+pre.diff .fb { display:block; } pre.diff.only .fb:not(.on) { display:none; }
 .badge { display:inline-flex; gap:6px; align-items:center; font-size:12px; padding:3px 10px; border-radius:999px; background:var(--green-soft); color:var(--green); }
 .badge.wait { background:var(--amber-soft); color:var(--amber); }
 .notice { background:var(--amber-soft); color:var(--amber); padding:10px 16px; font-size:13px; border-radius:8px; margin-bottom:14px; }
@@ -3390,7 +3486,7 @@ mod tests {
         let now = crate::store::now();
         let asked = page.render(View::Question("new".into(), "q1".into()), now).expect("the leave");
         // the title asks in words, the file in mono, never a backquote in what the person reads
-        assert!(asked.contains("<h1>May the agent change <code>tests/conftest.py</code>?</h1>"), "the title, the file in mono");
+        assert!(asked.contains(" · May the agent change <code>tests/conftest.py</code>?</h1>"), "the title, after the project, the file in mono");
         assert!(!seen(&asked).contains('`'), "no backquote anywhere on the page");
         assert!(asked.contains("<p class=\"whyyou\">Why you: the agent asked for something its step&#39;s settings do not allow.</p>"), "why you");
         assert!(!asked.contains("Ahead:"), "no line of what lies ahead");
@@ -3551,7 +3647,7 @@ mod tests {
         });
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
         store.append("o", &events).expect("append");
-        store.put_setup("o", &json!({})).expect("setup");
+        store.put_setup("o", &json!({"project": "/w/horta"})).expect("setup");
         store.put_display(&Digest("d-bug".into()), &json!({"aspects": [
             {"label": "Now", "text": "Exporting a note with a comma breaks the CSV."},
             {"label": "After the fix", "text": "The comma stays inside its quotes."},
@@ -3560,6 +3656,9 @@ mod tests {
         let now = crate::store::now();
         let asked = page.render(View::Question("o".into(), "merge-1".into()), now).expect("the merge");
         assert!(asked.contains("Merging also keeps these"), "the stops it keeps");
+        // the project before what it asks, in the title and the browser's tab (quatro-itens.md, 2)
+        assert!(asked.contains("<h1><span class=\"proj\">horta</span> · Merge into “main”?</h1>"), "the project in the title");
+        assert!(asked.contains("<title>horta · Merge into “main”? · Jaynes</title>"), "and in the browser's tab");
         assert!(asked.contains("your request answered it · the run went on</small>"), "the list beside: the request answered it");
         assert!(asked.contains("<span class=\"st\">“reproduce”</span><span>The bug, as your request says.</span><a href=\"/q/o/q-bug\">Open</a>"), "each with its step, what it holds, and Open");
         assert!(asked.contains("Merging keeps each as it is. To answer one differently, open it before you merge."), "under them");
@@ -3572,6 +3671,77 @@ mod tests {
         assert!(run.contains("Answer: Merge into “main”?</a>"), "the merge's invitation says what it asks");
         assert!(!run.contains("<div class=\"notice\"></div>"), "no notice without words");
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The real-user, 22/11 (uso-real/achados/2026-11-22-01.md): after Send the page opened the next question, of
+    // another project, without a word. A line on top of the next one says where it went (quatro-itens.md, 3).
+    #[test]
+    fn asked_after_send_the_page_says_where_it_went() {
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-sent-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        for (id, project, asks) in [("a", "/w/scaffold-vazio", false), ("b", "/w/horta", true)] {
+            let manifest: Manifest = serde_json::from_value(json!({"role": "kickoff", "version": "1.0.0", "protocol": 1, "steps": [{"name": "slice", "executor": "agent"}]})).expect("manifest");
+            let start = Input::Start { run: id.into(), request: "Start the app".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+            let mut events = decide(None, &start).expect("start").events;
+            if asks {
+                events.push(Event::QuestionOpened {
+                    question: Question { rides: Vec::new(),
+                        id: "q-slice".into(), step: "slice".into(), round: 1, kind: QuestionKind::Decision,
+                        items: vec![Item { id: "slice".into(), label: "The slice".into(), digest: Digest("d".into()) }],
+                        offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, about: "Is this the first slice?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+                    },
+                });
+            }
+            store.append(id, &events).expect("append");
+            store.put_setup(id, &json!({"project": project})).expect("setup");
+        }
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let other = page.render(View::Sent("a".into()), now).expect("the next");
+        assert!(other.contains("<div class=\"sent\" id=\"sent\">Sent to <span class=\"proj\">scaffold-vazio</span>. Next: <span class=\"proj\">horta</span> · Is this the first slice?</div>"), "another project");
+        let same = page.render(View::Sent("b".into()), now).expect("the next");
+        assert!(same.contains("<div class=\"sent\" id=\"sent\">Sent. Next: Is this the first slice?</div>"), "the same project");
+        assert!(!page.render(View::Home, now).expect("home").contains("id=\"sent\""), "only after a Send");
+        // the page's script goes there after a Send, and the line leaves at the next action
+        assert!(SCRIPT.contains("location.href = \"/?sent=\" + encodeURIComponent(base.run)"), "after a Send");
+        let _gone = std::fs::remove_dir_all(&home);
+        // nothing else waits: the list, saying so
+        let home = std::env::temp_dir().join(format!("jaynes-page-sent-none-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let manifest: Manifest = serde_json::from_value(json!({"role": "kickoff", "version": "1.0.0", "protocol": 1, "steps": [{"name": "slice", "executor": "agent"}]})).expect("manifest");
+        let start = Input::Start { run: "a".into(), request: "Start the app".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        store.append("a", &decide(None, &start).expect("start").events).expect("append");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        assert!(page.render(View::Sent("a".into()), now).expect("home").contains("<div class=\"sent\" id=\"sent\">Sent. Nothing else waits for you.</div>"), "nothing else");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The real-user, 22/11 (uso-real/achados/2026-11-22-01.md): a fix can pass by changing what a test expects. The
+    // merge says which of the person's tests it changed, those that were there before (quatro-itens.md, 1).
+    #[test]
+    fn asked_the_merge_says_when_it_changed_your_tests() {
+        let block = |path: &str, new: bool| format!(
+            "diff --git a/{path} b/{path}\n{}index 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-a\n+b\n",
+            if new { "new file mode 100644\n" } else { "" }
+        );
+        let diff = [block("src/export.js", false), block("test/export.test.js", false), block("test/new.test.js", true), block("test/screens.test.js", false)].concat();
+        assert_eq!(crate::listing::changed_tests(&diff), ["test/export.test.js", "test/screens.test.js"], "the tests that were there, never a new one");
+        let html = tests_changed_html(&crate::listing::changed_tests(&diff));
+        assert!(html.contains("It changed your tests: <code>test/export.test.js</code>, <code>test/screens.test.js</code>"), "{html}");
+        assert!(html.contains("<button class=\"seethem\""), "See them");
+        assert!(html.contains("A fix can pass by changing what a test expects. Read these before you merge."), "why");
+        let many: Vec<String> = (1..=6).map(|n| format!("test/t{n}.test.js")).collect();
+        assert!(tests_changed_html(&many).contains("<code>test/t4.test.js</code> and 2 more"), "four, then how many more");
+        assert_eq!(tests_changed_html(&[]), "", "none changed: nothing");
+        assert!(crate::listing::changed_tests(&block("src/export.js", false)).is_empty());
+        // the diff's files each in a block of their own, so See them shows only these
+        assert!(diff_html(&diff).contains("<span class=\"fb\" data-f=\"test/export.test.js\">"), "a block per file");
     }
 
     // The tech-lead's rule, 21/11 (Alan's run r1795301086-403): the stop of a step the run already passed never covers
