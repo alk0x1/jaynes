@@ -66,6 +66,10 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     }
+    // a run's process that a signal stopped recorded its halt, and ends as that signal says
+    if let Some(sig) = drive::stopped_by() {
+        std::process::exit(128 + sig);
+    }
 }
 
 fn library() -> PathBuf {
@@ -963,6 +967,10 @@ fn answer(args: &[String]) -> Result<(), String> {
 
 /// Give the run an input: drive it here if no process does, or leave it in the inbox for the one that does.
 fn send(mut s: Store, id: &str, input: Input) -> Result<(), String> {
+    // a run whose process is gone says so in the record before the person resumes it
+    if matches!(input, Input::Resume { .. }) {
+        let _settled = drive::settle_left_running(&home(), id)?;
+    }
     let state = s.state(id)?.ok_or("no such run")?;
     if let Err(r) = decide(Some(&state), &input) {
         return Err(format!("refused: {r}"));
