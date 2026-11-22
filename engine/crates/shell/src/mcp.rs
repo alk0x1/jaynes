@@ -126,7 +126,7 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             if let Some(file) = conducting_off_in(Path::new(project)) {
                 return Err(format!("{} says conduct = false: Jaynes stays out of this project, so make the change without it. The person removes that line to use Jaynes here.", file.display()));
             }
-            let run = drive::launch(home, &exe, role, project, request, Some(title), args["risk"].as_str() == Some("high"))?;
+            let run = drive::launch(home, &exe, role, project, request, Some(title), args["risk"].as_str() == Some("high"), false)?;
             Ok(format!(
                 "Run {run} started; it goes on by itself. What needs the person is on the page, {}. `run` with {run} says where it is.",
                 install::ensure_page(home)

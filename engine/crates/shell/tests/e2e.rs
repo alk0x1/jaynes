@@ -1427,6 +1427,38 @@ fn a_run_started_from_a_page_with_a_short_path_finds_the_toolchain_of_the_person
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_start_without_a_terminal_keeps_its_own_environment_and_only_the_app_s_mark_gives_it_the_person_s_terminal() {
+    let s = scratch("start-env");
+    let tools = made_up_tool(&s);
+    let long = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap_or_default());
+    let out = tty().arg(BIN).arg("--version").env("JAYNES_ENGINE_HOME", &s.home).env("PATH", &long).output().expect("terminal");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let agent = format!("quitanda-cc && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    // an agent's start, with no terminal: it may be in a direnv or a PATH of the project that the terminal does not know
+    let start = |run: &str, mark: Option<&str>| {
+        let mut c = jaynes();
+        c.args(["start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin").env_remove("JAYNES_START_ENV")
+            .stdin(std::process::Stdio::null());
+        if let Some(m) = mark {
+            c.env("JAYNES_START_ENV", m);
+        }
+        let out = c.output().expect("start");
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+    };
+    let said = start("agent-start", None);
+    assert!(said.contains("quitanda-cc: command not found"), "a start without a terminal took the person's terminal's PATH: {said}");
+    assert!(!types(&events(&s, "agent-start")).iter().any(|t| t == "Delivered"), "{said}");
+    // the app's start says it is the app's, and finds the person's tools
+    let said = start("app-start", Some("terminal"));
+    assert!(types(&events(&s, "app-start")).iter().any(|t| t == "Delivered"), "the app's start did not find the toolchain: {said}");
+}
+
+#[test]
 fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
     let s = scratch("setup");
     let settings = s.home.parent().expect("base").join("settings");

@@ -711,7 +711,7 @@ impl Page {
         if !std::path::Path::new(&project).join(".git").exists() {
             return Err(format!("{project} is not a git repository"));
         }
-        let run = drive::launch(&self.home, &self.exe, role, &project, request, body["title"].as_str(), body["risk"].as_str() == Some("high"))?;
+        let run = drive::launch(&self.home, &self.exe, role, &project, request, body["title"].as_str(), body["risk"].as_str() == Some("high"), true)?;
         Ok(json!({"ok": true, "run": run}))
     }
 

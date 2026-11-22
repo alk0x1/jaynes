@@ -142,7 +142,7 @@ fn with_env(args: &[String], kept: &std::collections::BTreeMap<String, String>) 
         Err(e) => return e,
     };
     let mut again = std::process::Command::new(exe);
-    again.args(args);
+    again.args(args).env_remove(drive::START_ENV);
     for k in drive::RUN_ENV {
         match kept.get(*k) {
             Some(v) => again.env(k, v),
@@ -188,10 +188,11 @@ fn run(args: &[String]) -> Result<(), String> {
     {
         return Err(format!("Jaynes could not carry run {id} on with the environment it started with: {}", with_env(args, &kept)));
     }
-    // A run started without a terminal (the page's, the app's) starts with the environment of the person's terminal,
-    // and keeps it from there as any run.
+    // The app's start says it is the app's (START_ENV): it starts with the environment of the person's terminal, and
+    // keeps it from there as any run. The mark only chooses the environment, so a forged one does no harm. Any other
+    // start keeps its own: an agent's may be in a direnv or a PATH of the project that the terminal does not know.
     if cmd == "start"
-        && !terminal
+        && std::env::var(drive::START_ENV).is_ok_and(|v| v == "terminal")
         && let Some(kept) = drive::terminal_env(&home())
         && !drive::env_is(&kept)
     {

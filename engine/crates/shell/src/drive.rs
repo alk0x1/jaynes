@@ -81,6 +81,9 @@ pub fn run_env(setup: &serde_json::Value) -> Option<std::collections::BTreeMap<S
 /// which may be opened with a short PATH) starts with it.
 pub const TERMINAL_ENV: &str = "terminal-env.json";
 
+/// The mark the app gives the `jaynes start` it runs ("terminal"), for it to start with [`terminal_env`].
+pub const START_ENV: &str = "JAYNES_START_ENV";
+
 /// Keep this process's [`RUN_ENV`] as the person's terminal's, when it is not already what the file says. What
 /// cannot be written is left as it was: no command fails for it.
 pub fn keep_terminal_env(home: &Path) {
@@ -150,7 +153,11 @@ pub fn merges(dir: &Path) -> Vec<String> {
 /// Start a run in a process of its own, which goes on by itself; what it says goes to `start-<run>.log` in the
 /// engine's home. The run's id is returned before the run is recorded.
 /// `title`: the short name the run is shown by, when one was given (`listing::run_title` says what it is otherwise).
-pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, title: Option<&str>, high: bool) -> Result<String, String> {
+///
+/// `terminal`: the run starts with the environment of the person's terminal ([`terminal_env`]), as the page's do; an
+/// agent's (through MCP) keeps its own.
+#[allow(clippy::too_many_arguments)]
+pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, title: Option<&str>, high: bool, terminal: bool) -> Result<String, String> {
     let dir = crate::install::find_role(home, role)?;
     // a role that does not fit the project says why here, to the page or the agent that asked, before a run exists
     let folder = std::fs::canonicalize(project).map_err(|e| format!("{project}: {e}"))?;
@@ -167,14 +174,17 @@ pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str,
     std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
     let log = std::fs::File::create(home.join(format!("start-{run}.log"))).map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
-    std::process::Command::new(exe)
-        .args(&argv)
-        .env("JAYNES_ENGINE_HOME", home)
-        .stdin(std::process::Stdio::null())
-        .stdout(log)
-        .stderr(err)
-        .spawn()
-        .map_err(|e| format!("the run could not start: {e}"))?;
+    let mut start = std::process::Command::new(exe);
+    start.args(&argv).env("JAYNES_ENGINE_HOME", home).env_remove(START_ENV);
+    if let Some(kept) = terminal.then(|| terminal_env(home)).flatten() {
+        for k in RUN_ENV {
+            match kept.get(*k) {
+                Some(v) => start.env(k, v),
+                None => start.env_remove(k),
+            };
+        }
+    }
+    start.stdin(std::process::Stdio::null()).stdout(log).stderr(err).spawn().map_err(|e| format!("the run could not start: {e}"))?;
     Ok(run)
 }
 
