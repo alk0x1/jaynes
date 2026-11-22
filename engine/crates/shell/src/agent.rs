@@ -1290,6 +1290,22 @@ mod tests {
         }
     }
 
+    /// G5 counts each turn once. A resumed session's result says what that turn used in `usage`, and in
+    /// `total_cost_usd`, `duration_api_ms` and `modelUsage` what the whole session used since it began: the tokens
+    /// and time recorded come from `usage` and the clock alone, or a resumed turn would count its earlier ones again.
+    #[test]
+    fn a_resumed_turn_records_its_own_tokens_never_the_whole_session_s() {
+        let out = r#"{"type":"system","session_id":"s1"}
+{"type":"result","is_error":false,"result":"done","session_id":"s1","total_cost_usd":1.43,"duration_ms":208000,"duration_api_ms":337633,"num_turns":12,"usage":{"input_tokens":12,"cache_creation_input_tokens":48132,"cache_read_input_tokens":221917,"output_tokens":21973},"modelUsage":{"claude-opus-5-5":{"inputTokens":40,"outputTokens":40908,"cacheReadInputTokens":385350,"cacheCreationInputTokens":82536,"costUSD":1.43}}}"#;
+        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(208), false) {
+            Ended::Ran { usage, session, .. } => {
+                assert_eq!((usage.tokens, usage.cached, usage.seconds), (12 + 48_132 + 21_973, 221_917, 208));
+                assert_eq!(session.as_deref(), Some("s1"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// A turn's output: the main conversation's messages, each by the model named, then the result with what
     /// each model wrote in all.
     fn turn_of(messages: &[(&str, Option<&str>)], usage: &[(&str, u64)]) -> String {

@@ -129,6 +129,12 @@ pub struct StepState {
     /// that ended by itself clears it.
     #[serde(default)]
     pub resume: Option<String>,
+    /// The tokens the attempts in `session` used, all told: what a round that goes on in it carries.
+    #[serde(default, skip_serializing_if = "nothing_carried")]
+    pub carried: u64,
+    /// The person dropped everything the step showed last, and nothing was delivered since: its next round is new.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dropped_all: bool,
     /// What the checks said of the last attempt they judged. For the person: an agent's turn never carries it.
     #[serde(default)]
     pub checks: Vec<crate::event::CheckRecord>,
@@ -203,6 +209,19 @@ pub struct QuestionState {
 impl QuestionState {
     pub fn open(&self) -> bool {
         self.answer.is_none() && !self.superseded
+    }
+}
+
+fn nothing_carried(n: &u64) -> bool {
+    *n == 0
+}
+
+impl StepState {
+    /// An attempt that ended in `session`, having used `tokens`: in the session the step had, its tokens add to what
+    /// that session carries; in a new one, they are all it carries.
+    fn carry(&mut self, session: Option<&String>, tokens: u64) {
+        let Some(new) = session else { return };
+        self.carried = if self.session.as_ref() == Some(new) { self.carried + tokens } else { tokens };
     }
 }
 
@@ -343,6 +362,8 @@ impl Run {
                 self.spent.add(*usage);
                 let acts = self.manifest.index(step).is_some_and(|i| self.manifest.steps[i].effect.acts() && !self.manifest.steps[i].repeats_safely());
                 if let Some(s) = self.step_mut(step) {
+                    s.carry(session.as_ref(), usage.tokens);
+                    s.dropped_all = false;
                     s.acted |= acts;
                     s.resume = None;
                     s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone(), tree: tree.clone() });
@@ -379,6 +400,7 @@ impl Run {
             Event::AttemptImpossible { step, usage, session, .. } => {
                 self.spent.add(*usage);
                 if let Some(s) = self.step_mut(step) {
+                    s.carry(session.as_ref(), usage.tokens);
                     s.resume = None;
                     s.pending = None;
                     s.status = Status::Idle;
@@ -551,6 +573,8 @@ impl Run {
                     s.locks.remove(&item.id);
                 }
                 let here = s.done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
+                let drops_all = answer.sends_back() && answer.drops_all(&question);
+                s.dropped_all = drops_all;
                 for item in &question.items {
                     match answer.verdict(&item.id) {
                         Verdict::Keep => {
@@ -574,6 +598,7 @@ impl Run {
                 if let Some(j) = maker.filter(|_| answer.sends_back() && answer.kept_alone(&question).is_none()) {
                     let made = self.steps[j].done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
                     let m = &mut self.steps[j];
+                    m.dropped_all = drops_all;
                     for item in &question.items {
                         if answer.verdict(&item.id) == Verdict::Drop && !m.dropped.contains(item) {
                             m.dropped.push(item.clone());

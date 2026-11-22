@@ -33,6 +33,14 @@ fn refuse<T>(why: impl Into<String>) -> Result<T, Refusal> {
 }
 
 /// The rule that answers routine leaves: reading inside the project.
+/// The most tokens a step's session may carry for a round the person sent back with their words to go on in it.
+/// A resumed session carries its whole conversation into every call: measured on 21/11/2026 (the ai-engineer's notes
+/// in the team's private folder), a resume cost half a new session's tokens when the cache was warm and the same when
+/// it was cold, and the saving is the rereading a new session does. Past about 100 thousand tokens carried, that
+/// conversation weighs more than what it saves, and the agent nears the window where Claude Code starts summarizing
+/// it on its own: the round starts afresh.
+pub const RESUME_CEILING: u64 = 100_000;
+
 pub const READ_INSIDE_PROJECT: &str = "read-inside-project";
 /// The rule that lets a step run a command when its role says the step runs commands: the agent program's own box
 /// confines every command it runs.
@@ -561,10 +569,19 @@ impl Ctx {
         let key = decl.effect.irreversible().then(|| self.act_key(i));
         // after the person answered the agent's "it cannot be done", it goes on in that session
         let answered = decl.executor == Executor::Agent && !s.inputs.is_empty() && s.session.is_some();
+        // A round the person sent back with their words goes on in the session of the step's last attempt that
+        // delivered: the agent knows what it made and why. Afresh after an attempt it spent, when the person dropped
+        // everything it showed (they want new ideas), and past the session's ceiling (RESUME_CEILING).
+        let noted = decl.executor == Executor::Agent
+            && !s.notes.is_empty()
+            && s.spent == 0
+            && !s.dropped_all
+            && s.carried <= RESUME_CEILING
+            && s.session.is_some();
         let session = match decl.session {
             // an attempt cut off from outside goes on where it was
             _ if decl.executor == Executor::Agent && s.resume.is_some() => s.resume.clone(),
-            _ if answered => s.session.clone(),
+            _ if answered || noted => s.session.clone(),
             SessionKind::Continue => self.run.manifest.steps[..i]
                 .iter()
                 .rposition(|b| b.executor == Executor::Agent)

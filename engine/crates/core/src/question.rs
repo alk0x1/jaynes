@@ -168,6 +168,11 @@ impl Answer {
         self.verdicts.values().any(Verdict::sends_back) || !self.back.is_empty()
     }
 
+    /// Whether the answer drops everything the question showed and brings nothing back: the person wants new ideas.
+    pub fn drops_all(&self, q: &Question) -> bool {
+        !q.items.is_empty() && self.back.is_empty() && q.items.iter().all(|x| self.verdict(&x.id) == Verdict::Drop)
+    }
+
     /// What an answer to a stop that chooses does: one option goes on, two or three finalists are developed and
     /// asked about again, or none goes on and new options are made. None when it is no valid choice.
     pub fn choice(&self, q: &Question) -> Option<Choice> {
