@@ -111,6 +111,17 @@ fn stop(s: &Scratch, run: &str) -> Option<String> {
         .filter_map(|e| e["question"]["id"].as_str()).find(|id| !done.contains(id)).map(str::to_string)
 }
 
+/// The person merges what the stop before the merge shows, at a terminal: every merge waits for them.
+fn merge_it(s: &Scratch, run: &str) -> String {
+    let e = events(s, run);
+    let done: Vec<&str> = e.iter().filter(|e| e["type"] == "AnswerRecorded").filter_map(|e| e["answer"]["question"].as_str())
+        .chain(e.iter().filter(|e| e["type"] == "QuestionSuperseded").filter_map(|e| e["question"].as_str())).collect();
+    let q = e.iter().rev().filter(|e| e["type"] == "QuestionOpened" && e["question"]["kind"] == "merge")
+        .filter_map(|e| e["question"]["id"].as_str()).find(|id| !done.contains(id)).map(str::to_string)
+        .unwrap_or_else(|| panic!("the merge waits for the person"));
+    person(s, &["answer", run, &q, "--send"])
+}
+
 /// A patch that sets the retries to zero, as the planter writes it.
 fn patch(s: &Scratch) -> PathBuf {
     let p = s.base.join("planted.patch");
@@ -192,10 +203,14 @@ fn nothing_is_delivered_while_a_planted_defect_is_in_and_unplanting_lets_it_go_w
     assert!(shown.contains("a planted defect is still in"), "{shown}");
     assert!(missed(&s, "held").is_empty(), "the summary would say a defect was missed while it is still in");
     assert_eq!(on(&s.project, "main", "config.txt"), "retries = 3\n");
-    assert_eq!(on(&s.project, "jaynes/held", "config.txt"), "retries = 3\n", "the run's branch went out with the defect");
+    // every merge waits for the person, so nothing went out before the defect went in, as a branch or merged
+    assert_eq!(on(&s.project, "jaynes/held", "config.txt"), "", "the run's branch went out with the defect");
     // taken out, the delivery goes on, without the defect and with the agent's change
     let id = planted_id(&s, "held");
     let out = person(&s, &["unplant", "held", &id, "--by", "Remover Name"]);
+    // taken out, the run waits at its merge, which shows no defect, and the person merges it
+    assert!(!out.contains("finished: delivered"), "{out}");
+    let out = merge_it(&s, "held");
     assert!(out.contains("finished: delivered"), "{out}");
     assert_eq!(on(&s.project, "main", "config.txt"), "retries = 3\n");
     assert_eq!(on(&s.project, "main", "greeting.txt"), "hi\n");
@@ -365,6 +380,8 @@ fn a_defect_taken_out_by_a_process_that_died_is_closed_by_a_second_unplant() {
     assert!(v["defects"][0]["removed"].is_null() && v["defects"][0]["still_in"] == false, "{v}");
     // a second unplant says it and the run goes on to its end
     let out = person(&s, &["unplant", "died", &id, "--by", "Remover Name"]);
+    assert!(!out.contains("finished: delivered"), "{out}");
+    let out = merge_it(&s, "died");
     assert!(out.contains("finished: delivered"), "{out}");
     let (_, export) = engine(&s, &["export", "--evaluation", "died"]);
     let v: Value = serde_json::from_str(&export).expect("json");

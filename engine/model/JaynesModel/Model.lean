@@ -86,7 +86,8 @@ structure Run where
   /-- the last delivery holds what the path holds now -/
   deliveredCurrent : Bool
   anyOpenQuestion : Bool
-  /-- G19: the delivery merges into the person's branch and brings in what runs later outside any box -/
+  /-- G19: the delivery merges into the person's branch and brings files in: every such merge waits for the person,
+      what runs later outside any box among them named -/
   mergeHeld : Bool
   /-- G19: the person answered about this very delivery -/
   mergeAnswered : Bool
@@ -189,8 +190,8 @@ def moveAt (r : Run) (i : Nat) : Move :=
   | .idle => r.idleMove i
   | _ => .none
 
-/-- When every step of the path is done on what holds now. G19: a merge that brings in what runs later outside any
-    box waits for the person's answer about this very delivery. -/
+/-- When every step of the path is done on what holds now. G19: a merge that brings files into the person's branch,
+    what runs later outside any box among them, waits for the person's answer about this very delivery. -/
 def settled (r : Run) : Move :=
   if !r.deliveredCurrent then
     (if r.mergeHeld && !r.mergeAnswered then (if r.mergeAsked then .waitAnswers else .askMerge) else .deliver)

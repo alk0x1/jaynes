@@ -373,7 +373,7 @@ impl World {
                             assert!(q.kind == QuestionKind::Permission && earlier.is_some_and(|a| a.verdict("leave") == answer.verdict("leave")), "seed {seed}: G9 a leave answered again without the person's earlier answer");
                         }
                         By::Rule { rule } => {
-                            assert!(rule == READ_INSIDE_PROJECT || rule == jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN, "seed {seed}: G9 unknown rule");
+                            assert!(rule == READ_INSIDE_PROJECT || rule == jaynes_core::decide::COMMAND_THE_STEP_MAY_RUN || rule == jaynes_core::decide::WRITE_THE_STEP_MAY_WRITE, "seed {seed}: G9 unknown rule");
                             assert_eq!(q.kind, QuestionKind::Permission, "seed {seed}: G9 a rule answered a decision");
                         }
                         By::Agent { .. } => {
@@ -430,11 +430,12 @@ impl World {
                     }
                     let _ = i;
                 }
-                // G19: a merge that brings in what runs later outside any box goes out only on the person's keep about
-                // this very delivery, every file it showed kept; dropped, it delivers the branch only
-                Command::Deliver { digest, merge, given } if !post.merge_holds().is_empty() && post.manifest.lands() && !post.undone => {
+                // G19: a merge goes out only on the person's keep about this very delivery, every file it showed kept,
+                // what runs later outside any box among them; dropped, it delivers the branch only. Every merge waits
+                // so, whatever it brings
+                Command::Deliver { digest, merge, given } if !post.delivered_files().is_empty() && post.manifest.lands() && !post.undone && !post.never_merge => {
                     let answer = post.merge_answer(digest);
-                    assert!(answer.is_some(), "seed {seed}: G19 a merge bringing in {:?} went out unanswered", post.merge_holds().iter().map(|(c, _)| &c.what).collect::<Vec<_>>());
+                    assert!(answer.is_some(), "seed {seed}: G19 a merge bringing in {:?} went out unanswered", post.delivered_files().iter().map(|(c, _)| &c.what).collect::<Vec<_>>());
                     assert_eq!(Some(*merge), answer, "seed {seed}: G19 the merge did not do what the person answered");
                     for r in given {
                         let j = post.manifest.index(&r.step).expect("read");
@@ -624,7 +625,7 @@ impl World {
             Command::RunAgent(turn) => {
                 if self.rng.chance(6) {
                     let target = if self.rng.chance(50) { "src/a.rs".to_string() } else { "/etc/passwd".to_string() };
-                    let kind = match self.rng.below(10) { 0..=6 => AskKind::Read, 7 => AskKind::Command, _ => AskKind::Network };
+                    let kind = match self.rng.below(10) { 0..=5 => AskKind::Read, 6 => AskKind::Write, 7 => AskKind::Command, _ => AskKind::Network };
                     self.send(Input::PermissionAsked { step: turn.step.clone(), attempt: turn.attempt, ask: Ask { kind, target } });
                 }
                 if self.rng.chance(50) {
@@ -1565,10 +1566,14 @@ fn g19_a_merge_that_brings_in_what_runs_later_waits_for_the_person_who_alone_ans
     assert_eq!(delivered_merge(&c), None, "G19 the merge went out unasked: {c:?}");
     let q = merge_asked(&c).expect("G19 the merge asks the person");
     assert!(q.holds);
-    assert_eq!(q.items.iter().map(|x| (x.id.as_str(), x.digest.0.as_str())).collect::<Vec<_>>(), [(".envrc", "b1")]);
+    assert_eq!(q.items.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), [".envrc", "src/a.rs"], "every file that lands");
+    assert_eq!(q.items.iter().find(|x| x.id == ".envrc").map(|x| x.digest.0.as_str()), Some("b1"));
+    assert!(q.about.contains("run or are obeyed later outside any box"), "{}", q.about);
     assert_eq!(run.risk, Risk::High, "G7 still raises the risk");
     // no agent and no rule answers it
-    let keep = |by: By| Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::from([(".envrc".to_string(), Verdict::Keep)]), by, context: String::new() };
+    let keep = |by: By| Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: q.items.iter().map(|x| (x.id.clone(), Verdict::Keep)).collect(), by, context: String::new() };
+    let says = jaynes_core::effects(&run, &q, &keep(By::Person)).sentences;
+    assert_eq!(says, ["The delivery merges into your branch, with .envrc."], "only what runs later is named");
     for by in [By::Agent { who: "claude".to_string() }, By::Rule { rule: "anything".to_string() }] {
         assert!(decide(Some(&run), &Input::Answer { answer: keep(by.clone()) }).is_err(), "G19 {by:?} answered the merge");
     }
@@ -1583,12 +1588,15 @@ fn g19_a_merge_that_brings_in_what_runs_later_waits_for_the_person_who_alone_ans
     // raises the risk; without the measure's word, a manifest holds it
     let quiet = Changed { what: "package.json".to_string(), size: 1, floor: true, holds: Some(false), ..Default::default() };
     let (run, c) = merging(vec![quiet.clone()]);
-    assert_eq!((run.risk, delivered_merge(&c)), (Risk::High, Some(true)), "{c:?}");
+    assert_eq!((run.risk, delivered_merge(&c)), (Risk::High, None), "{c:?}");
+    assert!(merge_asked(&c).is_some_and(|q| q.about.starts_with("This is what lands on your branch.")), "the merge waits, holding nothing that runs later: {c:?}");
     let (_, c) = merging(vec![Changed { holds: None, ..quiet }]);
     assert!(merge_asked(&c).is_some(), "G19 a manifest with no word from the measure went out unasked");
-    // nothing on the floor: it merges as before
+    // nothing on the floor: the merge still waits for the person, showing what lands, and names nothing as running
+    // later outside any box
     let (_, c) = merging(vec![Changed::file("src/a.rs".to_string(), 1)]);
-    assert_eq!(delivered_merge(&c), Some(true));
+    assert_eq!(delivered_merge(&c), None);
+    assert_eq!(merge_asked(&c).map(|q| q.items.into_iter().map(|x| x.id).collect::<Vec<_>>()), Some(vec!["src/a.rs".to_string()]));
 }
 
 #[test]
@@ -2285,7 +2293,7 @@ fn model_case(run: &Run) -> String {
         "ceilingReached": run.spent.seconds >= run.ceiling.seconds || run.spent.tokens >= run.ceiling.tokens,
         "deliveredCurrent": run.delivered.as_ref() == Some(&run.delivery().0),
         "anyOpenQuestion": !run.open_questions().is_empty(),
-        "mergeHeld": run.manifest.lands() && !run.undone && !run.merge_holds().is_empty(),
+        "mergeHeld": run.manifest.lands() && !run.undone && !run.never_merge && !run.delivered_files().is_empty(),
         "mergeAnswered": run.merge_answer(&run.delivery().0).is_some(),
         "mergeAsked": run.merge_open(&run.delivery().0).is_some(),
     });

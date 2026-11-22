@@ -768,8 +768,9 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
         .env("PROMPTS", &prompts)
         .output()
         .expect("start");
-    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    assert!(said.contains("delivered: jaynes/fixbug"), "{said}");
+    let started = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let (_, said) = merge_as_person(&s, "fixbug", fix_bug_env(&s));
+    assert!(said.contains("delivered: jaynes/fixbug"), "{started}\n{said}");
     let e = events(&s, "fixbug");
     // the incomplete fix passed the open checks and was caught by the hidden one, spending one attempt
     let failed: Vec<&Value> = e.iter().filter(|e| e["type"] == "AttemptFailed" && e["step"] == "fix").collect();
@@ -893,7 +894,10 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let mut c = tty();
     c.args([BIN, "answer", "redo", &q, "examples-1=redo:also an empty name", "--send"]);
     env(&mut c);
-    let said = String::from_utf8_lossy(&c.output().expect("answer").stdout).to_string();
+    let mut said = String::from_utf8_lossy(&c.output().expect("answer").stdout).to_string();
+    // the first delivery waited at its merge, and the person's answer to reproduce replaced it: the fix made again
+    // lands only once the person merges it
+    said.push_str(&merge_as_person(&s, "redo", env).1);
     let e = events(&s, "redo");
     let t = types(&e);
     // reproduce reran over the base, where the bug still is, and passed; fix ran again on top and was delivered
@@ -901,8 +905,9 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     assert_eq!(reproduce_failed, 0, "{said}\n{t:?}");
     assert!(e.iter().filter(|e| e["type"] == "StepDone" && e["step"] == "reproduce").count() == 2, "{t:?}");
     assert!(e.iter().filter(|e| e["type"] == "StepDone" && e["step"] == "fix").count() == 2, "{t:?}");
+    // delivered once: the first delivery never went out, since it waited at its merge when reproduce was sent back
     let delivered = e.iter().filter(|e| e["type"] == "Delivered").count();
-    assert_eq!(delivered, 2, "{t:?}");
+    assert_eq!(delivered, 1, "{t:?}");
     {
         let (file, want) = ("greet.sh", "echo \"hi $1\"\n");
         let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", &format!("jaynes/redo:{file}")]).output().expect("git");
@@ -1143,12 +1148,47 @@ fn fix_bug_run(s: &Scratch, run: &str) -> String {
     format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
 }
 
+/// The merge question a run waits on, if it waits on one: every merge waits for the person.
+fn open_merge(s: &Scratch, run: &str) -> Option<String> {
+    let e = events(s, run);
+    let closed: Vec<&str> = e
+        .iter()
+        .filter_map(|e| if e["type"] == "AnswerRecorded" { e["answer"]["question"].as_str() } else if e["type"] == "QuestionSuperseded" { e["question"].as_str() } else { None })
+        .collect();
+    e.iter()
+        .filter(|e| e["type"] == "QuestionOpened" && e["question"]["kind"] == "merge")
+        .filter_map(|e| e["question"]["id"].as_str())
+        .rfind(|id| !closed.contains(id))
+        .map(str::to_string)
+}
+
+/// The person, at a terminal, merges what the stop before the merge shows: its exit code and what it said.
+fn merge_as_person(s: &Scratch, run: &str, envs: impl Fn(&mut Command)) -> (Option<i32>, String) {
+    let q = open_merge(s, run).unwrap_or_else(|| panic!("the merge waits for the person: {:?}", types(&events(s, run))));
+    let mut c = tty();
+    c.args([BIN, "answer", run, &q, "--send"]);
+    envs(&mut c);
+    let out = c.output().expect("answer");
+    (out.status.code(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+/// The environment of a fix-bug run, for what the person types after it starts.
+fn fix_bug_env(s: &Scratch) -> impl Fn(&mut Command) + '_ {
+    move |c: &mut Command| {
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", s.home.join("prompts"));
+    }
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_reverts_it() {
     let s = bug_project("merge");
-    let said = fix_bug_run(&s, "merge");
-    assert!(said.contains("merged as"), "{said}");
+    let started = fix_bug_run(&s, "merge");
+    // nothing lands before the person looked at what lands and merged it
+    assert!(!started.contains("merged as"), "{started}");
+    assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello $1\"\n", "nothing landed unasked");
+    let (_, said) = merge_as_person(&s, "merge", fix_bug_env(&s));
+    assert!(said.contains("merged as"), "{started}\n{said}");
     // the person's checkout moved forward: their working tree has the fix, and nothing was pushed
     assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hi $1\"\n");
     let log = Command::new("git").arg("-C").arg(&s.project).args(["log", "--format=%s", "-1", "main"]).output().expect("git");
@@ -1170,7 +1210,8 @@ fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_revert
 fn a_merge_waits_for_a_clean_checkout_and_says_why() {
     let s = bug_project("dirty");
     std::fs::write(s.project.join("greet.sh"), "echo \"hello there $1\"\n").expect("write");
-    let said = fix_bug_run(&s, "dirty");
+    fix_bug_run(&s, "dirty");
+    let (_, said) = merge_as_person(&s, "dirty", fix_bug_env(&s));
     assert!(said.contains("not merged: your checkout of main has uncommitted changes"), "{said}");
     assert_eq!(std::fs::read_to_string(s.project.join("greet.sh")).expect("read"), "echo \"hello there $1\"\n", "the person's work is untouched");
     let branch = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/dirty:greet.sh"]).output().expect("git");
@@ -1772,6 +1813,11 @@ fn a_run_killed_at_any_moment_recovers_and_lands_once() {
             if events(&s, &run).iter().any(|e| e["type"] == "Delivered") {
                 break;
             }
+            // the merge waits for the person; anything else, the run goes on
+            if open_merge(&s, &run).is_some() {
+                said.push_str(&merge_as_person(&s, &run, envs).1);
+                continue;
+            }
             let mut c = tty();
             c.args([BIN, "continue", &run]);
             envs(&mut c);
@@ -1940,9 +1986,14 @@ fn a_merge_that_landed_before_the_process_died_lands_once_and_can_be_undone() {
         .args(["start", "--run", "diemerge", "--role", root().join("crates/shell/tests/roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", agent.display())])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("PROMPTS", &prompts)
-        .env("JAYNES_DIE_AFTER_MERGE", "1")
         .output().expect("start");
-    assert_eq!(out.status.code(), Some(9), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // the person merges, and the process that merges dies once the merge landed
+    let (code, said) = merge_as_person(&s, "diemerge", |c: &mut Command| {
+        fix_bug_env(&s)(c);
+        c.env("JAYNES_DIE_AFTER_MERGE", "1");
+    });
+    assert_eq!(code, Some(9), "{said}");
     // the delivery made again a second later is made of new commits, with the same change
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let mut c = jaynes();

@@ -45,6 +45,9 @@ pub const READ_INSIDE_PROJECT: &str = "read-inside-project";
 /// The rule that lets a step run a command when its role says the step runs commands: the agent program's own box
 /// confines every command it runs.
 pub const COMMAND_THE_STEP_MAY_RUN: &str = "command-the-step-may-run";
+/// The rule that lets a step write a file inside the project that its role lets it write: the merge into the
+/// person's branch asks them about what lands (G19), so no file written is asked about one by one.
+pub const WRITE_THE_STEP_MAY_WRITE: &str = "write-the-step-may-write";
 /// The rule that gives a leave asked again in a run the answer the person already gave it: they are not asked twice.
 pub const ANSWERED_BEFORE: &str = "answered-before";
 /// The rule that raises a run's risk from what its change touches.
@@ -264,6 +267,11 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             if id.trim().is_empty() || c.run.planted.contains_key(id) || c.run.unplanted.contains(id) {
                 return refuse(format!("this run already has a defect {id}"));
+            }
+            // a merge asked before the defect went in showed what lands without it: it is asked again once it is out
+            let stale: Vec<String> = c.run.open_questions().iter().filter(|q| q.question.kind == QuestionKind::Merge).map(|q| q.question.id.clone()).collect();
+            for question in stale {
+                c.emit(Event::QuestionSuperseded { question });
             }
             c.emit(Event::DefectPlanted { id: id.clone(), step: step.clone(), by: by.clone() });
         }
@@ -711,40 +719,47 @@ impl Ctx {
         false
     }
 
-    /// Whether the delivery `digest` merges into the person's branch: none while G19 waits for the person.
+    /// Whether the delivery `digest` merges into the person's branch: none while the merge waits for the person, as
+    /// every merge does (G19 for what runs later outside any box among what lands).
     fn lands(&self, digest: &Digest) -> Option<bool> {
         if !(self.run.manifest.lands() && !self.run.undone && !self.run.never_merge) {
             return Some(false);
         }
-        if self.run.merge_holds().is_empty() {
+        // a delivery that changes nothing brings nothing in: there is nothing to look at
+        if self.run.delivered_files().is_empty() {
             return Some(true);
         }
         self.run.merge_answer(digest)
     }
 
-    /// G19: the merge would bring in what runs or is obeyed later outside any box, and the person has not answered
-    /// about this delivery: ask them, naming each such file with what changes in it, and wait. A question about an
-    /// earlier delivery is replaced, since what it showed is not what would land.
+    /// Every merge into the person's branch waits for them, showing each file that lands, bound to its change; G19
+    /// for what runs or is obeyed later outside any box among them, named with what changes in it. A question about
+    /// an earlier delivery is replaced, since what it showed is not what would land.
     fn ask_merge(&mut self, digest: &Digest) {
-        const WHY: &str = "the merge waits for you: it brings into your branch what runs later outside any box";
+        let held = !self.run.merge_holds().is_empty();
+        let why = if held {
+            "the merge waits for you: it brings into your branch what runs later outside any box"
+        } else {
+            "the merge waits for you: you look at what lands on your branch before it does"
+        };
         if let Some(q) = self.run.merge_open(digest) {
             let on = vec![q.question.id.clone()];
-            self.wait(None, on, WHY.to_string());
+            self.wait(None, on, why.to_string());
             return;
         }
         let stale: Vec<String> = self.run.open_questions().iter().filter(|q| q.question.kind == QuestionKind::Merge).map(|q| q.question.id.clone()).collect();
         for question in stale {
             self.emit(Event::QuestionSuperseded { question });
         }
-        let held = self.run.merge_holds();
-        let step = held
+        let files = self.run.delivered_files();
+        let step = files
             .iter()
             .filter_map(|(_, s)| self.run.manifest.index(s))
             .max()
             .map(|i| self.name(i))
             .unwrap_or_default();
         let round = self.run.manifest.index(&step).map(|i| self.run.steps[i].round).unwrap_or(0);
-        let items = held
+        let items = files
             .iter()
             .map(|(c, _)| Item {
                 id: c.what.clone(),
@@ -752,6 +767,14 @@ impl Ctx {
                 digest: c.digest.clone().map(Digest).unwrap_or_else(|| Digest::of_json(c)),
             })
             .collect();
+        let about = if held {
+            format!(
+                "This delivery brings into your branch files that run or are obeyed later outside any box. Keep merges them; drop delivers the change on the branch jaynes/{} only, and nothing lands.",
+                self.run.id
+            )
+        } else {
+            format!("This is what lands on your branch. Keep merges it; drop delivers the change on the branch jaynes/{} only, and nothing lands.", self.run.id)
+        };
         let question = Question { back: Default::default(),
             id: self.question_id("merge"),
             step,
@@ -760,10 +783,7 @@ impl Ctx {
             items,
             offered: vec![VerdictKind::Keep, VerdictKind::Drop],
             holds: true,
-            about: format!(
-                "This delivery brings into your branch files that run or are obeyed later outside any box. Keep merges them; drop delivers the change on the branch jaynes/{} only, and nothing lands.",
-                self.run.id
-            ),
+            about,
             choose: false,
             pass: 0,
             passes: 0,
@@ -771,7 +791,7 @@ impl Ctx {
         let on = vec![question.id.clone()];
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
-        self.wait(None, on, WHY.to_string());
+        self.wait(None, on, why.to_string());
     }
 
     fn deliver(&mut self) -> bool {
@@ -1585,9 +1605,22 @@ pub fn routine(reach: &crate::manifest::Reach, ask: &Ask) -> Option<&'static str
     let inside = !t.is_empty() && !t.starts_with('/') && !t.starts_with('~') && !t.split('/').any(|part| part == "..");
     match ask.kind {
         AskKind::Read if reach.project != ProjectAccess::None && inside => Some(READ_INSIDE_PROJECT),
+        AskKind::Write if reach.project == ProjectAccess::Write && inside && crate::glob::allowed(t, &reach.write) && !agent_own(t) => {
+            Some(WRITE_THE_STEP_MAY_WRITE)
+        }
         AskKind::Command if reach.commands => Some(COMMAND_THE_STEP_MAY_RUN),
         _ => None,
     }
+}
+
+/// The settings an agent program obeys in the folder it works in, at any depth (a nested one holds when the agent runs
+/// in that folder): a write there could widen what the agent itself
+/// may do in the run, so it stays the person's to allow, even where the step may write everything.
+const AGENT_OWN: [&str; 5] = ["**/.claude/**", "**/.codex/**", "**/.gemini/**", "**/.cursor/**", "**/.mcp.json"];
+
+fn agent_own(path: &str) -> bool {
+    let p = path.trim_start_matches("./").to_lowercase();
+    AGENT_OWN.iter().any(|g| crate::glob::matches(&p, g))
 }
 
 /// `one`: the stop chooses with this option alone ([`Question::one_option`]), so a change chooses nothing yet.
@@ -1681,9 +1714,14 @@ pub fn before_sending(sentence: &str) -> String {
 pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     let mut sentences = Vec::new();
     if q.kind == QuestionKind::Merge {
-        let files: Vec<&str> = q.items.iter().map(|x| x.id.as_str()).collect();
+        // the files that run later outside any box, named: the rest is what the stop shows
+        let held: Vec<String> = run.merge_holds().into_iter().map(|(c, _)| c.what).filter(|w| q.items.iter().any(|x| &x.id == w)).collect();
         sentences.push(if q.items.iter().all(|x| answer.verdict(&x.id) == Verdict::Keep) {
-            format!("The delivery merges into your branch, with {}.", files.join(", "))
+            match held.split_last() {
+                None => "The delivery merges into your branch.".to_string(),
+                Some((last, [])) => format!("The delivery merges into your branch, with {last}."),
+                Some((last, first)) => format!("The delivery merges into your branch, with {} and {last}.", first.join(", ")),
+            }
         } else {
             format!("Nothing lands on your branch: the change stays on the branch jaynes/{}, where you can look at it.", run.id)
         });

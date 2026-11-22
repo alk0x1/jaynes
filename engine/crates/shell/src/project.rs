@@ -437,8 +437,10 @@ impl Copy {
         for line in stat.lines() {
             let mut parts = line.splitn(3, '\t');
             let (a, d, path) = (parts.next().unwrap_or("0"), parts.next().unwrap_or("0"), parts.next().unwrap_or(""));
-            let lines = a.parse::<u64>().unwrap_or(1) + d.parse::<u64>().unwrap_or(0);
-            changed.push(self.measured(path, lines));
+            let removed = d.parse::<u64>().unwrap_or(0);
+            let mut c = self.measured(path, a.parse::<u64>().unwrap_or(1) + removed);
+            c.removed = removed;
+            changed.push(c);
         }
         let outside: Vec<String> =
             changed.iter().filter(|c| !glob::allowed(&c.what, write)).map(|c| c.what.clone()).collect();

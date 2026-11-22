@@ -797,14 +797,18 @@ impl Run {
     /// G19: what the delivery brings in that holds a merge, each with the last step on the path that changed it, in
     /// the order the path changed them.
     pub fn merge_holds(&self) -> Vec<(Changed, String)> {
+        self.delivered_files().into_iter().filter(|(c, _)| crate::risk::holds_merge(self.manifest.target, c)).collect()
+    }
+
+    /// Every file the delivery brings, as the last step of the path that changed it left it, with that step's name:
+    /// what a merge lands on the person's branch, and what the stop before it shows.
+    pub fn delivered_files(&self) -> Vec<(Changed, String)> {
         let mut out: Vec<(Changed, String)> = Vec::new();
         for i in self.path() {
             let Some(done) = self.steps[i].done.as_ref() else { continue };
             for c in &done.changed {
                 out.retain(|(o, _)| o.what != c.what);
-                if crate::risk::holds_merge(self.manifest.target, c) {
-                    out.push((c.clone(), self.manifest.steps[i].name.clone()));
-                }
+                out.push((c.clone(), self.manifest.steps[i].name.clone()));
             }
         }
         out

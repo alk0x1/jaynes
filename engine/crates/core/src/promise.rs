@@ -407,6 +407,19 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
     }
     for q in r.open_questions() {
         let q = &q.question;
+        // the merge waits for the person, every time, and they merge. Taking the change as a branch only is not
+        // searched: it goes on as merging does, with the merge left out, so it never breaks a promise merging keeps
+        if q.kind == QuestionKind::Merge {
+            let verdicts = q.items.iter().map(|x| (x.id.clone(), Verdict::Keep)).collect();
+            out.push(Move {
+                input: Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: String::new() } },
+                says: "you merge".to_string(),
+                trouble: false,
+                sends_back: None,
+                answers: None,
+            });
+            continue;
+        }
         if q.kind != QuestionKind::Decision {
             continue;
         }
@@ -499,9 +512,10 @@ fn happened(e: &Event, pre: &Run) -> Vec<On> {
             .filter(|&i| pre.manifest.steps[i].executor == Executor::Person && pre.steps[i].question.is_none())
             .map(|_| vec![On::StepStarts(question.step.clone())])
             .unwrap_or_default(),
-        Event::DeliveryAsked { .. } => {
+        Event::DeliveryAsked { digest } => {
             let mut v = vec![On::Deliver];
-            if pre.manifest.delivery == DeliveryKind::Merge && !pre.undone {
+            // a merge, unless the person took the change as a branch only
+            if pre.manifest.delivery == DeliveryKind::Merge && !pre.undone && !pre.never_merge && pre.merge_answer(digest) != Some(false) {
                 v.push(On::Merge);
             }
             v

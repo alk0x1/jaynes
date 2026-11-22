@@ -269,6 +269,8 @@ pub fn title(q: &QuestionState) -> String {
         let label = &q.question.items[0].label;
         let name = label.split_once(':').map_or(label.as_str(), |(n, _)| n).trim();
         format!("Go with “{name}”?")
+    } else if q.question.kind == QuestionKind::Merge {
+        "Merge into your branch?".to_string()
     } else if !q.question.about.trim().is_empty() {
         q.question.about.clone()
     } else if q.question.kind == QuestionKind::Permission {

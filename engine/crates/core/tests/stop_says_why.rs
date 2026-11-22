@@ -42,7 +42,7 @@ fn small_change(ask: &str) -> Manifest {
 }
 
 fn file(what: &str, size: u64) -> Changed {
-    Changed { what: what.to_string(), size, floor: !jaynes_core::risk::floor([what]).is_empty(), digest: None, holds: None, about: String::new() }
+    Changed { what: what.to_string(), size, floor: !jaynes_core::risk::floor([what]).is_empty(), digest: None, holds: None, about: String::new(), removed: 0 }
 }
 
 /// What the stop asks of a run whose agent changed `changed`, or None when it does not ask.

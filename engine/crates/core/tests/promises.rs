@@ -89,7 +89,8 @@ fn a_stop_that_does_not_hold_lets_the_merge_go_before_the_answer() {
         on: On::Merge,
         unless: Condition::PersonAnswered("change".into()),
     });
-    let Proof::Broken { path } = &prove(&m, &[p])[0] else { panic!("it should break") };
+    let proofs = prove(&m, &[p]);
+    let Proof::Broken { path } = &proofs[0] else { panic!("it should break: {proofs:?}") };
     let said = path.join(" → ");
     assert!(said.contains("change asks you") && said.ends_with("merge, with no answer of yours at change"), "{said}");
 }

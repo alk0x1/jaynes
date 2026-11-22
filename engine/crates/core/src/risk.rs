@@ -55,6 +55,9 @@ pub struct Changed {
     pub what: String,
     /// How much it changed, in the target's unit: lines on a repository.
     pub size: u64,
+    /// Of `size`, how much went away: the lines removed, on a repository. The rest were added.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed: u64,
     /// It runs or is obeyed later outside any box, or cannot be taken back: it alone makes the change risky.
     pub floor: bool,
     /// The fingerprint of what the change leaves (a file's content), when the measure knows it: a question about the
@@ -76,6 +79,42 @@ impl Changed {
         let floor = !floor([path.as_str()]).is_empty();
         Changed { what: path, size: lines, floor, ..Default::default() }
     }
+}
+
+/// How each kind of file on the floor runs, in plain words, as the stop before a merge says it after the file's name:
+/// the first that matches tells (CI before git's own files, since `.github/` starts as they do).
+const RUNS_HOW: &[(&[&str], &str)] = &[
+    (&["**/conftest.py"], "runs on its own whenever the tests run"),
+    (&["**/sitecustomize.py", "**/usercustomize.py", "**/.venv/**", "**/venv/**"], "Python runs it on its own, before your code"),
+    (
+        &["**/setup.py", "**/setup.cfg", "**/pyproject.toml", "**/package.json", "**/.npmrc", "**/.yarnrc*", "**/Cargo.toml", "**/build.rs"],
+        "runs when the project is installed or built",
+    ),
+    (&["**/Makefile", "**/GNUmakefile"], "runs when you run make"),
+    (&[".github/**", ".gitlab-ci.yml", ".circleci/**", ".buildkite/**", "Jenkinsfile", "azure-pipelines.yml", ".travis.yml"], "runs in your CI"),
+    (
+        &["**/.git*", "**/.lfsconfig", "**/.husky/**", "**/.pre-commit-config.yaml", "**/lefthook*", "**/.lefthook*"],
+        "git runs or obeys it on your machine",
+    ),
+    (&["**/.envrc"], "runs when you enter the folder"),
+    (
+        &["**/.claude/**", "**/.codex/**", "**/.cursor/**", "**/.gemini/**", "**/.mcp.json", "**/CLAUDE.md", "**/AGENTS.md", "**/.cursorrules"],
+        "your agents read it as instructions",
+    ),
+    (&["**/.vscode/**", "**/.idea/**", "**/.zed/**"], "your editor obeys it"),
+    (&["**/.devcontainer/**"], "sets up your dev container"),
+];
+
+/// How a file on the floor runs later, in plain words, without the "it" a sentence would start with ("runs on its own
+/// whenever the tests run"); a kind the table does not name only "runs later outside any box". In any case, since
+/// macOS ignores it.
+pub fn runs_how(path: &str) -> &'static str {
+    let p = path.to_lowercase();
+    RUNS_HOW
+        .iter()
+        .find(|(globs, _)| globs.iter().any(|g| glob::matches(&p, &g.to_lowercase())))
+        .map(|(_, how)| *how)
+        .unwrap_or("runs later outside any box")
 }
 
 /// The package manifests on the floor: a change to one holds a merge only when it changes what runs or where code
@@ -107,6 +146,8 @@ struct ChangedOnRecord {
     what: String,
     #[serde(alias = "lines")]
     size: u64,
+    #[serde(default)]
+    removed: u64,
     floor: Option<bool>,
     #[serde(default)]
     digest: Option<String>,
@@ -119,8 +160,12 @@ struct ChangedOnRecord {
 impl From<ChangedOnRecord> for Changed {
     fn from(r: ChangedOnRecord) -> Changed {
         let floor = r.floor.unwrap_or_else(|| !floor([r.what.as_str()]).is_empty());
-        Changed { what: r.what, size: r.size, floor, digest: r.digest, holds: r.holds, about: r.about }
+        Changed { what: r.what, size: r.size, removed: r.removed.min(r.size), floor, digest: r.digest, holds: r.holds, about: r.about }
     }
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// The paths among `paths` that run later outside any box, in any case, since macOS ignores it.
@@ -263,6 +308,41 @@ impl Ceilings {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn each_kind_on_the_floor_says_how_it_runs_in_plain_words() {
+        for (path, how) in [
+            ("tests/conftest.py", "runs on its own whenever the tests run"),
+            ("sitecustomize.py", "Python runs it on its own, before your code"),
+            ("venv/bin/activate", "Python runs it on its own, before your code"),
+            ("pyproject.toml", "runs when the project is installed or built"),
+            ("web/package.json", "runs when the project is installed or built"),
+            ("crates/x/build.rs", "runs when the project is installed or built"),
+            ("Makefile", "runs when you run make"),
+            (".github/workflows/ci.yml", "runs in your CI"),
+            (".gitlab-ci.yml", "runs in your CI"),
+            (".gitattributes", "git runs or obeys it on your machine"),
+            (".husky/pre-commit", "git runs or obeys it on your machine"),
+            ("lefthook.yml", "git runs or obeys it on your machine"),
+            (".envrc", "runs when you enter the folder"),
+            (".claude/settings.json", "your agents read it as instructions"),
+            ("CLAUDE.md", "your agents read it as instructions"),
+            ("docs/AGENTS.md", "your agents read it as instructions"),
+            (".vscode/settings.json", "your editor obeys it"),
+            (".devcontainer/devcontainer.json", "sets up your dev container"),
+            ("TESTS/CONFTEST.PY", "runs on its own whenever the tests run"),
+        ] {
+            assert_eq!(runs_how(path), how, "{path}");
+        }
+        // every kind on the floor has words, the table's or the plain ones
+        for g in FLOOR {
+            let path = g.trim_start_matches("**/").replace("**", "x").replace('*', "x");
+            assert!(!floor([path.as_str()]).is_empty(), "{path} is on the floor");
+            assert!(!runs_how(&path).is_empty());
+        }
+        assert_eq!(runs_how("Brewfile"), "runs later outside any box");
+    }
+
     use super::*;
 
     fn c(path: &str, lines: u64) -> Changed {

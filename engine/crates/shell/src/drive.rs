@@ -411,7 +411,19 @@ fn act_elsewhere(home: &Path, run: &Run, act: &Value) -> Result<Value, String> {
 /// What an answer will do, as the engine the run started on writes it.
 pub fn effects(home: &Path, run: &Run, question: &jaynes_core::question::Question, answer: &jaynes_core::question::Answer) -> Result<jaynes_core::event::Effects, String> {
     if run.engine == jaynes_core::ENGINE {
-        return Ok(jaynes_core::effects(run, question, answer));
+        let mut fx = jaynes_core::effects(run, question, answer);
+        // the core says "your branch"; the copy knows its name
+        if question.kind == jaynes_core::question::QuestionKind::Merge {
+            let into = crate::project::start_branch_of(&home.join("runs").join(&run.id).join("project"));
+            if !into.is_empty() {
+                for s in &mut fx.sentences {
+                    if let Some(rest) = s.strip_prefix("The delivery merges into your branch") {
+                        *s = format!("The delivery merges into “{into}”{rest}");
+                    }
+                }
+            }
+        }
+        return Ok(fx);
     }
     let said = act_elsewhere(home, run, &json!({"effects": {"question": question.id, "answer": answer}}))?;
     serde_json::from_value(said["effects"].clone()).map_err(|e| e.to_string())

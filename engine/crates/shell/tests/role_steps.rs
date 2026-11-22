@@ -1074,8 +1074,12 @@ fn merged_run(s: &Scratch, name: &str) -> PathBuf {
     std::fs::create_dir_all(dir.join("steps")).expect("dir");
     std::fs::write(dir.join("steps/act.sh"), format!("echo note > NOTE\n{DONE}\n")).expect("write");
     std::fs::write(dir.join("role.toml"), format!("role = \"{name}\"\nversion = \"1.0.0\"\ndelivery = \"merge\"\n\n[[step]]\nname = \"act\"\nby = \"role\"\nscript = \"steps/act.sh\"\nreach = {{ project = \"write\", write = [\"NOTE\"] }}\n")).expect("write");
-    let out = start(s, name, &dir, "note it");
-    assert!(out.contains("finished: delivered") && out.contains("merged as"), "{out}");
+    let started = start(s, name, &dir, "note it");
+    // every merge waits for the person, who merges it at a terminal
+    assert!(!s.project.join("NOTE").exists(), "it landed unasked: {started}");
+    let q = merge_question(s, name).unwrap_or_else(|| panic!("the merge waits for the person: {started}"));
+    let out = person(s, &["answer", name, q["id"].as_str().expect("id"), "--send"]);
+    assert!(out.contains("finished: delivered") && out.contains("merged as"), "{started}\n{out}");
     assert_eq!(std::fs::read_to_string(s.project.join("NOTE")).expect("merged"), "note\n");
     dir
 }
@@ -1176,11 +1180,15 @@ fn g19_a_merge_that_brings_in_a_listed_file_waits_and_names_each_file_and_its_ch
     assert!(!s.project.join(".envrc").exists(), "{out}");
     let q = merge_question(&s, "waits").unwrap_or_else(|| panic!("no question holds the merge: {out}"));
     assert_eq!(q["holds"], true, "{q}");
-    // each listed file, and only those, is named; each is shown with what changes in it
-    let mut named: Vec<String> = q["items"].as_array().expect("items").iter().map(|i| i["id"].as_str().unwrap_or("").to_string()).collect();
-    named.sort();
-    assert_eq!(named, [".envrc", ".github/workflows/ci.yml"], "{q}");
+    // every file that lands is shown, each bound to its change; the listed ones, and only those, are named as what
+    // runs later outside any box in what merging does
+    let mut shown: Vec<String> = q["items"].as_array().expect("items").iter().map(|i| i["id"].as_str().unwrap_or("").to_string()).collect();
+    shown.sort();
+    assert_eq!(shown, [".envrc", ".github/workflows/ci.yml", "README.md"], "{q}");
     assert!(q["items"].as_array().expect("items").iter().all(|i| !i["digest"].as_str().unwrap_or("").is_empty()), "each change is shown and bound to the answer: {q}");
+    assert!(q["about"].as_str().unwrap_or("").contains("run or are obeyed later outside any box"), "{q}");
+    let said = person(&s, &["answer", "waits", q["id"].as_str().expect("id")]);
+    assert!(said.contains("The delivery merges into “main”, with .envrc and .github/workflows/ci.yml."), "{said}");
     // the risk goes up as it does today (G7), with the files named
     let e = events(&s, "waits");
     let raised = e.iter().find(|e| e["type"] == "RiskRaised").expect("the risk goes up");
@@ -1300,9 +1308,11 @@ fn g19_a_package_manifest_holds_the_merge_when_it_changes_what_runs_or_where_cod
         if m.file != "package-lock.json" && !events(&s, m.run).iter().any(|e| e["type"] == "RiskRaised") {
             wrong.push(format!("{}: the risk did not go up", m.run));
         }
+        // every merge waits for the person; a manifest that holds it (G19) is named as running later outside any box
         let q = merge_question(&s, m.run);
-        if q.is_some() != m.holds || merged_into_main(&s) == m.holds {
-            wrong.push(format!("{}: held {}, merged {}, should hold {}: {}", m.run, q.is_some(), merged_into_main(&s), m.holds, out.lines().last().unwrap_or("")));
+        let held = q.as_ref().is_some_and(|q| q["about"].as_str().unwrap_or("").contains("run or are obeyed later outside any box"));
+        if q.is_none() || held != m.holds || merged_into_main(&s) {
+            wrong.push(format!("{}: asked {}, held {held}, merged {}, should hold {}: {}", m.run, q.is_some(), merged_into_main(&s), m.holds, out.lines().last().unwrap_or("")));
         }
         // the question shows the package, where it comes from and what changes
         if let Some(q) = q {
@@ -1319,9 +1329,13 @@ fn g19_a_package_manifest_holds_the_merge_when_it_changes_what_runs_or_where_cod
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
-fn g19_a_merge_with_no_listed_file_lands_as_today() {
+fn g19_a_merge_with_no_listed_file_still_waits_for_the_person_and_names_none() {
     let s = scratch("g19-plain", "http://127.0.0.1:1");
     let role = merging_role(&s, "g19-plain", false);
     let out = start_with(&s, "plain", &role, &agent_doing("echo hi > README.md"));
-    assert!(merge_question(&s, "plain").is_none() && merged_into_main(&s), "{out}");
+    let q = merge_question(&s, "plain").unwrap_or_else(|| panic!("the merge waits for the person: {out}"));
+    assert!(!merged_into_main(&s), "{out}");
+    assert!(q["about"].as_str().unwrap_or("").starts_with("This is what lands on your branch."), "{q}");
+    let said = person(&s, &["answer", "plain", q["id"].as_str().expect("id"), "--send"]);
+    assert!(said.contains("The delivery merges into “main”.") && said.contains("merged as") && merged_into_main(&s), "{said}");
 }

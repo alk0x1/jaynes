@@ -792,6 +792,13 @@ fn answer(args: &[String]) -> Result<(), String> {
     if why.is_some() {
         verdicts = q.items.iter().map(|x| (x.id.clone(), Verdict::Drop)).collect();
     }
+    // the merge is one answer about every file it shows: a file not named is kept, as at any stop, and one dropped
+    // takes the change as a branch only, as what this answer will do says before it is sent
+    if q.kind == jaynes_core::question::QuestionKind::Merge {
+        for x in &q.items {
+            verdicts.entry(x.id.clone()).or_insert(Verdict::Keep);
+        }
+    }
     let context = [why.unwrap_or_default(), flag(args, "--context").unwrap_or_default()].iter().filter(|t| !t.trim().is_empty()).cloned().collect::<Vec<_>>().join(" ");
     let answer = Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts, by: who(), context };
     let effects = drive::effects(&home(), &state, &q, &answer)?;

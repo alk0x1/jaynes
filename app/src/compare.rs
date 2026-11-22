@@ -1643,6 +1643,9 @@ mod tests {
             round: 1,
             about: String::new(),
             ahead: None,
+            touch: None,
+            into: String::new(),
+            lands: vec![],
         }
     }
 
