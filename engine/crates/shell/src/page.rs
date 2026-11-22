@@ -1597,64 +1597,18 @@ fn wants_html(w: &crate::stop::Wants) -> String {
     )
 }
 
-/// The lines that go, come and stay from `before` to `after`: a new file all added; an edit as its changes, among
-/// three lines of what stays around each, a gap marked between.
+/// What the agent wants to write, as the page draws it: [`crate::stop::wants_lines`], each line marked.
 fn wants_lines(before: Option<&str>, after: &str) -> String {
     let line = |class: &str, mark: &str, l: &str| format!("<span class=\"{class}\"><i>{mark}</i>{}</span>", if l.is_empty() { " ".to_string() } else { esc(l) });
-    let Some(before) = before else { return after.lines().map(|l| line("add", "+", l)).collect() };
-    let (a, b): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
-    let pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
-    let suf = a[pre..].iter().rev().zip(b[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
-    let (am, bm) = (&a[pre..a.len() - suf], &b[pre..b.len() - suf]);
-    let mut ops: Vec<(char, &str)> = a[..pre].iter().map(|l| (' ', *l)).collect();
-    if am.len().saturating_mul(bm.len()) <= 1_000_000 {
-        // the longest run of lines both keep, read from the end so the walk goes forward
-        let w = bm.len() + 1;
-        let mut keep = vec![0u32; (am.len() + 1) * w];
-        for i in (0..am.len()).rev() {
-            for j in (0..bm.len()).rev() {
-                keep[i * w + j] = if am[i] == bm[j] { keep[(i + 1) * w + j + 1] + 1 } else { keep[(i + 1) * w + j].max(keep[i * w + j + 1]) };
-            }
-        }
-        let (mut i, mut j) = (0, 0);
-        while i < am.len() || j < bm.len() {
-            if i < am.len() && j < bm.len() && am[i] == bm[j] {
-                ops.push((' ', am[i]));
-                (i, j) = (i + 1, j + 1);
-            } else if j == bm.len() || (i < am.len() && keep[(i + 1) * w + j] >= keep[i * w + j + 1]) {
-                ops.push(('-', am[i]));
-                i += 1;
-            } else {
-                ops.push(('+', bm[j]));
-                j += 1;
-            }
-        }
-    } else {
-        // too long to measure: what goes, then what comes
-        ops.extend(am.iter().map(|l| ('-', *l)));
-        ops.extend(bm.iter().map(|l| ('+', *l)));
-    }
-    ops.extend(a[a.len() - suf..].iter().map(|l| (' ', *l)));
-    let changed: Vec<usize> = ops.iter().enumerate().filter(|(_, (k, _))| *k != ' ').map(|(n, _)| n).collect();
-    let near = |n: usize| changed.iter().any(|&c| c.abs_diff(n) <= 3);
-    let mut out = String::new();
-    let mut gap = false;
-    for (n, (k, l)) in ops.iter().enumerate() {
-        if *k == ' ' && !near(n) {
-            gap = true;
-            continue;
-        }
-        if gap && !out.is_empty() {
-            out.push_str("<span class=\"hunk\">⋯</span>");
-        }
-        gap = false;
-        out.push_str(&match k {
+    crate::stop::wants_lines(before, after)
+        .iter()
+        .map(|(k, l)| match k {
             '+' => line("add", "+", l),
             '-' => line("del", "-", l),
+            '⋯' => "<span class=\"hunk\">⋯</span>".to_string(),
             _ => line("ctx", " ", l),
-        });
-    }
-    out
+        })
+        .collect()
 }
 
 /// What a step changed in the project, as git shows it between where the step started and the commit its output

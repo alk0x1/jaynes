@@ -118,6 +118,22 @@ pub fn selected() -> u32 { frame().selected }
 pub fn line() -> u32 { frame().line }
 pub fn line_2() -> u32 { frame().line_2 }
 pub fn text() -> u32 { frame().text }
+/// A sentence's parts, each with whether it is a name the engine put between backquotes ("May the agent change
+/// `tests/conftest.py`?"): a name is drawn in mono, never with its backquotes. An unclosed backquote is dropped.
+pub fn ticks(text: &str) -> Vec<(String, bool)> {
+    let parts: Vec<&str> = text.split('`').collect();
+    let n = parts.len();
+    parts.iter().enumerate().filter(|(_, p)| !p.is_empty()).map(|(i, p)| (p.to_string(), i % 2 == 1 && i + 1 < n)).collect()
+}
+
+/// A sentence drawn with its names in mono ([`ticks`]), the rest in the font around it.
+pub fn ticked(text: &str) -> Div {
+    let mut row = div().flex().flex_wrap().items_baseline();
+    for (part, name) in ticks(text) {
+        row = row.child(if name { div().font_family(MONO_FONT).child(part) } else { div().whitespace_nowrap().child(part) });
+    }
+    row
+}
 pub fn dim() -> u32 { frame().dim }
 pub fn faint() -> u32 { frame().faint }
 pub fn amber() -> u32 { frame().amber }

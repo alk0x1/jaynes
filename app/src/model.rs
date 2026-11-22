@@ -159,10 +159,20 @@ fn now_seconds() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// A row's line in plain words: the backticks around a name are for the card, which sets it in mono.
+fn plain_lines(listing: &mut Listing) {
+    for r in listing.needs.iter_mut().chain(listing.projects.iter_mut().flat_map(|(_, rows)| rows.iter_mut())) {
+        if r.line.contains('`') {
+            r.line = crate::look::ticks(&r.line).into_iter().map(|(t, _)| t).collect();
+        }
+    }
+}
+
 /// Every run's list row and details, read from the record and the runs' folders.
 fn snapshot(home: &Path) -> Result<Snapshot, String> {
     let entries = listing::entries(home)?;
-    let listing = listing::arrange(&entries);
+    let mut listing = listing::arrange(&entries);
+    plain_lines(&mut listing);
     let rows: HashMap<&str, &Row> =
         listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.as_str(), r)).collect();
     let mut details = HashMap::new();
@@ -240,13 +250,26 @@ fn watch(tx: async_channel::Sender<Result<Snapshot, String>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{delivered_files, halted_by};
+    use super::{delivered_files, halted_by, plain_lines};
     use jaynes_core::event::Event;
     use jaynes_core::question::By;
     use jaynes_core::manifest::Manifest;
     use jaynes_core::risk::Changed;
     use jaynes_core::run::Run;
     use jaynes_core::{Digest, Input};
+
+    /// The column shows a leave's question as words: the backticks the engine puts around a file name are for the
+    /// card, which sets the name in mono; in a one-line row they were shown as they are (Alan's leave rows, 22/11:
+    /// "May the agent read `/etc/hosts`?").
+    #[test]
+    fn asked_column_rows_drop_the_backticks() {
+        use jaynes_shell::listing::{Listing, Mark, Row};
+        let row = |line: &str| Row { id: "r".into(), project: String::new(), apart: None, title: "T".into(), line: line.into(), mark: Mark::Needs };
+        let mut l = Listing { needs: vec![row("May the agent read `/etc/hosts`?")], projects: vec![("p".into(), vec![row("May the agent change `Makefile`?")])] };
+        plain_lines(&mut l);
+        assert_eq!(l.needs[0].line, "May the agent read /etc/hosts?");
+        assert_eq!(l.projects[0].1[0].line, "May the agent change Makefile?");
+    }
 
     fn done(step: &str, changed: &[&str]) -> Event {
         Event::StepDone { step: step.into(), round: 0, output: Digest("o".into()), items: vec![], reads: vec![], changed: changed.iter().map(|f| Changed::file((*f).into(), 4)).collect() }

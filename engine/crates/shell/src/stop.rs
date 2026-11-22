@@ -143,6 +143,62 @@ pub fn leave_consequences(run: &Run, about: &str) -> BTreeMap<VerdictKind, Strin
     [(VerdictKind::Keep, allow), (VerdictKind::Drop, refuse)].into_iter().collect()
 }
 
+/// What the agent wants to write, line by line from `before` to `after`, each with its mark: '+' comes, '-' goes, ' '
+/// stays, and '⋯' (no text) marks lines that stay left out. A new file is all added; an edit is its changes among
+/// three lines of what stays around each. The page and the app draw the same lines.
+pub fn wants_lines(before: Option<&str>, after: &str) -> Vec<(char, String)> {
+    let Some(before) = before else { return after.lines().map(|l| ('+', l.to_string())).collect() };
+    let (a, b): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
+    let pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suf = a[pre..].iter().rev().zip(b[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
+    let (am, bm) = (&a[pre..a.len() - suf], &b[pre..b.len() - suf]);
+    let mut ops: Vec<(char, &str)> = a[..pre].iter().map(|l| (' ', *l)).collect();
+    if am.len().saturating_mul(bm.len()) <= 1_000_000 {
+        // the longest run of lines both keep, read from the end so the walk goes forward
+        let w = bm.len() + 1;
+        let mut keep = vec![0u32; (am.len() + 1) * w];
+        for i in (0..am.len()).rev() {
+            for j in (0..bm.len()).rev() {
+                keep[i * w + j] = if am[i] == bm[j] { keep[(i + 1) * w + j + 1] + 1 } else { keep[(i + 1) * w + j].max(keep[i * w + j + 1]) };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < am.len() || j < bm.len() {
+            if i < am.len() && j < bm.len() && am[i] == bm[j] {
+                ops.push((' ', am[i]));
+                (i, j) = (i + 1, j + 1);
+            } else if j == bm.len() || (i < am.len() && keep[(i + 1) * w + j] >= keep[i * w + j + 1]) {
+                ops.push(('-', am[i]));
+                i += 1;
+            } else {
+                ops.push(('+', bm[j]));
+                j += 1;
+            }
+        }
+    } else {
+        // too long to measure: what goes, then what comes
+        ops.extend(am.iter().map(|l| ('-', *l)));
+        ops.extend(bm.iter().map(|l| ('+', *l)));
+    }
+    ops.extend(a[a.len() - suf..].iter().map(|l| (' ', *l)));
+    let changed: Vec<usize> = ops.iter().enumerate().filter(|(_, (k, _))| *k != ' ').map(|(n, _)| n).collect();
+    let near = |n: usize| changed.iter().any(|&c| c.abs_diff(n) <= 3);
+    let mut out: Vec<(char, String)> = Vec::new();
+    let mut gap = false;
+    for (n, (k, l)) in ops.iter().enumerate() {
+        if *k == ' ' && !near(n) {
+            gap = true;
+            continue;
+        }
+        if gap && !out.is_empty() {
+            out.push(('⋯', String::new()));
+        }
+        gap = false;
+        out.push((*k, l.to_string()));
+    }
+    out
+}
+
 /// A stop the run went on without: it did not hold the run, and the run is now at a later step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Passed {

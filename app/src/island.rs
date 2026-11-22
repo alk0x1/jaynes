@@ -225,6 +225,36 @@ pub fn focus_field(id: impl Into<ElementId>, input: &Entity<InputState>, window:
         .child(Input::new(input))
 }
 
+/// The card's first button for a leave: what the agent wants to write, in place of the step's changes, which are not
+/// there yet.
+pub const WANTS_BUTTON: &str = "See what it wants to write";
+
+/// What the card's first button opens, by its words: the step's changes, or for a leave what the agent wants to
+/// write; a leave with nothing to write (read, reach, run) has none.
+pub fn diff_button(stop: &Stop) -> Option<&'static str> {
+    if stop.permission {
+        stop.wants.as_ref().map(|_| WANTS_BUTTON)
+    } else {
+        Some("See the diff")
+    }
+}
+
+/// A leave's answers, each with what it does beside it, in the engine's sentence ("Allow", "It writes the file and
+/// goes on.").
+pub fn leave_rows(stop: &Stop) -> Vec<(&str, &str)> {
+    stop.offered.iter().map(|v| (stop.label(*v), stop.says(*v))).collect()
+}
+
+/// What the agent wants to write, as the diff view draws it: its title, and the engine's lines (`stop::wants_lines`)
+/// marked as a diff's, a gap as "@@ ⋯".
+pub fn wants_view(w: &stop::Wants) -> (String, String) {
+    let lines: Vec<String> = jaynes_shell::stop::wants_lines(w.before.as_deref(), &w.after)
+        .into_iter()
+        .map(|(k, l)| if k == '⋯' { "@@ ⋯".to_string() } else { format!("{k}{l}") })
+        .collect();
+    (format!("What the agent wants to write in {} · not written yet", w.file), lines.join("\n"))
+}
+
 pub fn button(id: String, text: &str, on: bool, color: u32) -> Stateful<Div> {
     // one that is on has its colour's fill; one that is off is clear, and takes the window's while it has the keys
     tabbed_with(div().id(SharedString::from(id)), (!on).then(look::panel))
@@ -848,10 +878,34 @@ impl Island {
     }
 
     fn diff(&self, stop: &Stop, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(w) = stop.wants.as_ref().filter(|_| stop.permission) {
+            let (title, text) = wants_view(w);
+            self.lightbox.update(cx, |l, cx| l.show(Shown::Diff { title, text }, window, cx));
+            return;
+        }
         let text = jaynes_shell::drive::step_diff(&jaynes_shell::home(), &stop.run, &stop.step).unwrap_or_default();
         let text = if text.trim().is_empty() { "This step changed nothing in the project.".to_string() } else { text };
         let title = diff_title(&stop.step);
         self.lightbox.update(cx, |l, cx| l.show(Shown::Diff { title, text }, window, cx));
+    }
+
+    /// A leave's answers, Allow and Refuse, each with what it does beside it ([`leave_rows`]); its item says no more
+    /// than the title does.
+    fn leave_view(&self, it: &stop::Item, stop: &Stop, cx: &mut Context<Self>) -> Div {
+        let mut rows = div().flex().flex_col().gap(px(8.));
+        for (v, (label, says)) in stop.offered.iter().zip(leave_rows(stop)) {
+            let (item, v) = (it.id.clone(), *v);
+            let on = self.marks.get(&it.id) == Some(&v);
+            rows = rows.child(
+                div()
+                    .flex()
+                    .gap(px(12.))
+                    .items_center()
+                    .child(button(format!("v-{}-{v:?}", it.id), label, on, colour_of(v)).min_w(px(76.)).flex().justify_center().on_click(cx.listener(move |this, _, window, cx| this.mark(item.clone(), v, window, cx))))
+                    .child(div().min_w_0().text_size(px(12.)).text_color(rgb(look::faint())).child(says.to_string())),
+            );
+        }
+        rows
     }
 
     fn item_view(&self, it: &stop::Item, stop: &Stop, back: bool, window: &Window, cx: &mut Context<Self>) -> Div {
@@ -1322,7 +1376,7 @@ impl Render for Island {
             items = items.child(self.landing_view(&stop, cx));
         } else {
             for it in &stop.items {
-                items = items.child(self.item_view(it, &stop, false, window, cx));
+                items = items.child(if stop.permission { self.leave_view(it, &stop, cx) } else { self.item_view(it, &stop, false, window, cx) });
             }
         }
         let mut back = div().flex().flex_col().gap(px(8.));
@@ -1413,7 +1467,7 @@ impl Render for Island {
                     .child(div().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(second)),
             )
             // at the merge, "See the changes" is beside what goes in
-            .when(!merge, |d| d.child(button("diff".into(), "See the diff", false, look::blue()).track_focus(&self.first).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx)))))
+            .when_some(diff_button(&stop).filter(|_| !merge), |d, words| d.child(button("diff".into(), words, false, look::blue()).track_focus(&self.first).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx)))))
             // as wide as its longer words, as the compare mode's; a press on it keeps the keys where they are, so it
             // does what it says
             .child(
@@ -1444,7 +1498,7 @@ impl Render for Island {
             .pb(px(10.))
             .child(head)
             .when_some(stop.gone.as_ref(), |d, gone| d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }))))
-            .when(stop.gone.is_none(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED)))));
+            .when(stop.gone.is_none(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::ticked(&stop.title).text_size(px(16.)).text_color(rgb(look::text()))).when_some(stop.why.clone(), |d, why| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(why))).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED)))));
         // the middle scrolls between the fixed head and foot; while there is more below, its bottom edge fades
         let max = self.scroll.max_offset().y;
         let more_below = fades_below(max, self.scroll.offset().y);
@@ -1531,7 +1585,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{diff_button, leave_rows, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1653,6 +1707,48 @@ mod tests {
         sending.touch = Some("send your answer to Jaynes: “send” cannot be undone".into());
         assert_eq!(ahead_line(&sending).as_deref(), Some("Ahead: “send” cannot be undone. Sending asks for your touch."));
         assert_eq!(crate::answer::touch_of(&sending), Some("send your answer to Jaynes: “send” cannot be undone"));
+    }
+
+    // Alan, 21/11: "pq to sendo chamado aqui? a role?" A leave says why it comes to the person, what each answer
+    // does beside its button, and what the agent wants to write, in place of a step's changes that are not there yet
+    // (design 0.2.5 permissao.md, on the roles-engineer's 6cbec6e)
+    #[test]
+    fn asked_permission_card_says_why_you() {
+        use jaynes_shell::stop::Wants;
+        let mut leave = judging(&["leave"]);
+        (leave.kind, leave.permission, leave.offered) = (QuestionKind::Permission, true, vec![VerdictKind::Keep, VerdictKind::Drop]);
+        leave.title = "May the agent change `tests/conftest.py`?".into();
+        leave.why = Some("Why you: the agent asked for something its step's settings do not allow.".into());
+        leave.consequences = [
+            (VerdictKind::Keep, "It writes the file and goes on. Before it lands in your branch, the merge asks you again.".to_string()),
+            (VerdictKind::Drop, "It goes on without writing it.".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        leave.wants = Some(Wants { file: "tests/conftest.py".into(), before: None, after: "import pytest\n\n@pytest.fixture\n".into() });
+        // the name in mono, never with its backquotes
+        assert_eq!(crate::look::ticks(&leave.title), [("May the agent change ".to_string(), false), ("tests/conftest.py".to_string(), true), ("?".to_string(), false)]);
+        assert_eq!(crate::look::ticks("no name here"), [("no name here".to_string(), false)]);
+        // Allow and Refuse, each with what it does beside it
+        assert_eq!(leave_rows(&leave), [
+            ("Allow", "It writes the file and goes on. Before it lands in your branch, the merge asks you again."),
+            ("Refuse", "It goes on without writing it."),
+        ]);
+        // what it wants to write, never "This step changed nothing in the project"
+        assert_eq!(diff_button(&leave), Some("See what it wants to write"));
+        let (title, text) = wants_view(leave.wants.as_ref().expect("wants"));
+        assert_eq!(title, "What the agent wants to write in tests/conftest.py · not written yet");
+        assert_eq!(text, "+import pytest\n+\n+@pytest.fixture");
+        // an edit: what goes and comes, among what stays
+        let edit = Wants { file: "src/a.py".into(), before: Some("a\nb\nc\n".into()), after: "a\nB\nc\n".into() };
+        assert_eq!(wants_view(&edit).1, " a\n-b\n+B\n c");
+        // a leave with nothing to write (read, reach, run) has no such button; any other stop keeps its diff
+        let mut read = leave.clone();
+        (read.wants, read.title) = (None, "May the agent read `/etc/hosts`?".into());
+        assert_eq!(diff_button(&read), None);
+        assert_eq!(diff_button(&judging(&["a"])), Some("See the diff"));
+        // and no line of what lies ahead: the merge asks by itself
+        assert_eq!(ahead_line(&leave), None);
     }
 
     // Alan, 21/11: "tive que dar uma porrada de allow com o meu touchid"
