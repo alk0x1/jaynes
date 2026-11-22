@@ -523,6 +523,49 @@ fn the_person_asks_the_agent_at_a_stop_and_its_answer_joins_the_stop_with_nothin
     let (_, state) = engine(&s, &["show", "ask"]);
     assert!(state.contains(&q), "{state}");
     assert!(std::fs::read_to_string(&prompt).expect("prompt").contains("what if it were Go?"));
+
+    // the app asks at the same stop as the person, with the paired key's signature over its words
+    use ed25519_dalek::{Signer, SigningKey};
+    use jaynes_shell::person;
+    let me = SigningKey::from_bytes(&[7; 32]);
+    let public = person::hex(me.verifying_key().as_bytes());
+    person::pair(&s.home, &public).expect("pair");
+    // the run's process the ask carries on in reads the test's own variables, as every call of the engine here does
+    let exe = s.base.join("jaynes-for-the-app");
+    std::fs::write(&exe, format!(
+        "#!/bin/sh\nJAYNES_NO_PAGE=1 JAYNES_PYTHON={} PYTHONPATH= JAYNES_CHROME='{}' exec '{BIN}' \"$@\"\n",
+        python(), test_browser().unwrap_or_else(|| PathBuf::from(NO_BROWSER)).display()
+    )).expect("exe");
+    std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("ask").expect("state").expect("run");
+    let words = "and in Rust, what if it were Go?";
+    let sig = person::hex(&me.sign(&person::ask_message("ask", &q, None, words)).to_bytes());
+    // another key's signature, or one over other words, is refused, and nothing is recorded
+    let other = SigningKey::from_bytes(&[9; 32]);
+    let theirs = person::hex(&other.sign(&person::ask_message("ask", &q, None, words)).to_bytes());
+    let before = events(&s, "ask").len();
+    assert!(person::submit_ask(&s.home, &exe, &run, &q, None, words, &public, &theirs).is_err());
+    assert!(person::submit_ask(&s.home, &exe, &run, &q, None, "drop the tests", &public, &sig).is_err());
+    assert_eq!(events(&s, "ask").len(), before);
+    assert_eq!(store.proof_keys("ask").expect("proofs"), vec![]);
+    // the signed ask is the person's: the agent answers it, and its proof is kept under the ask, not the stop
+    person::submit_ask(&s.home, &exe, &run, &q, None, words, &public, &sig).expect("the signed ask");
+    let mut e = events(&s, "ask");
+    for _ in 0..300 {
+        if e.iter().filter(|e| e["type"] == "AgentAnswered" || e["type"] == "AskFailed").count() == 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        e = events(&s, "ask");
+    }
+    let asked = e.iter().filter(|e| e["type"] == "AgentAsked").nth(1).unwrap_or_else(|| panic!("asked: {:?}", types(&e)));
+    let a2 = format!("{q}-a2");
+    assert_eq!((asked["ask"].as_str(), asked["by"]["by"].as_str(), asked["text"].as_str()), (Some(a2.as_str()), Some("person"), Some(words)), "{asked}");
+    let answered = e.iter().filter(|e| e["type"] == "AgentAnswered").nth(1).unwrap_or_else(|| panic!("answered: {:?}", types(&e)));
+    assert_eq!(answered["text"].as_str(), Some("Go would be warmer here."), "{answered}");
+    assert_eq!(store.proof_keys("ask").expect("proofs"), vec![(a2, public)]);
+    assert_eq!(e.iter().filter(|e| e["type"] == "AttemptStarted").count(), attempts, "{:?}", types(&e));
 }
 
 /// Alan, 21/11: "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse". He asks at the stop,

@@ -9,7 +9,7 @@ use crate::io::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, Che
 use crate::manifest::{CheckKind, Executor, ProjectAccess, Reach, SessionKind};
 use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Verdict, VerdictKind};
 use crate::risk::{self, Ceiling, Ceilings, Changed};
-use crate::run::{EntryKind, Phase, QuestionState, Run, Status};
+use crate::run::{Phase, QuestionState, Run, Status};
 use crate::{ENGINE, FORMAT, PROTOCOL};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1283,8 +1283,7 @@ impl Ctx {
         }
         let s = &self.run.steps[i];
         let Some(done) = s.done.clone() else { return Err(Refusal("the step has no output to ask about".into())) };
-        let n = s.thread.iter().filter(|e| e.kind == EntryKind::Ask && e.question == question).count() + 1;
-        let ask = format!("{question}-a{n}");
+        let ask = self.run.next_ask(question).ok_or_else(|| Refusal(format!("there is no such question {question}")))?;
         let (round, session) = (s.round, s.session.clone());
         let reach = Reach {
             project: if decl.reach.project == ProjectAccess::None { ProjectAccess::None } else { ProjectAccess::Read },

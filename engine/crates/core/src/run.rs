@@ -297,6 +297,15 @@ fn is_zero(n: &u32) -> bool {
 }
 
 impl Run {
+    /// The id the person's next ask at stop `question` takes, the core's and nobody else's: `<question>-a<n>`, n one
+    /// more than the asks already at that stop in its step's thread. None when there is no such stop or step.
+    pub fn next_ask(&self, question: &str) -> Option<String> {
+        let q = self.questions.get(question)?;
+        let s = &self.steps[self.manifest.index(&q.question.step)?];
+        let n = s.thread.iter().filter(|e| e.kind == EntryKind::Ask && e.question == question).count() + 1;
+        Some(format!("{question}-a{n}"))
+    }
+
     /// Whether step `i` cannot be undone and already acted on what it rests on: from then on it is never done again on
     /// its own (G14).
     pub fn acted(&self, i: usize) -> bool {

@@ -31,6 +31,19 @@ pub fn message(run: &str, answer: &Answer) -> Vec<u8> {
     .into_bytes()
 }
 
+/// What the signature of an ask covers: the run, the stop, the item the words are about if any, and the words. Its
+/// "jaynes" is not an answer's, so no signature over one ever holds for the other.
+pub fn ask_message(run: &str, question: &str, item: Option<&str>, text: &str) -> Vec<u8> {
+    jaynes_core::digest::canonical(&json!({
+        "jaynes": "ask/1",
+        "run": run,
+        "question": question,
+        "item": item,
+        "text": text,
+    }))
+    .into_bytes()
+}
+
 /// The app's key paired with this engine, if one is.
 pub fn paired(home: &Path) -> Result<Option<String>, String> {
     match std::fs::read_to_string(home.join(PAIRED)) {
@@ -55,14 +68,21 @@ pub fn pair(home: &Path, key: &str) -> Result<(), String> {
 
 /// Whether `signature` (hex) is the paired key's over this answer.
 pub fn check(home: &Path, run: &str, answer: &Answer, key: &str, signature: &str) -> Result<(), String> {
+    holds(home, &message(run, answer), "answer", key, signature)
+}
+
+/// Whether `signature` (hex) is the paired key's over this ask.
+pub fn check_ask(home: &Path, run: &str, question: &str, item: Option<&str>, text: &str, key: &str, signature: &str) -> Result<(), String> {
+    holds(home, &ask_message(run, question, item, text), "ask", key, signature)
+}
+
+fn holds(home: &Path, message: &[u8], what: &str, key: &str, signature: &str) -> Result<(), String> {
     let paired = paired(home)?.ok_or("no app key is paired with this engine")?;
     if paired != key.trim() {
-        return Err("the answer is signed with a key that is not the one paired with this engine".into());
+        return Err(format!("the {what} is signed with a key that is not the one paired with this engine"));
     }
     let bytes: [u8; 64] = decode(signature).and_then(|b| b.try_into().ok()).ok_or("the signature is not 64 bytes of hex")?;
-    key_of(&paired)?
-        .verify(&message(run, answer), &Signature::from_bytes(&bytes))
-        .map_err(|_| "the signature does not hold for this answer".to_string())
+    key_of(&paired)?.verify(message, &Signature::from_bytes(&bytes)).map_err(|_| format!("the signature does not hold for this {what}"))
 }
 
 /// Sends an answer from the app as the person's, if its signature holds; the signature is kept beside it.
@@ -72,6 +92,19 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, mut answer: Answer, key: &str,
     let question = answer.question.clone();
     let sent = crate::drive::submit(home, exe, run, Input::Answer { answer })?;
     Store::open(&home.join("record.sqlite3"))?.put_proof(&run.id, &question, key, signature)?;
+    Ok(sent)
+}
+
+/// Asks a stop's agent from the app as the person, if the signature holds over the ask; the signature is kept beside
+/// it under the ask's id (`<question>-a<n>`, as the core names it), never the stop's, so the record never shows an
+/// answer as signed because an ask at its stop was.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_ask(home: &Path, exe: &Path, run: &Run, question: &str, item: Option<&str>, text: &str, key: &str, signature: &str) -> Result<&'static str, String> {
+    check_ask(home, &run.id, question, item, text, key, signature)?;
+    let ask = run.next_ask(question).ok_or_else(|| format!("there is no such question {question}"))?;
+    let input = Input::AskAgent { question: question.to_string(), item: item.map(str::to_string), text: text.to_string(), by: By::Person };
+    let sent = crate::drive::submit(home, exe, run, input)?;
+    Store::open(&home.join("record.sqlite3"))?.put_proof(&run.id, &ask, key, signature)?;
     Ok(sent)
 }
 
@@ -143,6 +176,34 @@ mod tests {
         let mut said = a.clone();
         said.by = By::Person;
         assert_eq!(check(&h, "r1", &said, &public, &sig), Ok(()));
+    }
+
+    #[test]
+    fn an_ask_signed_with_the_paired_key_holds_and_nothing_else_does() {
+        // the app asks a stop's agent as the person only with the paired key's signature over these very words
+        let h = home("ask");
+        let me = key(7);
+        let public = hex(me.verifying_key().as_bytes());
+        pair(&h, &public).expect("pair");
+        let sig = hex(&me.sign(&ask_message("r1", "q1", Some("a"), "why this file?")).to_bytes());
+        assert_eq!(check_ask(&h, "r1", "q1", Some("a"), "why this file?", &public, &sig), Ok(()));
+        // the same signature over other words, another item, no item, another stop or another run does not hold
+        assert!(check_ask(&h, "r1", "q1", Some("a"), "drop the tests", &public, &sig).is_err());
+        assert!(check_ask(&h, "r1", "q1", Some("b"), "why this file?", &public, &sig).is_err());
+        assert!(check_ask(&h, "r1", "q1", None, "why this file?", &public, &sig).is_err());
+        assert!(check_ask(&h, "r1", "q2", Some("a"), "why this file?", &public, &sig).is_err());
+        assert!(check_ask(&h, "r2", "q1", Some("a"), "why this file?", &public, &sig).is_err());
+        // a key that is not the paired one does not hold, even with its own good signature
+        let other = key(9);
+        let theirs = hex(other.verifying_key().as_bytes());
+        let their_sig = hex(&other.sign(&ask_message("r1", "q1", Some("a"), "why this file?")).to_bytes());
+        assert!(check_ask(&h, "r1", "q1", Some("a"), "why this file?", &theirs, &their_sig).is_err());
+        assert!(check_ask(&h, "r1", "q1", Some("a"), "why this file?", &public, &their_sig).is_err());
+        // an answer's signature is not an ask's: the two messages never share bytes
+        let a = answer();
+        let answer_sig = hex(&me.sign(&message("r1", &a)).to_bytes());
+        assert!(check_ask(&h, "r1", "q1", None, "", &public, &answer_sig).is_err());
+        assert_ne!(ask_message("r1", "q1", None, ""), message("r1", &a));
     }
 
     #[test]
