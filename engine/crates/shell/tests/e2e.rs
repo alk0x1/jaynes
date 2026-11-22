@@ -990,7 +990,7 @@ fn the_page_answers_as_the_person_only_with_its_key() {
     assert!(keyed.contains("Location: /#key=k3y\r\n"), "{keyed}");
     let home = http(port, &format!("GET / HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
     // the stop says what raised the risk: the Makefile, which runs later outside any box
-    assert!(home.contains("This change touches `Makefile`, which runs later outside any box. Keep it, or have it done again?"), "{home}");
+    assert!(home.contains("This change touches <code>Makefile</code>, which runs later outside any box. Keep it, or have it done again?") && !home.contains("`Makefile`"), "{home}");
     // each run shows its steps as a strip, as the earlier page did
     assert!(home.contains("<div class=\"strip\"><i class=\"\" title=\"runner\"></i><i class=\"waiting\" title=\"change\"></i></div>"), "{home}");
     assert!(home.contains("step 2 of 2") || home.contains("step 1 of 2"), "{home}");
