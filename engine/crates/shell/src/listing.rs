@@ -219,10 +219,11 @@ pub fn move_all_button(n: usize) -> String {
     format!("Move {n}")
 }
 
-/// The line of a run whose engine left the Mac: "started on Jaynes 0.2.3" while it waits apart, and ", no longer on
-/// this Mac" after once moved to Finished, where nothing else says why it is there.
+/// The line of a run whose engine left the Mac: "Jaynes 0.2.3" while it waits apart, its group's head saying the
+/// rest, so a narrow column never cuts the version (the design-lead, 22/11); "started on Jaynes 0.2.3, no longer on
+/// this Mac" once moved to Finished, where nothing else says why it is there.
 pub fn older_line(version: &str, moved: bool) -> String {
-    if moved { format!("started on Jaynes {version}, no longer on this Mac") } else { format!("started on Jaynes {version}") }
+    if moved { format!("started on Jaynes {version}, no longer on this Mac") } else { format!("Jaynes {version}") }
 }
 
 /// How a run stands in the list: its mark, its line, and whether it waits for the person. A blocked run says so first:
@@ -561,6 +562,29 @@ pub fn stages(r: &Run) -> Vec<Stage> {
             Stage { index: i, name: d.name.clone(), about: d.about.clone(), class, detail }
         })
         .collect()
+}
+
+/// Where a run whose engine left the Mac stopped, in its list of steps.
+pub const STOPPED_HERE: &str = "stopped here · can't go on";
+/// A step after it, which no engine will run.
+pub const NEVER_RAN: &str = "never ran";
+
+/// The steps of a run whose engine left the Mac, as the page and the app show them (the design-lead, 22/11): the step
+/// it stopped at, waiting, blocked or under way, is "gone", grey, "stopped here · can't go on", never "waiting for
+/// you"; with none of those, between two steps, the first that had not run. The steps after it that had not run
+/// "never ran". A step left out at the run's risk, or one that ran in an earlier round, keeps what it says.
+pub fn cannot_go_on(mut stages: Vec<Stage>) -> Vec<Stage> {
+    let stopped = stages.iter().position(|s| matches!(s.class, "waiting" | "blocked" | "running" | "halted"));
+    let Some(at) = stopped.or_else(|| stages.iter().position(|s| s.class == "todo" && s.detail != "left out at this risk")) else { return stages };
+    stages[at].class = "gone";
+    stages[at].detail = STOPPED_HERE.into();
+    for s in &mut stages[at + 1..] {
+        if matches!(s.class, "todo" | "waiting") && (s.detail.is_empty() || s.detail == "next, after your answer" || s.detail.starts_with("waiting for you")) {
+            s.class = "todo";
+            s.detail = NEVER_RAN.into();
+        }
+    }
+    stages
 }
 
 /// What a finished run did, as the page and the app show it to copy: [`crate::summary::Summary::markdown`] is the
@@ -2144,7 +2168,15 @@ mod tests {
         assert_eq!(ids(&l.needs), ["mine"], "only the run that can take an answer waits for the person");
         assert_eq!(ids(&l.older), ["old"], "the other waits apart");
         assert!(l.projects.iter().all(|(_, rows)| rows.iter().all(|r| r.id != "old")), "and once only");
-        assert_eq!(said(&l.older[0]), "can't go on · started on Jaynes 0.0.1");
+        // its version whole in the column, never cut: the group's head says the rest (the design-lead, 22/11)
+        assert_eq!(said(&l.older[0]), "can't go on · Jaynes 0.0.1");
+        // its steps: where it stopped, in grey, and what came after never ran; never "waiting for you"
+        let told = |r: &Run| cannot_go_on(stages(r)).into_iter().map(|s| (s.name, s.class, s.detail)).collect::<Vec<_>>();
+        assert_eq!(told(&old), [("plan".to_string(), "gone", "stopped here · can't go on".to_string()), ("change".to_string(), "todo", "never ran".to_string())]);
+        // between two steps, the first that had not run is where it stopped; one left out at its risk says so still
+        let stage = |name: &str, class: &'static str, detail: &str| Stage { index: 0, name: name.into(), about: String::new(), class, detail: detail.into() };
+        let between = cannot_go_on(vec![stage("plan", "checked", "checked, 1 attempt"), stage("lint", "todo", "left out at this risk"), stage("change", "todo", ""), stage("review", "todo", "")]);
+        assert_eq!(between.iter().map(|s| (s.class, s.detail.as_str())).collect::<Vec<_>>(), [("checked", "checked, 1 attempt"), ("todo", "left out at this risk"), ("gone", STOPPED_HERE), ("todo", NEVER_RAN)]);
         assert!(can_still_answer(&[entry_of(&home, old.clone())]).is_empty(), "no late answer reaches it either");
         // a run of this engine does not move, and neither do the others moved with it
         let err = crate::moved::mark(&home, &[&old, &mine], None, 1_795_000_000).expect_err("refused");

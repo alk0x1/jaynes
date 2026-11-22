@@ -75,6 +75,8 @@ fn circle(class: &str, name: &str) -> Div {
         "halted" => base.border_color(rgb(look::grey())).text_color(rgb(look::grey())).child("‖"),
         "waiting" => base.bg(rgb(look::amber())).border_color(rgb(look::amber())).text_color(rgb(look::on_fill())).child("!"),
         "blocked" => base.border_color(rgb(look::red())).text_color(rgb(look::red())).child("×"),
+        // where a run whose engine left stopped: a grey dot, never amber (the design-lead, 22/11)
+        "gone" => base.border_color(rgb(look::grey())).child(div().size(px(6.)).rounded_full().bg(rgb(look::grey()))),
         _ => base.border_color(rgb(look::line_2())),
     }
 }

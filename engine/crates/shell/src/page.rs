@@ -866,7 +866,7 @@ impl Page {
                         esc(&run.manifest.role),
                         where_in(run),
                         status,
-                        strip(run)
+                        strip(run, false)
                     )
                 })
                 .collect()
@@ -880,7 +880,7 @@ impl Page {
             .iter()
             .map(|r| {
                 let on = shown_run.as_deref() == Some(r.id.as_str());
-                format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r))
+                format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r, false))
             })
             .collect();
         let mut aside = format!("<div class=\"qh\">Waiting for you · {}</div>{}{}", waiting.len() + blocked.len(), side(&waiting, false), blocked_links);
@@ -894,7 +894,7 @@ impl Page {
         let older_link = |r: &Run| {
             let on = shown_run.as_deref() == Some(r.id.as_str());
             let said = names.get(&r.id).map(crate::listing::said).unwrap_or_default();
-            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small class=\"older\">{}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&said), strip(r))
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small class=\"older\">{}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&said), strip(r, true))
         };
         if !older.is_empty() {
             let n = older.len();
@@ -925,7 +925,7 @@ impl Page {
             if moved.contains(&r.id) {
                 return older_link(r);
             }
-            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r))
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r, false))
         };
         aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Runs · {}</div>{}", open.len(), open.iter().map(run_link).collect::<String>()));
         if !done.is_empty() {
@@ -999,7 +999,7 @@ impl Page {
                     _ => changes_html(&self.home, run, i),
                 };
                 let project = names.get(&run.id).map(|n| format!("{} · ", esc(&n.project))).unwrap_or_default();
-                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project)
+                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project, gone(run))
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
@@ -1027,8 +1027,9 @@ fn name_html(row: &crate::listing::Row) -> String {
 /// The run's steps as a strip, one mark per step of its path, coloured by where each is, as the earlier page drew
 /// it: done, waiting for you, blocked, running, halted (under way in a run the person halted), not yet, or asked only
 /// a sample and skipped.
-fn strip(r: &Run) -> String {
+fn strip(r: &Run, gone: bool) -> String {
     use jaynes_core::run::Status;
+    let told = if gone { crate::listing::cannot_go_on(crate::listing::stages(r)) } else { Vec::new() };
     let blocked = match &r.phase {
         Phase::Blocked { step: Some(s), .. } => Some(s.as_str()),
         _ => None,
@@ -1053,6 +1054,9 @@ fn strip(r: &Run) -> String {
                     _ => "todo",
                 }
             };
+            // a run whose engine left: where it stopped in grey, never amber, as its list of steps says (the
+            // design-lead, 22/11)
+            let state = if gone { told.iter().find(|t| t.index == i).map_or(state, |t| if t.class == "gone" { "gone" } else if state.is_empty() || state == "sampled" { state } else { "todo" }) } else { state };
             format!("<i class=\"{state}\" title=\"{}\"></i>", esc(&d.name))
         })
         .collect();
@@ -1079,8 +1083,10 @@ fn who(d: &jaynes_core::manifest::StepDecl, r: &Run) -> String {
 
 /// The run's steps top to bottom: who does each, what the role says it does, and where it is, as the earlier
 /// page showed them.
-fn stage_list(r: &Run) -> String {
-    let rows: String = crate::listing::stages(r)
+fn stage_list(r: &Run, gone: bool) -> String {
+    let stages = crate::listing::stages(r);
+    let stages = if gone { crate::listing::cannot_go_on(stages) } else { stages };
+    let rows: String = stages
         .into_iter()
         .map(|stage| {
             let (i, class, detail) = (stage.index, stage.class, stage.detail);
@@ -1217,7 +1223,8 @@ fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String 
 /// stops when `older` is given.
 fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>) -> String {
     let path = r.path();
-    let steps = stage_list(r);
+    let gone = older.is_some();
+    let steps = stage_list(r, gone);
     let phase = match &r.phase {
         // set aside by the agent that started it: the person brings it back or ends it, whatever it was at
         _ if r.set_aside.is_some() && !r.finished() => format!(
@@ -1333,7 +1340,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
                 format!("<p class=\"req\">{}</p>", esc(whole))
             }
         },
-        strip = strip(r),
+        strip = strip(r, gone),
         sm = r.spent.seconds / 60,
         cm = r.ceiling.seconds / 60,
         // thousands as the run's summary writes them; what the cache gave only when it gave something (a count of
@@ -1504,7 +1511,7 @@ fn thread_story(s: &jaynes_core::run::StepState) -> String {
 }
 
 /// `project`: the stop's project and its separator, ready to show, or "" when the run has no name yet.
-fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str) -> String {
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str, gone: bool) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
@@ -1626,7 +1633,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         why = if leave { format!("<p class=\"whyyou\">{}</p>", esc(crate::stop::WHY_YOU)) } else { String::new() },
         lead = if leave { changes } else { "" },
         tail = if leave { "" } else { changes },
-        strip = strip(run),
+        strip = strip(run, gone),
         thread = thread_html(run, q),
         // with one option its own field is the stop's words: a second field above it left the person unsure where to
         // write (the design-lead, 22/11)
@@ -1642,7 +1649,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         } else {
             String::new()
         },
-        stages = stage_list(run),
+        stages = stage_list(run, gone),
         data = data.replace('<', "\\u003c"),
     )
 }
@@ -2005,7 +2012,7 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
             names.get(&r.id).map(name_html).unwrap_or_else(|| esc(&short(&r.request))),
             esc(&said),
             facts.iter().map(|f| format!("<span>{f}</span>")).collect::<String>(),
-            strip(r)
+            strip(r, false)
         )
     };
     let landed = |r: &Run| -> (String, &'static str) {
@@ -2620,7 +2627,7 @@ small.older { color:var(--dim); } button.linkish { background:none; border:0; pa
 .strip { display:flex; gap:3px; margin:4px 0 10px; } .strip i { width:14px; height:4px; border-radius:2px; background:var(--green); display:block; }
 aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min-width:3px; }
 .strip i.waiting { background:var(--amber); } .strip i.blocked { background:var(--red); } .strip i.running { background:var(--blue); } .strip i.halted { background:var(--faint); }
-.strip i.todo { background:var(--line-2); } .strip i.sampled { background:none; box-shadow:inset 0 0 0 1px var(--green); }
+.strip i.todo { background:var(--line-2); } .strip i.gone { background:var(--faint); } .strip i.sampled { background:none; box-shadow:inset 0 0 0 1px var(--green); }
 .stages { list-style:none; margin:8px 0 18px; padding:0; }
 .stages li { display:grid; grid-template-columns:14px 1fr; gap:10px; padding:5px 0; position:relative; }
 .stages li::before { content:""; position:absolute; left:6px; top:18px; bottom:-6px; width:1px; background:var(--line-2); }
@@ -2630,6 +2637,7 @@ aside .strip { margin:5px 0 0; } aside .strip i { width:auto; flex:0 1 14px; min
 .stages .blocked .dot { background:var(--red); box-shadow:0 0 0 4px var(--red-soft); }
 .stages .running .dot { background:var(--blue); box-shadow:0 0 0 4px var(--blue-soft); }
 .stages .halted .dot { background:var(--faint); } .stages .halted small { color:var(--dim); }
+.stages .gone .dot { background:var(--faint); } .stages .gone small { color:var(--faint); }
 .stages .todo .dot { background:var(--bg); box-shadow:inset 0 0 0 1px var(--line-2); }
 .stages .sampled .dot { background:var(--bg); box-shadow:inset 0 0 0 1.5px var(--green); }
 .stages .accepted .dot { box-shadow:0 0 0 3px var(--green-soft); }
@@ -3589,9 +3597,9 @@ mod tests {
         for status in [Status::Running { attempt: 1, fix: 0 }, Status::Checking { attempt: 1, fix: 0 }, Status::Probing] {
             r.steps[0].status = status;
             r.halted = false;
-            assert!(strip(&r).contains("class=\"running\""), "{}", strip(&r));
+            assert!(strip(&r, false).contains("class=\"running\""), "{}", strip(&r, false));
             r.halted = true;
-            let drawn = strip(&r);
+            let drawn = strip(&r, false);
             assert!(drawn.contains("class=\"halted\"") && !drawn.contains("class=\"running\""), "{drawn}");
         }
     }
@@ -3674,7 +3682,10 @@ mod tests {
         }
         let side = page.render(View::Overview, 0).expect("page");
         assert!(side.contains("Waiting for you · 1<") && side.contains("From an older Jaynes · 1<"), "{side}");
-        assert!(side.contains("<small class=\"older\">can&#39;t go on · started on Jaynes 0.0.1</small>") || side.contains("<small class=\"older\">can't go on · started on Jaynes 0.0.1</small>"), "{side}");
+        assert!(side.contains("<small class=\"older\">can&#39;t go on · Jaynes 0.0.1</small>"), "{side}");
+        // its marks in the list beside: none amber, the step it stopped at grey
+        let link = side.split("href=\"/run/old\"").nth(1).and_then(|l| l.split("</a>").next()).unwrap_or_default();
+        assert!(link.contains("<i class=\"gone\"") && !link.contains("class=\"waiting\""), "{link}");
         assert!(!side.contains("Move all to Finished"), "one run: its card's button is enough");
         let card = page.render(View::Run("old".into()), 0).expect("page");
         for said in ["This run can", "it started on Jaynes 0.0.1, which is no longer on this Mac.", crate::listing::OLDER_HOW, ">Move to Finished</button>", "It leaves Needs you for good."] {
@@ -3682,6 +3693,9 @@ mod tests {
         }
         assert!(!card.contains("data-act=\"abandon\"") && !card.contains("data-act=\"halt\"") && !card.contains("Answer: "), "nothing that cannot reach it");
         assert!(!card.contains("What it made so far"), "it made nothing yet");
+        // its steps: where it stopped, in grey, never "waiting for you"; its marks under the title none amber
+        assert!(card.contains("<li class=\"gone\">") && card.contains("<small>stopped here · can&#39;t go on</small>"), "{card}");
+        assert!(!card.contains("waiting for you") && !card.contains("<i class=\"waiting\""), "{card}");
         let agent = By::Agent { who: "an agent".into() };
         let err = act_in(&home, &exe, &json!({"run": "old", "action": "move-to-finished"}), agent).expect_err("an agent");
         assert!(err.starts_with("only you move a run to Finished"), "{err}");

@@ -92,7 +92,7 @@ fn finished(m: Mark) -> bool {
     matches!(m, Mark::Delivered | Mark::Merged | Mark::Undone | Mark::Abandoned | Mark::Moved)
 }
 
-/// The line under a run from an older Jaynes, grey, in its group ("can't go on · started on Jaynes 0.2.3") or in
+/// The line under a run from an older Jaynes, grey, in its group ("can't go on · Jaynes 0.2.3") or in
 /// Finished once the person moved it ("moved by you · started on Jaynes 0.2.3, no longer on this Mac"); the others
 /// keep theirs.
 fn older_line(row: &Row) -> String {
@@ -1135,7 +1135,7 @@ mod tests {
     #[test]
     fn asked_runs_from_an_older_jaynes_wait_apart_in_grey_until_i_move_them_to_finished_22_11() {
         let listing = Listing {
-            older: vec![row("o1", Mark::Older, "started on Jaynes 0.2.3"), row("o2", Mark::Older, "started on Jaynes 0.2.3")],
+            older: vec![row("o1", Mark::Older, "Jaynes 0.2.3"), row("o2", Mark::Older, "Jaynes 0.2.3")],
             needs: vec![row("q", Mark::Needs, "Keep this fix?")],
             projects: vec![("p".into(), vec![row("m", Mark::Moved, "started on Jaynes 0.2.3, no longer on this Mac"), row("d", Mark::Delivered, "delivered")])],
         };
@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q"]);
         assert_eq!(inbox_count(&o), 1);
         // grey, never amber, in the design-lead's words
-        assert_eq!(older_line(&listing.older[0]), "can't go on · started on Jaynes 0.2.3");
+        assert_eq!(older_line(&listing.older[0]), "can't go on · Jaynes 0.2.3");
         assert_eq!(crate::look::colour(Mark::Older), crate::look::grey());
         assert_ne!(crate::look::colour(Mark::Older), crate::look::amber());
         // moved: in Finished with its project, the neutral grey dot, the line that says who moved it

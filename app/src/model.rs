@@ -213,7 +213,8 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
                 mark: row.mark,
                 line: row.line.clone(),
                 minutes: until.saturating_sub(e.started) / 60,
-                stages: listing::stages(&e.run),
+                // a run whose engine left: where it stopped in grey, and what never ran, as the page says it
+                stages: if matches!(row.mark, Mark::Older | Mark::Moved) { listing::cannot_go_on(listing::stages(&e.run)) } else { listing::stages(&e.run) },
                 now: if row.mark == Mark::Working { listing::now(home, &e.run.id) } else { None },
                 delivered: !e.run.finished() && e.run.delivered.is_some(),
                 gone: matches!(row.mark, Mark::Older | Mark::Moved).then(|| stop::gone(home, &e.run)).flatten(),
