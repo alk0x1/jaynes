@@ -1926,7 +1926,7 @@ impl<'a> Driver<'a> {
             say(&format!("  {}", q.about));
         }
         for item in &q.items {
-            say(&format!("  - {}: {}", item.id, item.label));
+            say(&format!("  - {}", item_line(&item.id, &item.label, ": ")));
         }
         let offered: Vec<String> = q.offered.iter().map(|v| format!("{v:?}").to_lowercase()).collect();
         say(&format!("  answer: jaynes answer {} {} [item=verdict] ({})", run.id, q.id, offered.join(", ")));
@@ -2123,9 +2123,34 @@ pub fn narrate(e: &Event, r: &Run) {
     }
 }
 
+/// An item of a question as the terminal says it: its id, by which the person answers it, then its label; the label
+/// alone when it already starts with the id, as a role's whose id is the item's name ("Go: Go with ..." said once).
+pub fn item_line(id: &str, label: &str, between: &str) -> String {
+    if label == id || label.strip_prefix(id).is_some_and(|rest| rest.starts_with([':', ' ', '\u{2014}'])) {
+        label.to_string()
+    } else {
+        format!("{id}{between}{label}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // the real-user, 22/11: "A parada 1 ofereceu uma opção só, com o nome repetido: \"Go com biblioteca padrão: Go com
+    // biblioteca padrão:\"", and at kickoff "Marcar como visto — Marcar como visto: Ao ler um recado..."
+    #[test]
+    fn asked_an_item_s_name_is_said_once() {
+        let label = "Go com biblioteca padrão: Um único programa em Go";
+        assert_eq!(item_line("Go com biblioteca padrão", label, ": "), label);
+        assert_eq!(item_line("Marcar como visto", "Marcar como visto: Ao ler um recado", " \u{2014} "), "Marcar como visto: Ao ler um recado");
+        assert_eq!(item_line("Go", "Go", ": "), "Go");
+        // an id the label does not start with is still said, since the person answers by it
+        assert_eq!(item_line("stacks-1", "Go: one program", ": "), "stacks-1: Go: one program");
+        assert_eq!(item_line("fix", "The total is right now", " \u{2014} "), "fix \u{2014} The total is right now");
+        // a label that only begins with the same letters is another word
+        assert_eq!(item_line("Go", "Gopher kit: a server", ": "), "Go: Gopher kit: a server");
+    }
     use jaynes_core::manifest::{Executor, Manifest, Reach, SessionKind, StepDecl};
     use jaynes_core::question::By;
     use jaynes_core::risk::Changed;

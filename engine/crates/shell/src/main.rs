@@ -1011,7 +1011,7 @@ fn print_state(r: &jaynes_core::Run) {
         let q = &q.question;
         println!("? {} at {}{}", q.id, q.step, if q.holds { ", the run waits for it" } else { ", the run goes on" });
         for item in &q.items {
-            println!("    {} — {}", item.id, item.label);
+            println!("    {}", drive::item_line(&item.id, &item.label, " \u{2014} "));
         }
         let offered: Vec<String> = q.offered.iter().map(|v| format!("{v:?}").to_lowercase()).collect();
         println!("    verdicts: {}", offered.join(", "));
