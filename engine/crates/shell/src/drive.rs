@@ -2600,6 +2600,7 @@ mod tests {
             agent: Box::new(agent),
             any_port: false,
             servers: false,
+            freed_ports: vec![],
             home: home.clone(),
             project: None,
         };
