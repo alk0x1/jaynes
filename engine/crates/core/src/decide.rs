@@ -901,7 +901,7 @@ impl Ctx {
                 let q = &self.run.open_question(j)?.question;
                 // a stop the merge's touch keeps
                 let keeps = q.kind == QuestionKind::Decision && !q.holds && q.offered.contains(&VerdictKind::Keep) && (!q.choose || q.one_option());
-                keeps.then(|| Ride { question: q.id.clone(), step: q.step.clone(), said: self.run.unheld_said(q) })
+                keeps.then(|| Ride { question: q.id.clone(), step: q.step.clone(), said: self.run.settled_said(q) })
             })
             .collect()
     }
