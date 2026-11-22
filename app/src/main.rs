@@ -775,10 +775,11 @@ impl Root {
             let controls = self.controls_row(cx);
             return Some(tabs::halted_block(&title, controls));
         }
-        let (said, details_open) = self.tabs.read(cx).blocked()?;
+        let (said, details_open, printed_open) = self.tabs.read(cx).blocked()?;
         let controls = self.controls_row(cx);
-        let tabs = self.tabs.clone();
-        Some(tabs::blocked_block(&said, details_open, controls, move |_, cx| tabs.update(cx, |t, cx| t.flip_details(cx))))
+        let (tabs, folds) = (self.tabs.clone(), self.tabs.clone());
+        let on_printed: tabs::OnCase = std::rc::Rc::new(move |i, _, cx| folds.update(cx, |t, cx| t.flip_printed(i, cx)));
+        Some(tabs::blocked_block(&said, details_open, &printed_open, controls, move |_, cx| tabs.update(cx, |t, cx| t.flip_details(cx)), on_printed))
     }
 
     /// The open run's controls in a row.

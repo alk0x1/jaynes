@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub use jaynes_shell::listing::{BlockedSaid, halted_said};
-use jaynes_shell::listing::{AGENT_SAID_HEADING, DETAILS_CLOSED, DETAILS_OPEN, STILL_OPEN_HEADING, WAYS_HEADING};
+use jaynes_shell::listing::{AGENT_SAID_HEADING, ALL_OF_IT, CASE_HEADING, CASES_HEADING, DETAILS_CLOSED, DETAILS_OPEN, PRINTED_SHOWN, STILL_OPEN_HEADING, WAYS_HEADING};
 
 /// The note on a run's tab, only while its agent works or the run waits for the person: none once it is finished,
 /// halted (nothing works on it until resumed) or blocked (Jaynes stopped it).
@@ -74,17 +74,48 @@ pub enum Part {
     ContinueDoes(String),
     /// That the run waits.
     Waits(String),
+    /// A hidden case that failed, top to bottom: what it says, who wrote it, what it ran (its command between
+    /// backquotes, drawn in mono), what it expected and got, the end of what it printed a line each, the fold over
+    /// the rest of the case at that index, closed or open, and in how many attempts it failed.
+    CaseSays(String),
+    CaseWritten(String),
+    CaseRan(String),
+    CaseExpected(String),
+    CaseGot(String),
+    Printed(String),
+    AllOfIt(usize, &'static str),
+    CaseFailedIn(String),
     /// The switch of the raw reason, closed or open, and its lines when open.
     Details(&'static str),
     Raw(String),
 }
 
-/// The parts of a blocked run's card, in order; the raw reason only while Details is open.
-pub fn card(said: &BlockedSaid, details_open: bool) -> Vec<Part> {
+/// What a click on a case's fold does, given the case's index.
+pub type OnCase = std::rc::Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
+/// The fold over the rest of what a case printed, while open.
+pub const ALL_OF_IT_OPEN: &str = "▾ all of it";
+
+/// The parts of a blocked run's card, in order; the raw reason only while Details is open, and all a case printed
+/// only while its fold is open (`printed_open`, the cases by their index).
+pub fn card(said: &BlockedSaid, details_open: bool, printed_open: &[usize]) -> Vec<Part> {
     let mut parts = vec![Part::Title(said.title.clone()), Part::What(said.what.clone())];
     let why = [said.why.as_str()].into_iter().chain(said.holds.as_deref()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
     if !why.is_empty() {
         parts.push(Part::Why(why));
+    }
+    if !said.cases.is_empty() {
+        parts.push(Part::Heading(if said.cases.len() == 1 { CASE_HEADING } else { CASES_HEADING }));
+        for (i, c) in said.cases.iter().enumerate() {
+            parts.extend([Part::CaseSays(c.says.clone()), Part::CaseWritten(c.written.clone()), Part::CaseRan(c.ran.clone()), Part::CaseExpected(c.expected.clone()), Part::CaseGot(c.got.clone())]);
+            let open = printed_open.contains(&i);
+            let shown = if open { c.printed.len() } else { c.printed.len().min(PRINTED_SHOWN) };
+            parts.extend(c.printed[..shown].iter().cloned().map(Part::Printed));
+            if c.printed.len() > PRINTED_SHOWN {
+                parts.push(Part::AllOfIt(i, if open { ALL_OF_IT_OPEN } else { ALL_OF_IT }));
+            }
+            parts.push(Part::CaseFailedIn(c.failed_in.clone()));
+        }
     }
     if !said.agent_said.is_empty() {
         parts.push(Part::Heading(AGENT_SAID_HEADING));
@@ -120,7 +151,15 @@ const WAYS_WIDTH: f32 = 640.;
 /// The red block at the top of a blocked run's tab, drawn from its parts: what happened first, why, what the agent
 /// said, what the person can do, the run's controls and what Continue does, and the raw reason under Details, which
 /// `on_details` opens and closes.
-pub fn blocked_block(said: &BlockedSaid, details_open: bool, controls: Option<Div>, on_details: impl Fn(&mut Window, &mut App) + 'static) -> Div {
+/// `on_printed` opens and closes the fold over what the case at an index printed.
+pub fn blocked_block(
+    said: &BlockedSaid,
+    details_open: bool,
+    printed_open: &[usize],
+    controls: Option<Div>,
+    on_details: impl Fn(&mut Window, &mut App) + 'static,
+    on_printed: OnCase,
+) -> Div {
     let mut b = div()
         .mx(px(14.))
         .mt(px(12.))
@@ -139,7 +178,7 @@ pub fn blocked_block(said: &BlockedSaid, details_open: bool, controls: Option<Di
     let mut on_details = Some(on_details);
     let line = |size: f32, color: u32, text: String| div().text_size(px(size)).text_color(rgb(color)).child(text);
     let way = |d: Div| d.max_w(px(WAYS_WIDTH));
-    for (i, part) in card(said, details_open).into_iter().enumerate() {
+    for (i, part) in card(said, details_open, printed_open).into_iter().enumerate() {
         b = match part {
             Part::Title(t) => b.child(line(13., look::text(), t).font_weight(FontWeight::SEMIBOLD)),
             Part::What(t) => b.child(line(13., look::text(), t).font_weight(FontWeight::SEMIBOLD)),
@@ -156,6 +195,22 @@ pub fn blocked_block(said: &BlockedSaid, details_open: bool, controls: Option<Di
                         .child(crate::island::button(format!("copy-{i}"), "Copy", false, look::text()).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))),
                 )
             }
+            Part::CaseSays(t) => b.child(way(line(12.5, look::text(), t)).pt(px(2.))),
+            Part::CaseWritten(t) => b.child(way(line(12., look::dim(), t))),
+            Part::CaseRan(t) => {
+                // a command longer than the card wraps inside it, after "Ran:", never past the card's edge
+                let row = crate::look::ticks(&t).into_iter().fold(div().flex().items_start().gap(px(4.)), |row, (part, name)| {
+                    row.child(if name { div().flex_1().min_w_0().font_family(look::MONO_FONT).child(part) } else { div().flex_none().whitespace_nowrap().child(part.trim().to_string()) })
+                });
+                b.child(way(row.text_size(px(12.5)).text_color(rgb(look::text()))))
+            }
+            Part::CaseExpected(t) | Part::CaseGot(t) => b.child(way(line(12.5, look::text(), t))),
+            Part::Printed(t) => b.child(div().pl(px(12.)).font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(17.)).text_color(rgb(look::faint())).child(t)),
+            Part::AllOfIt(case, t) => {
+                let f = on_printed.clone();
+                b.child(div().id(("all-of-it", case)).pl(px(12.)).cursor_pointer().text_size(px(11.5)).text_color(rgb(look::faint())).child(t).on_click(move |_, window, cx| f(case, window, cx)))
+            }
+            Part::CaseFailedIn(t) => b.child(way(line(11.5, look::faint(), t))),
             Part::StillOpen(t) => b.child(way(line(12., look::faint(), format!("· {t}")).pl(px(12.)))),
             Part::Controls => b.when_some(controls.take(), |d, c| d.child(div().pt(px(6.)).child(c))),
             Part::ContinueDoes(t) => b.child(line(11.5, look::faint(), t)),
@@ -235,6 +290,8 @@ pub struct Tabs {
     pub blocked: Option<BlockedSaid>,
     /// The run whose blocked card shows its raw reason (Details open): only that run's.
     details_open: Option<String>,
+    /// The run whose card shows, and the cases whose fold over what they printed is open in it.
+    printed_open: Option<(String, Vec<usize>)>,
     /// When the summary was last copied: its button says Copied for a moment.
     copied_at: Option<std::time::Instant>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
@@ -265,7 +322,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, details_open: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, details_open: None, printed_open: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -344,10 +401,20 @@ impl Tabs {
         Some(halted_said(&who, step.as_deref()))
     }
 
-    /// The open run's card when it is blocked, and whether its Details are open.
-    pub fn blocked(&self) -> Option<(BlockedSaid, bool)> {
+    /// The open run's card when it is blocked, whether its Details are open, and the cases whose printed is all shown.
+    pub fn blocked(&self) -> Option<(BlockedSaid, bool, Vec<usize>)> {
         let said = self.blocked.clone()?;
-        Some((said, self.details_open.is_some() && self.details_open == self.open))
+        let printed = self.printed_open.as_ref().filter(|(run, _)| Some(run) == self.open.as_ref()).map(|(_, open)| open.clone()).unwrap_or_default();
+        Some((said, self.details_open.is_some() && self.details_open == self.open, printed))
+    }
+
+    /// Opens or closes the fold over what case `i` of the open run's card printed; another run's close.
+    pub fn flip_printed(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(run) = self.open.clone() else { return };
+        let mut open = self.printed_open.take().filter(|(r, _)| *r == run).map(|(_, o)| o).unwrap_or_default();
+        if let Some(at) = open.iter().position(|&c| c == i) { open.remove(at); } else { open.push(i); }
+        self.printed_open = Some((run, open));
+        cx.notify();
     }
 
     /// Opens or closes the raw reason of the open run's card; another run's opens closed.
@@ -938,6 +1005,54 @@ fn moved(order: &[Option<String>], key: &Option<String>, to: usize) -> Vec<Optio
 
 #[cfg(test)]
 mod tests {
+    // The real-user's round 2026-11-22-01 (recibo, fix-bug): the card said only "A check you cannot see found that this
+    // does not hold"; the person could not see the case nor what was wrong. A hidden case is hidden from the agent,
+    // never from the person: each one that failed shows what it says, who wrote it, what it ran, what it expected,
+    // what it got and the end of what it printed (six lines, the rest under "▸ all of it"), and in how many attempts.
+    #[test]
+    fn asked_the_blocked_card_shows_the_case_that_failed() {
+        use super::{Part, card};
+        use jaynes_core::event::Fault;
+        use jaynes_shell::listing::CaseSaid;
+        let mut said = blocked_said(Some("fix"), Fault::Agent, "fix spent its 3 attempts: A check you cannot see found that this does not hold");
+        said.agent_said = vec!["O total do recibo está corrigido.".into()];
+        let case = |says: &str, printed: usize| CaseSaid {
+            says: format!("“{says}”"),
+            written: "Written at “cases”, by the agent there.".into(),
+            ran: "Ran: `uv run pytest -q tests/test_total.py`".into(),
+            expected: "Expected: exit 0.".into(),
+            got: "Got: exit 1.".into(),
+            printed: (1..=printed).map(|n| format!("line {n}")).collect(),
+            failed_in: "Failed in 3 of 3 attempts.".into(),
+        };
+        said.cases = vec![case("the old render fails the suite", 8), case("two tomatoes total 17,98", 2)];
+        let closed = card(&said, false, &[]);
+        let at = |parts: &[Part], p: &Part| parts.iter().position(|q| q == p).unwrap_or_else(|| panic!("no {p:?} in {parts:?}"));
+        let head = at(&closed, &Part::Heading("The cases that failed"));
+        assert!(at(&closed, &Part::Why(said.why.clone())) < head && head < at(&closed, &Part::Heading("The agent said")), "the cases after why, before the agent's words");
+        assert_eq!(closed[head + 1..head + 6], [
+            Part::CaseSays("“the old render fails the suite”".into()),
+            Part::CaseWritten("Written at “cases”, by the agent there.".into()),
+            Part::CaseRan("Ran: `uv run pytest -q tests/test_total.py`".into()),
+            Part::CaseExpected("Expected: exit 0.".into()),
+            Part::CaseGot("Got: exit 1.".into()),
+        ]);
+        // six lines of what it printed, then the fold over the rest, then in how many attempts
+        let printed: Vec<&Part> = closed[head + 6..].iter().take_while(|p| matches!(p, Part::Printed(_))).collect();
+        assert_eq!(printed.len(), 6, "{closed:?}");
+        assert_eq!(closed[head + 12..head + 14], [Part::AllOfIt(0, "▸ all of it"), Part::CaseFailedIn("Failed in 3 of 3 attempts.".into())]);
+        // the second, two lines: no fold
+        let second = at(&closed, &Part::CaseSays("“two tomatoes total 17,98”".into()));
+        assert!(!closed[second..].iter().any(|p| matches!(p, Part::AllOfIt(1, _))), "{closed:?}");
+        // open, all eight lines of the first
+        let open = card(&said, false, &[0]);
+        assert_eq!(open.iter().filter(|p| matches!(p, Part::Printed(_))).count(), 10, "eight and two");
+        assert!(open.contains(&Part::AllOfIt(0, "▾ all of it")));
+        // one case: its heading in the singular
+        said.cases.truncate(1);
+        assert!(card(&said, false, &[]).contains(&Part::Heading("The case that failed")));
+    }
+
     // Alan, 21/11: "confuso pra caralho"
     #[test]
     fn asked_the_blocked_card_says_what_happened_first_and_the_raw_only_under_details() {
@@ -950,7 +1065,7 @@ mod tests {
         );
         let mut said = blocked_said(Some("change"), Fault::Jaynes, &reason);
         said.agent_said = vec!["Done. The whole suite passes.".into()];
-        let closed = card(&said, false);
+        let closed = card(&said, false, &[]);
         // what happened first, under the title, then why with what the run keeps
         assert_eq!(closed[..3], [
             Part::Title("Blocked at “change”".into()),
@@ -978,12 +1093,12 @@ mod tests {
             assert!(!shown.contains(word), "{word} on the closed card: {shown}");
         }
         // Details open: the raw reason under it, the panic once
-        let open = card(&said, true);
+        let open = card(&said, true, &[]);
         let d = open.iter().position(|p| *p == Part::Details("▾ Details")).expect("Details open");
         assert_eq!(open[d + 1..].iter().filter(|p| matches!(p, Part::Raw(r) if r.contains("panic"))).count(), 1);
         assert!(open[d + 1..].iter().all(|p| matches!(p, Part::Raw(_))) && open.len() > d + 1);
         // a cause with no ways out and no agent's words: no heading over nothing
-        let r = card(&blocked_said(None, Fault::Role, "nothing to deliver."), false);
+        let r = card(&blocked_said(None, Fault::Role, "nothing to deliver."), false, &[]);
         assert!(!r.iter().any(|p| matches!(p, Part::Heading(_))), "{r:?}");
     }
 
