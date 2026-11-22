@@ -105,10 +105,12 @@ commands, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, O
 
 The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS. It
 denies the network except local TCP ports and sends no UDP, it hides what the engine keeps (the page's key and
-log, the record, other runs) and those browsers' profiles, and the project's commands start none of them there.
+log, the record, other runs) and those browsers' profiles, and the project's commands, as Jaynes runs them, start
+none of them there.
 Jaynes photographs pages with one Chrome of this Mac, the one `JAYNES_CHROME` names or else the one you installed,
-with no window and a profile of its own; a role's own scripts may start that same Chrome to draw their pages, so the
-project's code a role's script runs can start it too, still without your profiles. The local ports are a list, closed by default: the commands bind and reach only the
+with no window and a profile of its own; a role's own scripts may start that same Chrome to draw their pages, so
+where a role's script runs the project's code in its step, its app or its tests, that code can start it too, still
+without your profiles. The local ports are a list, closed by default: the commands bind and reach only the
 free ports the run reserved for them (handed over in `JAYNES_PORTS`) and the ones the step or the check names in the
 role (`local_ports`), never the Jaynes page's; a suite that serves on another port is stopped, and told which port
 and how to take one of its own. **The known limits:** where you open one project's checks to every local port
