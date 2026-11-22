@@ -289,6 +289,55 @@ pub fn arrange(entries: &[Entry]) -> Listing {
     listing
 }
 
+/// An engine's version without its fingerprint: "0.2.4" of "0.2.4+6ab1636".
+pub fn release_of(engine: &str) -> &str {
+    engine.split('+').next().unwrap_or(engine)
+}
+
+/// What `jaynes update` says before it installs: the open runs it will leave behind (`left`, which is
+/// `stop::left_behind` of the version it installs: an older engine started them and its program is not kept), for
+/// each version (the newest first) how many, up to five by name with how each stands, and how to finish them. The
+/// design-lead's words (0.2.5, motor-velho.md); nothing when it leaves none behind.
+pub fn older_runs_said(entries: &[Entry], left: impl Fn(&Run) -> bool) -> Vec<String> {
+    let older: Vec<Entry> = entries.iter().filter(|e| !e.run.finished() && left(&e.run)).cloned().collect();
+    let mut versions: Vec<&str> = older.iter().map(|e| release_of(&e.run.engine)).collect();
+    versions.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+    versions.dedup();
+    let mut said = Vec::new();
+    for v in versions {
+        let of: Vec<Entry> = older.iter().filter(|e| release_of(&e.run.engine) == v).cloned().collect();
+        let listing = arrange(&of);
+        let rows: Vec<&Row> = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, r)| r)).collect();
+        let one = rows.len() == 1;
+        let (them, their) = if one { ("it", "Its") } else { ("them", "Their") };
+        said.push(format!(
+            "{} run{} started on Jaynes {v} can't go on after this update: no answer, Halt or Abandon will reach {them}.",
+            rows.len(),
+            if one { "" } else { "s" }
+        ));
+        for row in rows.iter().take(5) {
+            let e = of.iter().find(|e| e.run.id == row.id).expect("the row's run");
+            let stands = match row.mark {
+                Mark::Needs => "waits for your answer".to_string(),
+                Mark::Working => format!("working, at “{}”", step_at(&e.run)),
+                other => other.word().to_string(),
+            };
+            said.push(format!("  {} ({stands})", name(row).join(" · ")));
+        }
+        if rows.len() > 5 {
+            said.push(format!("  and {} more", rows.len() - 5));
+        }
+        said.push(format!("To finish {them} on {v}, answer or abandon {them} before you update. {their} work stays where it is either way,"));
+        said.push(format!("and the app lists {them} under “From an older Jaynes”."));
+    }
+    said
+}
+
+/// A version's numbers, to put the newest first: "0.2.10" after "0.2.9".
+fn version_key(v: &str) -> Vec<u64> {
+    v.split('.').map(|n| n.parse().unwrap_or(0)).collect()
+}
+
 /// The stops runs went on without, newest run first, each as a row whose line says so: "At “reproduce”: Is this the
 /// bug? · The run went on without your answer." They come after what waits for the person, under "Can still answer".
 pub fn can_still_answer(entries: &[Entry]) -> Vec<Row> {
@@ -2251,6 +2300,58 @@ mod tests {
         // the story the app reads by the run's id reads its state from the record; no record, the transcripts alone
         assert_eq!(story(&home, "r1"), vec![("plan".to_string(), vec!["Two directions for the stack.".to_string()])]);
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    fn of_engine(mut r: Run, engine: &str) -> Run {
+        r.engine = engine.into();
+        r
+    }
+
+    // The tech-lead's ask for 0.2.5 (the engineer lead, 22/11): before it installs, `jaynes update` says how many
+    // open runs an engine that will not carry them on started, and of which version, in the design-lead's words.
+    #[test]
+    fn asked_the_update_says_which_open_runs_an_older_jaynes_started_before_it_installs() {
+        let mut waits = of_engine(run("r1", "Choose the stack"), "0.2.4+aaa");
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: false,
+            about: "Which stack?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        waits.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        let working = of_engine(run("r2", "Login with passkey"), "0.2.4+aaa");
+        let mut blocked = of_engine(run("r3", "Fix the export"), "0.2.4+aaa");
+        blocked.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "no".into() };
+        let mut done = of_engine(run("r4", "Old and finished"), "0.2.4+aaa");
+        done.phase = Phase::Finished { outcome: Outcome::Abandoned };
+        let current = of_engine(run("r5", "On the new one"), "0.2.5+bbb");
+        let entries = [entry(waits, "/p/tidepool", 50), entry(working, "/p/harbor-api", 40), entry(blocked, "/p/tidepool", 30), entry(done, "/p/tidepool", 20), entry(current, "/p/tidepool", 10)];
+        // what the update leaves behind, as stop::left_behind says it for the version it installs: an open run of
+        // another version whose engine's program is not kept (0.2.3's is, here)
+        let left = |v: &'static str| move |r: &Run| release_of(&r.engine) != v && !r.engine.starts_with("0.2.3");
+        let said = older_runs_said(&entries, left("0.2.5"));
+        assert_eq!(said, [
+            "3 runs started on Jaynes 0.2.4 can't go on after this update: no answer, Halt or Abandon will reach them.",
+            "  tidepool · Choose the stack (waits for your answer)",
+            "  harbor-api · Login with passkey (working, at “plan”)",
+            "  tidepool · Fix the export (blocked)",
+            "To finish them on 0.2.4, answer or abandon them before you update. Their work stays where it is either way,",
+            "and the app lists them under “From an older Jaynes”.",
+        ]);
+        // one run: the singular; the version alone, never its fingerprint
+        let said = older_runs_said(&entries[2..], left("0.2.5"));
+        assert_eq!(said[0], "1 run started on Jaynes 0.2.4 can't go on after this update: no answer, Halt or Abandon will reach it.");
+        assert_eq!(said[2..], ["To finish it on 0.2.4, answer or abandon it before you update. Its work stays where it is either way,", "and the app lists it under “From an older Jaynes”."]);
+        // the same version again (the app put back): nothing to say; and no open run of an older one: nothing either
+        assert!(older_runs_said(&entries, left("0.2.4")).iter().all(|l| !l.contains("0.2.4")), "{:?}", older_runs_said(&entries, left("0.2.4")));
+        assert!(older_runs_said(&entries[3..], left("0.2.5")).is_empty(), "a finished run and one of the version installed are not said");
+        // past five, "and N more"; two older versions, the newest first; a run whose engine is kept goes on, unsaid
+        let many: Vec<Entry> = (0..7).map(|i| entry(of_engine(run(&format!("m{i}"), &format!("Task {i}")), "0.2.4+aaa"), "/p/tidepool", 100 + i))
+            .chain([entry(of_engine(run("o1", "Older yet"), "0.2.2+ccc"), "/p/tidepool", 1), entry(of_engine(run("k1", "Kept"), "0.2.3+ddd"), "/p/tidepool", 2)]).collect();
+        let said = older_runs_said(&many, left("0.2.5"));
+        assert_eq!(said[0], "7 runs started on Jaynes 0.2.4 can't go on after this update: no answer, Halt or Abandon will reach them.");
+        assert_eq!(said[6], "  and 2 more");
+        let at = said.iter().position(|l| l == "1 run started on Jaynes 0.2.2 can't go on after this update: no answer, Halt or Abandon will reach it.").expect("0.2.2");
+        assert!(at > 6 && !said.iter().any(|l| l.contains("0.2.3") || l.contains("Kept")), "{said:?}");
+        // a build of the newest source, whose version is not known: every open run is said
     }
 
     // The tech-lead's rule, 21/11 (Alan's run r1795301086-403): a run that went on without the answer to a stop shows
