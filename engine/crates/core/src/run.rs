@@ -31,6 +31,10 @@ pub struct Run {
     pub questions: BTreeMap<String, QuestionState>,
     pub phase: Phase,
     pub halted: bool,
+    /// Who halted it, while it is halted: the person, an agent, or a rule (Jaynes's own, when the process driving it
+    /// was stopped while it ran).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub halted_by: Option<By>,
     /// The agent's process that started the run, by pid and start time: it may continue a block of Jaynes's that
     /// judges the same change again, and set the run aside. None: only the person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,6 +366,7 @@ impl Run {
             questions: BTreeMap::new(),
             phase: Phase::Running,
             halted: false,
+            halted_by: None,
             starter: starter.clone(),
             set_aside: None,
             asking: BTreeMap::new(),
@@ -755,7 +760,10 @@ impl Run {
             Event::PortsChosen { any, servers, opened, freed_ports } => {
                 self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened, freed_ports: freed_ports.clone() })
             }
-            Event::Halted { .. } => self.halted = true,
+            Event::Halted { by } => {
+                self.halted = true;
+                self.halted_by = Some(by.clone());
+            }
             Event::AgentAsked { ask, question, step, round, item, text, .. } => {
                 self.asking.insert(ask.clone(), question.clone());
                 if let Some(s) = self.step_mut(step) {
@@ -776,6 +784,7 @@ impl Run {
             }
             Event::Resumed { .. } => {
                 self.halted = false;
+                self.halted_by = None;
                 self.set_aside = None;
             }
             Event::DeliveryAsked { digest } => {
