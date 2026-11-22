@@ -174,5 +174,20 @@ class AChecksTestsThatNameNoPort(unittest.TestCase):
             self.assertNotIsInstance(got, Blocked, held)
 
 
+
+class TheSuiteAsTheRunBegan(unittest.TestCase):
+    def test_the_suite_of_the_start_that_serves_on_a_held_port_is_jaynes_s_never_the_change_s(self):
+        # the real-user's estoque, attempt 1.1: the agent moved the fake database to a free port in conftest.py, the
+        # suite passed, and the suite as the project defined it when the run began, on 5432, failed for Jaynes's hold
+        root = project(ESTOQUE)
+        runs = [ran("11 passed", code=0), ran(NAMED_NOWHERE)]
+        with mock.patch.object(menu.box, "run", side_effect=runs):
+            got = menu._passes({"project": str(root), "source": str(root), "test_servers": True}, {"kind": "pytest"},
+                               "python3 -m pytest", "the suite fails", {"tests/conftest.py": "the old one"})
+        self.assertIsInstance(got, Blocked)
+        self.assertTrue(got.reason.startswith(menu.HELD_KEPT), got.reason)
+        self.assertIn(" It tried held port 5432.", got.reason)
+
+
 if __name__ == "__main__":
     unittest.main()
