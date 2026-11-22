@@ -495,6 +495,26 @@ pub const SENT_FOR: Duration = Duration::from_secs(4);
 pub struct Sent {
     pub run: String,
     pub at: Instant,
+    /// Where the answer went and what comes next, as the pill says it ([`sent_said`]).
+    pub said: String,
+}
+
+/// What the pill says after a Send, as the page's line does (design 0.2.5 quatro-itens.md, item 3): the project the
+/// answer went to and the next question with its project, the projects only when they differ; that nothing else
+/// waits, when nothing does. `next` is a project ("" without one) and the question it asks.
+pub fn sent_said(from: Option<&str>, next: Option<(&str, &str)>) -> String {
+    let Some((to, asks)) = next else { return "Sent. Nothing else waits for you.".to_string() };
+    match (from.filter(|f| !f.is_empty()), Some(to).filter(|t| !t.is_empty())) {
+        (Some(from), Some(to)) if from != to => format!("Sent to {from}. Next: {to} · {asks}"),
+        (None, Some(to)) => format!("Sent. Next: {to} · {asks}"),
+        _ => format!("Sent. Next: {asks}"),
+    }
+}
+
+/// What comes after a Send to `sent`: the first other run that needs the person, as the column lists them, with its
+/// project ("" for a run without one) and what it asks.
+pub fn next_after<'a>(needs: &'a [jaynes_shell::listing::Row], sent: &str) -> Option<(&'a str, &'a str)> {
+    needs.iter().find(|r| r.id != sent).map(|r| (if r.project == "no project" { "" } else { r.project.as_str() }, r.line.as_str()))
 }
 
 impl Sent {
@@ -700,7 +720,10 @@ impl Island {
 
     /// The answer just went to `run`'s `question`: the foot of its tab says so, for a few seconds.
     fn said_sent(&mut self, run: String, question: String, cx: &mut Context<Self>) {
-        self.sent = Some((Sent { run, at: Instant::now() }, question));
+        let snap = &self.runs.read(cx).snap;
+        let from = snap.details.get(&run).map(|d| d.project.as_str()).filter(|p| *p != "no project");
+        let said = sent_said(from, next_after(&snap.listing.needs, &run));
+        self.sent = Some((Sent { run, at: Instant::now(), said }, question));
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SENT_FOR + Duration::from_millis(50)).await;
             let _ = this.update(cx, |_, cx| cx.notify());
@@ -1388,8 +1411,8 @@ impl Render for Island {
         let now = Instant::now();
         // the answer just sent, at the foot of its run's tab, once its question is gone or while the record catches up
         let sent_foot = |q: Option<&str>, this: &Self| {
-            this.sent.as_ref().filter(|(s, question)| s.shows(tab_run.as_deref(), now) && q.is_none_or(|q| q == question)).map(|_| {
-                div().w_full().px(px(16.)).py(px(10.)).rounded(px(12.)).bg(rgb(look::panel_2())).border_1().border_color(rgb(look::line())).text_size(px(12.)).text_color(rgb(look::faint())).child(SENT)
+            this.sent.as_ref().filter(|(s, question)| s.shows(tab_run.as_deref(), now) && q.is_none_or(|q| q == question)).map(|(s, _)| {
+                div().w_full().px(px(16.)).py(px(10.)).rounded(px(12.)).bg(rgb(look::panel_2())).border_1().border_color(rgb(look::line())).text_size(px(12.)).text_color(rgb(look::faint())).child(s.said.clone())
             })
         };
         let Some(stop) = self.stop(cx) else {
@@ -1671,7 +1694,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1714,6 +1737,24 @@ mod tests {
     fn asked_the_question_s_title_names_its_project_first() {
         assert_eq!(question_title("horta", "Is this the first slice?"), (Some("horta · ".to_string()), "Is this the first slice?".to_string()));
         assert_eq!(question_title("", "Is this the first slice?"), (None, "Is this the first slice?".to_string()), "without a project, the question alone");
+    }
+
+    // the design-lead's quatro-itens.md, item 3 (the real-user, 22/11): after a Send the next question opened without a
+    // word of where the answer went; the app's pill says it for its 4 seconds, as the page's line does
+    #[test]
+    fn asked_after_send_the_app_says_where_it_went() {
+        let next = Some(("horta", "Is this the first slice?"));
+        assert_eq!(sent_said(Some("scaffold-vazio"), next), "Sent to scaffold-vazio. Next: horta · Is this the first slice?");
+        assert_eq!(sent_said(Some("horta"), next), "Sent. Next: Is this the first slice?", "within one project");
+        assert_eq!(sent_said(None, next), "Sent. Next: horta · Is this the first slice?", "from a run without a project");
+        assert_eq!(sent_said(Some("horta"), None), "Sent. Nothing else waits for you.");
+        // what comes next: the first other run that needs the person, as the column lists them
+        let row = |id: &str, project: &str, line: &str| jaynes_shell::listing::Row { id: id.into(), project: project.into(), title: String::new(), apart: None, line: line.into(), mark: jaynes_shell::listing::Mark::Needs };
+        let needs = [row("sent", "scaffold-vazio", "Is this the first slice?"), row("b", "horta", "Is this the first slice?"), row("c", "site", "Go with “Harbor”?")];
+        assert_eq!(next_after(&needs, "sent"), Some(("horta", "Is this the first slice?")));
+        assert_eq!(next_after(&needs[..1], "sent"), None);
+        let lone = [row("x", "no project", "Merge into “main”?")];
+        assert_eq!(next_after(&lone, "sent"), Some(("", "Merge into “main”?")), "no project names none");
     }
 
     // the engineer lead, 22/11 (row 9), in the design-lead's words: at a stop of a run whose older engine left the Mac,
@@ -2084,7 +2125,7 @@ mod tests {
     #[test]
     fn the_answer_sent_is_said_at_its_runs_foot_for_four_seconds() {
         let at = Instant::now();
-        let sent = Sent { run: "r".into(), at };
+        let sent = Sent { run: "r".into(), at, said: String::new() };
         assert_eq!(SENT, "Sent as yours. The run goes on.");
         assert!(sent.shows(Some("r"), at + Duration::from_millis(3900)));
         assert!(!sent.shows(Some("r"), at + Duration::from_millis(4100)));
