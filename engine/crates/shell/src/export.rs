@@ -174,10 +174,10 @@ mod tests {
         let mut events = jaynes_core::decide(None, &start).expect("start").events;
         let step = format!("{PLANTED}-step");
         let item = Item { id: format!("{PLANTED}-item"), label: format!("{PLANTED} src/{PLANTED}.rs"), digest: Digest("d".into()) };
-        events.push(Event::AttemptFailed { step: step.clone(), attempt: 1, reasons: vec![format!("{PLANTED} failed")], usage: Usage { seconds: 60, tokens: 1_000, cached: 7 }, spent: true });
+        events.push(Event::AttemptFailed { step: step.clone(), attempt: 1, reasons: vec![format!("{PLANTED} failed")], usage: Usage { seconds: 60, tokens: 1_000, cached: 7, ..Default::default() }, spent: true });
         events.push(Event::AttemptDelivered {
             step: step.clone(), attempt: 2, fix: 0, output: Digest("o".into()), items: vec![item.clone()],
-            changed: vec![Changed::file(format!("src/{PLANTED}.rs"), 3)], usage: Usage { seconds: 90, tokens: 3_321, cached: 0 }, session: Some(format!("{PLANTED}-session")),
+            changed: vec![Changed::file(format!("src/{PLANTED}.rs"), 3)], usage: Usage { seconds: 90, tokens: 3_321, cached: 0, ..Default::default() }, session: Some(format!("{PLANTED}-session")),
             tree: None,
             reply: None,
         });

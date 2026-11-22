@@ -44,6 +44,9 @@ pub struct Spec<'a> {
     /// Told the session as soon as the agent program names it, so a turn cut off from outside can go on in it, with
     /// what the program says it runs with.
     pub on_session: OnSession,
+    /// The tokens the run's ceiling leaves the turn (G5): one whose stream says it spent more is cut as it passes
+    /// them. None: no ceiling.
+    pub budget: Option<u64>,
 }
 
 /// The session a line of the agent program's output names as its turn starts (`{"type":"system","session_id":..}`),
@@ -69,10 +72,10 @@ pub enum Ended {
     Ran { usage: Usage, session: Option<String>, #[allow(dead_code)] model: String, said: String },
     /// The agent's fault, with what it cost.
     Failed { reason: String, usage: Usage },
-    /// Jaynes's or the machine's.
-    Fault { reason: String },
-    /// From outside: a quota.
-    Interrupted { reason: String },
+    /// Jaynes's or the machine's, with what the turn spent before it, as its stream said it.
+    Fault { reason: String, usage: Usage },
+    /// From outside: a quota, a silent connection; with what the turn spent till then.
+    Interrupted { reason: String, usage: Usage },
 }
 
 pub struct Turn {
@@ -102,6 +105,92 @@ pub struct Watched {
     pub timed_out: bool,
     /// Stopped because it was silent too long while no tool of its was at work: its connection to the model is gone.
     pub stalled: bool,
+    /// What its stream said it spent, read as it came.
+    pub meter: Meter,
+    /// Cut because its stream said it spent more than its budget.
+    pub over: bool,
+}
+
+/// What a turn has spent so far, as the agent program's stream says it while the turn runs, so a turn that dies
+/// counts what it spent up to there and one that passes the run's ceiling is cut as it passes it. Claude Code says a
+/// message's usage as the message starts (`message_start`), again on each of its whole lines, one a content block,
+/// and its last output count as it ends (`message_delta`); a subagent's messages come beside the agent's, each with
+/// its own id. Each message counts once, at the most any line said of it.
+#[derive(Clone, Debug, Default)]
+pub struct Meter {
+    /// By message: input, cache writes, output, cache reads.
+    messages: std::collections::BTreeMap<String, [u64; 4]>,
+    /// The message under way, by the subagent's tool call (empty for the agent's own), which a `message_delta` ends.
+    current: std::collections::BTreeMap<String, String>,
+    unnamed: u64,
+}
+
+impl Meter {
+    pub fn read(&mut self, line: &str) {
+        if !line.contains("usage") {
+            return;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+        let parent = v["parent_tool_use_id"].as_str().unwrap_or("").to_string();
+        let (id, usage) = match v["type"].as_str() {
+            Some("assistant") => (v["message"]["id"].as_str().map(str::to_string), &v["message"]["usage"]),
+            Some("stream_event") => match v["event"]["type"].as_str() {
+                Some("message_start") => {
+                    let id = v["event"]["message"]["id"].as_str().map(str::to_string);
+                    if let Some(id) = &id {
+                        self.current.insert(parent.clone(), id.clone());
+                    }
+                    (id, &v["event"]["message"]["usage"])
+                }
+                Some("message_delta") => (self.current.get(&parent).cloned(), &v["event"]["usage"]),
+                _ => return,
+            },
+            _ => return,
+        };
+        if !usage.is_object() {
+            return;
+        }
+        let id = id.unwrap_or_else(|| {
+            self.unnamed += 1;
+            format!("\u{1}{}", self.unnamed)
+        });
+        let n = |k: &str| usage[k].as_u64().unwrap_or(0);
+        let said = [n("input_tokens"), n("cache_creation_input_tokens"), n("output_tokens"), n("cache_read_input_tokens")];
+        let kept = self.messages.entry(id).or_default();
+        for (k, s) in kept.iter_mut().zip(said) {
+            *k = (*k).max(s);
+        }
+    }
+
+    /// Tokens sent and received, without those read back from the cache: what counts towards the ceiling.
+    pub fn tokens(&self) -> u64 {
+        self.messages.values().map(|m| m[0] + m[1] + m[2]).sum()
+    }
+
+    pub fn cached(&self) -> u64 {
+        self.messages.values().map(|m| m[3]).sum()
+    }
+
+    /// Whether the stream said anything of what was spent.
+    pub fn said(&self) -> bool {
+        !self.messages.is_empty()
+    }
+
+    pub fn add(&mut self, other: Meter) {
+        for (id, m) in other.messages {
+            // a message without an id is its own, whatever the other meter called it
+            let id = if id.starts_with('\u{1}') {
+                self.unnamed += 1;
+                format!("\u{1}{}", self.unnamed)
+            } else {
+                id
+            };
+            let kept = self.messages.entry(id).or_default();
+            for (k, s) in kept.iter_mut().zip(m) {
+                *k = (*k).max(s);
+            }
+        }
+    }
 }
 
 /// How long an agent may be silent while it waits for its model: a model at work sends its text as it comes, so
@@ -145,7 +234,13 @@ pub fn without_git_local(cmd: &mut Command) {
 
 /// `live`: a file the program's output is added to line by line as it comes, so the person can watch the agent work.
 #[allow(clippy::too_many_arguments)]
-fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession, live: Option<&Path>) -> Result<Watched, String> {
+fn run(cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession, live: Option<&Path>) -> Result<Watched, String> {
+    run_within(cmd, input, deadline, idle, pidfile, paused, on_session, live, None)
+}
+
+/// As `run`, and cut when its stream says it spent more tokens than `budget`.
+#[allow(clippy::too_many_arguments)]
+fn run_within(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession, live: Option<&Path>, budget: Option<u64>) -> Result<Watched, String> {
     use std::os::unix::process::CommandExt;
     without_git_local(&mut cmd);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
@@ -155,7 +250,7 @@ fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>
     if let Some(f) = pidfile {
         std::fs::write(f, pid.to_string()).map_err(|e| format!("Jaynes could not note the agent's process: {e}"))?;
     }
-    let result = watch(&mut child, pid, input, deadline, idle, started, paused, on_session, live);
+    let result = watch(&mut child, pid, input, deadline, idle, started, paused, on_session, live, budget);
     if let Some(f) = pidfile {
         let _gone = std::fs::remove_file(f);
     }
@@ -185,7 +280,7 @@ pub fn stop_left(pidfile: &Path) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, idle: Option<Duration>, started: Instant, paused: Option<&Path>, mut on_session: OnSession, live: Option<&Path>) -> Result<Watched, String> {
+fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, idle: Option<Duration>, started: Instant, paused: Option<&Path>, mut on_session: OnSession, live: Option<&Path>, budget: Option<u64>) -> Result<Watched, String> {
     if let Some(mut stdin) = child.stdin.take() {
         let _wrote = stdin.write_all(input.as_bytes());
     }
@@ -198,6 +293,9 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     // when the program last said anything, and how many of its tools are at work
     let life = std::sync::Arc::new(std::sync::Mutex::new((Instant::now(), 0i64)));
     let beat = life.clone();
+    // what the stream says was spent, the model's partial messages included: they say a message's count as it starts
+    let meter = std::sync::Arc::new(std::sync::Mutex::new(Meter::default()));
+    let metered = meter.clone();
     let mut live = live.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
     let out = std::thread::spawn(move || {
         use std::io::BufRead;
@@ -207,6 +305,9 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             if let Ok(mut b) = beat.lock() {
                 b.0 = Instant::now();
                 b.1 += tools_at_work(&line);
+            }
+            if let Ok(mut m) = metered.lock() {
+                m.read(&line);
             }
             if let Some(f) = on_session.as_mut()
                 && let Some((session, confirmed)) = session_of(&line)
@@ -241,6 +342,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     let group = |sig: &str| Command::new("kill").args([sig, "--", &format!("-{pid}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     let mut timed_out = false;
     let mut stalled = false;
+    let mut over = false;
     let mut waited = Duration::ZERO;
     let mut last = Instant::now();
     let code = loop {
@@ -271,6 +373,14 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
                 let _waited = child.wait();
                 break None;
             }
+            Ok(None) if budget.is_some_and(|b| meter.lock().is_ok_and(|m| m.tokens() > b)) => {
+                over = true;
+                let _term = group("-TERM");
+                std::thread::sleep(Duration::from_secs(2));
+                let _kill = group("-KILL");
+                let _waited = child.wait();
+                break None;
+            }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => return Err(format!("the agent program could not be watched: {e}")),
         }
@@ -293,7 +403,8 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
         std::thread::sleep(Duration::from_millis(50));
     }
     let text = |t: &std::sync::Arc<std::sync::Mutex<String>>| t.lock().map(|t| t.clone()).unwrap_or_default();
-    Ok(Watched { code, out: text(&out_text), err: text(&err_text), took, timed_out, stalled })
+    let meter = meter.lock().map(|m| m.clone()).unwrap_or_default();
+    Ok(Watched { code, out: text(&out_text), err: text(&err_text), took, timed_out, stalled, meter, over })
 }
 
 /// How a line of Claude Code's stream changes the count of its tools at work: a tool it calls starts one, a tool's
@@ -361,19 +472,19 @@ impl Agent for Shell {
         }
         let applied = json!({"command": self.command});
         let ended = match run(cmd, spec.prompt, spec.deadline, None, spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session, live(spec.transcript.as_deref())) {
-            Err(reason) => Ended::Fault { reason },
+            Err(reason) => Ended::Fault { reason, usage: Default::default() },
             Ok(Watched { code, out, err, took, timed_out, .. }) => {
                 if let Some(t) = &spec.transcript {
                     let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
                 }
                 let said: Value = out.lines().rev().find_map(|l| serde_json::from_str(l).ok()).unwrap_or(Value::Null);
-                let usage = Usage { seconds: took.as_secs(), tokens: said["tokens"].as_u64().unwrap_or(0), cached: 0 };
+                let usage = Usage { seconds: took.as_secs(), tokens: said["tokens"].as_u64().unwrap_or(0), cached: 0, ..Default::default() };
                 let session = said["session"].as_str().map(str::to_string);
                 match code {
                     _ if timed_out => Ended::Failed { reason: "the turn ran past its deadline".to_string(), usage },
                     Some(0) => Ended::Ran { usage, session, model: "command".to_string(), said: said["said"].as_str().unwrap_or("").to_string() },
-                    Some(75) => Ended::Interrupted { reason: "quota".to_string() },
-                    Some(3) => Ended::Fault { reason: err.trim().chars().take(300).collect() },
+                    Some(75) => Ended::Interrupted { usage: Default::default(), reason: "quota".to_string() },
+                    Some(3) => Ended::Fault { usage: Default::default(), reason: err.trim().chars().take(300).collect() },
                     _ => Ended::Failed { reason: with_said(&format!("the agent {}", exited(code)), &err.chars().take(300).collect::<String>()), usage },
                 }
             }
@@ -760,23 +871,23 @@ impl Agent for Claude {
         let wrapped = cfg!(target_os = "macos") && spec.reach.commands;
         let settings = self.settings(spec.cwd, spec.reach, spec.reads, spec.permit.is_some() || wrapped, spec.servers, wrapped);
         let Some(claude) = binary("claude") else {
-            return Turn { ended: Ended::Fault { reason: "Claude Code is not installed".to_string() }, applied: settings };
+            return Turn { ended: Ended::Fault { usage: Default::default(), reason: "Claude Code is not installed".to_string() }, applied: settings };
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
         // without the user the settings could not hide the shared folder, and without a folder of its own Claude Code
         // would give the agent's commands the shared one: a fault of Jaynes's, never a turn with it open
         if user().is_none() {
-            return Turn { ended: Ended::Fault { reason: "Jaynes could not tell which user it runs as, so it could not keep the agent's commands out of the temporary folder Claude Code's sessions share".to_string() }, applied: settings };
+            return Turn { ended: Ended::Fault { usage: Default::default(), reason: "Jaynes could not tell which user it runs as, so it could not keep the agent's commands out of the temporary folder Claude Code's sessions share".to_string() }, applied: settings };
         }
         let own_tmp = match OwnTmp::make() {
             Ok(own) => own,
-            Err(e) => return Turn { ended: Ended::Fault { reason: format!("Jaynes could not make Claude Code a temporary folder of its own: {e}") }, applied: settings },
+            Err(e) => return Turn { ended: Ended::Fault { usage: Default::default(), reason: format!("Jaynes could not make Claude Code a temporary folder of its own: {e}") }, applied: settings },
         };
         let boxed = if wrapped {
             match self.agent_box(&spec, own_tmp.path()) {
                 Ok(b) => Some(b),
-                Err(reason) => return Turn { ended: Ended::Fault { reason }, applied: settings },
+                Err(reason) => return Turn { ended: Ended::Fault { reason, usage: Default::default() }, applied: settings },
             }
         } else {
             None
@@ -786,7 +897,7 @@ impl Agent for Claude {
             (Some(p), None) => Some(p.clone()),
             (None, Some(b)) => match std::env::current_exe() {
                 Ok(exe) => Some((vec![exe.display().to_string(), "permit".into(), "--wrap-only".into(), "--box".into(), b.display().to_string()], Vec::new())),
-                Err(e) => return Turn { ended: Ended::Fault { reason: format!("Jaynes could not find itself to put its box around the agent's commands: {e}") }, applied: settings },
+                Err(e) => return Turn { ended: Ended::Fault { reason: format!("Jaynes could not find itself to put its box around the agent's commands: {e}"), usage: Default::default() }, applied: settings },
             },
             (None, None) => None,
         };
@@ -831,10 +942,12 @@ impl Agent for Claude {
         let mut prompt = spec.prompt.to_string();
         let mut deadline = spec.deadline;
         let mut said = (String::new(), String::new(), Duration::ZERO);
+        let mut spent = Meter::default();
         let mut watched = None;
         let mut failure = "the agent program did not start".to_string();
         for _ in 0..=STALLS {
-            let w = match run(command(session.as_deref()), &prompt, deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), on_session.take(), transcript) {
+            let budget = spec.budget.map(|b| b.saturating_sub(spent.tokens()));
+            let w = match run_within(command(session.as_deref()), &prompt, deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), on_session.take(), transcript, budget) {
                 Err(reason) => {
                     failure = reason;
                     break;
@@ -844,6 +957,7 @@ impl Agent for Claude {
             said.0.push_str(&w.out);
             said.1.push_str(&w.err);
             said.2 += w.took;
+            spent.add(w.meter.clone());
             deadline = deadline.saturating_sub(w.took);
             let stalled = w.stalled;
             session = w.out.lines().find_map(|l| session_of(l).map(|(s, _)| s)).or(session);
@@ -853,15 +967,21 @@ impl Agent for Claude {
             }
             prompt = RESUME.to_string();
         }
-        let watched = watched.map(|w| Watched { out: said.0.clone(), err: said.1.clone(), took: said.2, ..w });
+        let watched = watched.map(|w| Watched { out: said.0.clone(), err: said.1.clone(), took: said.2, meter: spent.clone(), ..w });
+        // what the turn spent, as its stream said it, whatever ends it
+        let usage = Usage { seconds: said.2.as_secs(), tokens: spent.tokens(), cached: spent.cached(), uncounted: u32::from(!spent.said()) };
         // a command the box could not be put around ran nothing, and the turn is Jaynes's fault, never the agent's
         if let Some(why) = boxed.as_ref().and_then(|b| std::fs::read_to_string(b.with_file_name(crate::permit::BOX_FAILED)).ok()) {
-            return Turn { ended: Ended::Fault { reason: why }, applied };
+            return Turn { ended: Ended::Fault { reason: why, usage }, applied };
         }
         let ended = match watched.ok_or(failure) {
-            Err(reason) => Ended::Fault { reason },
-            Ok(Watched { stalled: true, .. }) => Ended::Interrupted { reason: format!("its connection to the model went silent {} times; continue the run to take it up again", STALLS + 1) },
-            Ok(Watched { code, out, err, took, timed_out, .. }) => {
+            Err(reason) => Ended::Fault { reason, usage: Default::default() },
+            Ok(Watched { over: true, .. }) => Ended::Failed {
+                reason: format!("the turn was cut as it passed the run's ceiling: it spent {} tokens, and the ceiling left it {}", usage.tokens, spec.budget.unwrap_or(0)),
+                usage,
+            },
+            Ok(Watched { stalled: true, .. }) => Ended::Interrupted { usage, reason: format!("its connection to the model went silent {} times; continue the run to take it up again", STALLS + 1) },
+            Ok(Watched { code, out, err, took, timed_out, meter, .. }) => {
                 if let Some(t) = &spec.transcript {
                     let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
                 }
@@ -869,15 +989,17 @@ impl Agent for Claude {
                 match refused_writes(&out, spec.cwd, spec.reach) {
                     // a Claude Code that ignores --tools, or adds tools of its own: what the agent did is not the step's
                     _ if !extra.is_empty() => Ended::Fault {
+                        usage,
                         reason: format!("Claude Code gave the agent tools Jaynes did not: {}; this turn does not count", extra.join(", ")),
                     },
                     Some(paths) => Ended::Fault {
+                        usage,
                         reason: format!(
                             "Claude Code's guards, as Jaynes set them, refused writes the step may make: {}",
                             paths.join(", ")
                         ),
                     },
-                    None => claude_ended(&self.model, code, &out, &err, took, timed_out),
+                    None => claude_ended(&self.model, code, &out, &err, took, timed_out, &meter),
                 }
             }
         };
@@ -973,14 +1095,14 @@ impl Agent for Codex {
         let args = self.arguments(spec.cwd, spec.session);
         let applied = json!({"program": "codex", "model": self.model, "arguments": args, "in": "Jaynes's box", "resume": spec.session});
         let Some(program) = &self.program else {
-            return Turn { ended: Ended::Fault { reason: CODEX_NOT_YET.to_string() }, applied };
+            return Turn { ended: Ended::Fault { usage: Default::default(), reason: CODEX_NOT_YET.to_string() }, applied };
         };
         let tmp = spec.cwd.join(crate::project::EXCHANGE).join("tmp");
         let _made = std::fs::create_dir_all(&tmp);
         let argv = match self.boxed(program, spec.cwd, &tmp, spec.reach, &args) {
             Ok(argv) if !argv.is_empty() => argv,
-            Ok(_) => return Turn { ended: Ended::Fault { reason: "Jaynes's box gave an empty command line for Codex".into() }, applied },
-            Err(reason) => return Turn { ended: Ended::Fault { reason }, applied },
+            Ok(_) => return Turn { ended: Ended::Fault { usage: Default::default(), reason: "Jaynes's box gave an empty command line for Codex".into() }, applied },
+            Err(reason) => return Turn { ended: Ended::Fault { reason, usage: Default::default() }, applied },
         };
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]).current_dir(spec.cwd).env("TMPDIR", &tmp);
@@ -988,8 +1110,8 @@ impl Agent for Codex {
             cmd.env(k, v);
         }
         let ended = match run(cmd, spec.prompt, spec.deadline, Some(SILENCE), spec.pidfile.as_deref(), spec.paused.as_deref(), spec.on_session, live(spec.transcript.as_deref())) {
-            Err(reason) => Ended::Fault { reason },
-            Ok(Watched { stalled: true, .. }) => Ended::Interrupted { reason: "its connection to the model went silent; continue the run to take it up again".to_string() },
+            Err(reason) => Ended::Fault { reason, usage: Default::default() },
+            Ok(Watched { stalled: true, .. }) => Ended::Interrupted { usage: Default::default(), reason: "its connection to the model went silent; continue the run to take it up again".to_string() },
             Ok(Watched { code, out, err, took, timed_out, .. }) => {
                 if let Some(t) = &spec.transcript {
                     let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
@@ -1004,7 +1126,7 @@ impl Agent for Codex {
                 if refused.is_empty() {
                     read.ended(code, &err, took, timed_out)
                 } else {
-                    Ended::Fault { reason: format!("Jaynes's box, as Jaynes set it for Codex, refused writes the step may make: {}", refused.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ")) }
+                    Ended::Fault { usage: Default::default(), reason: format!("Jaynes's box, as Jaynes set it for Codex, refused writes the step may make: {}", refused.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ")) }
                 }
             }
         };
@@ -1068,18 +1190,18 @@ impl CodexTurn {
     fn ended(self, code: Option<i32>, err: &str, took: Duration, timed_out: bool) -> Ended {
         let (input, cached, output) = self.usage.unwrap_or((0, 0, 0));
         // the cached input is inside the input for Codex: the tokens are the new input and the output
-        let usage = Usage { seconds: took.as_secs(), tokens: input.saturating_sub(cached) + output, cached };
+        let usage = Usage { seconds: took.as_secs(), tokens: input.saturating_sub(cached) + output, cached, uncounted: u32::from(self.usage.is_none()) };
         if timed_out {
             return Ended::Failed { reason: "the turn ran past its deadline".to_string(), usage };
         }
         let said = self.failures.last().cloned().unwrap_or_default();
         let lower = format!("{} {err}", self.failures.join(" ")).to_lowercase();
         if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("quota") {
-            return Ended::Interrupted { reason: "quota".to_string() };
+            return Ended::Interrupted { usage, reason: "quota".to_string() };
         }
         if self.usage.is_none() && self.failures.is_empty() {
             let tail: String = err.trim().chars().take(300).collect();
-            return Ended::Fault { reason: format!("Codex ended with no completed turn (it {}), {} lines not its events: {tail}", exited(code), self.other) };
+            return Ended::Fault { usage, reason: format!("Codex ended with no completed turn (it {}), {} lines not its events: {tail}", exited(code), self.other) };
         }
         if !self.failures.is_empty() {
             return Ended::Failed { reason: format!("the Codex turn failed: {}", said.chars().take(300).collect::<String>()), usage };
@@ -1138,7 +1260,9 @@ fn refused_writes(out: &str, cwd: &Path, reach: &Reach) -> Option<Vec<String>> {
     (!refused.is_empty()).then_some(refused)
 }
 
-fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Duration, timed_out: bool) -> Ended {
+/// How a Claude Code turn ended, and what it spent: its result's count, or what its stream said when that is more
+/// (its subagents' messages, a turn that died before its result); "not counted yet" when neither said anything.
+fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Duration, timed_out: bool, meter: &Meter) -> Ended {
     let mut result = Value::Null;
     let mut session: Option<String> = None;
     for line in out.lines() {
@@ -1152,10 +1276,12 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
     }
     let u = &result["usage"];
     let n = |k: &str| u[k].as_u64().unwrap_or(0);
+    let counted = u.is_object() || meter.said();
     let usage = Usage {
         seconds: took.as_secs(),
-        tokens: n("input_tokens") + n("cache_creation_input_tokens") + n("output_tokens"),
-        cached: n("cache_read_input_tokens"),
+        tokens: (n("input_tokens") + n("cache_creation_input_tokens") + n("output_tokens")).max(meter.tokens()),
+        cached: n("cache_read_input_tokens").max(meter.cached()),
+        uncounted: u32::from(!counted),
     };
     let said = result["result"].as_str().unwrap_or("").to_string();
     if timed_out {
@@ -1165,9 +1291,9 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
     let lower = text.to_lowercase();
     if result.is_null() {
         if lower.contains("limit") || lower.contains("quota") {
-            return Ended::Interrupted { reason: "quota".to_string() };
+            return Ended::Interrupted { usage, reason: "quota".to_string() };
         }
-        return Ended::Fault { reason: format!("Claude Code ended with no result (it {}): {}", exited(code), text.trim().chars().take(300).collect::<String>()) };
+        return Ended::Fault { usage, reason: format!("Claude Code ended with no result (it {}): {}", exited(code), text.trim().chars().take(300).collect::<String>()) };
     }
     if result["is_error"].as_bool().unwrap_or(false) || code != Some(0) {
         let subtype = result["subtype"].as_str().unwrap_or("");
@@ -1175,13 +1301,13 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
             return Ended::Failed { reason: "the turn ran out of messages before it finished".to_string(), usage };
         }
         if lower.contains("usage limit") || lower.contains("hit your limit") || lower.contains("rate limit") {
-            return Ended::Interrupted { reason: "quota".to_string() };
+            return Ended::Interrupted { usage, reason: "quota".to_string() };
         }
-        return Ended::Fault { reason: format!("the Claude Code turn did not complete ({subtype}): {}", said.chars().take(300).collect::<String>()) };
+        return Ended::Fault { usage, reason: format!("the Claude Code turn did not complete ({subtype}): {}", said.chars().take(300).collect::<String>()) };
     }
     match answered_by(model, out, &result) {
         Ok(answered) => Ended::Ran { usage, session, model: answered, said },
-        Err(other) => Ended::Fault { reason: format!("asked for {model} and {other} answered; this turn does not count") },
+        Err(other) => Ended::Fault { usage, reason: format!("asked for {model} and {other} answered; this turn does not count") },
     }
 }
 
@@ -1539,7 +1665,7 @@ mod tests {
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![5432] };
         let spec = |reach: &Reach, servers, any_port| {
             box_spec(&Spec { cwd: &cwd, prompt: "", session: None, reach, deadline: Duration::from_secs(1), reads: &reads, env: vec![],
-                             transcript: None, pidfile: None, permit: None, servers, any_port, paused: None, on_session: None },
+                             transcript: None, pidfile: None, permit: None, servers, any_port, paused: None, on_session: None, budget: None },
                      Path::new("/py"), Path::new("/lib"))
         };
         let s = spec(&reach, true, false);
@@ -1628,7 +1754,7 @@ mod tests {
     fn a_result_names_its_cost_and_session() {
         let out = r#"{"type":"system","session_id":"abc"}
 {"type":"result","is_error":false,"result":"done","usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":100,"output_tokens":7},"modelUsage":{"claude-opus-5-5":{"outputTokens":7}}}"#;
-        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false) {
+        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false, &Meter::default()) {
             Ended::Ran { usage, session, .. } => {
                 assert_eq!((usage.tokens, usage.cached, usage.seconds), (22, 100, 4));
                 assert_eq!(session.as_deref(), Some("abc"));
@@ -1644,13 +1770,48 @@ mod tests {
     fn a_resumed_turn_records_its_own_tokens_never_the_whole_session_s() {
         let out = r#"{"type":"system","session_id":"s1"}
 {"type":"result","is_error":false,"result":"done","session_id":"s1","total_cost_usd":1.43,"duration_ms":208000,"duration_api_ms":337633,"num_turns":12,"usage":{"input_tokens":12,"cache_creation_input_tokens":48132,"cache_read_input_tokens":221917,"output_tokens":21973},"modelUsage":{"claude-opus-5-5":{"inputTokens":40,"outputTokens":40908,"cacheReadInputTokens":385350,"cacheCreationInputTokens":82536,"costUSD":1.43}}}"#;
-        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(208), false) {
+        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(208), false, &Meter::default()) {
             Ended::Ran { usage, session, .. } => {
                 assert_eq!((usage.tokens, usage.cached, usage.seconds), (12 + 48_132 + 21_973, 221_917, 208));
                 assert_eq!(session.as_deref(), Some("s1"));
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The real-user's turn (22/11) that ran past its deadline recorded 0 tokens: its stream had said what it spent.
+    /// Each message counts once, at the most a line said of it: its start, its whole lines, its last output count.
+    #[test]
+    fn a_turn_cut_at_its_deadline_counts_what_its_stream_said() {
+        let lines = [
+            r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"id":"m1","usage":{"input_tokens":9,"cache_creation_input_tokens":40000,"cache_read_input_tokens":900000,"output_tokens":2}}}}"#,
+            r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"text","text":"usage"}],"usage":{"input_tokens":9,"cache_creation_input_tokens":40000,"cache_read_input_tokens":900000,"output_tokens":2}}}"#,
+            r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":9,"cache_creation_input_tokens":40000,"cache_read_input_tokens":900000,"output_tokens":2}}}"#,
+            r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_delta","usage":{"output_tokens":1500}}}"#,
+            r#"{"type":"stream_event","parent_tool_use_id":"t1","event":{"type":"message_start","message":{"id":"s1","usage":{"input_tokens":3000,"output_tokens":1}}}}"#,
+            r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"id":"m2","usage":{"input_tokens":4,"cache_read_input_tokens":940000,"output_tokens":1}}}}"#,
+            r#"{"type":"stream_event","parent_tool_use_id":"t1","event":{"type":"message_delta","usage":{"output_tokens":200}}}"#,
+        ];
+        let mut meter = Meter::default();
+        for l in lines {
+            meter.read(l);
+        }
+        let out = lines.join("\n");
+        match claude_ended("claude-opus-5-5", None, &out, "", Duration::from_secs(1200), true, &meter) {
+            Ended::Failed { usage, reason } => {
+                assert_eq!(reason, "the turn ran past its deadline");
+                // m1 9 + 40000 + 1500, the subagent's 3000 + 200, m2 4 + 1; the cache's reads apart
+                assert_eq!((usage.tokens, usage.cached, usage.uncounted), (41_509 + 3_200 + 5, 1_840_000, 0));
+            }
+            other => panic!("{other:?}"),
+        }
+        // nothing said: not counted yet, never 0
+        match claude_ended("claude-opus-5-5", None, "", "", Duration::from_secs(1200), true, &Meter::default()) {
+            Ended::Failed { usage, .. } => assert_eq!((usage.tokens, usage.uncounted), (0, 1)),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(Usage { tokens: 0, uncounted: 1, ..Default::default() }.tokens_of(2_000_000), "tokens not counted yet, of 2000000");
+        assert_eq!(Usage { tokens: 7, uncounted: 2, ..Default::default() }.tokens_of(9), "7 of 9 tokens, and 2 attempts' not counted yet");
     }
 
     /// A turn's output: the main conversation's messages, each by the model named, then the result with what
@@ -1667,7 +1828,7 @@ mod tests {
     }
 
     fn ended(out: &str) -> Ended {
-        claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false)
+        claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false, &Meter::default())
     }
 
     #[test]
@@ -1692,7 +1853,7 @@ mod tests {
         // the model asked for wrote the most, and still part of the conversation was another model's
         let out = turn_of(&[("claude-opus-5-5", None), ("claude-sonnet-5-5", None)], &[("claude-opus-5-5", 5000), ("claude-sonnet-5-5", 40)]);
         match ended(&out) {
-            Ended::Fault { reason } => assert!(reason.contains("asked for claude-opus-5-5 and claude-sonnet-5-5 answered"), "{reason}"),
+            Ended::Fault { reason, .. } => assert!(reason.contains("asked for claude-opus-5-5 and claude-sonnet-5-5 answered"), "{reason}"),
             other => panic!("{other:?}"),
         }
     }
@@ -1702,7 +1863,7 @@ mod tests {
         // the conversation's messages name no model here, so what each model wrote in all decides
         let out = turn_of(&[], &[("claude-haiku-5-5", 300)]);
         match ended(&out) {
-            Ended::Fault { reason } => assert!(reason.contains("asked for claude-opus-5-5 and claude-haiku-5-5 answered"), "{reason}"),
+            Ended::Fault { reason, .. } => assert!(reason.contains("asked for claude-opus-5-5 and claude-haiku-5-5 answered"), "{reason}"),
             other => panic!("{other:?}"),
         }
         let silent = turn_of(&[], &[("claude-opus-5-5", 0), ("claude-haiku-5-5", 300)]);

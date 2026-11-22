@@ -662,7 +662,7 @@ fn changed(rng: &mut Rng) -> Vec<Changed> {
 }
 
 fn usage(rng: &mut Rng) -> Usage {
-    Usage { seconds: 10 + rng.below(200) as u64, tokens: 1000 + rng.below(300_000) as u64, cached: rng.below(1000) as u64 }
+    Usage { seconds: 10 + rng.below(200) as u64, tokens: 1000 + rng.below(300_000) as u64, cached: rng.below(1000) as u64, ..Default::default() }
 }
 
 fn verdict(rng: &mut Rng, offered: &[VerdictKind]) -> Verdict {
@@ -728,8 +728,8 @@ impl World {
                     },
                     72..=85 => AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: usage(&mut self.rng) },
                     86..=88 => AttemptOutcome::Impossible { reason: "the request contradicts itself".to_string(), usage: usage(&mut self.rng), session: Some(format!("session-{}", turn.step)) },
-                    89..=94 => AttemptOutcome::Fault { reason: "claude did not start".to_string() },
-                    _ => AttemptOutcome::Interrupted { reason: "quota".to_string() },
+                    89..=94 => AttemptOutcome::Fault { usage: Default::default(), reason: "claude did not start".to_string() },
+                    _ => AttemptOutcome::Interrupted { usage: Default::default(), reason: "quota".to_string() },
                 };
                 self.send(Input::AttemptEnded { step: turn.step, attempt: turn.attempt, fix: turn.fix, outcome });
             }
@@ -750,7 +750,7 @@ impl World {
                         about: String::new(),
                     },
                     92..=95 => AttemptOutcome::Refused { reason: "no test runner".to_string() },
-                    _ => AttemptOutcome::Fault { reason: "the role program crashed".to_string() },
+                    _ => AttemptOutcome::Fault { usage: Default::default(), reason: "the role program crashed".to_string() },
                 };
                 self.send(Input::AttemptEnded { step, attempt, fix: 0, outcome });
             }
@@ -1258,7 +1258,7 @@ fn deliver(run: &mut Run, step: &str, attempt: u32, output: &str, items: Vec<Ite
             output: Digest(output.to_string()),
             items,
             changed: Vec::new(),
-            usage: Usage { seconds: 5, tokens: 100, cached: 0 },
+            usage: Usage { seconds: 5, tokens: 100, cached: 0, ..Default::default() },
             session: Some("s".to_string()),
             tree: None,
             reply: None,
@@ -1476,11 +1476,11 @@ fn g14_an_act_whose_outcome_was_not_recorded_is_not_started_again_on_its_own() {
         ("Jaynes stopped", Box::new(|run: &mut Run| feed(run, Input::Recovered))),
         ("stopped from outside", Box::new(|run: &mut Run| {
             let attempt = run.steps[0].attempt;
-            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { reason: "halted".to_string() } })
+            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Interrupted { usage: Default::default(), reason: "halted".to_string() } })
         })),
         ("a fault", Box::new(|run: &mut Run| {
             let attempt = run.steps[0].attempt;
-            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the box died".to_string() } })
+            feed(run, Input::AttemptEnded { step: "send".to_string(), attempt, fix: 0, outcome: AttemptOutcome::Fault { usage: Default::default(), reason: "the box died".to_string() } })
         })),
     ];
     for effect in [Effect::Irreversible { idempotent: false }, Effect::Compensable { undo: "revert".to_string() }] {
@@ -1603,7 +1603,7 @@ fn g5_the_ceiling_stops_new_attempts() {
         step: "build".to_string(),
         attempt: 1,
         fix: 0,
-        outcome: AttemptOutcome::Failed { reasons: vec!["slow".to_string()], usage: Usage { seconds: 99_999, tokens: 1, cached: 0 } },
+        outcome: AttemptOutcome::Failed { reasons: vec!["slow".to_string()], usage: Usage { seconds: 99_999, tokens: 1, cached: 0, ..Default::default() } },
     });
     assert!(matches!(run.phase, Phase::Blocked { fault: Fault::Ceiling, .. }), "{:?}", run.phase);
 }
@@ -1749,7 +1749,7 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
         fix: 0,
         outcome: AttemptOutcome::Impossible {
             reason: "the tests ask for two answers that contradict each other".to_string(),
-            usage: Usage { seconds: 30, tokens: 900, cached: 0 },
+            usage: Usage { seconds: 30, tokens: 900, cached: 0, ..Default::default() },
             session: Some("s1".to_string()),
         },
     });

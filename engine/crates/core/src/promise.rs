@@ -322,7 +322,7 @@ fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> V
         let items: Vec<Item> = done.into_iter().filter(|x| keep.contains(&x.id)).collect();
         let d = Digest(format!("{step}.{round}.kept"));
         out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None }), format!("{step} keeps only what you chose"), false));
-        out.push(mv(ended(AttemptOutcome::Fault { reason: "the role could not keep it".into() }), format!("{step} cannot keep what you chose"), true));
+        out.push(mv(ended(AttemptOutcome::Fault { usage: Default::default(), reason: "the role could not keep it".into() }), format!("{step} cannot keep what you chose"), true));
         return out;
     }
     let choose = i.and_then(|i| r.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.choose);
@@ -341,8 +341,8 @@ fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> V
     }
     out.push(mv(ended(AttemptOutcome::Failed { reasons: vec!["no output".into()], usage: Usage::default() }), format!("{step}'s attempt fails"), false));
     out.push(mv(ended(AttemptOutcome::Impossible { reason: "it cannot be done".into(), usage: Usage::default(), session: None }), format!("{step}'s agent says it cannot be done"), true));
-    out.push(mv(ended(AttemptOutcome::Interrupted { reason: "cut off".into() }), format!("{step}'s agent is cut off"), true));
-    out.push(mv(ended(AttemptOutcome::Fault { reason: "the agent did not start".into() }), format!("{step}'s agent does not start"), true));
+    out.push(mv(ended(AttemptOutcome::Interrupted { usage: Default::default(), reason: "cut off".into() }), format!("{step}'s agent is cut off"), true));
+    out.push(mv(ended(AttemptOutcome::Fault { usage: Default::default(), reason: "the agent did not start".into() }), format!("{step}'s agent does not start"), true));
     out
 }
 
@@ -368,7 +368,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
                 let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: *attempt, fix: 0, outcome };
                 out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None }), format!("{step} done"), false));
                 out.push(mv(ended(AttemptOutcome::Refused { reason: "refused".into() }), format!("{step} refuses"), true));
-                out.push(mv(ended(AttemptOutcome::Fault { reason: "the role crashed".into() }), format!("{step}'s role program crashes"), true));
+                out.push(mv(ended(AttemptOutcome::Fault { usage: Default::default(), reason: "the role crashed".into() }), format!("{step}'s role program crashes"), true));
             }
             Command::RunChecks { step, attempt, fix, checks, .. } => {
                 let all = |v: &dyn Fn(usize) -> CheckVerdict| checks.iter().enumerate().map(|(n, c)| CheckResult { check: c.clone(), verdict: v(n), tree: None }).collect::<Vec<_>>();

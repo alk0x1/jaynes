@@ -2049,7 +2049,11 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
         if c.sent_back > 0 {
             facts.push(format!("{} sent back", c.sent_back));
         }
-        facts.push(format!("{} min, {} tokens", r.spent.seconds / 60, r.spent.tokens));
+        facts.push(if r.spent.uncounted > 0 && r.spent.tokens == 0 {
+            format!("{} min, tokens not counted yet", r.spent.seconds / 60)
+        } else {
+            format!("{} min, {} tokens", r.spent.seconds / 60, r.spent.tokens)
+        });
         facts.push(ago(now.saturating_sub(at(r))));
         format!(
             "<a class=\"hrow\" href=\"/run/{}\"><div class=\"t\">{}</div><div class=\"hq\">{}</div><div class=\"hm\">{chip}{}</div>{}</a>",

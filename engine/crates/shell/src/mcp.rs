@@ -219,7 +219,7 @@ fn home_text(home: &Path) -> Result<String, String> {
 fn run_text(r: &Run) -> String {
     let path = r.path();
     let mut out = format!(
-        "run {} — {} {} — {} risk — {}\nspent {} of {} s, {} of {} tokens\n",
+        "run {} — {} {} — {} risk — {}\nspent {} of {} s, {}\n",
         r.id,
         r.manifest.role,
         r.manifest.version,
@@ -232,8 +232,7 @@ fn run_text(r: &Run) -> String {
         },
         r.spent.seconds,
         r.ceiling.seconds,
-        r.spent.tokens,
-        r.ceiling.tokens
+        r.spent.tokens_of(r.ceiling.tokens)
     );
     for (i, d) in r.manifest.steps.iter().enumerate() {
         let state = if !path.contains(&i) {

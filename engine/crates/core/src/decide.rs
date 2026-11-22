@@ -605,8 +605,8 @@ impl Ctx {
         let (spent, ceiling) = (self.run.spent, self.run.ceiling);
         if spent.seconds >= ceiling.seconds || spent.tokens >= ceiling.tokens {
             let reason = format!(
-                "the run reached its ceiling: {} of {} seconds, {} of {} tokens",
-                spent.seconds, ceiling.seconds, spent.tokens, ceiling.tokens
+                "the run reached its ceiling: {} of {} seconds, {}",
+                spent.seconds, ceiling.seconds, spent.tokens_of(ceiling.tokens)
             );
             self.block(Some(name), Fault::Ceiling, reason);
             return false;
@@ -946,12 +946,12 @@ impl Ctx {
                     self.after_spent(i);
                 }
             }
-            AttemptOutcome::Fault { reason } => {
+            AttemptOutcome::Fault { reason, usage } => {
                 self.emit(Event::AttemptFailed {
                     step: step.to_string(),
                     attempt,
                     reasons: vec![reason.clone()],
-                    usage: Default::default(),
+                    usage: *usage,
                     spent: false,
                 });
                 // G4: the fault is Jaynes's either way; an act may have happened, and the person is told to look first
@@ -964,8 +964,8 @@ impl Ctx {
                     self.block(Some(step.to_string()), Fault::Jaynes, reason);
                 }
             }
-            AttemptOutcome::Interrupted { reason } => {
-                self.emit(Event::AttemptInterrupted { step: step.to_string(), attempt, reason: reason.clone() });
+            AttemptOutcome::Interrupted { reason, usage } => {
+                self.emit(Event::AttemptInterrupted { step: step.to_string(), attempt, reason: reason.clone(), usage: *usage });
                 if self.may_have_acted(i) {
                     self.emit(Event::MayHaveActed { step: step.to_string(), attempt });
                     self.block(Some(step.to_string()), Fault::MayHaveActed, format!("{step}, which acts on something real, was stopped from outside before its outcome was known: it may have acted ({reason}). Look, then continue or abandon the run"));
@@ -1329,7 +1329,7 @@ impl Ctx {
                         );
                         self.block(Some(name), Fault::MayHaveActed, reason);
                     } else {
-                        self.emit(Event::AttemptInterrupted { step: name, attempt, reason: "Jaynes stopped while it ran".to_string() });
+                        self.emit(Event::AttemptInterrupted { step: name, attempt, reason: "Jaynes stopped while it ran".to_string(), usage: Default::default() });
                     }
                 }
                 // checks that could not judge wait for the person's continue, never for a restart

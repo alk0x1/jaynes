@@ -14,9 +14,19 @@ pub struct Usage {
     pub seconds: u64,
     /// Tokens sent and received, without those read back from the cache.
     pub tokens: u64,
-    /// Tokens read back from the cache, kept apart.
+    /// Tokens read back from the cache, kept apart: they do not count towards the ceiling. A message reads its whole
+    /// conversation back from the cache, so they grow with how long the session is, not with the work, and they cost
+    /// about a tenth of a new token.
     #[serde(default)]
     pub cached: u64,
+    /// Attempts whose tokens are not known: their agent program died before its stream said what they spent. Their
+    /// tokens are "not counted yet", never 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub uncounted: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Usage {
@@ -24,6 +34,22 @@ impl Usage {
         self.seconds = self.seconds.saturating_add(other.seconds);
         self.tokens = self.tokens.saturating_add(other.tokens);
         self.cached = self.cached.saturating_add(other.cached);
+        self.uncounted = self.uncounted.saturating_add(other.uncounted);
+    }
+
+    pub fn is_nothing(&self) -> bool {
+        *self == Usage::default()
+    }
+
+    /// The tokens spent against a ceiling, in words: "3421 of 2000000 tokens", or "tokens not counted yet, of
+    /// 2000000" while some attempt's are not known and nothing else is, never "0 of 2000000 tokens".
+    pub fn tokens_of(&self, ceiling: u64) -> String {
+        match (self.uncounted, self.tokens) {
+            (0, t) => format!("{t} of {ceiling} tokens"),
+            (_, 0) => format!("tokens not counted yet, of {ceiling}"),
+            (1, t) => format!("{t} of {ceiling} tokens, and one attempt's not counted yet"),
+            (n, t) => format!("{t} of {ceiling} tokens, and {n} attempts' not counted yet"),
+        }
     }
 }
 
@@ -172,6 +198,9 @@ pub enum Event {
         step: String,
         attempt: u32,
         reason: String,
+        /// What it spent till it was stopped.
+        #[serde(default, skip_serializing_if = "Usage::is_nothing")]
+        usage: Usage,
     },
     /// A report that came for an attempt no longer under way. Recorded, and changes nothing.
     StaleReport {

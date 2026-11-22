@@ -211,10 +211,19 @@ pub enum AttemptOutcome {
     },
     /// The agent's fault: no output, an output that does not parse, a write outside its reach, its deadline.
     Failed { reasons: Vec<String>, usage: Usage },
-    /// Jaynes's or the machine's fault: the agent program did not start, the box refused, the disk is full.
-    Fault { reason: String },
-    /// Stopped from outside, such as the agent program's quota or the person's halt.
-    Interrupted { reason: String },
+    /// Jaynes's or the machine's fault: the agent program did not start, the box refused, the disk is full. What
+    /// the turn spent before it, as its stream said it, still counts towards the ceiling (G5).
+    Fault {
+        reason: String,
+        #[serde(default, skip_serializing_if = "Usage::is_nothing")]
+        usage: Usage,
+    },
+    /// Stopped from outside, such as the agent program's quota or the person's halt, with what it spent till then.
+    Interrupted {
+        reason: String,
+        #[serde(default, skip_serializing_if = "Usage::is_nothing")]
+        usage: Usage,
+    },
     /// A role step asks the person something before it can give its output.
     NeedsInput {
         items: Vec<Item>,

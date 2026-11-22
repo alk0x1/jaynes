@@ -491,7 +491,8 @@ impl Run {
                     }
                 }
             }
-            Event::AttemptInterrupted { step, .. } => {
+            Event::AttemptInterrupted { step, usage, .. } => {
+                self.spent.add(*usage);
                 if let Some(s) = self.step_mut(step) {
                     s.pending = None;
                     s.unjudged = false;

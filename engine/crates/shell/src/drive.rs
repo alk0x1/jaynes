@@ -1332,11 +1332,11 @@ impl<'a> Driver<'a> {
             step: turn.step.clone(),
             attempt: turn.attempt,
             fix: turn.fix,
-            outcome: AttemptOutcome::Fault { reason },
+            outcome: AttemptOutcome::Fault { reason, usage: Default::default() },
         };
         let Some(i) = run.manifest.index(&turn.step) else { return fault("no such step".into()) };
         if let Some(keep) = &turn.keep {
-            let outcome = self.kept_alone(run, i, &turn, keep).unwrap_or_else(|reason| AttemptOutcome::Fault { reason });
+            let outcome = self.kept_alone(run, i, &turn, keep).unwrap_or_else(|reason| AttemptOutcome::Fault { reason, usage: Default::default() });
             return Input::AttemptEnded { step: turn.step.clone(), attempt: turn.attempt, fix: turn.fix, outcome };
         }
         let cwd = self.cwd(run, i, turn.attempt);
@@ -1471,6 +1471,7 @@ impl<'a> Driver<'a> {
             // what the person chose for the project's ports, as its checks run with it
             servers: self.setup.servers || self.setup.any_port,
             any_port: self.setup.any_port,
+            budget: Some(turn.tokens_left),
         };
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));
@@ -1478,8 +1479,8 @@ impl<'a> Driver<'a> {
         let done = self.setup.agent.turn(spec);
         let _kept = std::fs::write(exchange.join(format!("applied-{}-{}.json", turn.attempt, turn.fix)), done.applied.to_string());
         let outcome = match done.ended {
-            Ended::Fault { reason } => AttemptOutcome::Fault { reason },
-            Ended::Interrupted { reason } => AttemptOutcome::Interrupted { reason },
+            Ended::Fault { reason, usage } => AttemptOutcome::Fault { reason, usage },
+            Ended::Interrupted { reason, usage } => AttemptOutcome::Interrupted { reason, usage },
             Ended::Failed { reason, usage } => AttemptOutcome::Failed { reasons: vec![reason], usage },
             Ended::Ran { usage, session, .. } => self.delivered(run, i, &turn, &exchange, usage, session),
         };
@@ -1529,14 +1530,14 @@ impl<'a> Driver<'a> {
             permit: None,
             servers: self.setup.servers || self.setup.any_port,
             any_port: self.setup.any_port,
+            budget: Some(turn.tokens_left),
         };
         let done = self.setup.agent.turn(spec);
         let reply = reply_in(&exchange);
         let _gone = std::fs::remove_file(exchange.join(REPLY));
         let _gone = std::fs::remove_file(exchange.join(ASKED_ABOUT));
         let usage = match &done.ended {
-            Ended::Ran { usage, .. } | Ended::Failed { usage, .. } => *usage,
-            Ended::Fault { .. } | Ended::Interrupted { .. } => Default::default(),
+            Ended::Ran { usage, .. } | Ended::Failed { usage, .. } | Ended::Fault { usage, .. } | Ended::Interrupted { usage, .. } => *usage,
         };
         if let Some(c) = copy {
             let changed: Vec<String> = match c.drifted() {
@@ -1557,8 +1558,8 @@ impl<'a> Driver<'a> {
                 None => failed("the agent answered nothing: ask again".into(), usage),
             },
             Ended::Failed { reason, usage } => failed(reason, usage),
-            Ended::Fault { reason } => failed(reason, usage),
-            Ended::Interrupted { reason } => failed(format!("stopped from outside ({reason}): ask again"), usage),
+            Ended::Fault { reason, .. } => failed(reason, usage),
+            Ended::Interrupted { reason, .. } => failed(format!("stopped from outside ({reason}): ask again"), usage),
         }
     }
 
@@ -1597,21 +1598,21 @@ impl<'a> Driver<'a> {
                     tree = Value::String(t);
                 }
                 Err(Ok(paths)) => return failed(format!("the step changed files it may not change: {}", paths.join(", "))),
-                Err(Err(e)) => return AttemptOutcome::Fault { reason: e },
+                Err(Err(e)) => return AttemptOutcome::Fault { usage: Default::default(), reason: e },
             }
         }
         let object = json!({"output": output, "tree": tree});
         let digest = match self.store.put(&object) {
             Ok(d) => d,
-            Err(e) => return AttemptOutcome::Fault { reason: e },
+            Err(e) => return AttemptOutcome::Fault { usage: Default::default(), reason: e },
         };
         let items = match self.setup.role.call(Call::Items { step: turn.step.clone(), output: object["output"].clone() }) {
             Ok(Body::Items { items }) => match self.keep_items(&items, exchange.parent().unwrap_or(exchange)) {
                 Ok(i) => i,
-                Err(e) => return AttemptOutcome::Fault { reason: e },
+                Err(e) => return AttemptOutcome::Fault { usage: Default::default(), reason: e },
             },
-            Ok(other) => return AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
-            Err(e) => return AttemptOutcome::Fault { reason: e },
+            Ok(other) => return AttemptOutcome::Fault { usage: Default::default(), reason: format!("the role answered items with {other:?}") },
+            Err(e) => return AttemptOutcome::Fault { usage: Default::default(), reason: e },
         };
         // the agent's words to the person, beside its output and never inside it (thread A)
         let reply = reply_in(exchange);
@@ -1736,11 +1737,11 @@ impl<'a> Driver<'a> {
         let end = |outcome| Input::AttemptEnded { step: step.clone(), attempt, fix: 0, outcome };
         let given = match self.given(&given) {
             Ok(g) => g,
-            Err(e) => return end(AttemptOutcome::Fault { reason: e }),
+            Err(e) => return end(AttemptOutcome::Fault { usage: Default::default(), reason: e }),
         };
         let i = run.manifest.index(&step).unwrap_or(0);
         if let Err(e) = self.prepare(run, i) {
-            return end(AttemptOutcome::Fault { reason: e });
+            return end(AttemptOutcome::Fault { usage: Default::default(), reason: e });
         }
         let reaches = run.manifest.steps[i].reach.project != ProjectAccess::None;
         let project = self.setup.copy.as_ref().filter(|_| reaches).map(|c| c.dir().display().to_string());
@@ -1762,7 +1763,7 @@ impl<'a> Driver<'a> {
             freed_ports: self.setup.freed_ports.clone(),
         });
         let outcome = match reply {
-            Err(e) => AttemptOutcome::Fault { reason: e },
+            Err(e) => AttemptOutcome::Fault { usage: Default::default(), reason: e },
             Ok(Body::Result { output }) => {
                 // What the role's own step changed in the run's copy is measured by Jaynes, as an agent's change is:
                 // the risk is judged from it, and a change outside what the step may write is refused and thrown away.
@@ -1780,20 +1781,20 @@ impl<'a> Driver<'a> {
                             // its script ran to the end before this was found: what cannot be undone may be done
                             let reason = format!("the step changed files it may not change: {}", paths.join(", "));
                             // what may have acted is held by the core as an outcome not known, never as a refusal
-                            return end(if decl.effect.irreversible() { AttemptOutcome::Fault { reason } } else { AttemptOutcome::Refused { reason } });
+                            return end(if decl.effect.irreversible() { AttemptOutcome::Fault { reason, usage: Default::default() } } else { AttemptOutcome::Refused { reason } });
                         }
-                        Err(Err(e)) => return end(AttemptOutcome::Fault { reason: e }),
+                        Err(Err(e)) => return end(AttemptOutcome::Fault { usage: Default::default(), reason: e }),
                     }
                 }
                 let object = json!({"output": output, "tree": tree});
                 match self.store.put(&object) {
-                    Err(e) => AttemptOutcome::Fault { reason: e },
+                    Err(e) => AttemptOutcome::Fault { usage: Default::default(), reason: e },
                     Ok(digest) => match self.setup.role.call(Call::Items { step: step.clone(), output: object["output"].clone() }) {
                         Ok(Body::Items { items }) => AttemptOutcome::Delivered {
                             output: digest,
                             items: match self.keep_items(&items, &self.cwd(run, i, attempt)) {
                                 Ok(i) => i,
-                                Err(e) => return end(AttemptOutcome::Fault { reason: e }),
+                                Err(e) => return end(AttemptOutcome::Fault { usage: Default::default(), reason: e }),
                             },
                             changed,
                             usage: Default::default(),
@@ -1801,19 +1802,19 @@ impl<'a> Driver<'a> {
                             tree: tree.as_str().map(str::to_string),
                             reply: None,
                         },
-                        Ok(other) => AttemptOutcome::Fault { reason: format!("the role answered items with {other:?}") },
-                        Err(e) => AttemptOutcome::Fault { reason: e },
+                        Ok(other) => AttemptOutcome::Fault { usage: Default::default(), reason: format!("the role answered items with {other:?}") },
+                        Err(e) => AttemptOutcome::Fault { usage: Default::default(), reason: e },
                     },
                 }
             }
             Ok(Body::NeedsInput { items, offered, about }) => {
                 match self.keep_items(&items, &self.cwd(run, i, attempt)) {
                     Ok(items) => AttemptOutcome::NeedsInput { items, offered, about },
-                    Err(e) => AttemptOutcome::Fault { reason: e },
+                    Err(e) => AttemptOutcome::Fault { usage: Default::default(), reason: e },
                 }
             }
             Ok(Body::Refused { reason }) => AttemptOutcome::Refused { reason },
-            Ok(other) => AttemptOutcome::Fault { reason: format!("the role answered execute with {other:?}") },
+            Ok(other) => AttemptOutcome::Fault { usage: Default::default(), reason: format!("the role answered execute with {other:?}") },
         };
         end(outcome)
     }
@@ -2539,7 +2540,7 @@ mod tests {
             if let Some(f) = self.writes {
                 std::fs::write(spec.cwd.join(f), "changed while answering").expect("write");
             }
-            let usage = jaynes_core::event::Usage { seconds: 3, tokens: 1200, cached: 9000 };
+            let usage = jaynes_core::event::Usage { seconds: 3, tokens: 1200, cached: 9000, ..Default::default() };
             agent::Turn { ended: Ended::Ran { usage, session: spec.session.map(str::to_string), model: "stand-in".into(), said: self.said.clone() }, applied: json!({}) }
         }
     }

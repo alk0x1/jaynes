@@ -136,7 +136,7 @@ fn an_agent_inside_a_run_owns_nothing_of_the_run_that_started_it() {
 fn a_block_that_needs_work_is_refused_to_the_agent_that_started_the_run() {
     // the agent program did not start: going on starts a turn, so the agent would work again
     let (mut run, attempt) = started(Some(OUTER));
-    feed(&mut run, Input::AttemptEnded { step: "change".into(), attempt, fix: 0, outcome: AttemptOutcome::Fault { reason: "the agent did not start".into() } });
+    feed(&mut run, Input::AttemptEnded { step: "change".into(), attempt, fix: 0, outcome: AttemptOutcome::Fault { usage: Default::default(), reason: "the agent did not start".into() } });
     assert!(matches!(run.phase, Phase::Blocked { fault: Fault::Jaynes, .. }), "{:?}", run.phase);
     assert!(run.checks_again().is_none());
     let (by, starter) = agent(Some(OUTER));

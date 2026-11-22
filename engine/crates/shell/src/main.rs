@@ -994,8 +994,8 @@ fn print_state(r: &jaynes_core::Run) {
     let aside = " (abandoned by the agent that started it: its work is kept; resume brings it back, abandon ends it)";
     println!("{}{}", phase(&r.phase), if r.set_aside.is_some() { aside } else if r.halted { " (halted)" } else { "" });
     println!(
-        "spent {} of {} s, {} of {} tokens ({} read from cache)",
-        r.spent.seconds, r.ceiling.seconds, r.spent.tokens, r.ceiling.tokens, r.spent.cached
+        "spent {} of {} s, {} ({} read from cache)",
+        r.spent.seconds, r.ceiling.seconds, r.spent.tokens_of(r.ceiling.tokens), r.spent.cached
     );
     let path = r.path();
     for (i, s) in r.steps.iter().enumerate() {
