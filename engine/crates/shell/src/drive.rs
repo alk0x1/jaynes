@@ -1468,7 +1468,6 @@ impl<'a> Driver<'a> {
     /// Nothing it asks beyond its settings reaches the person, and its session is never one a cut-off attempt goes on
     /// in. The answer is what it wrote in reply.md, else its result's last words. A turn that changed the copy fails,
     /// and what it changed is put back.
-    #[cfg_attr(not(test), allow(dead_code))] // WIRED by the AnswerAsk dispatch, then this line goes
     pub(crate) fn answer_ask(&mut self, run: &Run, turn: AskTurn) -> AskOutcome {
         let failed = |reason: String, usage: jaynes_core::event::Usage| AskOutcome::Failed { reason, usage };
         let Some(i) = run.manifest.index(&turn.step) else { return failed("no such step".into(), Default::default()) };
@@ -1917,6 +1916,18 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         }
         p.push('\n');
     }
+    if !turn.asked.is_empty() {
+        // thread A: what the person asked at the stop, so the question does not vanish with the round that answered it
+        p.push_str("# What the person asked at the stop, and what you answered\n\nAt the stop before this round, the person asked you this, and you changed nothing to answer. Keep it in mind; it is not a request on its own.\n\n");
+        for a in &turn.asked {
+            match &a.answer {
+                Some(answer) => p.push_str(&format!("- They asked: {}\n  You answered: {answer}\n", a.text)),
+                None if read => p.push_str(&format!("- They asked: {}\n  No answer reached them: answer it in your reply.\n", a.text)),
+                None => p.push_str(&format!("- They asked: {}\n  No answer reached them.\n", a.text)),
+            }
+        }
+        p.push('\n');
+    }
     if let Some(r) = &turn.review {
         p.push_str(&format!(
             "# What the reviewer said of your last version\n\nThe person sent your work back from {}, which reviewed it. Read what it said in .jaynes/review.json, and do not repeat what it found wrong.\n\n",
@@ -1989,7 +2000,6 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
 
 /// What the agent is told when the person asks a question at a stop. An agent in the step's session knows the rest;
 /// one in a session of its own is told the request and where what it is asked about is.
-#[cfg_attr(not(test), allow(dead_code))] // WIRED by the AnswerAsk dispatch, then this line goes
 fn ask_prompt(request: &str, turn: &AskTurn) -> String {
     let mut p = String::new();
     if turn.session.is_none() {
@@ -2688,6 +2698,44 @@ mod tests {
         assert!(read.find("# Your reply").expect("reply") < read.find("# Your output").expect("output"));
         let unread = compose("r", "make it", &json!({}), &turn(Vec::new()), &[], false);
         assert!(!unread.contains("reply.md"), "{unread}");
+    }
+
+    #[test]
+    fn what_the_person_asked_at_the_stop_reaches_the_next_round_with_its_answer() {
+        let mut turn = AgentTurn {
+            step: "stack".into(),
+            round: 2,
+            attempt: 1,
+            fix: 0,
+            session: None,
+            reach: Reach::default(),
+            given: Vec::new(),
+            previous: None,
+            notes: vec!["keep it short".into()],
+            context: Vec::new(),
+            failure: Vec::new(),
+            checks: Vec::new(),
+            locked: Vec::new(),
+            dropped: Vec::new(),
+            keep: None,
+            review: None,
+            earlier: Vec::new(),
+            back: Vec::new(),
+            asked: Vec::new(),
+            deadline_seconds: 60,
+            tokens_left: 1000,
+        };
+        assert!(!compose("r", "make it", &json!({}), &turn, &[], true).contains("# What the person asked at the stop"));
+        turn.asked = vec![
+            jaynes_core::io::Asked { text: "e se fosse Go?".into(), answer: Some("Go would be faster to start.".into()) },
+            jaynes_core::io::Asked { text: "and the tests?".into(), answer: None },
+        ];
+        let p = compose("r", "make it", &json!({}), &turn, &[], true);
+        let at = p.find("# What the person asked at the stop, and what you answered").expect(&p);
+        let section = &p[at..];
+        assert!(section.contains("e se fosse Go?") && section.contains("Go would be faster to start."), "{p}");
+        assert!(section.contains("and the tests?") && section.contains("answer it in your reply"), "an unanswered question is answered now: {p}");
+        assert!(at < p.find("# Your reply to the person").expect("reply"), "{p}");
     }
 
     #[test]

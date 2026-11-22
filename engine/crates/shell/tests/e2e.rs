@@ -525,6 +525,48 @@ fn the_person_asks_the_agent_at_a_stop_and_its_answer_joins_the_stop_with_nothin
     assert!(std::fs::read_to_string(&prompt).expect("prompt").contains("what if it were Go?"));
 }
 
+/// Alan, 21/11: "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse". He asks at the stop,
+/// the agent answers with nothing redone, he sends it back to be redone, and the round that redoes it is told what he asked and
+/// what it answered: his question does not vanish.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_question_at_the_stop_and_its_answer_reach_the_round_that_redoes_the_step() {
+    let s = scratch("thread");
+    let prompt = s.base.join("thread-prompt.txt");
+    let asked = "eu queria uma thread de conversa com a jaynes e nao que minha pergunta sumisse";
+    let answer = "A pergunta fica no fio, ao lado da parada.";
+    // the stand-in answers when it is asked about what it made, and otherwise makes the change
+    let agent = format!(
+        "cat > {p} && if grep -q '^# A question from the person' {p}; then printf '{answer}' > .jaynes/reply.md && echo '{{\"tokens\":40,\"session\":\"s2\"}}'; \
+         else perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT} && echo '{{\"session\":\"s1\"}}'; fi",
+        p = prompt.display()
+    );
+    let out = start(&s, "thread", &agent);
+    assert!(out.contains("waiting: delivered"), "{out}");
+    let e = events(&s, "thread");
+    let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let person = |args: &[&str]| {
+        tty().arg(BIN).args(args).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .output().expect("person")
+    };
+    let said = person(&["ask", "thread", &q, "--text", asked]);
+    assert!(String::from_utf8_lossy(&said.stdout).contains(answer), "{}", String::from_utf8_lossy(&said.stdout));
+    let changed = person(&["answer", "thread", &q, "change=redo:keep the greeting short", "--send"]);
+    assert!(changed.status.success(), "{}", String::from_utf8_lossy(&changed.stdout));
+    let mut next = String::new();
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let e = events(&s, "thread");
+        if e.iter().filter(|e| e["type"] == "QuestionOpened").count() > 1 || e.iter().any(|e| e["type"] == "RunFinished") {
+            next = std::fs::read_to_string(&prompt).expect("prompt");
+            break;
+        }
+    }
+    let at = next.find("# What the person asked at the stop, and what you answered").unwrap_or_else(|| panic!("the next round: {next}"));
+    assert!(next[at..].contains(asked) && next[at..].contains(answer), "{next}");
+    assert!(next.contains("keep the greeting short"), "{next}");
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s() {
