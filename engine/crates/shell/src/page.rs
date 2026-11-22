@@ -753,7 +753,11 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
         let input = match body["action"].as_str().unwrap_or("") {
             "halt" => Input::Halt { by },
             "resume" => Input::Resume { by },
-            "continue" => Input::Continue { by, starter: None },
+            // with the person's words, a run the agent's attempts left blocked goes back to the agent with them
+            "continue" => match body["words"].as_str() {
+                Some(words) => Input::SendBack { by, words: words.to_string() },
+                None => Input::Continue { by, starter: None },
+            },
             "abandon" => Input::Abandon { by, starter: None },
             "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
             "raise-ceiling" => {
@@ -3732,6 +3736,8 @@ mod tests {
             (json!({"action": "halt"}), By::Person),
             (json!({"run": "nope", "action": "halt"}), By::Person),
             (json!({"run": "r1", "action": "fly"}), By::Person),
+            (json!({"run": "r1", "action": "continue", "words": "the case needs git history"}), agent()),
+            (json!({"run": "r1", "action": "continue", "words": "the case needs git history"}), By::Person),
             (json!({"run": "r1", "action": "resume"}), agent()),
             (json!({"run": "r1", "action": "raise-risk"}), agent()),
             (json!({"run": "r1", "action": "halt"}), agent()),

@@ -221,7 +221,21 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.advance();
         }
-        Input::SendBack { .. } => return refuse("not yet"),
+        Input::SendBack { by, words } => {
+            if !by.person() {
+                return refuse("only you send a run back to the agent with your words");
+            }
+            let Phase::Blocked { step: Some(_), fault, .. } = &c.run.phase else { return refuse("the run is not blocked at a step") };
+            if *fault != Fault::Agent {
+                return refuse("your words go to the agent, and Continue has no agent work again here: continue without them");
+            }
+            let words = words.trim();
+            if words.is_empty() {
+                return refuse("say in words what the agent should know: sent back without them, it would do again what failed");
+            }
+            c.emit(Event::Continued { by: by.clone(), words: Some(words.to_string()) });
+            c.advance();
+        }
         Input::PortsChosen { any, servers, opened, freed_ports } => {
             if c.run.finished() {
                 return refuse("the run is finished");

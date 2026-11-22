@@ -20,7 +20,8 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   start --role NAME --request TEXT [--title WORDS] [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
         [--task ID] [--arm NAME]   in an evaluation: the task's id in your own list and the arm, letters, digits and hyphens
         [--never-merge]   in an evaluation: deliver the run's branch only, whatever is answered
-  continue RUN            go on after a stop of the process, or after a block
+  continue RUN [--note TEXT]  go on after a stop of the process, or after a block; with --note, a run blocked
+                          because the agent spent its attempts goes back to it with your words
   version, --version      the version, the commit it is built from, and the engine
   show RUN                where the run is, and what it asks you
   answer RUN QUESTION [ITEM=keep|skip|drop|change:TEXT|redo:TEXT ...] [--context TEXT] [--send]
@@ -291,15 +292,24 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut s = store()?;
             let setup = Setup::load(&s, &home(), id)?;
             let state = s.state(id)?.ok_or("no such run")?;
+            let words = flag(rest, "--note");
             let input = if state.blocked() {
                 let by = who();
-                let starter = starter_of(&by);
-                Input::Continue { by, starter }
+                match words {
+                    // the person's words go to the agent that works again
+                    Some(words) => Input::SendBack { by, words },
+                    None => {
+                        let starter = starter_of(&by);
+                        Input::Continue { by, starter }
+                    }
+                }
+            } else if words.is_some() {
+                return Err(format!("run {id} is not blocked: --note goes with continuing a blocked run"));
             } else {
                 Input::Recovered
             };
             let mut d = Driver::take(&mut s, setup)?;
-            let first = if matches!(input, Input::Continue { .. }) {
+            let first = if matches!(input, Input::Continue { .. } | Input::SendBack { .. }) {
                 d.drive(Input::Recovered)?;
                 input
             } else {

@@ -484,6 +484,8 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
         });
     }
     if r.blocked() && node.continues < CONTINUES {
+        // the person's continue with words (SendBack) goes the same way, only with notes for the agent: the core's
+        // send_back test holds the two runs equal but for those, so it is not explored apart
         out.push(Move { input: Input::Continue { by: By::Person, starter: None }, says: "you continue".into(), trouble: false, sends_back: None, answers: None });
     }
     out

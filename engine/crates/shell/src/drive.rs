@@ -256,7 +256,7 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         // An input that starts work is left to the process carried on here, which recovers first and then takes it:
         // decided here, the attempt it begins would be taken by that process for one Jaynes stopped. The rest is
         // recorded at once.
-        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::Resume { .. } | Input::AskAgent { .. }) {
+        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::SendBack { .. } | Input::Resume { .. } | Input::AskAgent { .. }) {
             store.inbox_put(&run.id, &input)?;
         } else {
             store.decide(&run.id, &input)?;
@@ -872,7 +872,7 @@ impl<'a> Driver<'a> {
             }
             let Some(mut input) = queue.pop_front() else { break };
             // the person continues as the project's ports stand now: what they chose since the start goes on record first
-            if matches!(input, Input::Continue { .. }) {
+            if matches!(input, Input::Continue { .. } | Input::SendBack { .. }) {
                 self.ports_now()?;
             }
             // A turn whose agent a halt stopped is interrupted, so it spends no attempt and runs again on resume.

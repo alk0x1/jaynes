@@ -725,11 +725,15 @@ impl Run {
                         }
                 self.phase = Phase::Blocked { step: step.clone(), fault: *fault, reason: reason.clone() };
             }
-            Event::Continued { .. } => {
+            Event::Continued { words, .. } => {
                 if let Phase::Blocked { step: Some(name), fault, .. } = self.phase.clone()
                     && let Some(s) = self.step_mut(&name) {
                         if fault == Fault::Agent {
                             s.spent = 0;
+                            // the person's words go to the agent's next attempt, beside what failed
+                            if let Some(w) = words {
+                                s.notes.push(format!("The person sent this back to you after your attempts failed, saying: {w}"));
+                            }
                         }
                         if matches!(fault, Fault::Jaynes) {
                             s.probed = false;
