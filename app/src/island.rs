@@ -1520,6 +1520,7 @@ mod tests {
             touch: None,
             into: String::new(),
             lands: vec![],
+            passed: None,
         }
     }
 

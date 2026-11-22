@@ -54,6 +54,21 @@ pub struct Stop {
     pub into: String,
     /// What the merge lands, at the stop before it: every file with its lines, what runs later outside any box said.
     pub lands: Vec<Lands>,
+    /// When the run went on without the person's answer to this stop: where it is now and what an answer still
+    /// changes. Such a stop never covers what holds the run now: it is answered from the line below.
+    pub passed: Option<Passed>,
+}
+
+/// A stop the run went on without: it did not hold the run, and the run is now at a later step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Passed {
+    /// The step the run is at now, and whether it is blocked there.
+    pub now: String,
+    pub blocked: bool,
+    /// "The run went on without your answer. It is now at “fix”, blocked."
+    pub went_on: String,
+    /// What each answer still does: "“Redo” would do “found” and “fix” again. “Keep” changes nothing."
+    pub still: String,
 }
 
 /// A file the merge lands on the person's branch, as the stop before it shows it.
@@ -66,12 +81,86 @@ pub struct Lands {
     pub runs: Option<&'static str>,
 }
 
-/// The stop a run waits at: its first open question.
+/// The stop a run waits at: its first open question the run has not gone on without.
 pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
     if run.finished() {
         return None;
     }
-    let q = run.questions.values().find(|q| q.open())?;
+    let q = run.questions.values().find(|q| q.open() && went_on(run, q).is_none())?;
+    Some(stop_of(home, run, q))
+}
+
+/// The stops the run went on without, oldest first: each answered from a line under what holds the run now.
+pub fn passed(home: &Path, run: &Run) -> Vec<Stop> {
+    run.questions.values().filter(|q| went_on(run, q).is_some()).map(|q| stop_of(home, run, q)).collect()
+}
+
+/// Where the run is now, and whether it is blocked there, when it went on without the person's answer to `q`: an
+/// open question that does not hold the run, at a step before the one the run is at.
+pub fn went_on(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<(String, bool)> {
+    if run.finished() || !q.open() || q.question.holds {
+        return None;
+    }
+    let now = match &run.phase {
+        jaynes_core::run::Phase::Blocked { step: Some(s), .. } | jaynes_core::run::Phase::Waiting { step: Some(s), .. } => s.clone(),
+        _ => crate::listing::step_at(run),
+    };
+    let path = run.path();
+    let at = |name: &str| run.manifest.index(name).and_then(|i| path.iter().position(|&j| j == i));
+    match (at(&q.question.step), at(&now)) {
+        (Some(asked), Some(here)) if here > asked => Some((now, matches!(run.phase, jaynes_core::run::Phase::Blocked { .. }))),
+        _ => None,
+    }
+}
+
+/// What each answer the stop offers still makes run again, as the core says it would (jaynes_core::effects).
+pub fn still_redoes(run: &Run, q: &jaynes_core::question::Question) -> String {
+    let every = |v: VerdictKind| -> Answer {
+        let verdict = match v {
+            VerdictKind::Keep => Verdict::Keep,
+            VerdictKind::Skip => Verdict::Skip,
+            VerdictKind::Drop => Verdict::Drop,
+            VerdictKind::Change => Verdict::Change { text: String::new() },
+            VerdictKind::Redo => Verdict::Redo { note: String::new() },
+        };
+        Answer {
+            question: q.id.clone(),
+            shown: q.shown(),
+            verdicts: q.items.iter().map(|i| (i.id.clone(), verdict.clone())).collect(),
+            by: By::Person,
+            context: String::new(),
+            back: BTreeMap::new(),
+        }
+    };
+    let said: Vec<(String, Vec<String>)> = q.offered.iter().map(|&v| (label_for(v, q.kind).to_string(), jaynes_core::effects(run, q, &every(v)).reruns)).collect();
+    still_sentence(&said)
+}
+
+/// What each answer, by its label, still makes run again, in a line: "“Redo” would do “found” and “fix” again.
+/// “Keep” changes nothing.", "Either answer does “fix” again.", or "Your answer goes to the record; nothing runs again."
+pub fn still_sentence(said: &[(String, Vec<String>)]) -> String {
+    let and = |words: Vec<String>| match words.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, first)) => format!("{} and {last}", first.join(", ")),
+    };
+    let quoted = |v: &[String]| and(v.iter().map(|x| format!("“{x}”")).collect());
+    let (redo, none): (Vec<_>, Vec<_>) = said.iter().partition(|(_, r)| !r.is_empty());
+    if redo.is_empty() {
+        return "Your answer goes to the record; nothing runs again.".into();
+    }
+    if none.is_empty() && redo.iter().all(|(_, r)| *r == redo[0].1) {
+        return format!("{} answer does {} again.", if redo.len() == 2 { "Either" } else { "Every" }, quoted(&redo[0].1));
+    }
+    let mut line: Vec<String> = redo.iter().map(|(l, r)| format!("“{l}” would do {} again.", quoted(r))).collect();
+    if !none.is_empty() {
+        let labels: Vec<String> = none.iter().map(|(l, _)| l.clone()).collect();
+        line.push(format!("{} {}.", quoted(&labels), if none.len() == 1 { "changes nothing" } else { "change nothing" }));
+    }
+    line.join(" ")
+}
+
+fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop {
     let store = crate::store::Store::open(&home.join("record.sqlite3")).ok();
     let shown = |it: &jaynes_core::question::Item| {
         let d = store.as_ref().map(|s| s.display(&it.digest)).unwrap_or_default();
@@ -122,7 +211,13 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
     } else {
         Vec::new()
     };
-    Some(Stop {
+    let passed = went_on(run, q).map(|(now, blocked)| Passed {
+        went_on: format!("The run went on without your answer. It is now at “{now}”{}.", if blocked { ", blocked" } else { "" }),
+        still: still_redoes(run, &q.question),
+        now,
+        blocked,
+    });
+    Stop {
         run: run.id.clone(),
         question: q.question.id.clone(),
         shown: q.question.shown().0,
@@ -141,7 +236,8 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
         touch,
         into,
         lands,
-    })
+        passed,
+    }
 }
 
 /// A page the role kept, named by its fingerprint: nothing else is served.
@@ -289,6 +385,50 @@ mod tests {
         assert_eq!(a.verdicts["a"], Verdict::Keep);
         assert_eq!(a.verdicts["b"], Verdict::Redo { note: "it misses the tests".into() });
         assert!(!a.by.person(), "the engine sets who answered, never the app");
+    }
+
+    /// A run of reproduce, found and fix, blocked at fix, with reproduce's stop still open: a stop that does not hold
+    /// the run, which went on without the answer.
+    fn went_on_from_reproduce(holds: bool) -> Run {
+        let mut r = run(&[("reproduce", false), ("found", false), ("fix", false)], DeliveryKind::Branch);
+        let item = QItem { id: "examples".into(), label: "The examples".into(), digest: jaynes_core::Digest("d-examples".into()) };
+        let question = Question {
+            id: "q1".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision, items: vec![item],
+            offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds, about: "Is this the bug?".into(),
+            choose: false, pass: 1, passes: 0, back: vec![],
+        };
+        r.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        r.phase = Phase::Blocked { step: Some("fix".into()), fault: jaynes_core::event::Fault::Agent, reason: "the change could not be checked".into() };
+        r
+    }
+
+    // The tech-lead's rule, 21/11, from Alan's run r1795301086-403, where reproduce's stop (which does not hold the
+    // run) stayed drawn over the card of fix, blocked, and he could not tell which one counted: "uma parada de um passo
+    // que a execução já passou nunca fica por cima do estado de agora". The design-lead's parada-passada.md.
+    #[test]
+    fn asked_a_stop_the_run_passed_never_covers_now() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-passed-{}", std::process::id()));
+        let r = went_on_from_reproduce(false);
+        assert_eq!(waiting(&home, &r), None, "the stop the run passed is not the one it waits at");
+        let passed = passed(&home, &r);
+        assert_eq!(passed.iter().map(|s| (s.step.as_str(), s.title.as_str())).collect::<Vec<_>>(), [("reproduce", "Is this the bug?")]);
+        let p = passed[0].passed.clone().expect("it says the run went on");
+        assert_eq!((p.now.as_str(), p.blocked), ("fix", true));
+        assert_eq!(p.went_on, "The run went on without your answer. It is now at “fix”, blocked.");
+        assert_eq!(p.still, "“Redo” would do “reproduce” again. “Keep” changes nothing.");
+        // the same stop, holding the run, is the one it waits at
+        let held = went_on_from_reproduce(true);
+        assert_eq!(waiting(&home, &held).map(|s| (s.step, s.passed)), Some(("reproduce".to_string(), None)));
+        assert!(super::passed(&home, &held).is_empty());
+    }
+
+    #[test]
+    fn what_an_answer_to_a_passed_stop_still_does_is_said_in_one_line() {
+        let s = |v: &[(&str, &[&str])]| still_sentence(&v.iter().map(|(l, r)| (l.to_string(), r.iter().map(|x| x.to_string()).collect())).collect::<Vec<_>>());
+        assert_eq!(s(&[("Yes", &[]), ("No, it's something else", &["found", "fix"])]), "“No, it's something else” would do “found” and “fix” again. “Yes” changes nothing.");
+        assert_eq!(s(&[("Keep", &["fix"]), ("Redo", &["fix"])]), "Either answer does “fix” again.");
+        assert_eq!(s(&[("Keep", &[]), ("Drop", &[])]), "Your answer goes to the record; nothing runs again.");
+        assert_eq!(s(&[("Keep", &[]), ("Redo", &["a", "b", "c"]), ("Drop", &[])]), "“Redo” would do “a”, “b” and “c” again. “Keep” and “Drop” change nothing.");
     }
 
     /// A run of one agent step that may write the whole project, delivered by merge, waiting at the merge after it

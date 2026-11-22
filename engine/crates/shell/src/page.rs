@@ -767,6 +767,8 @@ impl Page {
         let store = self.store()?;
         let mut waiting: Vec<(Run, QuestionState)> = Vec::new();
         let mut released: Vec<(Run, QuestionState)> = Vec::new();
+        // stops the run went on without: under what waits, never over where the run is now
+        let mut still: Vec<(Run, QuestionState)> = Vec::new();
         let mut runs: Vec<Run> = Vec::new();
         for id in store.runs()? {
             let Some(run) = store.state(&id)? else { continue };
@@ -775,7 +777,9 @@ impl Page {
                 continue;
             }
             for q in run.questions.values() {
-                if q.open() {
+                if crate::stop::went_on(&run, q).is_some() {
+                    still.push((run.clone(), q.clone()));
+                } else if q.open() {
                     waiting.push((run.clone(), q.clone()));
                 } else if !q.superseded && q.answer.as_ref().is_some_and(|a| matches!(a.by, By::Agent { .. })) {
                     let i = run.manifest.index(&q.question.step).unwrap_or(0);
@@ -793,16 +797,19 @@ impl Page {
             None
         } else {
             chosen
-                .and_then(|(r, q)| waiting.iter().chain(released.iter()).find(|(run, s)| run.id == r && s.question.id == q).cloned())
+                .and_then(|(r, q)| waiting.iter().chain(released.iter()).chain(still.iter()).find(|(run, s)| run.id == r && s.question.id == q).cloned())
                 .or_else(|| waiting.first().cloned())
                 .or_else(|| released.first().cloned())
         };
         let side = |list: &[(Run, QuestionState)], released: bool| -> String {
+            let went_on = |run: &Run, q: &QuestionState| crate::stop::went_on(run, q).is_some();
             list.iter()
                 .map(|(run, q)| {
                     let on = current.as_ref().is_some_and(|(r, c)| r.id == run.id && c.question.id == q.question.id);
                     let status = if released {
                         "an agent let it go on · you can change it".to_string()
+                    } else if went_on(run, q) {
+                        "the run went on without your answer".to_string()
                     } else if q.question.holds {
                         "<span class=\"holds\">the run waits here</span>".to_string()
                     } else {
@@ -825,6 +832,9 @@ impl Page {
         let mut aside = format!("<div class=\"qh\">Waiting for you · {}</div>{}", waiting.len(), side(&waiting, false));
         if !released.is_empty() {
             aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Let through by an agent · {}</div>{}", released.len(), side(&released, true)));
+        }
+        if !still.is_empty() {
+            aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Can still answer · {}</div>{}", still.len(), side(&still, false)));
         }
         let open: Vec<&Run> = runs.iter().rev().filter(|r| !r.finished()).collect();
         let done: Vec<&Run> = runs.iter().rev().filter(|r| r.finished()).take(8).collect();
@@ -1085,7 +1095,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
     let answers: String = r
         .questions
         .values()
-        .filter(|q| q.open())
+        .filter(|q| q.open() && crate::stop::went_on(r, q).is_none())
         .map(|q| format!("<a class=\"answer\" href=\"/q/{}/{}\">Answer: {}</a>", esc(&r.id), esc(&q.question.id), esc(&q.question.about)))
         .collect();
     let finished = r.finished();
@@ -1128,12 +1138,26 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
     } else {
         String::new()
     };
+    // the stops the run went on without, under where it is now, each in one line with its Answer
+    let passed: String = r
+        .questions
+        .values()
+        .filter(|q| crate::stop::went_on(r, q).is_some())
+        .map(|q| {
+            format!(
+                "<div class=\"passed\"><span>◇ {}</span><a href=\"/q/{}/{}\">Answer</a></div>",
+                esc(&crate::listing::passed_line(&q.question.step, &crate::listing::title(q))),
+                esc(&r.id),
+                esc(&q.question.id)
+            )
+        })
+        .collect();
     let data = json!({"run": r.id}).to_string();
     format!(
         "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{why}{strip}{phase}{answers}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {work}, {back} sent back{corr}</p>\
          {steps}\
-         <div class=\"acts\">{buttons}</div>{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
+         <div class=\"acts\">{buttons}</div>{passed}{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
         version = esc(&r.manifest.version),
         id = esc(&r.id),
@@ -1246,13 +1270,23 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     } else {
         String::new()
     };
-    let badge = if question.holds {
+    let went_on = crate::stop::went_on(run, q);
+    let badge = if went_on.is_some() {
+        ""
+    } else if question.holds {
         "<span class=\"badge wait\">● The run waits for your answer</span>"
     } else {
         "<span class=\"badge\">● The run goes on while you look</span>"
     };
-    let phase = match &run.phase {
-        Phase::Blocked { step, reason, fault } => blocked_notice(step.as_deref(), *fault, reason),
+    let phase = match (&went_on, &run.phase) {
+        // a stop the run went on without says where it is now, and what an answer still does
+        (Some((now, blocked)), _) => format!(
+            "<div class=\"notice passed-q\">The run went on without your answer. It is now at “{}”{}.<br>{}</div>",
+            esc(now),
+            if *blocked { ", blocked" } else { "" },
+            esc(&crate::stop::still_redoes(run, question))
+        ),
+        (None, Phase::Blocked { step, reason, fault }) => blocked_notice(step.as_deref(), *fault, reason),
         _ => String::new(),
     };
     // a stop that chooses: one click on an option sends the choice; a note beside it adjusts the chosen one
@@ -2204,6 +2238,9 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .owner { display:inline-flex; align-items:center; gap:8px; margin:0 12px 6px 0; } .owner input { background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px 9px; font:inherit; font-size:13px; }
 .notice.new { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--blue-soft); color:var(--ink); }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
+.notice.passed-q { background:var(--panel); color:var(--dim); }
+.passed { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:8px 0; font-size:13px; color:var(--dim); border-top:1px solid var(--line); }
+.passed span { color:var(--dim); } .passed a { border:1px solid var(--line-2); border-radius:8px; padding:4px 12px; color:var(--ink); white-space:nowrap; }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
 .steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
@@ -2449,6 +2486,52 @@ mod tests {
         assert!(!asked.contains("Merge into your branch?"), "the question's title");
         let listed = page.render(View::Overview, now).expect("home");
         assert!(listed.contains("Merge into “main”?<small>"), "the list beside");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The tech-lead's rule, 21/11 (Alan's run r1795301086-403): the stop of a step the run already passed never covers
+    // where the run is now. On the page the blocked notice stays on top and the passed stop goes under it, in one line
+    // with Answer; the list beside has it under "Can still answer", and its question says where the run is now.
+    #[test]
+    fn asked_a_stop_the_run_passed_never_covers_now_on_the_page() {
+        use jaynes_core::event::Fault;
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-passed-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "fix-bug", "version": "4.0.0", "protocol": 1,
+            "steps": [{"name": "reproduce", "executor": "agent"}, {"name": "found", "executor": "agent", "needs": ["reproduce"]}, {"name": "fix", "executor": "agent", "needs": ["found"]}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "b".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let mut events = decide(None, &start).expect("start").events;
+        events.push(Event::QuestionOpened {
+            question: Question {
+                id: "q-repro".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
+                items: vec![Item { id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
+                offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            },
+        });
+        events.push(Event::Blocked { step: Some("fix".into()), fault: Fault::Agent, reason: "the change could not be checked".into() });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("b", &events).expect("append");
+        store.put_setup("b", &json!({})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let line = "At “reproduce”: Is this the bug? · The run went on without your answer.";
+        let run = page.render(View::Run("b".into()), now).expect("the run");
+        let (blocked, passed) = (run.find("Blocked at").expect("the blocked notice"), run.find(line).expect("the passed stop's line"));
+        assert!(blocked < passed, "the blocked notice on top, the passed stop under it");
+        assert!(!run.contains("Answer: Is this the bug?"), "no invitation on top");
+        assert!(run.contains("href=\"/q/b/q-repro\">Answer</a>"), "Answer opens its question");
+        let home_page = page.render(View::Overview, now).expect("home");
+        let (can, waits) = (home_page.find("Can still answer · 1").expect("the group beside"), home_page.find("Waiting for you · 0").expect("nothing waits"));
+        assert!(waits < can, "under what waits");
+        let asked = page.render(View::Question("b".into(), "q-repro".into()), now).expect("its question");
+        assert!(asked.contains("The run went on without your answer. It is now at “fix”, blocked."), "where the run is now");
+        assert!(asked.contains("“Redo” would do “reproduce” again. “Keep” changes nothing."), "what an answer still does");
         let _gone = std::fs::remove_dir_all(&home);
     }
 

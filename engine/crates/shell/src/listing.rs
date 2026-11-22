@@ -96,7 +96,7 @@ pub fn arrange(entries: &[Entry]) -> Listing {
         let r = &e.run;
         let project = project_name(&e.project, &folders);
         let title = run_title(e.title.as_deref(), &r.request);
-        let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open()) };
+        let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
         let (mark, line, needs) = match waiting {
             Some(q) => (Mark::Needs, title_into(q, &e.into), true),
             None => {
@@ -133,6 +133,35 @@ pub fn arrange(entries: &[Entry]) -> Listing {
     listing
 }
 
+/// The stops runs went on without, newest run first, each as a row whose line says so: "At “reproduce”: Is this the
+/// bug? · The run went on without your answer." They come after what waits for the person, under "Can still answer".
+pub fn can_still_answer(entries: &[Entry]) -> Vec<Row> {
+    let folders: Vec<&str> = entries.iter().map(|e| e.project.as_str()).collect();
+    let mut newest: Vec<&Entry> = entries.iter().collect();
+    newest.sort_by_key(|e| std::cmp::Reverse(e.at));
+    newest
+        .into_iter()
+        .flat_map(|e| {
+            let r = &e.run;
+            let (project, title) = (project_name(&e.project, &folders), run_title(e.title.as_deref(), &r.request));
+            let mark = standing(e).0;
+            r.questions.values().filter(|q| crate::stop::went_on(r, q).is_some()).map(move |q| Row {
+                id: r.id.clone(),
+                project: project.clone(),
+                title: title.clone(),
+                apart: None,
+                line: passed_line(&q.question.step, &self::title(q)),
+                mark,
+            })
+        })
+        .collect()
+}
+
+/// The line of a stop the run went on without: "At “reproduce”: Is this the bug? · The run went on without your answer."
+pub fn passed_line(step: &str, title: &str) -> String {
+    format!("At “{step}”: {title} · The run went on without your answer.")
+}
+
 /// A project's name in the list: its folder's name, with the folder above it when another project of `folders` has
 /// a folder of the same name somewhere else; "no project" for a run without one.
 fn project_name(folder: &str, folders: &[&str]) -> String {
@@ -146,7 +175,7 @@ fn project_name(folder: &str, folders: &[&str]) -> String {
 }
 
 /// The step a run is at: the first on its path whose output is not fresh, or its last.
-fn step_at(r: &Run) -> String {
+pub(crate) fn step_at(r: &Run) -> String {
     let path = r.path();
     let at = path.iter().find(|&&i| !r.fresh(i)).or(path.last());
     at.map(|&i| r.manifest.steps[i].name.clone()).unwrap_or_default()
@@ -1319,6 +1348,25 @@ mod tests {
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
         Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new() }
+    }
+
+    // The tech-lead's rule, 21/11 (Alan's run r1795301086-403): a run that went on without the answer to a stop shows
+    // where it is now, never the stop's invitation; the stop goes to "Can still answer", under what waits.
+    #[test]
+    fn asked_a_stop_the_run_passed_is_listed_under_can_still_answer_and_the_run_shows_now() {
+        let mut went = run("r1", "Fix the login redirect");
+        went.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "the change could not be checked".into() };
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: false,
+            about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        went.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        let entries = [entry(went, "/p/app", 30)];
+        let listing = arrange(&entries);
+        assert!(listing.needs.is_empty(), "the stop it passed does not make it wait for the person");
+        assert_eq!(listing.projects[0].1.iter().map(|r| r.mark).collect::<Vec<_>>(), [Mark::Blocked]);
+        let still = can_still_answer(&entries);
+        assert_eq!(still.iter().map(|r| (r.id.as_str(), r.title.as_str(), r.line.as_str())).collect::<Vec<_>>(), [("r1", "Fix the login redirect", "At “plan”: Is this the bug? · The run went on without your answer.")]);
     }
 
     #[test]
