@@ -1900,6 +1900,7 @@ mod tests {
             wants: None,
             gone: None,
             offers: Vec::new(),
+            rides: vec![],
         }
     }
 

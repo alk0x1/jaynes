@@ -108,6 +108,47 @@ pub const RUNS_LATER: &str = "runs later outside any box";
 pub const LATER_HEAD: &str = "Runs later outside any box";
 pub const READ_THESE: &str = "Read these before you merge: they run on your machine, outside any box.";
 pub const ONE_TOUCH: &str = "Merging asks for your touch, once.";
+/// The button of each stop the merge's touch keeps: it opens that stop on the page, to answer it differently first.
+pub const RIDE_OPEN: &str = "Open";
+
+/// The stops still open that the merge's touch keeps, as its card names them before the touch (design 0.2.5
+/// merge.md): the touch counts only for what it showed.
+#[derive(Debug, PartialEq)]
+pub struct RidesPart {
+    pub head: &'static str,
+    /// Each stop: its step in quotes, what it keeps as a sentence ("Built on Go, as your request says."), and its
+    /// question, which Open opens.
+    pub rows: Vec<(String, String, String)>,
+    pub under: &'static str,
+}
+
+/// The part of the merge's card that names the stops its touch keeps; none when it keeps none, and never at another
+/// stop.
+pub fn rides_part(stop: &Stop) -> Option<RidesPart> {
+    if stop.kind != QuestionKind::Merge || stop.rides.is_empty() {
+        return None;
+    }
+    let sentence = |said: &str| {
+        let said = said.trim().trim_end_matches('.');
+        let mut letters = said.chars();
+        letters.next().map(|first| format!("{}{}.", first.to_uppercase(), letters.as_str())).unwrap_or_default()
+    };
+    Some(RidesPart {
+        head: "Your touch also keeps these",
+        rows: stop.rides.iter().map(|r| (format!("“{}”", r.step), sentence(&r.said), r.question.clone())).collect(),
+        under: "Merging keeps each as it is. To answer one differently, open it before you merge.",
+    })
+}
+
+/// The line under the merge's two ways out: the touch once, and the answers it also keeps when it keeps any.
+pub fn one_touch(stop: &Stop) -> String {
+    match stop.rides.len() {
+        _ if stop.kind != QuestionKind::Merge => ONE_TOUCH.to_string(),
+        0 => ONE_TOUCH.to_string(),
+        1 => format!("{ONE_TOUCH} It also keeps the answer above."),
+        n => format!("{ONE_TOUCH} It also keeps the {n} answers above."),
+    }
+}
 
 /// The most files the merge's stop lists; the rest are counted.
 const LANDS_SHOWN: usize = 8;
@@ -937,10 +978,38 @@ impl Island {
                     .when(*later, |d| d.child(div().flex_none().font_family(look::UI_FONT).text_color(rgb(look::amber())).child(RUNS_LATER))),
             );
         }
-        let mut view = div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
+        let mut view = div().flex().flex_col().gap(px(10.));
+        if let Some(part) = rides_part(stop) {
+            // the stops the touch keeps, before what lands: each with Open, which opens it on the page to answer first
+            let mut rides = div().flex().flex_col().gap(px(4.)).child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(part.head));
+            for (i, (step, said, question)) in part.rows.into_iter().enumerate() {
+                let run = stop.run.clone();
+                rides = rides.child(
+                    div()
+                        .flex()
+                        .gap(px(12.))
+                        .items_center()
+                        .py(px(4.))
+                        .border_t_1()
+                        .border_color(rgb(look::line()))
+                        .text_size(px(12.5))
+                        .child(div().flex_none().text_color(rgb(look::dim())).child(step))
+                        .child(div().flex_1().min_w_0().text_color(rgb(look::text())).child(said))
+                        .child(button(format!("ride-{i}"), RIDE_OPEN, false, look::text()).on_click(move |_, _, cx| {
+                            let (run, question) = (run.clone(), question.clone());
+                            cx.background_executor()
+                                .spawn(async move {
+                                    if let Err(why) = crate::open_page::stop(&run, &question) {
+                                        tracing::warn!("the stop did not open on the page: {why}");
+                                    }
+                                })
+                                .detach();
+                        })),
+                );
+            }
+            view = view.child(rides.child(div().pt(px(2.)).text_size(px(12.)).text_color(rgb(look::dim())).child(part.under)));
+        }
+        let mut view = view
             .child(
                 div()
                     .flex()
@@ -1689,7 +1758,7 @@ impl Render for Island {
                 .border_color(rgb(look::line()))
                 .child(way(primary("merge", merge_label, going).when(going, |d| d.on_click(cx.listener(|this, _, _, cx| this.send_all(VerdictKind::Keep, cx)))), keep))
                 .child(way(button("branch-only".into(), stop::label_for(VerdictKind::Drop, stop.kind), false, look::text()).when(going, |d| d.on_click(cx.listener(|this, _, _, cx| this.send_all(VerdictKind::Drop, cx)))), drop))
-                .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(self.said.clone().unwrap_or_else(|| ONE_TOUCH.to_string())))
+                .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(self.said.clone().unwrap_or_else(|| one_touch(&stop))))
         } else {
             foot
         };
@@ -1716,7 +1785,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said, diff_shown};
+    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said, diff_shown, one_touch, rides_part, RIDE_OPEN};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1751,6 +1820,7 @@ mod tests {
             wants: None,
             gone: None,
             offers: Vec::new(),
+            rides: vec![],
         }
     }
 
@@ -1778,6 +1848,38 @@ mod tests {
         assert_eq!(next_after(&needs[..1], "sent"), None);
         let lone = [row("x", "no project", "Merge into “main”?")];
         assert_eq!(next_after(&lone, "sent"), Some(("", "Merge into “main”?")), "no project names none");
+    }
+
+    // the engineer lead, 22/11 (row 32, merge.md): the merge's touch keeps the stops the run went on without, so the
+    // app's card shows each before the touch, or the record says the person kept what they never saw in the app
+    #[test]
+    fn asked_the_merge_card_names_what_the_touch_keeps() {
+        use jaynes_core::question::Ride;
+        let mut merge = judging(&["copy/hero.txt"]);
+        merge.kind = QuestionKind::Merge;
+        assert_eq!((rides_part(&merge), one_touch(&merge)), (None, ONE_TOUCH.to_string()), "nothing open, no part and the touch alone");
+        merge.rides = vec![
+            Ride { question: "q-stack".into(), step: "stack".into(), said: "built on Go, standard library, as your request says".into() },
+            Ride { question: "q-bug".into(), step: "bug".into(), said: "The bug above, as your request says.".into() },
+        ];
+        let part = rides_part(&merge).expect("the stops the touch keeps");
+        assert_eq!(part.head, "Your touch also keeps these");
+        assert_eq!(
+            part.rows,
+            [
+                ("“stack”".to_string(), "Built on Go, standard library, as your request says.".to_string(), "q-stack".to_string()),
+                ("“bug”".to_string(), "The bug above, as your request says.".to_string(), "q-bug".to_string()),
+            ],
+            "the step in quotes, what it keeps as a sentence, and the stop Open opens"
+        );
+        assert_eq!(part.under, "Merging keeps each as it is. To answer one differently, open it before you merge.");
+        assert_eq!(RIDE_OPEN, "Open");
+        assert_eq!(one_touch(&merge), "Merging asks for your touch, once. It also keeps the 2 answers above.");
+        merge.rides.truncate(1);
+        assert_eq!(one_touch(&merge), "Merging asks for your touch, once. It also keeps the answer above.");
+        let mut decision = judging(&["a"]);
+        decision.rides = merge.rides.clone();
+        assert_eq!(rides_part(&decision), None, "only the merge's card");
     }
 
     // the engineer lead, 22/11 (row 9), in the design-lead's words: at a stop of a run whose older engine left the Mac,

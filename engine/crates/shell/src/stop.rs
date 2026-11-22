@@ -77,6 +77,9 @@ pub struct Stop {
     /// What the person may grant here beside their answer, each with its box marked or not beforehand: sent with the
     /// answer as the page's act "grant", the person's alone (`Input::Grant`). Empty at most stops.
     pub offers: Vec<Offered>,
+    /// At the merge, the stops still open that its touch keeps, each with what it holds in Jaynes's words: the card
+    /// shows them before the touch, which counts only for what it showed. Empty elsewhere.
+    pub rides: Vec<jaynes_core::question::Ride>,
 }
 
 /// Something a stop offers the person to grant, as the card shows it: a box to mark, with its words.
@@ -519,6 +522,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         wants,
         gone: gone(home, run),
         offers: offered(store.as_ref(), run, q),
+        rides: q.question.rides.clone(),
     }
 }
 
