@@ -523,5 +523,131 @@
    ]
   },
   "request": "Os dados ficam no Postgres"
+ },
+ {
+  "id": "refused-inside-the-quote",
+  "expect": "reject",
+  "hole": "the quote names this option only to refuse it, after naming another",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Rust, not Python"
+    }
+   ]
+  },
+  "request": "Rust, not Python"
+ },
+ {
+  "id": "refused-in-a-sentence-before",
+  "expect": "reject",
+  "hole": "the refusal sits in its own sentence before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Rust"
+    }
+   ]
+  },
+  "request": "No Rust. Python."
+ },
+ {
+  "id": "dont-want",
+  "expect": "reject",
+  "hole": "don't want, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Rust"
+    }
+   ]
+  },
+  "request": "I don't want Rust for this"
+ },
+ {
+  "id": "no-after-the-name",
+  "expect": "reject",
+  "hole": "no, after the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Rust no"
+    }
+   ]
+  },
+  "request": "Python yes, Rust no"
+ },
+ {
+  "id": "pt-sem-after-another",
+  "expect": "reject",
+  "hole": "sem before the name, after naming another",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Rust"
+    }
+   ]
+  },
+  "request": "Python sem Rust"
+ },
+ {
+  "id": "pt-nunca",
+  "expect": "reject",
+  "hole": "nunca, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "PHP + Laravel",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "PHP"
+    }
+   ]
+  },
+  "request": "Nunca mais PHP"
  }
 ]

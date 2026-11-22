@@ -288,5 +288,68 @@
    "stacks": []
   },
   "request": "A habit tracker"
+ },
+ {
+  "id": "not-x-but-y",
+  "expect": "accept",
+  "keeps": "not Rust but Python names Python",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Not Rust but Python"
+    }
+   ]
+  },
+  "request": "Not Rust but Python"
+ },
+ {
+  "id": "pt-nao-x-mas-y",
+  "expect": "accept",
+  "keeps": "the same in Portuguese",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Python"
+    }
+   ]
+  },
+  "request": "Não Rust, mas Python"
+ },
+ {
+  "id": "refused-later-another",
+  "expect": "accept",
+  "keeps": "a later sentence refuses something else",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + Postgres",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Python and Postgres"
+    }
+   ]
+  },
+  "request": "Python and Postgres. No ORM."
  }
 ]
