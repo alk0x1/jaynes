@@ -848,6 +848,24 @@ impl Page {
                 .or_else(|| waiting.first().cloned())
                 .or_else(|| released.first().cloned())
         };
+        // what an item of a list beside reads as: its run's project and its question
+        let reads = |run: &Run, q: &QuestionState| (names.get(&run.id).map(|n| n.project.clone()), crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id)));
+        // two items that read the same are told apart after the project, faint (the design-lead's quatro-itens.md,
+        // item 8): by the run's title when the titles differ, by what listing::name tells apart when they are the
+        // same; the question gives way first
+        let head = |run: &Run, q: &QuestionState, list: &[(Run, QuestionState)]| -> String {
+            let question = ticks(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id)));
+            let me = reads(run, q);
+            let same: Vec<&Run> = list.iter().filter(|(o, oq)| !(o.id == run.id && oq.question.id == q.question.id) && reads(o, oq) == me).map(|(o, _)| o).collect();
+            let (Some(row), false) = (names.get(&run.id), same.is_empty()) else { return format!("{}{question}", whose(run)) };
+            let one_title = same.iter().any(|o| names.get(&o.id).is_some_and(|n| n.title == row.title));
+            let apart = if one_title { row.apart.clone().unwrap_or_else(|| row.title.clone()) } else { row.title.clone() };
+            format!(
+                "<span class=\"nm\"><span class=\"proj\">{}</span><span class=\"sep\"> · </span><span class=\"apart\">{}</span><span class=\"sep\"> · </span><span class=\"tt\">{question}</span></span>",
+                esc(&row.project),
+                esc(&apart)
+            )
+        };
         let side = |list: &[(Run, QuestionState)], released: bool| -> String {
             let went_on = |run: &Run, q: &QuestionState| crate::stop::went_on(run, q).is_some();
             list.iter()
@@ -863,12 +881,11 @@ impl Page {
                         "<span class=\"goes\">the run goes on</span>".to_string()
                     };
                     format!(
-                        "<a class=\"q{}\" href=\"/q/{}/{}\">{}{}<small>{} · {} · {}</small>{}</a>",
+                        "<a class=\"q{}\" href=\"/q/{}/{}\">{}<small>{} · {} · {}</small>{}</a>",
                         if on { " on" } else { "" },
                         esc(&run.id),
                         esc(&q.question.id),
-                        whose(run),
-                        ticks(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id))),
+                        head(run, q, list),
                         esc(&run.manifest.role),
                         where_in(run),
                         status,
@@ -2986,6 +3003,11 @@ mod tests {
 
     /// Two runs, each waiting on its question q1, which the person was told of.
     fn told(name: &str) -> PathBuf {
+        told_with(name, |_| json!({}))
+    }
+
+    /// As `told`, each run's setup from `setup`.
+    fn told_with(name: &str, setup: impl Fn(&str) -> serde_json::Value) -> PathBuf {
         use jaynes_core::question::{Item, Question, VerdictKind};
         use jaynes_core::{Digest, Event, Manifest};
         let home = std::env::temp_dir().join(format!("jaynes-remind-{name}-{}", std::process::id()));
@@ -3007,7 +3029,7 @@ mod tests {
             events.push(Event::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: String::new() });
             let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
             store.append(run, &events).expect("append");
-            store.put_setup(run, &json!({})).expect("setup");
+            store.put_setup(run, &setup(run)).expect("setup");
         }
         home
     }
@@ -3584,6 +3606,34 @@ mod tests {
         let asked = page.render(View::Question("new".into(), "q1".into()), now).expect("the leave");
         assert!(asked.contains("<div class=\"where\">tidepool · <a href=\"/run/new\">"), "the stop's where line starts with its project");
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The design-lead's quatro-itens.md, item 8: an item of "Waiting for you" names the project and the question, not
+    // the run. Two items that read the same are told apart after the project, faint: by the run's title when the
+    // titles differ, by what listing::name tells apart when they are the same; the question is what gives way.
+    #[test]
+    fn asked_two_items_that_read_the_same_are_told_apart_in_waiting_for_you() {
+        // the item beside of each run whose setup `setup` gives
+        let waits = |case: &str, setup: &dyn Fn(&str) -> serde_json::Value| {
+            let page = Page { home: told_with(&format!("apart-{case}"), setup), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+            let listed = page.render(View::Overview, crate::store::now()).expect("home");
+            let _gone = std::fs::remove_dir_all(&page.home);
+            listed.split("<div class=\"qh\">Waiting for you").nth(1).and_then(|a| a.split("<div class=\"qh\" style").next()).expect("the waiting list").to_string()
+        };
+        let item = |apart: &str| {
+            format!("<span class=\"nm\"><span class=\"proj\">tidepool</span><span class=\"sep\"> · </span><span class=\"apart\">{apart}</span><span class=\"sep\"> · </span><span class=\"tt\">Is the plan right?</span></span><small>")
+        };
+        // one title in one project, at one stop: when each started
+        let both = waits("same", &|_| json!({"project": "/w/tidepool", "title": "Fix the export"}));
+        assert_eq!(both.matches("<span class=\"nm\"><span class=\"proj\">tidepool</span><span class=\"sep\"> · </span><span class=\"apart\">started ").count(), 2, "{both}");
+        assert_eq!(both.matches("</span><span class=\"sep\"> · </span><span class=\"tt\">Is the plan right?</span></span><small>").count(), 2, "{both}");
+        // two titles asking the same: each run's title
+        let titled = waits("titles", &|run| json!({"project": "/w/tidepool", "title": if run == "w1" { "Fix the export" } else { "Rename the footer link" }}));
+        assert!(titled.contains(&item("Fix the export")) && titled.contains(&item("Rename the footer link")), "{titled}");
+        // another project: nothing reads the same, today's item
+        let other = waits("projects", &|run| json!({"project": if run == "w1" { "/w/tidepool" } else { "/w/harbor" }, "title": "Fix the export"}));
+        assert!(!other.contains("class=\"apart\""), "{other}");
+        assert!(other.contains("<span class=\"proj\">tidepool</span><span class=\"sep\"> · </span>Is the plan right?<small>"), "{other}");
     }
 
     /// The section of reminders a page shows, or "" when it shows none.
