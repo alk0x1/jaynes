@@ -4427,6 +4427,16 @@ fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_at_its_start_before_any_
     }
     let agent_worked = |e: &[Value]| e.iter().filter(|x| x["type"] == "AttemptStarted" && x["step"] == "change").count();
     assert_eq!(agent_worked(&e), 0, "no agent worked: {:?}", types(&e));
+    // the card as the app lays it out, from the run's own reason (the role program's words before it)
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("held-start").expect("state").expect("run");
+    let b = jaynes_shell::listing::blocked(&s.home, &run).unwrap_or_else(|| panic!("not blocked: {:?}", run.phase));
+    assert_eq!(b.what, "The run stopped before any agent worked.", "{reason}");
+    assert!(b.why.starts_with(&format!("This project's tests start a test server on port {held}, which Jaynes holds")), "{}", b.why);
+    assert_eq!(b.continue_does, "Continue: Jaynes runs the project's tests again. If they start, the run goes on to “change”.");
+    let way = b.ways.first().expect("a way");
+    assert_eq!(way.command.as_deref(), Some(format!("jaynes project test-servers {real} {held}").as_str()));
+    drop(store);
     // the one line the card gives, then Continue: the tests run again, and the run goes on to its delivery
     let said = typed_at_terminal(&s, &["project", "test-servers", &project, &held.to_string()], None, "y\n");
     assert!(said.contains("Done."), "{said}");

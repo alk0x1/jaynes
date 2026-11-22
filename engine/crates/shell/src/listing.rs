@@ -1320,6 +1320,8 @@ struct Held<'a> {
 }
 
 fn held(said: &str) -> Option<Held<'_>> {
+    // a role program's step (the runner's find-suite) says it after its own words
+    let said = said.strip_prefix("the role program could not answer: ").unwrap_or(said);
     let rest = said.strip_prefix(HELD_KEPT)?;
     let (lines, tail) = rest.split_at(rest.find(HELD_TRIED)?);
     let ports = tail[HELD_TRIED.len()..].split('.').next().unwrap_or("").split(", ").filter_map(|p| p.trim().parse().ok()).collect();
@@ -1995,7 +1997,8 @@ mod blocked_tests {
         // the tech-lead's, 22/11 (the real-user's estoque): the suite of the start serves on a port Jaynes holds, so
         // every check would fail for Jaynes, never for the run; the run stops at its first step, the agent never works
         let bind = "E       OSError: [Errno 48] Address already in use";
-        let inner = format!("Jaynes held a port the command tried to serve on, so its failure says nothing about the project: {bind} It tried held port 5432. The person lets this project's tests use them with `jaynes project test-servers /Users/x/Projects/estoque`, naming the ports.");
+        // as a real run says it: the role program's words before the box's
+        let inner = format!("the role program could not answer: Jaynes held a port the command tried to serve on, so its failure says nothing about the project: {bind} It tried held port 5432. The person lets this project's tests use them with `jaynes project test-servers /Users/x/Projects/estoque`, naming the ports.");
         let b = blocked_said(Some("runner"), Fault::Jaynes, &format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent"));
         // the design-lead's words (bloqueada.md, 22/11): what happened first, the port in why, as the check's card says it
         assert_eq!(b.what, "The run stopped before any agent worked.");
