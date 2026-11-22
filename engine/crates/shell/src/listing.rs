@@ -488,9 +488,38 @@ fn actions(v: &serde_json::Value, project: &Path) -> Vec<String> {
         .collect()
 }
 
+/// A stop's conversation, one line each, as the run's story tells it on the page and in the app: "you asked: …",
+/// "agent answered, nothing redone: …", "agent answered after the stop closed, nothing changed: …", "agent could not
+/// answer: …".
+pub fn talk(s: &jaynes_core::run::StepState) -> Vec<String> {
+    use jaynes_core::run::EntryKind;
+    s.thread
+        .iter()
+        .map(|e| {
+            let said = match e.kind {
+                EntryKind::Change => "you:",
+                EntryKind::Ask => "you asked:",
+                EntryKind::Answer if e.late => "agent answered after the stop closed, nothing changed:",
+                EntryKind::Answer => "agent answered, nothing redone:",
+                EntryKind::AskFailed => "agent could not answer:",
+                EntryKind::Reply => "agent:",
+            };
+            format!("{said} {}", e.text)
+        })
+        .collect()
+}
+
 /// A run's story: each step its agents worked, in the order they started, with what they did there, turn after turn,
-/// read from the transcripts the engine writes as the agents speak. The app shows it in the run's tab.
+/// read from the transcripts the engine writes as the agents speak, then what was said at its stop. The app shows it
+/// in the run's tab.
 pub fn story(home: &Path, run: &str) -> Vec<(String, Vec<String>)> {
+    let record = home.join("record.sqlite3");
+    let state = if record.exists() { Store::open(&record).ok().and_then(|s| s.state(run).ok().flatten()) } else { None };
+    story_of(home, run, state.as_ref())
+}
+
+/// [`story`] with the run's state at hand: what was said at each step's stop follows what its agent did there.
+pub fn story_of(home: &Path, run: &str, state: Option<&Run>) -> Vec<(String, Vec<String>)> {
     let dir = home.join("runs").join(run);
     let project = dir.join("project");
     let when = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
@@ -514,11 +543,14 @@ pub fn story(home: &Path, run: &str) -> Vec<(String, Vec<String>)> {
     steps
         .into_iter()
         .map(|(_, name, turns)| {
-            let said = turns
+            let mut said: Vec<String> = turns
                 .iter()
                 .filter_map(|t| tail(t, 1024 * 1024))
                 .flat_map(|text| text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).flat_map(|v| actions(&v, &project)).collect::<Vec<_>>())
                 .collect();
+            if let Some(s) = state.and_then(|r| r.manifest.index(&name).map(|i| &r.steps[i])) {
+                said.extend(talk(s));
+            }
             (name, said)
         })
         .collect()
@@ -1573,6 +1605,45 @@ mod tests {
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
         Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new() }
+    }
+
+    // Alan, 22/11, at a stop where he asked the agent: "ele regerou tudo?". He wanted to see his question stay: the run's
+    // story in the app says what he asked and what the agent answered, with nothing redone, in the page's words and order.
+    #[test]
+    fn asked_the_runs_story_keeps_what_the_person_asked_and_what_the_agent_answered() {
+        use jaynes_core::run::{Entry as Said, EntryKind};
+        let home = std::env::temp_dir().join(format!("jaynes-story-talk-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let plan = home.join("runs/r1/steps/plan");
+        std::fs::create_dir_all(&plan).expect("dir");
+        let did = serde_json::json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Two directions for the stack."}]}}).to_string();
+        std::fs::write(plan.join("turn-1-0.jsonl"), did + "\n").expect("write");
+        let said = |kind: EntryKind, text: &str, late: bool| Said { round: 1, question: "q1".into(), kind, text: text.into(), item: None, late, ask: Some("q1-a1".into()) };
+        let mut r = run("r1", "a stack");
+        r.steps[0].thread = vec![
+            said(EntryKind::Ask, "ele regerou tudo?", false),
+            said(EntryKind::Answer, "Não, nada foi refeito: só respondi.", false),
+            said(EntryKind::Ask, "e se fosse Go só na API?", false),
+            said(EntryKind::AskFailed, "the agent's turn ended without a reply", false),
+            said(EntryKind::Answer, "Daria, mas o ganho é pequeno.", true),
+        ];
+        // a step whose agent has not worked yet tells nothing, though words were said at it
+        r.steps[1].thread = vec![said(EntryKind::Ask, "and here?", false)];
+        assert_eq!(talk(&r.steps[0]), [
+            "you asked: ele regerou tudo?",
+            "agent answered, nothing redone: Não, nada foi refeito: só respondi.",
+            "you asked: e se fosse Go só na API?",
+            "agent could not answer: the agent's turn ended without a reply",
+            "agent answered after the stop closed, nothing changed: Daria, mas o ganho é pequeno.",
+        ]);
+        let told = story_of(&home, "r1", Some(&r));
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].0, "plan");
+        assert_eq!(told[0].1[0], "Two directions for the stack.", "what the agent did comes first");
+        assert_eq!(told[0].1[1..], talk(&r.steps[0])[..], "then the conversation at its stop, in order");
+        // the story the app reads by the run's id reads its state from the record; no record, the transcripts alone
+        assert_eq!(story(&home, "r1"), vec![("plan".to_string(), vec!["Two directions for the stack.".to_string()])]);
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     // The tech-lead's rule, 21/11 (Alan's run r1795301086-403): a run that went on without the answer to a stop shows

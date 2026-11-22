@@ -1405,23 +1405,9 @@ fn thread_html(run: &Run, q: &QuestionState) -> String {
     out + "</div>"
 }
 
-/// A stop's conversation in the run's story, one line each: "you asked: …", "agent answered, nothing redone: …".
+/// A stop's conversation in the run's story, one line each, as the app tells it: the listing's words.
 fn thread_story(s: &jaynes_core::run::StepState) -> String {
-    use jaynes_core::run::EntryKind;
-    s.thread
-        .iter()
-        .map(|e| {
-            let said = match e.kind {
-                EntryKind::Change => "you:",
-                EntryKind::Ask => "you asked:",
-                EntryKind::Answer if e.late => "agent answered after the stop closed, nothing changed:",
-                EntryKind::Answer => "agent answered, nothing redone:",
-                EntryKind::AskFailed => "agent could not answer:",
-                EntryKind::Reply => "agent:",
-            };
-            format!("<small class=\"talk\">{said} {}</small>", esc(&e.text))
-        })
-        .collect()
+    crate::listing::talk(s).iter().map(|line| format!("<small class=\"talk\">{}</small>", esc(line))).collect()
 }
 
 fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str) -> String {

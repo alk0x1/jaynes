@@ -565,6 +565,11 @@ fn the_person_asks_the_agent_at_a_stop_and_its_answer_joins_the_stop_with_nothin
     let answered = e.iter().filter(|e| e["type"] == "AgentAnswered").nth(1).unwrap_or_else(|| panic!("answered: {:?}", types(&e)));
     assert_eq!(answered["text"].as_str(), Some("Go would be warmer here."), "{answered}");
     assert_eq!(store.proof_keys("ask").expect("proofs"), vec![(a2, public)]);
+    // the run's story in the app keeps what was asked and what the agent answered, nothing redone, as the page says it
+    let told: Vec<String> = jaynes_shell::listing::story(&s.home, "ask").into_iter().flat_map(|(_, said)| said).collect();
+    let asked_at = told.iter().position(|l| l == "you asked: what if it were Go?").unwrap_or_else(|| panic!("the story: {told:?}"));
+    assert_eq!(told.get(asked_at + 1).map(String::as_str), Some("agent answered, nothing redone: Go would be warmer here."), "{told:?}");
+    assert!(told.contains(&format!("you asked: {words}")), "{told:?}");
     assert_eq!(e.iter().filter(|e| e["type"] == "AttemptStarted").count(), attempts, "{:?}", types(&e));
 }
 
