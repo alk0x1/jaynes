@@ -202,3 +202,38 @@ fn a_choice_kept_alone_still_counts_as_your_answer_before_the_merge() {
     let proofs = prove(&m, &[p]);
     assert!(matches!(proofs[0], Proof::Proved { .. }), "{proofs:?}");
 }
+
+/// identity's directions, holding unless the request named the one direction and a check of the step vouched for it.
+fn choosing_unless_named() -> Manifest {
+    let mut m = choosing();
+    m.delivery = DeliveryKind::Merge;
+    m.steps[0].checks.push(open("named-in-request"));
+    if let Some(s) = m.steps[0].stop.as_mut() {
+        s.holds_unless = Some("name".into());
+    }
+    m
+}
+
+#[test]
+fn a_stop_that_holds_unless_named_lets_the_next_step_start_when_the_request_named_the_one_option() {
+    let m = choosing_unless_named();
+    m.validate().expect("the role is valid");
+    let p = promise("The tokens are applied only after you chose a direction", Form::OnlyAfter {
+        on: On::parse("step tokens starts", &m).expect("event"),
+        after: Condition::parse("person answered at directions", &m).expect("condition"),
+    });
+    let proofs = prove(&m, &[p]);
+    let Proof::Broken { path } = &proofs[0] else { panic!("the named option lets the run go on: {proofs:?}") };
+    assert!(path.iter().any(|s| s.contains("named")), "the path says the request named it: {path:?}");
+}
+
+#[test]
+fn a_named_option_is_still_kept_by_the_person_s_touch_before_the_merge() {
+    let m = choosing_unless_named();
+    let p = promise("Nothing is merged before you chose a direction", Form::Never {
+        on: On::parse("merge", &m).expect("event"),
+        unless: Condition::parse("person answered at directions", &m).expect("condition"),
+    });
+    let proofs = prove(&m, &[p]);
+    assert!(matches!(proofs[0], Proof::Proved { .. }), "{proofs:?}");
+}
