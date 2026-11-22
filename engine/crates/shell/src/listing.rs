@@ -1734,13 +1734,16 @@ mod blocked_tests {
         // two cases at the last attempt, one failing once: no "Each time", and what it printed beyond six lines folds
         let home = failed_cases("two", &[
             (2, &[(history, git, 128, "fatal: bad object 8527993")]),
-            (3, &[(history, git, 128, "fatal: bad object 8527993"), (other, "make test", 2, &printed)]),
+            (3, &[(history, git, 128, "fatal: bad object 8527993"), (other, "make test", 124, &printed)]),
         ]);
         let b = blocked(&home, &r).expect("blocked");
         let _gone = std::fs::remove_dir_all(&home);
         assert_eq!(b.why, "“change” used its 3 attempts. A case the agent does not see failed.");
         assert_eq!(b.cases.iter().map(|c| c.failed_in.as_str()).collect::<Vec<_>>(), ["Failed in 2 of 3 attempts.", "Failed in 1 of 3 attempts."]);
         assert_eq!(b.cases[1].printed.len(), 9);
+        // a case the check stopped because it did not finish in time says so, not a bare code (the design-lead, 22/11)
+        assert_eq!(b.cases[1].got, "Got: it did not finish in time, so the check stopped it (exit 124).");
+        assert_eq!(b.cases[0].got, "Got: exit 128.");
         let text = b.text();
         assert!(text.lines().any(|l| l == "The cases that failed"), "{text}");
         assert!(text.contains("line 6\n▸ all of it") && !text.contains("line 7"), "six lines, then the fold:\n{text}");
