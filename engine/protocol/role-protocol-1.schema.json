@@ -808,6 +808,10 @@
             },
             "step": {
               "type": "string"
+            },
+            "test_servers": {
+              "description": "The person let this project's tests start their own test servers (`jaynes project test-servers`), as the\nrun's setup recorded it or the person chose since: macOS's box then lets its commands serve on a port the\nsystem picks, and reach the window of ports the system gives next. Left out when not.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -870,6 +874,10 @@
             },
             "step": {
               "type": "string"
+            },
+            "test_servers": {
+              "description": "The person let this project's tests start their own test servers (`jaynes project test-servers`), as the\nrun's setup recorded it or the person chose since: macOS's box then lets its commands serve on a port the\nsystem picks, and reach the window of ports the system gives next. Left out when not.",
+              "type": "boolean"
             }
           },
           "required": [

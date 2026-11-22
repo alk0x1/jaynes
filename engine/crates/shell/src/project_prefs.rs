@@ -15,6 +15,10 @@ pub struct Ports {
     /// declares. The person's, never an agent's.
     #[serde(default)]
     pub any: bool,
+    /// The project's tests may start their own test servers on ports the system picks (`jaynes project
+    /// test-servers`, macOS's box). The person's, never an agent's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub servers: bool,
     /// When the person opened them, in seconds since 1970.
     #[serde(default)]
     pub opened: u64,
@@ -89,10 +93,10 @@ mod tests {
         std::fs::create_dir_all(home.join(FOLDER)).expect("dir");
         std::fs::write(path(&home, &project), "[delivery]\nsign = true\n").expect("write");
         let mut prefs = load(&home, &project).expect("read");
-        prefs.ports = Some(Ports { any: true, opened: 1_795_000_000 });
+        prefs.ports = Some(Ports { any: true, servers: false, opened: 1_795_000_000 });
         save(&home, &project, &prefs).expect("save");
         let again = load(&home, &project).expect("read");
-        assert_eq!(again.ports, Some(Ports { any: true, opened: 1_795_000_000 }));
+        assert_eq!(again.ports, Some(Ports { any: true, servers: false, opened: 1_795_000_000 }));
         assert_eq!(again.rest["delivery"]["sign"].as_bool(), Some(true));
         // the same project by another spelling of its path is the same file
         let other = base.join("home/../project");

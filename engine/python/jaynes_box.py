@@ -52,6 +52,7 @@ with a proof only they can give, by starting the run unboxed (G18); never a vari
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import errno
 import functools
@@ -125,6 +126,9 @@ class Box:
     reserved: tuple[int, ...] = ()  # the free ports the run reserved, handed over in JAYNES_PORTS
     local_ports: tuple[int, ...] = ()  # the ports the step, or the check, that runs the commands names
     any_port: bool = False  # with ``local``: every local TCP port, opened by the person for this project
+    # with ``local``: the project's own test servers, let by the person for this project (macOS): its servers bind any
+    # local port, a port the system picks among them, and it reaches these, the ones the system gives next
+    window: tuple[int, ...] = ()
     readable: tuple[Path, ...] = ()  # folders inside hidden ones it may still read, such as the run's own copy
     home: Path = field(default_factory=Path.home)
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
@@ -240,9 +244,16 @@ def profile(box: Box) -> str:
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
     elif box.local:
         lines.append("(deny network-bind)")
+        if box.window:
+            # a port the system picks binds only under "localhost:*", which every address and port matches, so the
+            # bind is open (the page's port is held by `_page_held` meanwhile) and what it reaches stays a list
+            lines.append('(allow network-bind (local tcp "localhost:*"))')
         for p in sorted({*box.reserved, *box.local_ports} - {PAGE_PORT}):
-            lines.append(f'(allow network-bind (local tcp "localhost:{int(p)}"))')
+            if not box.window:
+                lines.append(f'(allow network-bind (local tcp "localhost:{int(p)}"))')
             lines.append(f'(allow network-outbound (remote tcp "localhost:{int(p)}"))')
+        lines += [f'(allow network-outbound (remote tcp "localhost:{int(p)}"))'
+                  for p in sorted(set(box.window) - {*box.reserved, *box.local_ports, PAGE_PORT})]
         lines += [f"(allow network-bind (local unix-socket {_subpaths([p])}))" for p in box.writable]
         lines += _chrome_socket()
         # a suite's own servers on socket files, such as the role tools: only in its own folders, a rule each, since
@@ -934,6 +945,7 @@ class Ran:
     reserved: tuple[int, ...] = ()  # the ports it was given in JAYNES_PORTS
     local_ports: tuple[int, ...] = ()  # the ports its step declared
     any_port: bool = False  # it ran with every local port open, by the person's choice for the project
+    test_servers: bool = False  # it ran with the project's own test servers let, by the person's choice for the project
 
 
 def _kill(proc: "subprocess.Popen[bytes]") -> None:
@@ -1082,14 +1094,113 @@ def reserve(n: int = RESERVED) -> tuple[int, ...]:
             s.close()
 
 
+# How many of the ports macOS gives next a project's own test servers may reach: a server falls outside only if the
+# machine takes more than these while one command runs (here about 500 a minute), and it is then refused, never let
+# through. 4,000 rules cost the profile about 0.3 s and stay far below where sandbox-exec breaks (about 16,000).
+SERVERS_WINDOW = 4000
+
+
+def _held(port: int) -> bool:
+    """Whether something on this machine listens on ``port`` (or holds it) on a loopback or every-address address."""
+    for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"), (socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+        try:
+            s = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:
+            continue
+        try:
+            if family == socket.AF_INET6:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            s.bind((address, port))
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                return True
+        finally:
+            s.close()
+    return False
+
+
+def servers_window() -> tuple[int, ...]:
+    """The ports a project's own test servers get from macOS while one command runs: macOS gives a port the system
+    picks in sequence (``net.inet.tcp.randomize_ports`` 0), the same sequence for IPv4 and IPv6 and for every
+    process, so the next ``SERVERS_WINDOW`` after the one it gives now, without the ones something listens on now.
+    None where macOS gives them at random: the box then stays closed."""
+    try:
+        said = subprocess.run(["/usr/sbin/sysctl", "-n", "net.inet.tcp.randomize_ports", "net.inet.ip.portrange.hifirst",
+                               "net.inet.ip.portrange.hilast"], capture_output=True, text=True, timeout=10).stdout.split()
+        at_random, first, last = (int(x) for x in said)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ()
+    if at_random != 0 or not 0 < first <= last <= 65535:
+        return ()
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        given = s.getsockname()[1]
+    finally:
+        s.close()
+    span = last - first + 1
+    after = (first + (given - first + i) % span for i in range(1, min(SERVERS_WINDOW, span) + 1))
+    return tuple(p for p in after if p != PAGE_PORT and not _held(p))
+
+
+class _page_held:
+    """While a command with its own test servers runs, Jaynes holds the page's port on 127.0.0.1 and ::1 where the page
+    does not (the page down), and closes what comes there: the box binds any port then, and a bind it is denied does
+    not hold in sandbox-exec. What the page or another program holds stays theirs."""
+
+    def __init__(self) -> None:
+        self.socks: list[socket.socket] = []
+        self._done = threading.Event()
+        self._watch: threading.Thread | None = None
+
+    def __enter__(self) -> "_page_held":
+        for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+            try:
+                s = socket.socket(family, socket.SOCK_STREAM)
+            except OSError:
+                continue
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if family == socket.AF_INET6:
+                    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                s.bind((address, PAGE_PORT))
+                s.listen(16)
+                s.setblocking(False)
+            except OSError:
+                s.close()
+                continue
+            self.socks.append(s)
+        if self.socks:
+            self._watch = threading.Thread(target=self._close_what_comes, daemon=True)
+            self._watch.start()
+        return self
+
+    def _close_what_comes(self) -> None:
+        while not self._done.is_set():
+            ready, _, _ = select.select(self.socks, [], [], 0.2)
+            for s in ready:
+                try:
+                    s.accept()[0].close()
+                except OSError:
+                    pass
+
+    def __exit__(self, *_) -> None:
+        self._done.set()
+        if self._watch is not None:
+            self._watch.join(timeout=3)
+        for s in self.socks:
+            s.close()
+
+
 def run(project: Path, command: str, *, source: Path | None = None, timeout: float = 600.0,
         env: dict[str, str] | None = None, hidden: tuple[Path, ...] = (), stdin: str | None = None,
         readable: tuple[Path, ...] = (), local_ports: Iterable[int] = (), any_port: bool = False,
-        over: dict[str, str | None] | None = None) -> Ran:
+        test_servers: bool = False, over: dict[str, str | None] | None = None) -> Ran:
     """Run ``command`` from a throwaway copy of ``project``, in the box, with the installed dependencies of
     ``source`` linked, and ``stdin`` on its standard input. ``readable`` names more folders it may read, only read,
     inside the hidden ones, such as the run's own copy of the role a check's script is in. Its servers bind the ports
-    in ``JAYNES_PORTS`` and the step's ``local_ports``. ``over`` puts files back in the copy before it runs: a path
+    in ``JAYNES_PORTS`` and the step's ``local_ports``; with ``test_servers`` (macOS, the person's choice for the
+    project, in the engine's call) any port too, a port the system picks among them. ``over`` puts files back in the copy before it runs: a path
     inside the project to the text it holds, or None to take it out. Raises ``Unavailable`` where there is no box."""
     with tempfile.TemporaryDirectory(prefix="jaynes-suite-") as tmp:
         work, scratch = Path(tmp) / "project", Path(tmp) / "tmp"
@@ -1112,16 +1223,19 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         ports, declared = reserve(), tuple(sorted({int(p) for p in local_ports} - {PAGE_PORT}))
         # the run's say, from its setup, in the engine's call: the person opened this project's local ports
         anyone = any_port is True
+        own = test_servers is True and not anyone
+        window = servers_window() if own and sys.platform == "darwin" else ()
         box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *installed, *readable), reserved=ports,
-                  local_ports=declared, any_port=anyone)
+                  local_ports=declared, any_port=anyone, window=window)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
-        code, out, _, late = _wait_in_box(argv, cwd=work, env={**inherited(), **suite_environment(work, scratch), **(env or {}), **given},
-                                          stdin=stdin, timeout=timeout)
+        with _page_held() if window else contextlib.nullcontext():
+            code, out, _, late = _wait_in_box(argv, cwd=work, env={**inherited(), **suite_environment(work, scratch), **(env or {}), **given},
+                                              stdin=stdin, timeout=timeout)
         if late:
             out += f"\n(stopped after {timeout:.0f} s)".encode()
         text = out.decode(errors="replace")
-        return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone)
+        return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone, test_servers=own)
 
 
 # --- a role's own step ------------------------------------------------------------------------------------------

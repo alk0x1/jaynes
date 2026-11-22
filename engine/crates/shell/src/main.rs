@@ -53,6 +53,7 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   check DIR               read a role in TOML strictly, every error with its line, and prove its promises
   project ports DIR       whether a project's checks reach any local port of this machine, and since when
   project open-ports DIR | project close-ports DIR   let them, or not: the person's alone, at a terminal
+  project test-servers DIR  let a project's tests start their own test servers (macOS), the person's alone; close-ports closes it
   schema                  print the protocol's schema
 
 The record lives in $JAYNES_ENGINE_HOME (default ~/.jaynes/engine).";
@@ -300,12 +301,14 @@ fn run(args: &[String]) -> Result<(), String> {
             let s = store()?;
             let state = s.state(id)?.ok_or("no such run")?;
             print_state(&state);
-            let opened = match state.ports {
-                Some(p) => p.any.then_some(p.opened),
-                None => s.setup(id).ok().as_ref().and_then(drive::ports_open),
-            };
-            if let Some(opened) = opened {
-                println!("{}", ports_sentence(opened));
+            let chosen = state.ports.or_else(|| {
+                let setup = s.setup(id).ok()?;
+                let any = drive::ports_open(&setup);
+                let servers = drive::servers_open(&setup);
+                Some(jaynes_core::run::Ports { any: any.is_some(), servers: servers.is_some(), opened: any.or(servers).unwrap_or(0) })
+            });
+            if let Some(said) = chosen.as_ref().and_then(chosen_sentence) {
+                println!("{said}");
             }
             Ok(())
         }
@@ -666,18 +669,18 @@ fn start(args: &[String]) -> Result<(), String> {
     }
     // the project's open ports as the person left them now; a continue reads them again, and the record says so
     let ports = match &project {
-        Some(p) => project_prefs::load(&home(), p)?.ports.filter(|p| p.any),
+        Some(p) => project_prefs::load(&home(), p)?.ports.filter(|p| p.any || p.servers),
         None => None,
     };
     s.put_setup(&id, &json!({
         "role_given": role_dir, "fingerprint": fingerprint, "agent": agent, "target": manifest.target,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
         "title": title,
-        "ports": ports.as_ref().map(|p| json!({"any": true, "opened": p.opened})),
+        "ports": ports.as_ref().map(|p| json!({"any": p.any, "servers": p.servers, "opened": p.opened})),
         "env": drive::started_env(),
     }))?;
-    if let Some(p) = &ports {
-        say(&ports_sentence(p.opened));
+    if let Some(said) = ports.as_ref().and_then(|p| chosen_sentence(&jaynes_core::run::Ports { any: p.any, servers: p.servers, opened: p.opened })) {
+        say(&said);
     }
     drive::sweep_engines(&home(), &s)?;
     drive::sweep_copies(&home(), &s)?;
@@ -694,20 +697,66 @@ fn ports_sentence(opened: u64) -> String {
     format!("this project's checks reach any local port of this machine: opened by you on {}", summary::utc(opened))
 }
 
+/// What a run whose project's tests may start their own test servers says about it, before it starts and when it is
+/// shown.
+fn servers_sentence(opened: u64) -> String {
+    format!("this project's tests may start their own test servers: allowed by you on {}", summary::utc(opened))
+}
+
+/// What the person's choice for a project's ports says, when they chose one.
+fn chosen_sentence(p: &jaynes_core::run::Ports) -> Option<String> {
+    if p.any {
+        Some(ports_sentence(p.opened))
+    } else if p.servers {
+        Some(servers_sentence(p.opened))
+    } else {
+        None
+    }
+}
+
 /// `jaynes project ports|open-ports|close-ports DIR`. Opening and closing are the person's, at a terminal: an
 /// agent's shell has none, and the agent's box cannot write the engine's home anyway.
 fn project_cmd(args: &[String]) -> Result<(), String> {
     let (Some(what), Some(dir)) = (args.first(), args.get(1)) else {
-        return Err("jaynes project ports|open-ports|close-ports DIR".into());
+        return Err("jaynes project ports|open-ports|test-servers|close-ports DIR".into());
     };
     let dir = std::fs::canonicalize(dir).map_err(|e| format!("{dir}: {e}"))?;
     let mut prefs = project_prefs::load(&home(), &dir)?;
     match what.as_str() {
         "ports" => {
-            match prefs.ports.as_ref().filter(|p| p.any) {
-                Some(p) => println!("{}", ports_sentence(p.opened)),
+            match prefs.ports.as_ref().and_then(|p| chosen_sentence(&jaynes_core::run::Ports { any: p.any, servers: p.servers, opened: p.opened })) {
+                Some(said) => println!("{said}"),
                 None => println!("this project's checks reach only the ports a run reserves for them (JAYNES_PORTS) and the ones a step declares"),
             }
+            Ok(())
+        }
+        "test-servers" => {
+            if let By::Agent { who } = who() {
+                return Err(format!("only the person lets a project's tests start their own test servers, at a terminal; {who} may not"));
+            }
+            if !cfg!(target_os = "macos") {
+                return Err("test servers are a choice of macOS's box; here `jaynes project open-ports` opens a project's ports".into());
+            }
+            let name = dir.display();
+            println!("Tests of {name} may start their own test servers, as when you run them yourself.");
+            println!("They still cannot reach your services or the Jaynes page.");
+            println!("Still open while the tests run:");
+            for line in listing::test_servers_still_open() {
+                println!("  · {line}");
+            }
+            print!("Allow this for {name}? [y/N] ");
+            std::io::Write::flush(&mut std::io::stdout()).map_err(|e| e.to_string())?;
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+            if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+                println!("Nothing changed.");
+                return Ok(());
+            }
+            let any = prefs.ports.as_ref().is_some_and(|p| p.any);
+            let opened = prefs.ports.as_ref().filter(|p| p.any).map(|p| p.opened).unwrap_or_else(store::now);
+            prefs.ports = Some(project_prefs::Ports { any, servers: true, opened });
+            project_prefs::save(&home(), &dir, &prefs)?;
+            println!("Done. Go back to the run and press Continue.");
             Ok(())
         }
         "open-ports" | "close-ports" => {
@@ -715,16 +764,18 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
                 return Err(format!("only the person opens or closes a project's local ports, at a terminal; {who} may not"));
             }
             let open = what == "open-ports";
-            prefs.ports = Some(project_prefs::Ports { any: open, opened: if open { store::now() } else { 0 } });
+            // closing closes both choices, the open ports and the test servers: one way to close
+            let servers = open && prefs.ports.as_ref().is_some_and(|p| p.servers);
+            prefs.ports = Some(project_prefs::Ports { any: open, servers, opened: if open { store::now() } else { 0 } });
             project_prefs::save(&home(), &dir, &prefs)?;
             println!("{}", if open {
                 format!("{}; a run started from now on, and a blocked one when you continue it, lets its checks reach every service listening here, the Jaynes page's port among them. `jaynes project close-ports {}` closes them again", ports_sentence(store::now()), dir.display())
             } else {
-                "closed: this project's checks reach only the ports a run reserves for them and the ones a step declares".to_string()
+                "closed: this project's checks reach only the ports a run reserves for them and the ones a step declares, and its tests start no test servers of their own".to_string()
             });
             Ok(())
         }
-        other => Err(format!("jaynes project ports|open-ports|close-ports DIR, not {other}")),
+        other => Err(format!("jaynes project ports|open-ports|test-servers|close-ports DIR, not {other}")),
     }
 }
 

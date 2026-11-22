@@ -657,6 +657,7 @@ const TRIED_PORT: &str = " It tried local port ";
 const OWN_CHOOSING: &str = "0, a port of its own choosing";
 const REACH_ONLY: &str = " A check's commands bind and reach only the ports in JAYNES_PORTS (";
 const OPEN_DID_NOT_HELP: &str = " The person's open ports did not help here.";
+const SERVERS_DID_NOT_HELP: &str = " The project's test servers did not help here.";
 const OPEN_PORTS: &str = "`jaynes project open-ports ";
 
 /// A blocked run's words, with what its agent said last at the step it stopped at; None when it is not blocked.
@@ -790,11 +791,12 @@ struct Boxed<'a> {
     given: Vec<u16>,
     project: Option<&'a str>,
     open_did_not_help: bool,
+    servers_did_not_help: bool,
 }
 
 fn boxed(said: &str) -> Option<Boxed<'_>> {
     let rest = said.strip_prefix(BOX_REFUSED)?;
-    let end = [TRIED_PORT, REACH_ONLY, OPEN_DID_NOT_HELP].iter().filter_map(|m| rest.find(m)).min().unwrap_or(rest.len());
+    let end = [TRIED_PORT, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP].iter().filter_map(|m| rest.find(m)).min().unwrap_or(rest.len());
     let (lines, tail) = rest.split_at(end);
     let numbers = |t: &str| t.split(", ").filter_map(|p| p.trim().parse().ok()).collect::<Vec<u16>>();
     Some(Boxed {
@@ -803,6 +805,7 @@ fn boxed(said: &str) -> Option<Boxed<'_>> {
         given: tail.split_once(REACH_ONLY).and_then(|(_, t)| t.split_once(')')).map(|(g, _)| numbers(g)).unwrap_or_default(),
         project: tail.split_once(OPEN_PORTS).and_then(|(_, t)| t.split_once('`')).map(|(p, _)| p),
         open_did_not_help: tail.contains(OPEN_DID_NOT_HELP),
+        servers_did_not_help: tail.contains(SERVERS_DID_NOT_HELP),
     })
 }
 
@@ -843,7 +846,18 @@ fn not_given_said(named: &str) -> String {
 /// Whether `jaynes project test-servers` is in this Jaynes: the rd-engineer's window for a test server on a port the
 /// system picks (macOS's box). Until it is, such a port gets the project's open ports, since a card never says to
 /// run a command that does not exist; the commit that brings the command turns this on.
-const TEST_SERVERS: bool = false;
+const TEST_SERVERS: bool = true;
+
+/// What stays open while a project's tests run with their own test servers, in the person's words: on the card and
+/// where the person chooses (`jaynes project test-servers`), the same.
+pub fn test_servers_still_open() -> Vec<String> {
+    let mac = this_machine();
+    vec![
+        format!("A test server listens on every network of {mac}, so another machine on your network could reach it."),
+        format!("A service that starts on {mac} while the tests run may get a port they can reach."),
+        format!("A test server may take the port of a service of {mac} that is not running, and what then connects to that service reaches the test server instead."),
+    ]
+}
 
 /// The way out for a command the box kept from a local port: the project's test servers (`own`, a port the system
 /// picks) or its open ports.
@@ -854,10 +868,7 @@ fn port_way(project: &str, own: bool) -> Way {
             says: "Let this project's tests start their own test servers, then Continue.".into(),
             then: Some("As when you run the tests yourself, but they still cannot reach your services or the Jaynes page.".into()),
             command: Some(format!("jaynes project test-servers {}", shell_word(project))),
-            still_open: vec![
-                format!("A test server listens on every network of {mac}, so another machine on your network could reach it."),
-                format!("A service that starts on {mac} while the tests run may get a port they can reach."),
-            ],
+            still_open: test_servers_still_open(),
         }
     } else {
         Way {
@@ -882,7 +893,7 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
             let mac = this_machine();
             // one way out, the one that serves what the command tried, never two: a port the system picks gets the
             // project's test servers (macOS's box, the rd-engineer's), a fixed one the project's open ports
-            let own = fixed.is_empty() && cfg!(target_os = "macos") && TEST_SERVERS;
+            let own = fixed.is_empty() && cfg!(target_os = "macos") && TEST_SERVERS && !b.servers_did_not_help;
             said.why = if fixed.is_empty() {
                 "The project's tests start a test server on a port the system picks, and the box Jaynes checks in allows only its own ports.".into()
             } else {
@@ -909,6 +920,9 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
             details.extend(once(b.refused.iter().map(|l| go_annotation_off(l))));
             if b.open_did_not_help {
                 details.push(OPEN_DID_NOT_HELP.trim().into());
+            }
+            if b.servers_did_not_help {
+                details.push(SERVERS_DID_NOT_HELP.trim().into());
             }
         }
         None => match head_of(inner) {
@@ -1160,6 +1174,7 @@ mod blocked_tests {
             still_open: vec![
                 format!("A test server listens on every network of {}, so another machine on your network could reach it.", machine()),
                 format!("A service that starts on {} while the tests run may get a port they can reach.", machine()),
+                format!("A test server may take the port of a service of {} that is not running, and what then connects to that service reaches the test server instead.", machine()),
             ],
         });
         assert_eq!(port_way("/Users/x/Projects/app", false), open_ports("/Users/x/Projects/app"));
@@ -1296,7 +1311,7 @@ mod blocked_tests {
     fn the_words_the_card_reads_are_the_ones_the_box_check_writes() {
         // jaynes_menu.py says why the box kept a check from judging; the card finds its parts by these words
         let menu = include_str!("../../../python/jaynes_menu.py");
-        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, OPEN_PORTS] {
+        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS] {
             assert!(menu.contains(words.trim_start()), "jaynes_menu.py no longer says {words:?}");
         }
     }

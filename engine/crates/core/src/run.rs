@@ -63,11 +63,13 @@ pub struct Run {
     pub ports: Option<Ports>,
 }
 
-/// The project's ports as the person chose them: every local port, opened at `opened` (seconds since 1970), or only
-/// the ones a run reserves and a step declares.
+/// The project's ports as the person chose them: every local port (`any`), test servers on ports the system picks
+/// (`servers`), opened at `opened` (seconds since 1970), or only the ones a run reserves and a step declares.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ports {
     pub any: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub servers: bool,
     #[serde(default)]
     pub opened: u64,
 }
@@ -646,7 +648,7 @@ impl Run {
                     s.unjudged = true;
                 }
             }
-            Event::PortsChosen { any, opened } => self.ports = Some(Ports { any: *any, opened: *opened }),
+            Event::PortsChosen { any, servers, opened } => self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened }),
             Event::Halted { .. } => self.halted = true,
             Event::Resumed { .. } => self.halted = false,
             Event::DeliveryAsked { digest } => {

@@ -187,11 +187,21 @@ fn nothing_but_the_person_s_continue_has_the_checks_judge_again() {
 fn the_project_s_ports_opened_or_closed_after_the_start_are_recorded_with_when() {
     let (mut run, _) = checking(Some("t1"));
     assert_eq!(run.ports, None, "as the run's setup says");
-    let (events, _) = feed(&mut run, Input::PortsChosen { any: true, opened: 1_700_000_000 });
-    assert!(matches!(events.as_slice(), [Event::PortsChosen { any: true, opened: 1_700_000_000 }]), "{events:?}");
-    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: true, opened: 1_700_000_000 }));
-    assert!(decide(Some(&run), &Input::PortsChosen { any: true, opened: 1_700_000_000 }).is_err(), "the same choice again");
-    let (events, _) = feed(&mut run, Input::PortsChosen { any: false, opened: 0 });
+    let (events, _) = feed(&mut run, Input::PortsChosen { any: true, servers: false, opened: 1_700_000_000 });
+    assert!(matches!(events.as_slice(), [Event::PortsChosen { any: true, servers: false, opened: 1_700_000_000 }]), "{events:?}");
+    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: true, servers: false, opened: 1_700_000_000 }));
+    assert!(decide(Some(&run), &Input::PortsChosen { any: true, servers: false, opened: 1_700_000_000 }).is_err(), "the same choice again");
+    let (events, _) = feed(&mut run, Input::PortsChosen { any: false, servers: false, opened: 0 });
     assert!(matches!(events.as_slice(), [Event::PortsChosen { any: false, .. }]), "{events:?}");
-    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: false, opened: 0 }));
+    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: false, servers: false, opened: 0 }));
+    // the test servers are a choice of their own, and closing takes them out too
+    let (events, _) = feed(&mut run, Input::PortsChosen { any: false, servers: true, opened: 1_700_000_100 });
+    assert!(matches!(events.as_slice(), [Event::PortsChosen { any: false, servers: true, opened: 1_700_000_100 }]), "{events:?}");
+    assert_eq!(run.ports.map(|p| p.servers), Some(true));
+    let (_, _) = feed(&mut run, Input::PortsChosen { any: false, servers: false, opened: 0 });
+    assert_eq!(run.ports, Some(jaynes_core::run::Ports { any: false, servers: false, opened: 0 }));
+    // a record of before the test servers reads as it was, and an event without them is written as before
+    let old: Event = serde_json::from_str(r#"{"type":"PortsChosen","any":true,"opened":5}"#).expect("old event");
+    assert_eq!(old, Event::PortsChosen { any: true, servers: false, opened: 5 });
+    assert!(!serde_json::to_string(&old).expect("json").contains("servers"));
 }

@@ -2279,12 +2279,13 @@ impl TomlRole {
                 Err(b) => b,
                 Ok((_, x)) => Body::Prompt { text: fill(&x.instructions, &request, &given), schema: x.schema.clone() },
             },
-            Call::Execute { step, request, round, attempt, given, previous, answers, key, project, source, any_port } => match step_of(&step) {
+            Call::Execute { step, request, round, attempt, given, previous, answers, key, project, source, any_port, test_servers } => match step_of(&step) {
                 Err(b) => b,
                 Ok((d, x)) => {
                     let call = json!({"step": step, "request": request, "round": round, "attempt": attempt, "given": given,
                                       "previous": previous, "answers": answers, "key": key, "project": project, "source": source,
-                                      "reach": reached(d), "any_port": any_port});
+                                      "reach": reached(d), "any_port": any_port,
+                                      "test_servers": test_servers});
                     match (&x.uses, &x.script) {
                         (Some((uses, with)), _) => menu(library, &self.dir, json!({"kind": "step", "use": uses, "with": with, "call": call})),
                         // the role's own script, run in the box with what its step may reach
@@ -2298,7 +2299,7 @@ impl TomlRole {
                     }
                 }
             },
-            Call::Check { step, check, request, output, given, project, source, start, any_port } => match step_of(&step) {
+            Call::Check { step, check, request, output, given, project, source, start, any_port, test_servers } => match step_of(&step) {
                 Err(b) => b,
                 Ok((_, x)) => {
                     // where the project stood when the run began, as the engine gives it: a check of the menu compares
@@ -2306,7 +2307,7 @@ impl TomlRole {
                     let start = start.map(|s| json!({"git": s.git, "commit": s.commit}));
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
                                       "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port,
-                                      "start": start});
+                                      "test_servers": test_servers, "start": start});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),

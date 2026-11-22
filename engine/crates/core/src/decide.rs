@@ -189,15 +189,15 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.advance();
         }
-        Input::PortsChosen { any, opened } => {
+        Input::PortsChosen { any, servers, opened } => {
             if c.run.finished() {
                 return refuse("the run is finished");
             }
-            let now = crate::run::Ports { any: *any, opened: if *any { *opened } else { 0 } };
+            let now = crate::run::Ports { any: *any, servers: *servers, opened: if *any || *servers { *opened } else { 0 } };
             if c.run.ports == Some(now) {
                 return refuse("the project's ports are already so for this run");
             }
-            c.emit(Event::PortsChosen { any: now.any, opened: now.opened });
+            c.emit(Event::PortsChosen { any: now.any, servers: now.servers, opened: now.opened });
         }
         Input::DeliveryEnded { digest, ok, reference } => {
             if c.run.delivering.as_ref() != Some(digest) {

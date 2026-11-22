@@ -284,10 +284,13 @@ pub enum Event {
         attempt: u32,
         fix: u32,
     },
-    /// The person opened the project's checks to every local port (`any`, at `opened`) or closed them again, after
-    /// the run's setup; the setup stays as it was, and from here the run's commands reach what this says.
+    /// The person opened the project's checks to every local port (`any`, at `opened`), let its tests start their
+    /// own test servers (`servers`), or closed them again, after the run's setup; the setup stays as it was, and from
+    /// here the run's commands reach what this says.
     PortsChosen {
         any: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        servers: bool,
         #[serde(default)]
         opened: u64,
     },

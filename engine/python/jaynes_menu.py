@@ -66,11 +66,12 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
         if call.get("project"):
             ran = box.run(Path(call["project"]), command, source=_source(call), timeout=timeout, stdin=stdin, readable=readable,
                          local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
-                         over=over)
+                         test_servers=call.get("test_servers") is True, over=over)
         else:
             with tempfile.TemporaryDirectory(prefix="jaynes-empty-") as empty:
                 ran = box.run(Path(empty), command, timeout=timeout, stdin=stdin, readable=readable,
-                         local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True)
+                         local_ports=(call.get("reach") or {}).get("local_ports") or (), any_port=call.get("any_port") is True,
+                         test_servers=call.get("test_servers") is True)
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
@@ -78,7 +79,10 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
         tried = (f" It tried local port {', '.join('0, a port of its own choosing' if p == '0' else p for p in ports)}.")\
             if ports else ""
         given = ", ".join(map(str, ran.reserved))
-        ways = (" The person's open ports did not help here." if ran.any_port else
+        # the project's test servers serve a port the system picks: one refused with them on says so, and the card
+        # then offers what they did not give
+        servers = " The project's test servers did not help here." if ran.test_servers and "0" in ports else ""
+        ways = (" The person's open ports did not help here." if ran.any_port else servers +
                 f" A check's commands bind and reach only the ports in JAYNES_PORTS ({given}) and the ones the check"
                 " names in its local_ports, never its step's. Two ways out, the first the better: (1) the suite takes its"
                 " test servers' ports from JAYNES_PORTS, and the box stays closed; (2) the person opens this project"
@@ -86,10 +90,11 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
                 " service listening on this machine, the Jaynes page among them.")
         return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
                        + "; ".join(box.refused(ran)[:3]) + tried + ways)
-    if ran.any_port and ran.code != 0:
+    if (ran.any_port or ran.test_servers) and ran.code != 0:
         # a failure of a check that ran open says so, beside what it says about the project
-        ran = box.Ran(ran.code, ran.output + "\n(this check ran with every local port open, by the person's choice"
-                      " for this project)", ran.printed, ran.reserved, ran.local_ports, ran.any_port)
+        how = "every local port open" if ran.any_port else "the project's own test servers let"
+        ran = box.Ran(ran.code, ran.output + f"\n(this check ran with {how}, by the person's choice for this project)",
+                      ran.printed, ran.reserved, ran.local_ports, ran.any_port, ran.test_servers)
     return ran
 
 

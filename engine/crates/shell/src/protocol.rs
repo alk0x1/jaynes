@@ -74,6 +74,11 @@ pub enum Call {
         /// out when not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         any_port: bool,
+        /// The person let this project's tests start their own test servers (`jaynes project test-servers`), as the
+        /// run's setup recorded it or the person chose since: macOS's box then lets its commands serve on a port the
+        /// system picks, and reach the window of ports the system gives next. Left out when not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        test_servers: bool,
     },
     Check {
         step: String,
@@ -97,6 +102,11 @@ pub enum Call {
         /// out when not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         any_port: bool,
+        /// The person let this project's tests start their own test servers (`jaynes project test-servers`), as the
+        /// run's setup recorded it or the person chose since: macOS's box then lets its commands serve on a port the
+        /// system picks, and reach the window of ports the system gives next. Left out when not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        test_servers: bool,
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },

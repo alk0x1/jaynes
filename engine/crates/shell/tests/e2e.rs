@@ -21,9 +21,11 @@ fn python() -> String {
 /// here and its program's side stays open here too, so what the program wrote before it ended is read whole and never
 /// thrown away with the terminal (a test once read an empty `open-ports` on CI); the program's end is waited for, not
 /// the terminal's, so a process it left holding the terminal never keeps the test waiting. When no terminal can be
-/// had, the helper says why on its output, where the test's message shows it.
+/// had, the helper says why on its output, where the test's message shows it. What TTY_TYPED holds is typed at the
+/// terminal, as the person answers a question.
 const TTY: &str = r#"
 import fcntl, os, select, sys, termios, time
+typed = os.environ.pop("TTY_TYPED", "")
 for tried in range(10):
     try:
         master, slave = os.openpty()
@@ -45,6 +47,8 @@ if pid == 0:
         os.close(slave)
     os.execvp(sys.argv[1], sys.argv[1:])
 # the slave stays open here too, so what the program wrote before it ended is never thrown away with the terminal
+if typed:
+    os.write(master, typed.encode())
 status = None
 while True:
     ready, _, _ = select.select([master], [], [], 0.05)
@@ -3559,13 +3563,137 @@ if b"hi" not in open("greeting.txt", "rb").read():
 
 /// `jaynes ARGS` at a terminal, as the person types it, with `path` as the PATH when one is given.
 fn at_terminal(s: &Scratch, args: &[&str], path: Option<&str>) -> String {
+    typed_at_terminal(s, args, path, "")
+}
+
+/// `jaynes ARGS` at a terminal, the person typing `typed` (an answer to its question).
+fn typed_at_terminal(s: &Scratch, args: &[&str], path: Option<&str>, typed: &str) -> String {
     let mut c = tty();
-    c.arg(BIN).args(args).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "");
+    c.arg(BIN).args(args).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("TTY_TYPED", typed);
     if let Some(p) = path {
         c.env("PATH", p);
     }
     let out = c.output().expect("terminal");
     format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box serves on port 0 itself)")]
+fn the_person_s_test_servers_let_a_check_serve_on_a_port_the_system_picks_and_reach_nothing_else() {
+    let s = scratch("test-servers");
+    let project = s.project.to_str().expect("path");
+    // a program without a terminal is an agent: it may not allow them
+    let (ok, out) = engine(&s, &["project", "test-servers", project]);
+    assert!(!ok && out.contains("only the person"), "{out}");
+    // the person is told what stays open before it holds, and a no keeps it closed
+    let said = typed_at_terminal(&s, &["project", "test-servers", project], None, "n\n");
+    for words in ["may start their own test servers, as when you run them yourself.", "They still cannot reach your services or the Jaynes page.",
+        "Still open while the tests run:", "A test server listens on every network of this Mac, so another machine on your network could reach it.",
+        "A service that starts on this Mac while the tests run may get a port they can reach.", "? [y/N]"] {
+        assert!(said.contains(words), "{words}: {said}");
+    }
+    assert!(!said.contains("Done."), "{said}");
+    let (_, ports) = engine(&s, &["project", "ports", project]);
+    assert!(ports.contains("reach only the ports a run reserves"), "{ports}");
+    let said = typed_at_terminal(&s, &["project", "test-servers", project], None, "y\n");
+    assert!(said.contains("Done. Go back to the run and press Continue."), "{said}");
+    let (_, ports) = engine(&s, &["project", "ports", project]);
+    assert!(ports.contains("this project's tests may start their own test servers: allowed by you on"), "{ports}");
+
+    // a service of the person's, on a port of its own outside the system's (as a database's), and the page's port
+    let service = (20_000..30_000).find_map(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok()).expect("a free port");
+    let service_port = service.local_addr().expect("addr").port();
+    let role = s.home.parent().expect("base").join("servers");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "servers"
+version = "1.0.0"
+
+[[step]]
+name = "look"
+reach = { project = "read" }
+instructions = "Look at {{request}}."
+checks = [{ script = "checks/servers.py", about = "its own test servers, and nothing else" }]
+"#).expect("write");
+    std::fs::write(role.join("checks/servers.py"), r#"#!/usr/bin/env python3
+import json, socket, sys
+said = json.load(sys.stdin)["output"]
+# as Go's httptest.NewServer: [::1]:0 first, then 127.0.0.1:0, each served and reached
+for family, host in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
+    mine = socket.socket(family)
+    mine.bind((host, 0))
+    mine.listen()
+    socket.create_connection((host, mine.getsockname()[1]), timeout=3).close()
+# the person's service stays out of reach
+try:
+    socket.create_connection(("127.0.0.1", said["service"]), timeout=3).close()
+    print("reached the person's service")
+    sys.exit(1)
+except OSError:
+    pass
+# and the page's port is never taken, the page up or not
+for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+    page = socket.socket(family)
+    page.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        page.bind((host, 8750))
+        page.listen()
+        print(f"took the page's port on {host}")
+        sys.exit(1)
+    except OSError:
+        pass
+"#).expect("write");
+    let script = role.join("checks/servers.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    let call = |servers: Option<bool>| {
+        let mut c = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "look", "check": "servers", "request": "r",
+            "output": {"home": s.home, "service": service_port}, "given": [], "project": s.project, "source": s.project});
+        if let Some(on) = servers {
+            c["test_servers"] = serde_json::json!(on);
+        }
+        c
+    };
+    // the box opens the window on the engine's word in the call, and on nothing else
+    let open = serve_check(&s, &role, call(Some(true)), &[]);
+    assert_eq!(open["verdict"], "pass", "{open}");
+    for said in [call(None), call(Some(false))] {
+        let shut = serve_check(&s, &role, said, &[]);
+        assert_eq!(shut["verdict"], "blocked", "{shut}");
+    }
+    drop(service);
+    // the person closes both choices with one command
+    let closed = at_terminal(&s, &["project", "close-ports", project], None);
+    assert!(closed.contains("closed"), "{closed}");
+    let (_, ports) = engine(&s, &["project", "ports", project]);
+    assert!(ports.contains("reach only the ports a run reserves"), "{ports}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box serves on port 0 itself)")]
+fn continue_after_the_person_allows_test_servers_checks_the_same_change_again_and_delivers() {
+    let s = scratch("servers-continue");
+    let role = port_zero_role(&s, "servers-role", None);
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let out = jaynes()
+        .args(["start", "--run", "servers", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .output().expect("start");
+    let e = events(&s, "servers");
+    assert!(e.iter().any(|x| x["type"] == "Blocked" && x["fault"] == "jaynes"), "{}\n{:?}", String::from_utf8_lossy(&out.stdout), types(&e));
+    // what the card reads to offer the test servers, the way out that serves a port the system picks
+    let blocked = e.iter().rev().find(|x| x["type"] == "Blocked").expect("blocked");
+    assert!(blocked["reason"].as_str().unwrap_or("").contains("It tried local port 0, a port of its own choosing."), "{blocked}");
+    let said = typed_at_terminal(&s, &["project", "test-servers", s.project.to_str().expect("path")], None, "y\n");
+    assert!(said.contains("Done."), "{said}");
+    let said = at_terminal(&s, &["continue", "servers"], None);
+    let e = events(&s, "servers");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+    // the agent did not work again: one Execute of change
+    assert_eq!(e.iter().filter(|x| x["type"] == "AttemptStarted").count(), 1, "{:?}", types(&e));
 }
 
 #[test]
