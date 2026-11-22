@@ -2549,7 +2549,7 @@ mod tests {
                 "steps": [{"name": "change", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
             }))
             .expect("manifest");
-            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
             let mut events = decide(None, &start).expect("start").events;
             events.push(match run {
                 "asks" => Event::QuestionOpened {
