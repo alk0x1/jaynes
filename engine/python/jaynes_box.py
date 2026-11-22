@@ -1722,6 +1722,21 @@ def past_window(ran: Ran) -> list[int]:
     return [int(p) for p in ports_refused(ran) if p != "0" and first <= int(p) <= last and int(p) not in window]
 
 
+# a (host, port) as Python prints an address
+_ADDRESS = re.compile(r"\(\s*['\"](?:localhost|[\d.]+|::1?|)['\"]\s*,\s*(\d{1,5})\s*\)")
+# where pytest begins a frame of a traceback: a line of "_ _ _" between frames, or the test's own "____ name ____"
+_FRAME_START = re.compile(r"^(?:_ ){3,}_?\s*$|^_{3,} ")
+
+
+def _frame(lines: list[str], i: int) -> list[str]:
+    """The lines of the traceback's frame that holds line ``i``, from its start (``_FRAME_START``), at most 80 back."""
+    start = max(0, i - 80)
+    for j in range(i - 1, start - 1, -1):
+        if _FRAME_START.match(lines[j]):
+            return lines[j + 1:i]
+    return lines[start:i]
+
+
 def ports_refused(ran: Ran) -> list[str]:
     """The local ports a refused command names, outside what it was given: ``0`` for a server on a port of its own
     choosing, or one whose refused bind names no port. Read from each refusal and the few lines before it, where a
@@ -1734,8 +1749,15 @@ def ports_refused(ran: Ran) -> list[str]:
             continue
         near = "\n".join(lines[max(0, i - 6):i + 1])
         ports = re.findall(r"(?:localhost|[\d.]+|\[[0-9a-f:]*\]|\*):(\d{1,5})\b", line)
-        ports = ports or re.findall(r"\(\s*['\"](?:localhost|[\d.]+|::1?|)['\"]\s*,\s*(\d{1,5})\s*\)", near)
-        if not ports and re.search(r"\b(listen|bind)\b", near, re.IGNORECASE):
+        ports = ports or re.findall(_ADDRESS, near)
+        # the call refused: the line pytest marks with ">", else the source line printed just before
+        marked = [l for l in lines[max(0, i - 6):i] if l.lstrip().startswith(">")]
+        call = marked[-1] if marked else (lines[i - 1] if i else "")
+        if not ports and re.search(r"\bconnect\w*\s*\(", call):
+            # a connect whose address is a name: pytest prints the frame's arguments at its head (the estoque's
+            # create_connection, 22/11), and a bind in the library's source above it is no bind of port 0
+            ports = re.findall(r"^\s*\w+ = " + _ADDRESS.pattern, "\n".join(_frame(lines, i)), re.MULTILINE)
+        elif not ports and re.search(r"\b(listen|bind)\b", near, re.IGNORECASE):
             ports = ["0"]
         for port in ports:
             if int(port) not in allowed and port not in named:
