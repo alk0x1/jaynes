@@ -111,7 +111,8 @@ fn asked() -> (Run, Question) {
         role_fingerprint: Digest("f".into()),
         agent: "claude:m1".into(),
         raise: None,
-        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false,
+        starter: None,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");
@@ -286,7 +287,8 @@ fn asked_one(label: &str) -> (Run, Question) {
         role_fingerprint: Digest("f".into()),
         agent: "claude:m1".into(),
         raise: None,
-        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false,
+        starter: None,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");

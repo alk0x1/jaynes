@@ -711,7 +711,7 @@ impl Page {
         if !std::path::Path::new(&project).join(".git").exists() {
             return Err(format!("{project} is not a git repository"));
         }
-        let run = drive::launch(&self.home, &self.exe, role, &project, request, body["title"].as_str(), body["risk"].as_str() == Some("high"), true)?;
+        let run = drive::launch(&self.home, &self.exe, role, &project, request, body["title"].as_str(), body["risk"].as_str() == Some("high"), true, None)?;
         Ok(json!({"ok": true, "run": run}))
     }
 
@@ -740,8 +740,8 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
         let input = match body["action"].as_str().unwrap_or("") {
             "halt" => Input::Halt { by },
             "resume" => Input::Resume { by },
-            "continue" => Input::Continue { by },
-            "abandon" => Input::Abandon { by },
+            "continue" => Input::Continue { by, starter: None },
+            "abandon" => Input::Abandon { by, starter: None },
             "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
             "raise-ceiling" => {
                 let c = run.ceiling;
@@ -2459,7 +2459,7 @@ mod tests {
             "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
         }))
         .expect("manifest");
-        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         let question = Question {
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
@@ -2483,7 +2483,7 @@ mod tests {
                 "steps": [{"name": "plan", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
             }))
             .expect("manifest");
-            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
             let mut events = decide(None, &start).expect("start").events;
             let question = Question {
                 id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
@@ -2512,7 +2512,7 @@ mod tests {
             "steps": [{"name": "fix", "executor": "agent"}],
         }))
         .expect("manifest");
-        let start = Input::Start { run: "m".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "m".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         events.push(Event::QuestionOpened {
             question: Question {
@@ -2549,7 +2549,7 @@ mod tests {
             "steps": [{"name": "reproduce", "executor": "agent"}, {"name": "found", "executor": "agent", "needs": ["reproduce"]}, {"name": "fix", "executor": "agent", "needs": ["found"]}],
         }))
         .expect("manifest");
-        let start = Input::Start { run: "b".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "b".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         events.push(Event::QuestionOpened {
             question: Question {
@@ -2592,7 +2592,7 @@ mod tests {
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
         for (id, project) in [("a", "/w/tidepool"), ("b", "/w/harbor-api")] {
             let manifest: Manifest = serde_json::from_value(json!({"role": "fix-bug", "version": "4.0.0", "protocol": 1, "steps": [{"name": "fix", "executor": "agent"}]})).expect("manifest");
-            let start = Input::Start { run: id.into(), request: request.into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+            let start = Input::Start { run: id.into(), request: request.into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
             store.append(id, &decide(None, &start).expect("start").events).expect("append");
             store.put_setup(id, &json!({"project": project})).expect("setup");
         }
@@ -2668,7 +2668,7 @@ mod tests {
             steps.push(json!({"name": "review", "executor": "agent", "from_risk": "high"}));
         }
         let manifest: jaynes_core::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": steps})).expect("manifest");
-        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         Run::fold(&decide(None, &start).expect("start").events).expect("run")
     }
 
@@ -2744,7 +2744,7 @@ mod tests {
     fn a_halted_run_s_step_under_way_is_drawn_halted_not_running() {
         use jaynes_core::run::Status;
         let manifest: jaynes_core::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "plan", "executor": "agent"}]})).expect("manifest");
-        let start = Input::Start { run: "h".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "h".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut r = Run::fold(&decide(None, &start).expect("start").events).expect("run");
         for status in [Status::Running { attempt: 1, fix: 0 }, Status::Checking { attempt: 1, fix: 0 }, Status::Probing] {
             r.steps[0].status = status;

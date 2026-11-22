@@ -99,7 +99,7 @@ fn with_jaynes_off_the_mcp_server_offers_no_tool_and_says_why() {
     // unset, empty or 0, the tools are there
     for off in [None, Some(""), Some("0"), Some("false")] {
         let (_, list, call) = mcp(&s.0, off);
-        assert_eq!(list["result"]["tools"].as_array().map(Vec::len), Some(7), "{off:?}");
+        assert_eq!(list["result"]["tools"].as_array().map(Vec::len), Some(9), "{off:?}");
         assert_eq!(call["result"]["isError"], false, "{off:?}: {call}");
     }
 }

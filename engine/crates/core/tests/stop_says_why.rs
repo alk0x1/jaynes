@@ -58,6 +58,7 @@ fn asked(ask: &str, changed: Vec<Changed>) -> Option<String> {
         task: None,
         arm: None,
         never_merge: false,
+        starter: None,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");

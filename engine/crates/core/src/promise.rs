@@ -482,7 +482,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
         });
     }
     if r.blocked() && node.continues < CONTINUES {
-        out.push(Move { input: Input::Continue { by: By::Person }, says: "you continue".into(), trouble: false, sends_back: None, answers: None });
+        out.push(Move { input: Input::Continue { by: By::Person, starter: None }, says: "you continue".into(), trouble: false, sends_back: None, answers: None });
     }
     out
 }
@@ -686,7 +686,7 @@ fn starts(m: &Manifest) -> Vec<(Input, String)> {
         for raise in [None, Some(Risk::High)] {
             let says = format!("{} risk{note}", if raise.is_some() { "high" } else { "low" });
             out.push((
-                Input::Start { run: id.clone(), request: "a request".into(), manifest: m.clone(), role_fingerprint: fingerprint.clone(), agent: "agent".into(), raise, attention: attention.clone(), task: None, arm: None, never_merge: false },
+                Input::Start { run: id.clone(), request: "a request".into(), manifest: m.clone(), role_fingerprint: fingerprint.clone(), agent: "agent".into(), raise, attention: attention.clone(), task: None, arm: None, never_merge: false, starter: None },
                 says,
             ));
         }

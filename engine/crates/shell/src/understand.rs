@@ -284,7 +284,7 @@ mod tests {
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
-        let start = jaynes_core::Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = jaynes_core::Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let run = Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run");
         let sentence = "With one option there is nothing to choose among: keep is “go with it”; change is “not yet”: their words go to the agent as a question or a change, and nothing is chosen; drop is “not this one”. A question or a doubt is never keep.";
         let words = "entender onde o python entra antes de decidir";

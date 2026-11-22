@@ -111,6 +111,7 @@ fn started() -> (Run, AgentTurn) {
         task: None,
         arm: None,
         never_merge: false,
+        starter: None,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("run");

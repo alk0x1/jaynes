@@ -153,6 +153,11 @@ fn with_env(args: &[String], kept: &std::collections::BTreeMap<String, String>) 
     again.exec()
 }
 
+/// The agent's process an input comes from, when an agent sends it: the core matches it with the run's starter.
+fn starter_of(by: &By) -> Option<String> {
+    (!by.person()).then(jaynes_shell::starter::of_this_process).flatten()
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let Some(cmd) = args.first().map(String::as_str) else {
         println!("{USAGE}");
@@ -284,7 +289,13 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut s = store()?;
             let setup = Setup::load(&s, &home(), id)?;
             let state = s.state(id)?.ok_or("no such run")?;
-            let input = if state.blocked() { Input::Continue { by: who() } } else { Input::Recovered };
+            let input = if state.blocked() {
+                let by = who();
+                let starter = starter_of(&by);
+                Input::Continue { by, starter }
+            } else {
+                Input::Recovered
+            };
             let mut d = Driver::take(&mut s, setup)?;
             let first = if matches!(input, Input::Continue { .. }) {
                 d.drive(Input::Recovered)?;
@@ -321,7 +332,11 @@ fn run(args: &[String]) -> Result<(), String> {
             let input = match cmd {
                 "halt" => Input::Halt { by: who() },
                 "resume" => Input::Resume { by: who() },
-                "abandon" => Input::Abandon { by: who() },
+                "abandon" => {
+                    let by = who();
+                    let starter = starter_of(&by);
+                    Input::Abandon { by, starter }
+                }
                 _ => {
                     if rest.get(1).map(String::as_str) == Some("high") {
                         Input::RaiseRisk { to: Risk::High, by: who() }
@@ -608,6 +623,14 @@ fn start(args: &[String]) -> Result<(), String> {
     let task = label(args, "--task")?;
     let arm = label(args, "--arm")?;
     let never_merge = args.iter().any(|a| a == "--never-merge");
+    // the agent above this start, unless the person starts it at a terminal; one started for the page or an agent
+    // through the plugin says it (none for the page's)
+    let starter = match flag(args, "--starter").as_deref() {
+        Some("none") => None,
+        Some(given) => Some(given.to_string()),
+        None if std::io::stdin().is_terminal() => None,
+        None => jaynes_shell::starter::of_this_process(),
+    };
     // the short name the run is shown by, kept as the start gave it, cut at a word past 40
     let title = flag(args, "--title").map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).map(|t| listing::run_title(Some(&t), ""));
     let id = flag(args, "--run").unwrap_or_else(|| {
@@ -687,7 +710,7 @@ fn start(args: &[String]) -> Result<(), String> {
     let setup = Setup::load(&s, &home(), &id)?;
     let mut d = Driver::take(&mut s, setup)?;
     say(&format!("run {id}: what needs the person is on the page, {}", install::ensure_page(&home())));
-    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm, never_merge })?;
+    let end = d.drive(Input::Start { run: id.clone(), request, manifest, role_fingerprint: fingerprint, agent, raise, attention, task, arm, never_merge, starter })?;
     print_state(&end);
     Ok(())
 }
@@ -907,7 +930,8 @@ fn phase(p: &Phase) -> String {
 
 fn print_state(r: &jaynes_core::Run) {
     println!("run {} — {} {} — {} risk", r.id, r.manifest.role, r.manifest.version, r.risk.word());
-    println!("{}{}", phase(&r.phase), if r.halted { " (halted)" } else { "" });
+    let aside = " (abandoned by the agent that started it: its work is kept; resume brings it back, abandon ends it)";
+    println!("{}{}", phase(&r.phase), if r.set_aside.is_some() { aside } else if r.halted { " (halted)" } else { "" });
     println!(
         "spent {} of {} s, {} of {} tokens ({} read from cache)",
         r.spent.seconds, r.ceiling.seconds, r.spent.tokens, r.ceiling.tokens, r.spent.cached

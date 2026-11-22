@@ -169,6 +169,7 @@ mod tests {
             run: format!("{PLANTED}-run"), request: format!("{PLANTED} the request /Users/someone/{PLANTED}/path"), manifest,
             role_fingerprint: Digest("f".into()), agent: format!("command:cat /{PLANTED}/x"), raise: None, attention: Default::default(),
             task: task.map(str::to_string), arm: arm.map(str::to_string), never_merge: false,
+            starter: None,
         };
         let mut events = jaynes_core::decide(None, &start).expect("start").events;
         let step = format!("{PLANTED}-step");
@@ -280,6 +281,7 @@ mod tests {
                 let start = Input::Start {
                     run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "a".into(), raise: None, attention: Default::default(),
                     task: task.map(str::to_string), arm: arm.map(str::to_string), never_merge: false,
+                    starter: None,
                 };
                 let refused = jaynes_core::decide(None, &start).expect_err(bad);
                 assert!(refused.0.contains("is a label: 1 to 64 letters, digits and hyphens, the first a letter or a digit"), "{refused:?}");

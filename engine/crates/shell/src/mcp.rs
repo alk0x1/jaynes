@@ -26,6 +26,8 @@ fn tools() -> Value {
         {"name": "answer", "description": "Let a result go on as it is, at a stop the role marks as a release. Only that: everything else is the person's.",
          "inputSchema": obj(json!({"run": {"type": "string"}, "question": {"type": "string"}}), &["run", "question"])},
         {"name": "halt", "description": "Halt a run at once: its agent stops where it is, the step under way runs again on resume, and only the person resumes it.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
+        {"name": "continue", "description": "Go on with a run you started that Jaynes blocked on a change its checks could not judge: Jaynes judges the same change again, nothing is redone. Any other block is the person's.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
+        {"name": "abandon", "description": "Abandon a run you started: it is set aside with its work kept, and the person brings it back or abandons it for good.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
         {"name": "correct", "description": "Record that a delivered run was wrong, and in which step if known, so the rework counts.",
          "inputSchema": obj(json!({"run": {"type": "string"}, "note": {"type": "string"}, "step": {"type": "string"}}), &["run", "note"])},
     ])
@@ -126,7 +128,7 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             if let Some(file) = conducting_off_in(Path::new(project)) {
                 return Err(format!("{} says conduct = false: Jaynes stays out of this project, so make the change without it. The person removes that line to use Jaynes here.", file.display()));
             }
-            let run = drive::launch(home, &exe, role, project, request, Some(title), args["risk"].as_str() == Some("high"), false)?;
+            let run = drive::launch(home, &exe, role, project, request, Some(title), args["risk"].as_str() == Some("high"), false, crate::starter::of_this_process().as_deref())?;
             Ok(format!(
                 "Run {run} started; it goes on by itself. What needs the person is on the page, {}. `run` with {run} says where it is.",
                 install::ensure_page(home)
@@ -147,6 +149,16 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             let run = state(home, text(args, "run")?)?;
             drive::submit(home, &exe, &run, Input::Halt { by: agent() })?;
             Ok(format!("Run {} halts now: its agent stops, and the step under way runs again when the person resumes it.", run.id))
+        }
+        "continue" => {
+            let run = state(home, text(args, "run")?)?;
+            drive::submit(home, &exe, &run, Input::Continue { by: agent(), starter: crate::starter::of_this_process() })?;
+            Ok(format!("Run {} goes on: Jaynes judges again the change its checks could not judge, and tells the person you continued it.", run.id))
+        }
+        "abandon" => {
+            let run = state(home, text(args, "run")?)?;
+            drive::submit(home, &exe, &run, Input::Abandon { by: agent(), starter: crate::starter::of_this_process() })?;
+            Ok(format!("Run {} is set aside: nothing goes on in it, its work is kept, and the person is told; only they bring it back or abandon it for good.", run.id))
         }
         "correct" => {
             let run = state(home, text(args, "run")?)?;

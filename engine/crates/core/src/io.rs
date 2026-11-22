@@ -38,6 +38,11 @@ pub enum Input {
         /// delivers its branch only.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         never_merge: bool,
+        /// Who started the run, when an agent did: the agent program's process that the start came from, by its
+        /// pid and start time, which the shell finds. That agent may continue a block of Jaynes's that judges the
+        /// same change again, and set the run aside; nothing else. None: the person's alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        starter: Option<String>,
     },
     /// Go on as far as the run can without anything from outside.
     Tick,
@@ -96,6 +101,9 @@ pub enum Input {
     /// Go on after a block, once its cause is dealt with.
     Continue {
         by: By,
+        /// The agent's process the input came from, as the start's `starter` names it, when an agent sends it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        starter: Option<String>,
     },
     DeliveryEnded {
         digest: Digest,
@@ -103,8 +111,12 @@ pub enum Input {
         #[serde(default)]
         reference: String,
     },
+    /// The person's abandon is final. The agent that started the run sets it aside instead: nothing goes on in it,
+    /// its work is kept, and only the person brings it back or abandons it for good.
     Abandon {
         by: By,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        starter: Option<String>,
     },
     /// The person reverted what the run merged.
     Undo {

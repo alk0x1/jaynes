@@ -470,6 +470,7 @@ mod tests {
         let start = Input::Start {
             run: "d1".into(), request: format!("{WORD} make the plan"), manifest, role_fingerprint: Digest("fp".into()),
             agent: "claude:some-model".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false,
+            starter: None,
         };
         let mut events = jaynes_core::decide(None, &start).expect("start").events;
         let item = Item { id: "a".into(), label: "the plan".into(), digest: Digest("d".into()) };

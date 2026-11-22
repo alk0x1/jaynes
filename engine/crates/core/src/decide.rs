@@ -55,11 +55,13 @@ pub const WHAT_THE_CHANGE_TOUCHES: &str = "what-the-change-touches";
 /// The rule that continues a run paused from outside once the pause is over.
 pub const PAUSE_OVER: &str = "pause-over";
 
+const SET_ASIDE_IS_YOURS: &str = "only you bring back, or abandon for good, a run the agent that started it set aside";
+
 /// Steps `advance` may take before it stops, a guard against a loop no event can end.
 const MAX_MOVES: usize = 10_000;
 
 pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
-    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm, never_merge } = input {
+    if let Input::Start { run: id, request, manifest, role_fingerprint, agent, raise, attention, task, arm, never_merge, starter } = input {
         if run.is_some() {
             return refuse("the run already started");
         }
@@ -100,6 +102,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             task: task.clone(),
             arm: arm.clone(),
             never_merge: *never_merge,
+            starter: starter.clone(),
         };
         let Some(state) = Run::started(&start) else { return refuse("the run could not start") };
         let mut c = Ctx { run: state, out: Decided { events: vec![start], commands: Vec::new() }, again: None };
@@ -175,14 +178,27 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             c.advance();
         }
         Input::Recovered => c.recovered(),
-        Input::Continue { by } => {
-            let Phase::Blocked { fault, .. } = &c.run.phase else { return refuse("the run is not blocked") };
-            let allowed = by.person() || (*fault == Fault::Paused && *by == By::Rule { rule: PAUSE_OVER.to_string() });
-            if !allowed {
-                return refuse("only you continue a blocked run");
+        Input::Continue { by, starter } => {
+            if c.run.set_aside.is_some() && !by.person() {
+                return refuse(SET_ASIDE_IS_YOURS);
             }
+            let Phase::Blocked { fault, .. } = &c.run.phase else { return refuse("the run is not blocked") };
             let again = c.run.checks_again();
+            // the agent that started the run goes on only where Jaynes judges the same change again: nothing is redone
+            let starts = c.run.started_by(by, starter.as_deref());
+            let allowed = by.person() || (*fault == Fault::Paused && *by == By::Rule { rule: PAUSE_OVER.to_string() }) || (starts && again.is_some() && !c.run.halted);
+            if !allowed {
+                return refuse(if starts && again.is_none() {
+                    "only you continue a run blocked so: going on would have the agent work again"
+                } else {
+                    "only you continue a blocked run"
+                });
+            }
             c.emit(Event::Continued { by: by.clone() });
+            if let Some(i) = again.filter(|_| starts && !by.person()) {
+                let text = format!("The agent that started the run continued it: Jaynes judges again what “{}” made, which it could not judge before. Nothing is redone.", c.name(i));
+                c.command(Command::Notify { text });
+            }
             // a change a check could not judge is judged again as it was: the agent does not work again
             if let Some(i) = again {
                 c.check_again(i);
@@ -214,9 +230,24 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
                 });
             }
         }
-        Input::Abandon { by } => {
+        Input::Abandon { by, starter } => {
             if !by.person() {
-                return refuse("only you abandon a run");
+                if c.run.set_aside.is_some() {
+                    return refuse(SET_ASIDE_IS_YOURS);
+                }
+                if !c.run.started_by(by, starter.as_deref()) {
+                    return refuse("only you abandon a run, or the agent that started it");
+                }
+                // not final: set aside, halted with its work kept, and only the person brings it back or ends it
+                let acting: Vec<String> = (0..c.run.steps.len())
+                    .filter(|&i| matches!(c.run.steps[i].status, Status::Running { .. }) && c.run.manifest.steps[i].effect.acts())
+                    .map(|i| format!("“{}”", c.name(i)))
+                    .collect();
+                c.emit(Event::SetAside { by: by.clone() });
+                let acted = if acting.is_empty() { String::new() } else { format!(" {} was under way, so it may have acted.", acting.join(" and ")) };
+                let text = format!("The agent that started the run abandoned it. Nothing goes on in it, and its work is kept: bring it back, or abandon it for good.{acted}");
+                c.command(Command::Notify { text });
+                return Ok(c.out);
             }
             // G14: a step that acts on something real, stopped in the middle, may have acted; the record says so
             for i in 0..c.run.steps.len() {

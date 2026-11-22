@@ -203,6 +203,16 @@ impl World {
     }
 
     /// Send an input, check every guarantee it could break, and record what it decided.
+    /// The person, the agent that started the run, or another agent.
+    fn who(&mut self) -> (By, Option<String>) {
+        let agent = By::Agent { who: "claude".to_string() };
+        match self.rng.below(10) {
+            0..=6 => (By::Person, None),
+            7 | 8 => (agent, Some(OWN.to_string())),
+            _ => (agent, Some("claude:8@1763779999".to_string())),
+        }
+    }
+
     fn send(&mut self, input: Input) -> bool {
         let before = self.run.clone();
         match decide(before.as_ref(), &input) {
@@ -468,6 +478,22 @@ impl World {
             );
             self.rechecked += 1;
         }
+        // The agent that started the run goes on only where Jaynes judges the same change again, and sets the run
+        // aside, never ends it; another agent does neither. Each tells the person.
+        if let Some(b) = before {
+            let notified = commands.iter().any(|c| matches!(c, Command::Notify { .. }));
+            match input {
+                Input::Continue { by: by @ By::Agent { .. }, starter } if events.iter().any(|e| matches!(e, Event::Continued { .. })) => {
+                    assert!(b.started_by(by, starter.as_deref()) && b.checks_again().is_some() && notified, "seed {seed}: an agent continued what it may not: {events:?}");
+                }
+                Input::Abandon { by: by @ By::Agent { .. }, starter } if !events.is_empty() => {
+                    assert!(b.started_by(by, starter.as_deref()) && b.set_aside.is_none() && notified, "seed {seed}: an agent abandoned what it may not");
+                    assert!(!events.iter().any(|e| matches!(e, Event::RunFinished { .. })), "seed {seed}: an agent's abandon ended the run");
+                }
+                Input::Resume { by: By::Agent { .. } } if !events.is_empty() => panic!("seed {seed}: an agent brought back a run"),
+                _ => {}
+            }
+        }
         // G4: a fault of Jaynes spends no attempt.
         let faulted = match input {
             Input::AttemptEnded { outcome: AttemptOutcome::Fault { .. }, .. } => true,
@@ -502,6 +528,9 @@ impl World {
 }
 
 /// Inputs the world sends that the core may refuse.
+/// The agent process that started half the random runs.
+const OWN: &str = "claude:7@1763770000";
+
 fn refusal_allowed(input: &Input) -> bool {
     !matches!(input, Input::Tick | Input::Recovered)
 }
@@ -880,8 +909,8 @@ impl World {
             }
         } else if roll < 86 {
             if run.blocked() {
-                let by = if self.rng.chance(80) { By::Person } else { By::Agent { who: "claude".to_string() } };
-                self.send(Input::Continue { by });
+                let (by, starter) = self.who();
+                self.send(Input::Continue { by, starter });
             } else {
                 self.send(Input::Tick);
             }
@@ -895,8 +924,14 @@ impl World {
         } else if roll < 92 {
             if run.halted {
                 self.send(Input::Resume { by: By::Person });
-            } else {
+            } else if self.rng.chance(70) {
                 self.send(Input::Halt { by: By::Agent { who: "claude".to_string() } });
+            } else {
+                // an agent abandons: set aside if it started the run, refused otherwise
+                let (by, starter) = self.who();
+                if !by.person() {
+                    self.send(Input::Abandon { by, starter });
+                }
             }
         } else if roll < 94 {
             let c = run.ceiling;
@@ -932,6 +967,7 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         let (n, k) = match w.rng.below(3) { 0 => (40, 0), 1 => (30, 12), _ => (5, 0) };
         attention.insert(s.name.clone(), Count { key, n, k, pending: 0, braked: w.rng.chance(25) });
     }
+    let starter = w.rng.chance(50).then(|| OWN.to_string());
     let started = w.send(Input::Start {
         run: format!("run-{seed}"),
         request: "change the button's text".to_string(),
@@ -939,7 +975,9 @@ fn start_random(w: &mut World, seed: u64) -> (Manifest, bool) {
         role_fingerprint: fingerprint,
         agent: "claude:m1".to_string(),
         raise,
-        attention, task: None, arm: None, never_merge: false
+        attention, task: None, arm: None, never_merge: false,
+        // half the runs an agent started, which may then continue a block of Jaynes's and set the run aside
+        starter,
     });
     (manifest, started)
 }
@@ -957,7 +995,8 @@ fn simulate(seed: u64) {
         manifest,
         role_fingerprint: Digest("other".to_string()),
         agent: "claude:m1".to_string(), raise: None,
-        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false,
+        starter: None,
     })
     .is_err());
     for _ in 0..400 {
@@ -1133,7 +1172,8 @@ fn start(steps: Vec<StepDecl>) -> (Run, Vec<Command>) {
         manifest,
         role_fingerprint: Digest("f".to_string()),
         agent: "claude:m1".to_string(), raise: None,
-        attention: BTreeMap::new(), task: None, arm: None, never_merge: false
+        attention: BTreeMap::new(), task: None, arm: None, never_merge: false,
+        starter: None,
     })
     .expect("start");
     (Run::fold(&out.events).expect("run"), out.commands)
@@ -1399,7 +1439,7 @@ fn g14_an_act_whose_outcome_was_not_recorded_is_not_started_again_on_its_own() {
             assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })), "{effect:?}, {how}: started again: {c:?}");
             assert!(matches!(run.phase, Phase::Blocked { .. }), "{effect:?}, {how}: {:?}", run.phase);
             // a bare continue does not act again: it asks, saying it repeats with the same key
-            let c = feed(&mut run, Input::Continue { by: By::Person });
+            let c = feed(&mut run, Input::Continue { by: By::Person, starter: None });
             let c = probe_ok(&mut run, c);
             assert!(!c.iter().any(|c| matches!(c, Command::RunRole { .. })), "{effect:?}, {how}: continue acted again: {c:?}");
             let q = asked_in(&c).filter(|q| q.kind == QuestionKind::Acted).unwrap_or_else(|| panic!("{effect:?}, {how}: asked nothing: {c:?}"));
@@ -1452,14 +1492,14 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
         assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
         if matches!(verdict, CheckVerdict::Blocked { .. }) {
             // the check judges the same act again, and nothing acts
-            let c = feed(&mut run, Input::Continue { by: By::Person });
+            let c = feed(&mut run, Input::Continue { by: By::Person, starter: None });
             assert!(pushes_of(&c, "send").is_empty(), "continuing acted again: {c:?}");
             assert!(c.iter().any(|c| matches!(c, Command::RunChecks { step, attempt: a, .. } if step == "send" && *a == attempt)), "{c:?}");
             let failed = CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new() };
             feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: failed, tree: None }] });
             assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
         }
-        let c = feed(&mut run, Input::Continue { by: By::Person });
+        let c = feed(&mut run, Input::Continue { by: By::Person, starter: None });
         let c = probe_ok(&mut run, c);
         assert!(pushes_of(&c, "send").is_empty(), "{verdict:?}: continuing acted again: {c:?}");
         let held = asked_in(&c).filter(|q| q.kind == QuestionKind::Acted).expect("the run asks about the act");
@@ -1542,7 +1582,7 @@ fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {
     let mut change = step("change", Executor::Agent);
     change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
     let manifest = Manifest { role: "story".to_string(), version: "1".to_string(), protocol: 1, steps: vec![change], target: Default::default(), delivery: jaynes_core::manifest::DeliveryKind::Merge };
-    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false }).expect("start");
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter: None }).expect("start");
     let mut run = Run::fold(&out.events).expect("run");
     let c = probe_ok(&mut run, out.commands);
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
@@ -1765,7 +1805,7 @@ fn g16_a_role_that_breaks_the_rules_is_refused_before_it_runs() {
     a.needs = vec!["b".to_string()];
     let b = step("b", Executor::Agent);
     let manifest = Manifest { role: "bad".to_string(), version: "1".to_string(), protocol: 1, steps: vec![a, b], target: Default::default(), delivery: Default::default() };
-    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false });
+    let refused = decide(None, &Input::Start { run: "r".to_string(), request: String::new(), manifest, role_fingerprint: Digest::default(), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter: None });
     assert!(refused.is_err());
 }
 
@@ -1819,6 +1859,8 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Acted => hit("an act held, not done again"),
                 Event::ActKept { .. } => hit("an act kept as it acted"),
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Merge => hit("a merge held for the person"),
+                Event::Continued { by: By::Agent { .. } } => hit("continued by the agent that started the run"),
+                Event::SetAside { .. } => hit("set aside by the agent that started the run"),
                 _ => {}
             }
         }
@@ -1830,7 +1872,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         "finished", "rerun because an input changed", "sent back", "late report", "fix in place", "risk raised by a rule",
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
         "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
-        "a change judged again on the person's continue",
+        "a change judged again on the person's continue", "continued by the agent that started the run", "set aside by the agent that started the run",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -1852,7 +1894,7 @@ fn simulate_logged(seed: u64) {
     let manifest = role(&mut w.rng);
     eprintln!("{}", serde_json::to_string_pretty(&manifest).expect("json"));
     let raise = if w.rng.chance(20) { Some(Risk::High) } else { None };
-    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new(), task: None, arm: None, never_merge: false });
+    w.send(Input::Start { run: format!("run-{seed}"), request: String::new(), manifest, role_fingerprint: Digest("role".to_string()), agent: "claude:m1".to_string(), raise, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter: None });
 
     let mut printed = 0;
     for _ in 0..400 {
@@ -1954,6 +1996,7 @@ fn history_run(run: &str, at: u64, verdict: Option<Verdict>, by: By, manifest: &
             run: r.clone(), request: String::new(), manifest: manifest.clone(), role_fingerprint: Digest("f".to_string()),
             agent: "claude:m1".to_string(), engine: String::new(), protocol: 1, format: 1, risk: Risk::Low, reasons: Vec::new(), ceilings: c, ceiling: c.low,
             attention: BTreeMap::new(), task: None, arm: None, never_merge: false,
+            starter: None,
         }),
         (at, r.clone(), Event::QuestionOpened { question }),
         (at, r.clone(), Event::AnswerRecorded { answer, effects: Effects::default() }),
@@ -2179,7 +2222,7 @@ fn g17_a_certified_stop_asks_only_a_sample_and_a_braked_one_holds() {
     let key = stop_key(&manifest, &f, 0);
     let run_with = |id: &str, braked: bool| {
         let attention = [("change".to_string(), Count { key: key.clone(), n: 40, k: 0, pending: 0, braked })].into_iter().collect();
-        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention, task: None, arm: None, never_merge: false }).expect("start");
+        let out = decide(None, &Input::Start { run: id.to_string(), request: String::new(), manifest: manifest.clone(), role_fingerprint: f.clone(), agent: "claude:m1".to_string(), raise: None, attention, task: None, arm: None, never_merge: false, starter: None }).expect("start");
         let mut run = Run::fold(&out.events).expect("run");
         let c = probe_ok(&mut run, out.commands);
         let _ = c;

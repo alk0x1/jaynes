@@ -62,7 +62,7 @@ fn choosing(home: &Path) -> String {
         "steps": [{"name": "directions", "executor": "agent", "stop": {"verdicts": ["keep", "change", "drop"], "holds": true, "choose": true, "about": "Which direction?"}}],
     }))
     .expect("manifest");
-    let start = Input::Start { run: "pick".into(), request: "a look".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+    let start = Input::Start { run: "pick".into(), request: "a look".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
     store.put_setup("pick", &serde_json::json!({})).expect("setup");
     let mut todo = store.decide("pick", &start).expect("start").2;
     // what the run asks for, answered as its shell would, until its stop asks

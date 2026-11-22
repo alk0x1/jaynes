@@ -335,7 +335,7 @@ mod tests {
             checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: if name == "plan" { "Plans the work.".into() } else { String::new() },
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: steps.iter().map(|(n, i)| decl(n, *i)).collect(), target: Default::default(), delivery };
-        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run")
     }
 
@@ -440,7 +440,7 @@ mod tests {
         };
         build.reach = Reach { project: jaynes_core::manifest::ProjectAccess::Write, write: vec!["**".into()], ..Reach::default() };
         let manifest = Manifest { role: "build".into(), version: "1".into(), protocol: 1, steps: vec![build], target: Default::default(), delivery: DeliveryKind::Merge };
-        let start = Input::Start { run: "r1".into(), request: "Scaffold the\nengram service".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "r1".into(), request: "Scaffold the\nengram service".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let feed = |r: &mut Option<Run>, input: Input| -> Vec<jaynes_core::Command> {
             let out = jaynes_core::decide(r.as_ref(), &input).expect("taken");
             match r {

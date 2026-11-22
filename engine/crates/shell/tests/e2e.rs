@@ -1288,7 +1288,7 @@ fn agents_in_claude_code_use_the_mcp_server_and_may_only_release() {
     let mut mcp = Mcp { child, out, n: 0 };
     mcp.call("initialize", serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
     let names: Vec<String> = mcp.call("tools/list", serde_json::json!({}))["result"]["tools"].as_array().expect("tools").iter().map(|t| t["name"].as_str().unwrap_or("").to_string()).collect();
-    assert_eq!(names, ["home", "roles", "start", "run", "answer", "halt", "correct"]);
+    assert_eq!(names, ["home", "roles", "start", "run", "answer", "halt", "continue", "abandon", "correct"]);
     let tool = |mcp: &mut Mcp, name: &str, args: Value| -> (bool, String) {
         let r = mcp.call("tools/call", serde_json::json!({"name": name, "arguments": args}));
         (r["result"]["isError"] == false, r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string())
@@ -1359,6 +1359,73 @@ fn abandoning_a_run_stops_its_agent_at_once() {
     let _done = run.wait();
     assert!(!mark.join("finished").exists());
     assert!(types(&events(&s, "abandon")).contains(&"RunFinished".to_string()));
+}
+
+/// A stand-in for an agent program: a program the process table names `claude` that runs one shell line and waits
+/// for it. A script would not do: the table names it by its interpreter.
+fn agent_stand_in(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("dir");
+    let src = dir.join("stand-in.c");
+    std::fs::write(&src, "#include <stdlib.h>\nint main(int c, char **v) { return c > 1 ? system(v[1]) != 0 : 2; }\n").expect("source");
+    let bin = dir.join("claude");
+    let ok = Command::new("cc").arg("-o").arg(&bin).arg(&src).status().expect("cc").success();
+    assert!(ok, "the stand-in compiled");
+    bin
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_agent_that_started_a_run_sets_it_aside_and_another_agent_cannot() {
+    let s = scratch("own");
+    let mark = s.home.join("mark");
+    std::fs::create_dir_all(&mark).expect("dir");
+    let agent = format!("touch {m}/started; sleep 30; touch {m}/finished", m = mark.display());
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let (a, b) = (agent_stand_in(&s.base.join("a")), agent_stand_in(&s.base.join("b")));
+    let env = |c: &mut Command| {
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .env("JAYNES_CHROME", test_browser().unwrap_or_else(|| PathBuf::from(NO_BROWSER))).env("BIN", BIN)
+            .stdin(std::process::Stdio::null());
+    };
+    // agent A starts the run, then abandons it once told to; agent B, beside it, tries first
+    let line = format!(
+        "\"$BIN\" start --run own --role '{role}' --project '{project}' --request 'say hi' --agent 'command:{agent}' >/dev/null 2>&1 & \
+         while [ ! -e '{m}/go' ]; do sleep 0.1; done; \"$BIN\" abandon own > '{m}/a.out' 2>&1; wait",
+        role = role.display(), project = s.project.display(), m = mark.display()
+    );
+    let mut starter = Command::new(&a);
+    starter.arg(line);
+    env(&mut starter);
+    let mut starter = starter.spawn().expect("agent A");
+    for _ in 0..100 {
+        if mark.join("started").exists() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(mark.join("started").exists(), "the run's agent started");
+    let mut other = Command::new(&b);
+    other.arg(format!("\"$BIN\" abandon own > '{m}/b.out' 2>&1; true", m = mark.display()));
+    env(&mut other);
+    assert!(other.status().expect("agent B").success());
+    let said_b = std::fs::read_to_string(mark.join("b.out")).unwrap_or_default();
+    assert!(said_b.contains("only you abandon a run, or the agent that started it"), "{said_b}");
+    assert!(!types(&events(&s, "own")).contains(&"SetAside".to_string()), "another agent set it aside");
+    // A abandons: set aside, its agent stopped at once as at a halt, nothing finished
+    let pgid = std::fs::read_to_string(s.home.join("runs/own/agent.pid")).expect("noted");
+    std::fs::write(mark.join("go"), "").expect("go");
+    let _done = starter.wait();
+    let said_a = std::fs::read_to_string(mark.join("a.out")).unwrap_or_default();
+    let alive = Command::new("kill").args(["-0", "--", &format!("-{}", pgid.trim())]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    assert!(!alive, "the agent was stopped at once: {said_a}");
+    assert!(!mark.join("finished").exists());
+    let log = events(&s, "own");
+    let started = log.iter().find(|e| e["type"] == "RunStarted").expect("started");
+    assert!(started["starter"].as_str().is_some_and(|w| w.starts_with(&format!("claude:{}@", starter.id()))), "{started}");
+    let t = types(&log);
+    assert!(t.contains(&"SetAside".to_string()) && !t.contains(&"RunFinished".to_string()), "{t:?} {said_a}");
+    assert!(t.contains(&"AttemptInterrupted".to_string()) && !t.contains(&"AttemptFailed".to_string()), "came back interrupted, as at a halt: {t:?}");
+    // only the person ends it for good
+    let out = tty().args([BIN, "abandon", "own"]).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").output().expect("abandon");
+    assert!(types(&events(&s, "own")).contains(&"RunFinished".to_string()), "{}", String::from_utf8_lossy(&out.stdout));
 }
 
 /// A page process that dies with its test, even when the test panics, so it never holds the test's output open.

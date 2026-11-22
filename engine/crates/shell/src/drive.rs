@@ -166,9 +166,10 @@ pub fn merges(dir: &Path) -> Vec<String> {
 /// `title`: the short name the run is shown by, when one was given (`listing::run_title` says what it is otherwise).
 ///
 /// `terminal`: the run starts with the environment of the person's terminal ([`terminal_env`]), as the page's do; an
-/// agent's (through MCP) keeps its own.
+/// agent's (through MCP) keeps its own. `starter` is the agent's process that asked for the run
+/// (`starter::of_this_process`), None for the person's.
 #[allow(clippy::too_many_arguments)]
-pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, title: Option<&str>, high: bool, terminal: bool) -> Result<String, String> {
+pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, title: Option<&str>, high: bool, terminal: bool, starter: Option<&str>) -> Result<String, String> {
     let dir = crate::install::find_role(home, role)?;
     // a role that does not fit the project says why here, to the page or the agent that asked, before a run exists
     let folder = std::fs::canonicalize(project).map_err(|e| format!("{project}: {e}"))?;
@@ -182,6 +183,7 @@ pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str,
     if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) {
         argv.extend(["--title", t]);
     }
+    argv.extend(["--starter", starter.unwrap_or("none")]);
     std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
     let log = std::fs::File::create(home.join(format!("start-{run}.log"))).map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
@@ -283,11 +285,13 @@ pub const BOX_GROUPS: &str = "box-groups";
 /// too the commands in the box that a call to the role is running.
 pub fn stop_agent_for(dir: &Path, input: &Input) {
     match input {
-        Input::Abandon { .. } => {
+        Input::Abandon { by, .. } if by.person() => {
             agent::stop_left(&dir.join("agent.pid"));
             stop_box_groups(dir);
         }
-        Input::Halt { .. } => {
+        // an agent's abandon sets the run aside, which the person may bring back: what it stops comes back
+        // interrupted, as at a halt, never as an attempt that failed
+        Input::Halt { .. } | Input::Abandon { .. } => {
             // the mark goes first: the process may get the turn back as soon as the agent is gone. A halt that stops
             // nothing takes away only its own mark, never one an earlier halt left for the agent it stopped
             let before = dir.join(HALTED_AGENT).exists();
@@ -2006,7 +2010,7 @@ mod tests {
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
-        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let out = jaynes_core::decide(None, &start).expect("start");
         let events: Vec<Event> = out
             .events
@@ -2132,7 +2136,7 @@ mod tests {
         });
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![first, look], target: Default::default(), delivery: Default::default() };
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
-        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: "w".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         store.decide("w", &start).expect("start");
         let run = store.state("w").expect("state").expect("run");
         let probe = Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() };

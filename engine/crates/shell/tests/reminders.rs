@@ -66,7 +66,7 @@ fn told_two_days_ago(home: &Path) {
             ],
         }))
         .expect("manifest");
-        let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         store.put_setup(run, &serde_json::json!({})).expect("setup");
         store.decide(run, &start).expect("start");
         store.decide(run, &Input::ProbeEnded { step: "make".into(), ok: true, reason: String::new() }).expect("probe");

@@ -54,7 +54,7 @@ fn feed(run: &mut Run, input: Input) -> Vec<Command> {
 /// A scaffold run of one agent step that may write the whole project, delivered by merge, at its first turn.
 fn scaffold() -> (Run, u32) {
     let manifest = Manifest { role: "build".to_string(), version: "1".to_string(), protocol: 1, steps: vec![build()], target: Default::default(), delivery: DeliveryKind::Merge };
-    let out = decide(None, &Input::Start { run: "r".to_string(), request: "scaffold it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false }).expect("start");
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "scaffold it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter: None }).expect("start");
     let mut run = Run::fold(&out.events).expect("run");
     let mut c = Vec::new();
     for cmd in out.commands {
@@ -162,7 +162,7 @@ fn every_merge_waits_for_the_person_even_with_nothing_that_runs_later() {
     assert_eq!(delivered_merge(&feed(&mut run, Input::Answer { answer: drop })), Some(false), "branch only");
     // a run that delivers a branch never asks
     let manifest = Manifest { delivery: DeliveryKind::Branch, ..run.manifest.clone() };
-    let out = decide(None, &Input::Start { run: "b".to_string(), request: "x".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false }).expect("start");
+    let out = decide(None, &Input::Start { run: "b".to_string(), request: "x".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter: None }).expect("start");
     let mut branch = Run::fold(&out.events).expect("run");
     let mut c = Vec::new();
     for cmd in out.commands {

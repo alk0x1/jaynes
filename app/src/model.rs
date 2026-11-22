@@ -248,6 +248,7 @@ mod tests {
         let start = Input::Start {
             run: "r1".into(), request: "Fix it".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(),
             raise: None, attention: Default::default(), task: None, arm: None, never_merge: false,
+            starter: None,
         };
         let mut events = jaynes_core::decide(None, &start).expect("start").events;
         events.extend([done("change", &["a.rs", "b.rs"]), done("tests", &["b.rs", "tests/c.rs"]), done("deliver", &[])]);

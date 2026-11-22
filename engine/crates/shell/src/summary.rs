@@ -678,6 +678,7 @@ mod tests {
         let start = Input::Start {
             run: "r1".into(), request: "Make the login redirect keep the page the person came from".into(), manifest,
             role_fingerprint: Digest("6ab163606a8e72693cddc7a260cd34f5".into()), agent: "claude:some-model".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false,
+            starter: None,
         };
         jaynes_core::decide(None, &start).expect("start").events.into_iter().map(|e| (at, e)).collect()
     }

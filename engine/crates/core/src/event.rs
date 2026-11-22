@@ -113,6 +113,9 @@ pub enum Event {
         /// The run never merges: it delivers its branch only, whatever is answered.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         never_merge: bool,
+        /// The agent's process that started the run, by pid and start time; none when the person did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        starter: Option<String>,
     },
     RiskRaised {
         to: Risk,
@@ -332,6 +335,11 @@ pub enum Event {
         n: u64,
         k: u64,
     },
+    /// The agent that started the run abandoned it: it is set aside, halted with its work kept, until the person
+    /// brings it back (a resume) or abandons it for good.
+    SetAside {
+        by: By,
+    },
 }
 
 impl Event {
@@ -373,6 +381,7 @@ impl Event {
             Event::RunFinished { .. } => "RunFinished",
             Event::DeliveryCorrected { .. } => "DeliveryCorrected",
             Event::StopSkipped { .. } => "StopSkipped",
+            Event::SetAside { .. } => "SetAside",
             Event::MergeUndone { .. } => "MergeUndone",
         }
     }

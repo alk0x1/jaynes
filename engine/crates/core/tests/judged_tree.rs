@@ -46,6 +46,7 @@ fn checking(tree: Option<&str>) -> (Run, u32) {
         task: None,
         arm: None,
         never_merge: false,
+        starter: None,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("fold");
@@ -136,7 +137,7 @@ fn continue_after_a_check_that_could_not_judge_checks_the_same_change_again_and_
     assert!(!events.iter().any(|e| matches!(e, Event::AttemptFailed { .. })), "the attempt waits at its checks, it did not fail: {events:?}");
     assert_eq!(run.checks_again(), Some(0), "the run knows a change waits to be checked again");
     assert_eq!(run.counts.spent, 0);
-    let (events, commands) = feed(&mut run, Input::Continue { by: person() });
+    let (events, commands) = feed(&mut run, Input::Continue { by: person(), starter: None });
     assert!(!events.iter().any(|e| matches!(e, Event::AttemptStarted { .. } | Event::ProbeAsked { .. })), "{events:?}");
     let again = commands.iter().find_map(|c| match c {
         Command::RunChecks { step, attempt: a, fix, output, .. } => Some((step.clone(), *a, *fix, output.clone())),
@@ -157,7 +158,7 @@ fn a_change_that_fails_when_it_is_checked_again_spends_its_attempt_as_any_failur
     let (mut run, attempt) = checking(Some("t1"));
     verdicts(&mut run, attempt, CheckVerdict::Blocked { reason: "a port was refused".into() });
     assert!(run.blocked());
-    feed(&mut run, Input::Continue { by: person() });
+    feed(&mut run, Input::Continue { by: person(), starter: None });
     let events = verdicts(&mut run, attempt, CheckVerdict::Fail { reasons: vec!["it does not hold".into()], detail: String::new() });
     let spent = events.iter().find_map(|e| if let Event::AttemptFailed { spent, .. } = e { Some(*spent) } else { None });
     assert_eq!(spent, Some(true), "{events:?}");
@@ -177,7 +178,7 @@ fn nothing_but_the_person_s_continue_has_the_checks_judge_again() {
     let events = verdicts(&mut run, attempt, CheckVerdict::Pass);
     assert!(matches!(events.as_slice(), [Event::StaleReport { .. }]), "{events:?}");
     assert!(run.blocked() && run.checks_again() == Some(0));
-    let refused = decide(Some(&run), &Input::Continue { by: jaynes_core::question::By::Agent { who: "claude".into() } });
+    let refused = decide(Some(&run), &Input::Continue { by: jaynes_core::question::By::Agent { who: "claude".into() }, starter: None });
     assert!(refused.is_err(), "an agent continued: {refused:?}");
 }
 

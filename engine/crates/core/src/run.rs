@@ -3,7 +3,7 @@
 use crate::digest::Digest;
 use crate::event::{Cost, Effects, Event, Fault, Outcome, Read, Usage};
 use crate::manifest::{Executor, Manifest, ProjectAccess};
-use crate::question::{Answer, Item, Question, QuestionKind, Verdict};
+use crate::question::{Answer, By, Item, Question, QuestionKind, Verdict};
 use crate::risk::{Ceiling, Ceilings, Changed, Risk};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -31,6 +31,14 @@ pub struct Run {
     pub questions: BTreeMap<String, QuestionState>,
     pub phase: Phase,
     pub halted: bool,
+    /// The agent's process that started the run, by pid and start time: it may continue a block of Jaynes's that
+    /// judges the same change again, and set the run aside. None: only the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starter: Option<String>,
+    /// Set aside by the agent that started it, which abandoned it: halted with its work kept, until the person
+    /// brings it back or abandons it for good.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_aside: Option<By>,
     pub delivering: Option<Digest>,
     pub delivered: Option<Digest>,
     pub counts: Counts,
@@ -264,7 +272,7 @@ impl Run {
     }
 
     pub fn started(e: &Event) -> Option<Run> {
-        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, reasons, ceilings, ceiling, attention, never_merge, .. } = e else {
+        let Event::RunStarted { run, request, manifest, role_fingerprint, agent, engine, protocol, format, risk, reasons, ceilings, ceiling, attention, never_merge, starter, .. } = e else {
             return None;
         };
         Some(Run {
@@ -285,6 +293,8 @@ impl Run {
             questions: BTreeMap::new(),
             phase: Phase::Running,
             halted: false,
+            starter: starter.clone(),
+            set_aside: None,
             delivering: None,
             delivered: None,
             counts: Counts::default(),
@@ -650,7 +660,14 @@ impl Run {
             }
             Event::PortsChosen { any, servers, opened } => self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened }),
             Event::Halted { .. } => self.halted = true,
-            Event::Resumed { .. } => self.halted = false,
+            Event::SetAside { by } => {
+                self.halted = true;
+                self.set_aside = Some(by.clone());
+            }
+            Event::Resumed { .. } => {
+                self.halted = false;
+                self.set_aside = None;
+            }
             Event::DeliveryAsked { digest } => {
                 self.unwait();
                 self.delivering = Some(digest.clone());
@@ -830,6 +847,11 @@ impl Run {
     /// G19: the question that holds the merge of the delivery `digest`, while it waits for the person.
     pub fn merge_open(&self, digest: &Digest) -> Option<&QuestionState> {
         self.merges.iter().filter(|(_, d)| *d == digest).filter_map(|(id, _)| self.questions.get(id)).find(|q| q.open())
+    }
+
+    /// Whether `by`, giving `starter`, is the agent that started the run: never the person, nor a run with none.
+    pub fn started_by(&self, by: &By, starter: Option<&str>) -> bool {
+        matches!(by, By::Agent { .. }) && starter.is_some() && starter == self.starter.as_deref()
     }
 
     pub fn open_questions(&self) -> Vec<&QuestionState> {

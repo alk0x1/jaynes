@@ -53,6 +53,7 @@ fn running(effect: Effect) -> (Run, u32) {
         task: None,
         arm: None,
         never_merge: false,
+        starter: None,
     })
     .expect("start");
     let mut run = Run::fold(&out.events).expect("fold");
@@ -83,9 +84,9 @@ fn a_delivery_that_failed_waits_for_the_person_s_continue_and_no_process_that_st
     // a process that starts (a continue that will be refused, a page, a crash) recovers first: it delivers nothing
     let (_, cmds) = feed(&mut run, Input::Recovered);
     assert!(!delivers(&cmds), "a process that started delivered without the person: {cmds:?}");
-    assert!(decide(Some(&run), &Input::Continue { by: By::Agent { who: "an agent".into() } }).is_err(), "an agent's continue is refused");
+    assert!(decide(Some(&run), &Input::Continue { by: By::Agent { who: "an agent".into() }, starter: None }).is_err(), "an agent's continue is refused");
     // the person's continue is accepted, and it alone delivers again
-    let (_, cmds) = feed(&mut run, Input::Continue { by: By::Person });
+    let (_, cmds) = feed(&mut run, Input::Continue { by: By::Person, starter: None });
     assert!(delivers(&cmds), "the person's continue delivers again: {cmds:?}");
 }
 
@@ -110,7 +111,7 @@ fn a_delivery_under_way_when_jaynes_stopped_is_made_when_it_starts_again() {
 fn abandoning_a_run_while_a_step_that_acts_is_under_way_records_that_it_may_have_acted() {
     for effect in [Effect::Irreversible { idempotent: false }, Effect::Irreversible { idempotent: true }, Effect::Compensable { undo: "revert".into() }] {
         let (mut run, attempt) = running(effect.clone());
-        let (events, _) = feed(&mut run, Input::Abandon { by: By::Person });
+        let (events, _) = feed(&mut run, Input::Abandon { by: By::Person, starter: None });
         let acted = events.iter().position(|e| matches!(e, Event::MayHaveActed { step, attempt: a } if step == "make" && *a == attempt));
         let finished = events.iter().position(|e| matches!(e, Event::RunFinished { .. }));
         assert!(matches!(run.steps[0].status, jaynes_core::run::Status::Running { .. }) || acted.is_some(), "{effect:?}: the step was not under way");
@@ -119,6 +120,6 @@ fn abandoning_a_run_while_a_step_that_acts_is_under_way_records_that_it_may_have
     }
     // a step that acts on nothing real leaves nothing to say
     let (mut run, _) = running(Effect::None);
-    let (events, _) = feed(&mut run, Input::Abandon { by: By::Person });
+    let (events, _) = feed(&mut run, Input::Abandon { by: By::Person, starter: None });
     assert!(!events.iter().any(|e| matches!(e, Event::MayHaveActed { .. })), "{events:?}");
 }
