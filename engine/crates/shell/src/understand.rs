@@ -232,7 +232,7 @@ mod tests {
     use jaynes_core::question::QuestionKind;
 
     fn item(id: &str) -> Item {
-        Item { id: id.into(), label: id.into(), digest: Digest(id.into()) }
+        Item { named: None, id: id.into(), label: id.into(), digest: Digest(id.into()) }
     }
 
     fn question() -> Question {

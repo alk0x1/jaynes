@@ -32,7 +32,7 @@ fn step(name: &str, needs: &[&str]) -> StepDecl {
 }
 
 fn stop(choose: bool, redo: Option<&str>) -> StopDecl {
-    StopDecl { settled: None,
+    StopDecl { settled: None, holds_unless: None, vouched_by: None,
         verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
         holds: true,
         from_risk: Risk::Low,
@@ -81,7 +81,7 @@ fn settle(run: &mut Run, mut events: Vec<Event>, mut cmds: Vec<Command>) -> (Vec
 }
 
 fn item(id: &str, d: &str) -> Item {
-    Item { id: id.into(), label: id.into(), digest: Digest(d.into()) }
+    Item { named: None, id: id.into(), label: id.into(), digest: Digest(d.into()) }
 }
 
 fn turn(cmds: &[Command]) -> AgentTurn {

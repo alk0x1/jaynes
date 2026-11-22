@@ -22,7 +22,7 @@ fn manifest() -> Manifest {
         reach: Reach { project: ProjectAccess::Write, write: vec!["design/**".into()], ..Reach::default() },
         effect: Effect::None,
         checks: vec![CheckDecl { name: "shape".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }],
-        stop: Some(StopDecl { settled: None,
+        stop: Some(StopDecl { settled: None, holds_unless: None, vouched_by: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
             holds: true,
             from_risk: Risk::Low,
@@ -78,7 +78,7 @@ fn turn(cmds: &[Command]) -> AgentTurn {
 }
 
 fn items() -> Vec<Item> {
-    ["go", "next"].iter().map(|id| Item { id: id.to_string(), label: id.to_string(), digest: Digest(format!("{id}-d")) }).collect()
+    ["go", "next"].iter().map(|id| Item { named: None, id: id.to_string(), label: id.to_string(), digest: Digest(format!("{id}-d")) }).collect()
 }
 
 /// The turn delivers in `session`, having used `tokens`, and its checks pass: the person is asked.

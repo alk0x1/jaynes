@@ -496,7 +496,7 @@ impl Ctx {
             kind: QuestionKind::Decision,
             items,
             offered: stop.verdicts.clone(),
-            holds: stop.holds || self.braked(i),
+            holds: (stop.holds && !self.named(i, &stop)) || self.braked(i),
             about: self.risk_told(&stop.about),
             choose: stop.choose,
             pass: self.run.sent_back_at(i) + 1,
@@ -522,6 +522,16 @@ impl Ctx {
             (true, _) => String::new(),
         };
         about.replace(risk::RISK_TOLD, &why).trim().to_string()
+    }
+
+    /// Whether the output names the one option its stop offers, words its step's check vouched for: the request or
+    /// the brief chose it, so the stop does not hold the run ([`crate::manifest::StopDecl::holds_unless`]). Its output is done, so every
+    /// check of its step passed on it.
+    fn named(&self, i: usize, stop: &crate::manifest::StopDecl) -> bool {
+        let decl = &self.run.manifest.steps[i];
+        let vouched = stop.vouched_by.as_deref().unwrap_or("named-in-request");
+        let items = self.run.steps[i].done.as_ref().map(|d| d.items.as_slice()).unwrap_or_default();
+        stop.holds_unless.is_some() && decl.checks.iter().any(|c| c.name == vouched) && matches!(items, [one] if one.named.is_some())
     }
 
     /// A stop with two errors among its last ten outcomes asks every run and holds it.
@@ -812,6 +822,7 @@ impl Ctx {
         let items = files
             .iter()
             .map(|(c, _)| Item {
+                named: None,
                 id: c.what.clone(),
                 label: if c.about.is_empty() { c.what.clone() } else { format!("{}: {}", c.what, c.about) },
                 digest: c.digest.clone().map(Digest).unwrap_or_else(|| Digest::of_json(c)),
@@ -1025,7 +1036,7 @@ impl Ctx {
                     step: step.to_string(),
                     round: self.run.steps[i].round,
                     kind: QuestionKind::Decision,
-                    items: vec![Item { id: "impossible".to_string(), label: reason.clone(), digest: Digest::of_json(reason) }],
+                    items: vec![Item { named: None, id: "impossible".to_string(), label: reason.clone(), digest: Digest::of_json(reason) }],
                     offered: vec![VerdictKind::Change, VerdictKind::Redo],
                     holds: true,
                     about: format!("{step} says it cannot be done as asked"),
@@ -1384,7 +1395,7 @@ impl Ctx {
             step: step.to_string(),
             round: self.run.steps[i].round,
             kind: QuestionKind::Permission,
-            items: vec![Item { id: "leave".to_string(), label: about.clone(), digest: Digest::of_json(ask) }],
+            items: vec![Item { named: None, id: "leave".to_string(), label: about.clone(), digest: Digest::of_json(ask) }],
             offered: vec![VerdictKind::Keep, VerdictKind::Drop],
             holds: true,
             about,
@@ -1589,7 +1600,7 @@ impl Ctx {
             step: name.clone(),
             round: self.run.steps[i].round,
             kind: QuestionKind::Acted,
-            items: vec![Item { id: name.clone(), label: format!("what {name} did"), digest: output }],
+            items: vec![Item { named: None, id: name.clone(), label: format!("what {name} did"), digest: output }],
             // an act whose checks did not pass cannot be kept as done: only a second act, or the person stops the run
             offered: if self.run.steps[i].status == Status::Done { vec![VerdictKind::Keep, VerdictKind::Redo] } else { vec![VerdictKind::Redo] },
             holds: true,
@@ -1736,7 +1747,7 @@ fn maker(run: &Run, i: usize) -> Option<usize> {
 
 /// An item that stands for a step's whole output.
 fn whole(step: &str, output: Option<&Digest>) -> Item {
-    Item { id: step.to_string(), label: format!("what {step} made"), digest: output.cloned().unwrap_or_default() }
+    Item { named: None, id: step.to_string(), label: format!("what {step} made"), digest: output.cloned().unwrap_or_default() }
 }
 
 fn describe_ask(ask: &Ask) -> String {

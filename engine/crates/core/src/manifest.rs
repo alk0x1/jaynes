@@ -314,6 +314,14 @@ pub struct StopDecl {
     /// {{name}}", the name being the option's): Jaynes says whose request it was after it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled: Option<String>,
+    /// A stop that holds does not when the role's output names the one option it offers in this field of it (the
+    /// words, copied from the request or the brief) and the step's check `vouched_by` vouched for them; the run then
+    /// goes on with it, and the person's touch at the merge keeps it. A braked stop holds still (G17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holds_unless: Option<String>,
+    /// The step's check that vouches for the words: `named-in-request` when none is named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vouched_by: Option<String>,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {
