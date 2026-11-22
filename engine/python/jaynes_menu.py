@@ -985,7 +985,10 @@ def named_in_request(call: Call, params: Params) -> Any:
         sentence = request[start + 1:min(ends) + 1 if ends else len(request)]
         # a refusal inside the quote counts where the quote names this option: "Python, not Rust" names Python
         names = set(re.findall(r"\w+", _as_compared(name)))
-        own = [c for c in re.split(r"[,;]", said) if set(re.findall(r"\w+", c)) & names]
+        # "but" and "mas" end a refusal ("Not Rust but Python"), save where they are it ("anything but Rust")
+        turn = r"(?<!anything )(?<!everything )(?<!all )(?<!coisa )\b(?:but|mas)\b"
+        own = [c for part in re.split(r"[,;]", said) for c in re.split(turn, part) if set(re.findall(r"\w+", c)) & names]
+        before = re.split(turn, before)[-1]
         if _REFUSES.search(" ".join(before.split()[-4:])) or any(_REFUSES.search(c) for c in own) or re.match(r"^\s*(not|no|never|não|nao|nunca|nem)\b", after, re.I):
             reasons.append(f"{name}: the request may refuse \"{o[words].strip()}\" rather than ask for it, so the person chooses")
         elif _UNDECIDED.search(sentence):
