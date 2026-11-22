@@ -1885,7 +1885,25 @@ impl<'a> Driver<'a> {
         // what git ignores is in no state and no delivery: a check that fails or cannot judge says it was not given it
         let not_given = laid.as_ref().and(copy).and_then(|c| crate::project::not_given(&c.left_out()));
         let hidden = |name: &str| decl.checks.iter().any(|c| c.name == name && c.kind == jaynes_core::manifest::CheckKind::Hidden);
-        let told = |name: &str, verdict: CheckVerdict| match (verdict, &not_given) {
+        // a check whose test server got a port past the box's window, again on the same change after the person's
+        // Continue: the card then says the tests themselves likely take that many ports
+        let past_before = self.store.events(&run.id).ok().is_some_and(|events| {
+            let at = events.iter().rposition(|e| matches!(e, Event::Blocked { .. }));
+            at.is_some_and(|at| {
+                let Event::Blocked { step: Some(s), reason, .. } = &events[at] else { return false };
+                s == step
+                    && crate::listing::past_window_said(reason)
+                    && events[at..].iter().any(|e| matches!(e, Event::Continued { .. }))
+                    && !events[at..].iter().any(|e| matches!(e, Event::AttemptStarted { step: s, .. } if s == step))
+            })
+        });
+        let again = |verdict: CheckVerdict| match verdict {
+            CheckVerdict::Blocked { reason } if past_before && crate::listing::past_window_said(&reason) => {
+                CheckVerdict::Blocked { reason: format!("{reason}{}", crate::listing::PAST_AGAIN) }
+            }
+            v => v,
+        };
+        let told = |name: &str, verdict: CheckVerdict| match (again(verdict), &not_given) {
             (CheckVerdict::Fail { mut reasons, mut detail, cases }, Some(n)) => {
                 // a hidden check's agent gets only the sentence the check wrote (G3): the person reads it
                 if hidden(name) {

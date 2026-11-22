@@ -948,6 +948,7 @@ class Ran:
     any_port: bool = False  # it ran with every local port open, by the person's choice for the project
     test_servers: bool = False  # it ran with the project's own test servers let, by the person's choice for the project
     held: tuple[int, ...] = ()  # the ports of HELD_PORTS Jaynes held while it ran
+    window: tuple[int, ...] = ()  # the ports macOS gives next that its own test servers could reach (servers_window)
 
 
 def _kill(proc: "subprocess.Popen[bytes]") -> None:
@@ -1121,18 +1122,27 @@ def _held(port: int) -> bool:
     return False
 
 
-def servers_window() -> tuple[int, ...]:
-    """The ports a project's own test servers get from macOS while one command runs: macOS gives a port the system
-    picks in sequence (``net.inet.tcp.randomize_ports`` 0), the same sequence for IPv4 and IPv6 and for every
-    process, so the next ``SERVERS_WINDOW`` after the one it gives now, without the ones something listens on now.
-    None where macOS gives them at random: the box then stays closed."""
+def _system_ports() -> tuple[int, int, bool] | None:
+    """The ports macOS gives a server that asks for any (first, last), and whether it gives them at random."""
     try:
         said = subprocess.run(["/usr/sbin/sysctl", "-n", "net.inet.tcp.randomize_ports", "net.inet.ip.portrange.hifirst",
                                "net.inet.ip.portrange.hilast"], capture_output=True, text=True, timeout=10).stdout.split()
         at_random, first, last = (int(x) for x in said)
     except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return first, last, at_random != 0
+
+
+def servers_window() -> tuple[int, ...]:
+    """The ports a project's own test servers get from macOS while one command runs: macOS gives a port the system
+    picks in sequence (``net.inet.tcp.randomize_ports`` 0), the same sequence for IPv4 and IPv6 and for every
+    process, so the next ``SERVERS_WINDOW`` after the one it gives now, without the ones something listens on now.
+    None where macOS gives them at random: the box then stays closed."""
+    system = _system_ports()
+    if system is None:
         return ()
-    if at_random != 0 or not 0 < first <= last <= 65535:
+    first, last, at_random = system
+    if at_random or not 0 < first <= last <= 65535:
         return ()
     s = socket.socket()
     try:
@@ -1140,9 +1150,49 @@ def servers_window() -> tuple[int, ...]:
         given = s.getsockname()[1]
     finally:
         s.close()
+    return _window_from(given, first, last, _listening())
+
+
+def _window_from(given: int, first: int, last: int, listening: frozenset[int] | None) -> tuple[int, ...]:
+    """The ``SERVERS_WINDOW`` ports macOS gives after ``given`` in its range ``first``..``last``, without the page's
+    port and the ones a server listens on (``listening``; None when that could not be read: then every port a bind
+    finds taken). Only a listening port is left out: a client's end of a connection, or one closing, holds its port
+    only until it closes, and macOS then gives it to the next server that asks, a test's among them (measured 22/11:
+    of 20 ports a bind found taken in the window, 18 were such ends)."""
     span = last - first + 1
     after = (first + (given - first + i) % span for i in range(1, min(SERVERS_WINDOW, span) + 1))
-    return tuple(p for p in after if p != PAGE_PORT and not _held(p))
+    taken = listening if listening is not None else frozenset(p for p in range(first, last + 1) if _held(p))
+    return tuple(p for p in after if p != PAGE_PORT and p not in taken)
+
+
+def _listening() -> frozenset[int] | None:
+    """The TCP ports a server listens on now on this machine, on any address: from netstat, every process's, the
+    person's too, with no privilege; where netstat lists no TCP socket at all, from lsof, the person's own
+    processes' (netstat run from some Pythons, Homebrew's 3.14 among them, lists none: measured 22/11); None when
+    neither could say."""
+    try:
+        said = subprocess.run(["/usr/sbin/netstat", "-an", "-p", "tcp"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        said = None
+    if said is not None and said.returncode == 0 and "Active Internet connections" in said.stdout:
+        ports = set()
+        for line in said.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 6 and fields[0].startswith("tcp") and fields[-1] == "LISTEN":
+                port = fields[3].rsplit(".", 1)[-1]
+                if port.isdigit():
+                    ports.add(int(port))
+        return frozenset(ports)
+    try:
+        said = subprocess.run(["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "n"], capture_output=True,
+                              text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # lsof says 1 when it found nothing to list, which is an answer too
+    if said.returncode not in (0, 1) or (said.returncode == 1 and said.stderr.strip()):
+        return None
+    return frozenset(int(port) for line in said.stdout.splitlines() if line.startswith("n")
+                     for port in [line.rsplit(":", 1)[-1]] if port.isdigit())
 
 
 # The ports of the usual databases, caches and queues, which keep data or passwords: while a command with the project's
@@ -1335,7 +1385,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
             out += f"\n(stopped after {timeout:.0f} s)".encode()
         text = out.decode(errors="replace")
         return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone, test_servers=own,
-                   held=holding.held if holding is not None else ())
+                   held=holding.held if holding is not None else (), window=window)
 
 
 # --- a role's own step ------------------------------------------------------------------------------------------
@@ -1445,6 +1495,20 @@ def missing(project: Path, runner: Runner, *, source: Path | None = None) -> str
     hint = ("install pytest where the project's tests run (its .venv, or the python3 on the PATH)"
             if runner.kind == "pytest" else f"install {program}")
     return f"the project's tests cannot run on this machine ({runner.suite}: {said}); {hint}, then continue the run"
+
+
+def past_window(ran: Ran) -> list[int]:
+    """The ports a refused command named that macOS gave its own test servers past the window the box let them reach
+    (``servers_window``): more ports were taken while it ran than the window holds, by it or by the machine's other
+    programs, so the test server's own port came after them. Empty when the window was not open."""
+    if not ran.window:
+        return []
+    system = _system_ports()
+    if system is None:
+        return []
+    first, last, _ = system
+    window = set(ran.window)
+    return [int(p) for p in ports_refused(ran) if p != "0" and first <= int(p) <= last and int(p) not in window]
 
 
 def ports_refused(ran: Ran) -> list[str]:

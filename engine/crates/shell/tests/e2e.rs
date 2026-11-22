@@ -3912,6 +3912,113 @@ fn typed_at_terminal(s: &Scratch, args: &[&str], path: Option<&str>, typed: &str
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box serves on port 0 itself)")]
+fn a_suite_that_opens_thousands_of_connections_still_reaches_the_test_server_it_starts_after_them() {
+    let _one = holding_alone();
+    let s = scratch("many-conns");
+    let project = s.project.to_str().expect("path");
+    let said = typed_at_terminal(&s, &["project", "test-servers", project], None, "y\n");
+    assert!(said.contains("Done."), "{said}");
+    let role = s.home.parent().expect("base").join("many");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "many"
+version = "1.0.0"
+
+[[step]]
+name = "look"
+reach = { project = "read" }
+instructions = "Look at {{request}}."
+checks = [{ script = "checks/many.py", about = "a suite's many requests, then a server of its own" }]
+"#).expect("write");
+    // as a suite of many HTTP tests: each request a connection on a port the system picks, more than the box
+    // used to allow, and a test server started after them all; and as the machine's other programs, which take the
+    // same ports meanwhile
+    std::fs::write(role.join("checks/many.py"), r#"#!/usr/bin/env python3
+import socket, struct, sys
+app = socket.socket()
+app.bind(("127.0.0.1", 0))
+app.listen(128)
+for n in range(5000):
+    try:
+        c = socket.create_connection(("127.0.0.1", app.getsockname()[1]), timeout=3)
+    except OSError as e:
+        print(f"request {n} refused: {e}")
+        sys.exit(1)
+    # closed at once with a reset, so its port waits for nobody: 5,000 ports in TIME_WAIT for 30 s would leave
+    # the Mac's other programs short of ports to connect from
+    c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    c.close()
+    app.accept()[0].close()
+for family, host in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
+    mine = socket.socket(family)
+    mine.bind((host, 0))
+    mine.listen()
+    try:
+        socket.create_connection((host, mine.getsockname()[1]), timeout=3).close()
+    except OSError as e:
+        print(f"the test server on {host}:{mine.getsockname()[1]} out of reach: {e}")
+        sys.exit(1)
+"#).expect("write");
+    let script = role.join("checks/many.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    let call = serde_json::json!({"jaynes": 1, "id": "x", "call": "check", "step": "look", "check": "many", "request": "r",
+        "output": {}, "given": [], "project": s.project, "source": s.project, "test_servers": true});
+    // the box lets the tests reach the 4,000 ports macOS gives next, as a list: the server's comes after them, and the
+    // check says so, never that the tests went for a port of the person's
+    let verdict = serve_check(&s, &role, call, &[]);
+    assert_eq!(verdict["verdict"], "blocked", "{verdict}");
+    let reason = verdict["reason"].as_str().unwrap_or("");
+    let tried = reason.split("out of reach").next().and_then(|t| t.rsplit(':').next()).unwrap_or("").trim().to_string();
+    assert!(reason.contains(&format!(" It tried port {tried}, which macOS gave after the 4,000 the box let the tests reach (")), "{reason}");
+    assert!(!reason.contains("JAYNES_PORTS"), "{reason}");
+    assert!(reason.contains("`jaynes project open-ports "), "{reason}");
+
+    // in a run: the block, then the person's Continue checks the same change again, and the same block comes back
+    // saying so, the agent working no more
+    std::fs::write(role.join("role.toml"), r#"
+role = "many"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Make the change: {{request}}"
+checks = [{ script = "checks/many.py", about = "a suite's many requests, then a server of its own" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+files = { type = "array", items = "string" }
+"#).expect("write");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let out = jaynes()
+        .args(["start", "--run", "many", "--role", role.to_str().expect("path"), "--project", project,
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .output().expect("start");
+    let blocks = |e: &[Value]| e.iter().filter(|x| x["type"] == "Blocked").map(|x| x["reason"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+    let first = blocks(&events(&s, "many"));
+    assert_eq!(first.len(), 1, "{}\n{first:?}", String::from_utf8_lossy(&out.stdout));
+    assert!(first[0].contains(", which macOS gave after the 4,000 the box let the tests reach (") && !first[0].contains("It happened again."), "{}", first[0]);
+    let said = at_terminal(&s, &["continue", "many"], None);
+    let e = events(&s, "many");
+    let both = blocks(&e);
+    assert_eq!(both.len(), 2, "{said}\n{both:?}");
+    assert!(both[1].contains(", which macOS gave after the 4,000 the box let the tests reach (") && both[1].contains("It happened again."), "{}", both[1]);
+    // the card, from what the record keeps: Continue first the first time, gone the second, the ports first then
+    let card = |reason: &str| jaynes_shell::listing::blocked_said(Some("change"), jaynes_core::event::Fault::Jaynes, reason);
+    let (once, again) = (card(&first[0]), card(&both[1]));
+    assert!(once.why.contains("so macOS gave it a port past the ones the box lets the tests reach.") && !once.why.contains("It happened again"), "{once:?}");
+    assert!(once.ways[0].says.starts_with("Continue to check again") && once.ways[1].says.starts_with("If it happens again, open this project's ports"), "{once:?}");
+    assert!(again.why.ends_with("It happened again, so the tests themselves likely make that many connections."), "{again:?}");
+    assert_eq!(again.ways[0].says, "Open this project's ports, then Continue.", "{again:?}");
+    assert!(again.ways[0].command.as_deref().is_some_and(|c| c.starts_with("jaynes project open-ports ")), "{again:?}");
+    assert_eq!(e.iter().filter(|x| x["type"] == "AttemptStarted").count(), 1, "{:?}", types(&e));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box serves on port 0 itself)")]
 fn the_person_s_test_servers_let_a_check_serve_on_a_port_the_system_picks_and_reach_nothing_else() {
     let _one = holding_alone();
     let s = scratch("test-servers");

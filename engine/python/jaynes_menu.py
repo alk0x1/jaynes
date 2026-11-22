@@ -80,6 +80,14 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
+        past = box.past_window(ran)
+        if past:
+            # its own test server, on a port macOS gave after the window: never a service of the person's
+            return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
+                           + "; ".join(box.refused(ran)[:3])
+                           + f" It tried port {', '.join(map(str, past))}, which macOS gave after the {box.SERVERS_WINDOW:,} the box"
+                           f" let the tests reach ({ran.window[0]} to {ran.window[-1]})."
+                           f" The person may open this project's ports with `jaynes project open-ports {_source(call) or call['project']}`.")
         ports = box.ports_refused(ran)
         tried = (f" It tried local port {', '.join('0, a port of its own choosing' if p == '0' else p for p in ports)}.")\
             if ports else ""

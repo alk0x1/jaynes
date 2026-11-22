@@ -865,6 +865,16 @@ const OPEN_PORTS: &str = "`jaynes project open-ports ";
 const HELD_KEPT: &str = "Jaynes held a port the command tried to serve on, so its failure says nothing about the project: ";
 const HELD_TRIED: &str = " It tried held port ";
 const HELD_LET: &str = "`jaynes project test-servers ";
+/// The words of a check whose own test server got a port macOS gave past the ones the box let the tests reach
+/// (jaynes_menu.py), and what the driver adds when the same block comes back on the same change after a Continue.
+const PAST_TRIED: &str = " It tried port ";
+const PAST_GAVE: &str = ", which macOS gave after the ";
+pub const PAST_AGAIN: &str = " It happened again.";
+
+/// Whether a check's reason says its own test server got a port past the box's window (see [`PAST_AGAIN`]).
+pub fn past_window_said(reason: &str) -> bool {
+    reason.contains(BOX_REFUSED) && reason.contains(PAST_GAVE)
+}
 
 /// A blocked run's words, with what its agent said last at the step it stopped at; None when it is not blocked.
 pub fn blocked(home: &Path, r: &Run) -> Option<BlockedSaid> {
@@ -1068,6 +1078,32 @@ fn boxed(said: &str) -> Option<Boxed<'_>> {
     })
 }
 
+/// A check whose own test server got a port macOS gave past the ones the box let the tests reach, from what the box's
+/// check said: the lines it printed, the sentence of the port tried, how many the box let, the project's folder, and
+/// whether it came back on the same change after a Continue.
+struct Past<'a> {
+    lines: Vec<&'a str>,
+    tried: &'a str,
+    let_reach: &'a str,
+    project: Option<&'a str>,
+    again: bool,
+}
+
+fn past(said: &str) -> Option<Past<'_>> {
+    let rest = said.strip_prefix(BOX_REFUSED)?;
+    let (lines, tail) = rest.split_at(rest.find(PAST_TRIED)?);
+    let tried = tail[..tail.find(").")? + 2].trim();
+    let let_reach = tried.split_once(PAST_GAVE)?.1.split(' ').next()?;
+    Some(Past {
+        lines: lines.split("; ").map(str::trim).filter(|l| !l.is_empty()).collect(),
+        tried,
+        let_reach,
+        project: tail.split_once(OPEN_PORTS).and_then(|(_, t)| t.split_once('`')).map(|(p, _)| p),
+        // at the reason's end, its period goes with "No attempt was spent" (`unspent`)
+        again: tail.contains(PAST_AGAIN.trim_end_matches('.')),
+    })
+}
+
 /// A check whose test server hit ports Jaynes holds, from what the box's check said: the lines it printed for it, the
 /// ports, and the project's folder.
 struct Held<'a> {
@@ -1244,6 +1280,32 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
         said.ways.push(Way { says: "Or abandon: the run ends and its change is not kept. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() });
         details.extend(once(h.lines.iter().copied()));
         details.push(format!("It tried {}, which Jaynes holds while the checks run.", ports_named(&h.ports)));
+        details.extend(not_given.map(not_given_said));
+        said.details = details;
+        return;
+    }
+    if let Some(p) = past(inner) {
+        // the design-lead's words of 22/11: the tests' own server, on a port macOS gave after the box's window; the
+        // engine cannot tell whether the suite or another program took the ports, so the first time Continue comes
+        // first, and when it comes back on the same change the tests themselves likely did
+        let mac = this_machine();
+        said.why = format!("The project's tests started a test server after more than {} connections on {mac} during the same command, so macOS gave it a port past the ones the box lets the tests reach.", p.let_reach);
+        if p.again {
+            said.why.push_str(" It happened again, so the tests themselves likely make that many connections.");
+        } else {
+            said.ways.push(Way { says: format!("Continue to check again: if other programs on {mac} used those ports, the tests may fit this time."), then: None, command: None, still_open: Vec::new() });
+        }
+        if let Some(project) = p.project {
+            let mut open = port_way(project, false);
+            if !p.again {
+                open.says = "If it happens again, open this project's ports, then Continue.".into();
+            }
+            said.ways.push(open);
+        }
+        said.ways.push(Way { says: "Or abandon: the run ends and its change is not kept. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() });
+        details.extend(once(p.lines.iter().copied()));
+        details.push(p.tried.to_string());
+        details.push("Or the suite takes its test servers' ports from JAYNES_PORTS, and the box stays closed.".into());
         details.extend(not_given.map(not_given_said));
         said.details = details;
         return;
@@ -1551,6 +1613,54 @@ mod blocked_tests {
         )
     }
 
+    /// The reason for a check whose own test server got a port macOS gave past the window the box let it reach, once
+    /// or `again` after a Continue on the same change.
+    fn past_window(project: &str, again: bool) -> String {
+        format!(
+            "the check suite-passes of change could not judge: the box refused what the command tried, so its failure says nothing about the project: the test server on ::1:53342 out of reach: [Errno 1] Operation not permitted It tried port 53342, which macOS gave after the 4,000 the box let the tests reach (49200 to 53199). The person may open this project's ports with `jaynes project open-ports {project}`.{}. No attempt was spent",
+            if again { PAST_AGAIN } else { "" }
+        )
+    }
+
+    #[test]
+    fn a_test_server_past_the_ports_the_box_lets_says_so_and_offers_to_check_again_then_to_open_the_ports() {
+        // the design-lead's words of 22/11: the tests' own server, never a service of the person's
+        let b = blocked_said(Some("change"), Fault::Jaynes, &past_window("/Users/x/Projects/app", false));
+        assert_eq!(b.what, "The change is done. Jaynes could not check it.");
+        let mac = this_machine();
+        let why = format!("The project's tests started a test server after more than 4,000 connections on {mac} during the same command, so macOS gave it a port past the ones the box lets the tests reach.");
+        assert_eq!(b.why, why);
+        assert_eq!(b.ways, [
+            Way { says: format!("Continue to check again: if other programs on {mac} used those ports, the tests may fit this time."), then: None, command: None, still_open: Vec::new() },
+            Way {
+                says: "If it happens again, open this project's ports, then Continue.".into(),
+                then: Some(format!("Its checks may then reach any service on {mac}, the Jaynes page among them.")),
+                command: Some("jaynes project open-ports /Users/x/Projects/app".into()),
+                still_open: Vec::new(),
+            },
+            abandon(),
+        ]);
+        assert_eq!(b.details, [
+            "the test server on ::1:53342 out of reach: [Errno 1] Operation not permitted".to_string(),
+            "It tried port 53342, which macOS gave after the 4,000 the box let the tests reach (49200 to 53199).".to_string(),
+            "Or the suite takes its test servers' ports from JAYNES_PORTS, and the box stays closed.".to_string(),
+        ]);
+        assert_eq!(b.holds.as_deref(), Some(NO_ATTEMPT_USED));
+        // the same block again on the same change: the tests themselves, so no Continue, the ports first
+        let again = blocked_said(Some("change"), Fault::Jaynes, &past_window("/Users/x/my app", true));
+        assert_eq!(again.why, format!("{why} It happened again, so the tests themselves likely make that many connections."));
+        assert_eq!(again.ways, [
+            Way {
+                says: "Open this project's ports, then Continue.".into(),
+                then: Some(format!("Its checks may then reach any service on {mac}, the Jaynes page among them.")),
+                command: Some("jaynes project open-ports '/Users/x/my app'".into()),
+                still_open: Vec::new(),
+            },
+            abandon(),
+        ]);
+        assert_eq!(again.details, b.details);
+    }
+
     #[test]
     fn a_test_server_on_a_port_jaynes_holds_says_it_was_jaynes_and_how_to_let_it() {
         // the design-lead's words of 22/11: it was Jaynes, which port, and the command to let it
@@ -1740,7 +1850,7 @@ mod blocked_tests {
     fn the_words_the_card_reads_are_the_ones_the_box_check_writes() {
         // jaynes_menu.py says why the box kept a check from judging; the card finds its parts by these words
         let menu = include_str!("../../../python/jaynes_menu.py");
-        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED] {
+        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED, PAST_TRIED, PAST_GAVE] {
             assert!(menu.contains(words.trim_start()), "jaynes_menu.py no longer says {words:?}");
         }
     }
