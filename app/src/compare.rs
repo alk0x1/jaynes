@@ -1648,6 +1648,9 @@ mod tests {
             lands: vec![],
             passed: None,
             answers: Default::default(),
+            why: None,
+            consequences: Default::default(),
+            wants: None,
         }
     }
 

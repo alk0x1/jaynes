@@ -318,10 +318,14 @@ pub fn title(q: &QuestionState) -> String {
         format!("Go with “{name}”?")
     } else if q.question.kind == QuestionKind::Merge {
         merge_title("")
+    } else if q.question.kind == QuestionKind::Permission {
+        // what the leave asks, as the core says it ("change tests/conftest.py"): the verb, then its target in backticks
+        match q.question.about.split_once(' ') {
+            Some((verb, target)) => format!("May the agent {verb} `{target}`?"),
+            None => format!("May the agent {}?", q.question.about),
+        }
     } else if !q.question.about.trim().is_empty() {
         q.question.about.clone()
-    } else if q.question.kind == QuestionKind::Permission {
-        format!("May the agent {}?", q.question.about)
     } else {
         format!("Does what {} made go on?", q.question.step)
     }

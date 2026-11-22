@@ -61,13 +61,56 @@ pub struct Stop {
     /// something else" for redo. Only at a stop of the role's: a question of Jaynes's own (a leave, a merge) has
     /// none. What each verdict does is still Jaynes's sentence, shown under the button.
     pub answers: BTreeMap<VerdictKind, String>,
+    /// Why the person is asked here, when Jaynes has more to say than the title: a leave's "Why you: ...".
+    pub why: Option<String>,
+    /// What each answer does, in a sentence beside its button, where Jaynes says it there (a leave's).
+    pub consequences: BTreeMap<VerdictKind, String>,
+    /// What the agent wants to write, for a leave to change a file: the file as it is in the step's copy, and as the
+    /// agent would leave it.
+    pub wants: Option<Wants>,
 }
+
+/// What an agent asked leave to write, kept beside the run as it asked (`runs/<run>/wants/<question>.json`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Wants {
+    /// The file, relative to the project when it is inside it.
+    pub file: String,
+    /// The file as it is in the step's copy, none when it does not exist yet.
+    pub before: Option<String>,
+    /// The file as the agent would leave it.
+    pub after: String,
+}
+
+/// Why a leave comes to the person: the agent asked past what its step lets it do.
+pub const WHY_YOU: &str = "Why you: the agent asked for something its step's settings do not allow.";
 
 impl Stop {
     /// A verdict's name on its button: the role's word for it at this stop, or Jaynes's name ([`label_for`]).
     pub fn label(&self, v: VerdictKind) -> &str {
         self.answers.get(&v).map(String::as_str).unwrap_or_else(|| label_for(v, self.kind))
     }
+
+    /// What answering `v` does, in the sentence beside its button, or nothing where Jaynes says none there.
+    pub fn says(&self, v: VerdictKind) -> &str {
+        self.consequences.get(&v).map(String::as_str).unwrap_or("")
+    }
+}
+
+/// What allowing and refusing a leave do, from what it asks (`change tests/conftest.py`): a file that runs later
+/// outside any box, in a run that merges, is asked about again before the merge (G19).
+pub fn leave_consequences(run: &Run, about: &str) -> BTreeMap<VerdictKind, String> {
+    let (verb, target) = about.split_once(' ').unwrap_or((about, ""));
+    let (allow, refuse) = match verb {
+        "change" => {
+            let again = run.manifest.lands() && !jaynes_core::risk::floor([target]).is_empty();
+            let more = if again { " Before it lands in your branch, the merge asks you again." } else { "" };
+            (format!("It writes the file and goes on.{more}"), "It goes on without writing it.".to_string())
+        }
+        "read" => ("It reads it and goes on.".into(), "It goes on without reading it.".into()),
+        "reach" => ("It reaches it and goes on.".into(), "It goes on without reaching it.".into()),
+        _ => ("It runs it and goes on.".into(), "It goes on without running it.".into()),
+    };
+    [(VerdictKind::Keep, allow), (VerdictKind::Drop, refuse)].into_iter().collect()
 }
 
 /// A stop the run went on without: it did not hold the run, and the run is now at a later step.
@@ -240,6 +283,8 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         blocked,
     });
     let answers = role_words(run, &q.question);
+    let permission = q.question.kind == QuestionKind::Permission;
+    let wants = permission.then(|| crate::permit::wants_kept(home, &run.id, &q.question.id)).flatten();
     Stop {
         run: run.id.clone(),
         question: q.question.id.clone(),
@@ -247,7 +292,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         title: crate::listing::title_into(q, &into),
         asks: if merge { format!("“{name}” is done and checked. This is what lands on your branch.") } else { q.question.about.clone() },
         step: q.question.step.clone(),
-        permission: q.question.kind == QuestionKind::Permission,
+        permission,
         kind: q.question.kind,
         choose: q.question.choose,
         offered: q.question.offered.clone(),
@@ -261,6 +306,9 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         lands,
         passed,
         answers,
+        why: permission.then(|| WHY_YOU.to_string()),
+        consequences: if permission { leave_consequences(run, &q.question.about) } else { BTreeMap::new() },
+        wants,
     }
 }
 
@@ -592,5 +640,57 @@ mod tests {
         assert_eq!(ahead(&deploy, "plan").as_deref(), Some("“deploy” cannot be undone"));
         let merge = run(&[("plan", false), ("change", false)], DeliveryKind::Merge);
         assert_eq!(ahead(&merge, "plan").as_deref(), Some("the run merges into your branch"));
+    }
+
+    fn leave(mut r: Run, about: &str) -> Run {
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Permission,
+            items: vec![QItem { id: "leave".into(), label: about.into(), digest: jaynes_core::Digest("d-leave".into()) }],
+            offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: about.into(),
+            choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        r.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        r.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits".into() };
+        r
+    }
+
+    // Alan, 21/11: "pq to sendo chamado aqui? a role?"
+    #[test]
+    fn asked_permission_says_why_you() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-leave-{}", std::process::id()));
+        let _fresh = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let r = leave(run(&[("plan", false), ("change", false)], DeliveryKind::Merge), "change tests/conftest.py");
+        // what the agent sent with its request, kept beside the run as it asked
+        let wants = Wants { file: "tests/conftest.py".into(), before: None, after: "import pytest\n".into() };
+        crate::permit::keep_wants(&home, "r1", "q1", &wants).expect("kept");
+        let stop = waiting(&home, &r).expect("a stop");
+        assert_eq!(stop.title, "May the agent change `tests/conftest.py`?");
+        assert_eq!(stop.why.as_deref(), Some("Why you: the agent asked for something its step's settings do not allow."));
+        // an answer to a leave never takes the run to the merge: the merge asks by itself
+        assert_eq!(stop.ahead, None);
+        assert_eq!(stop.says(VerdictKind::Keep), "It writes the file and goes on. Before it lands in your branch, the merge asks you again.");
+        assert_eq!(stop.says(VerdictKind::Drop), "It goes on without writing it.");
+        assert_eq!(stop.wants, Some(wants));
+        // a file that runs nowhere later: the merge has no more to ask about it
+        let plain = leave(run(&[("plan", false), ("change", false)], DeliveryKind::Merge), "change src/app.py");
+        let stop = waiting(&home, &plain).expect("a stop");
+        assert_eq!(stop.says(VerdictKind::Keep), "It writes the file and goes on.");
+        // the other kinds of leave, each in its own verb, and nothing to see written
+        for (about, title, allow, refuse) in [
+            ("read /etc/hosts", "May the agent read `/etc/hosts`?", "It reads it and goes on.", "It goes on without reading it."),
+            ("reach https://example.com", "May the agent reach `https://example.com`?", "It reaches it and goes on.", "It goes on without reaching it."),
+            ("run make deploy", "May the agent run `make deploy`?", "It runs it and goes on.", "It goes on without running it."),
+        ] {
+            let mut r = leave(run(&[("plan", false), ("change", false)], DeliveryKind::Merge), about);
+            r.id = "r2".into();
+            let stop = waiting(&home, &r).expect("a stop");
+            assert_eq!((stop.title.as_str(), stop.says(VerdictKind::Keep), stop.says(VerdictKind::Drop)), (title, allow, refuse));
+            assert_eq!(stop.wants, None);
+        }
+        // a stop that is no leave says no why of this kind, and its ahead is as before
+        let decision = waiting(&home, &asking(run(&[("plan", false), ("change", false)], DeliveryKind::Merge))).expect("a stop");
+        assert_eq!((decision.why, decision.ahead.as_deref()), (None, Some("the run merges into your branch")));
+        let _gone = std::fs::remove_dir_all(&home);
     }
 }

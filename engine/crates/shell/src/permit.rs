@@ -60,6 +60,50 @@ pub fn ask_of(tool: &str, input: &Value, cwd: &Path) -> Ask {
     }
 }
 
+/// The most of a file Jaynes keeps to show what an agent wants to write in it.
+const WANTS_MOST: u64 = 1 << 20;
+
+/// What a tool call wants to write, for the person to see before they allow it: the file as it is in `cwd`, the
+/// step's copy, and as the call would leave it. None for a call that writes no file's text (a read, a notebook, a
+/// file too big to show).
+pub fn wants_of(tool: &str, input: &Value, cwd: &Path) -> Option<crate::stop::Wants> {
+    let path = input["file_path"].as_str()?;
+    let at = if Path::new(path).is_absolute() { PathBuf::from(path) } else { cwd.join(path) };
+    let file = at.strip_prefix(cwd).map(|r| r.display().to_string()).unwrap_or_else(|_| path.to_string());
+    let before = match std::fs::metadata(&at) {
+        Ok(m) if m.len() > WANTS_MOST => return None,
+        Ok(_) => Some(std::fs::read_to_string(&at).ok()?),
+        Err(_) => None,
+    };
+    let edit = |text: &str, e: &Value| -> Option<String> {
+        let (old, new) = (e["old_string"].as_str()?, e["new_string"].as_str()?);
+        Some(if e["replace_all"].as_bool() == Some(true) { text.replace(old, new) } else { text.replacen(old, new, 1) })
+    };
+    let after = match tool {
+        "Write" => input["content"].as_str()?.to_string(),
+        "Edit" => edit(before.as_deref().unwrap_or(""), input)?,
+        "MultiEdit" => input["edits"].as_array()?.iter().try_fold(before.clone().unwrap_or_default(), |text, e| edit(&text, e))?,
+        _ => return None,
+    };
+    Some(crate::stop::Wants { file, before, after })
+}
+
+fn wants_path(home: &Path, run: &str, question: &str) -> PathBuf {
+    home.join("runs").join(run).join("wants").join(format!("{question}.json"))
+}
+
+/// Keeps what the agent wants to write beside the run, under the question that asks leave for it.
+pub fn keep_wants(home: &Path, run: &str, question: &str, wants: &crate::stop::Wants) -> Result<(), String> {
+    let at = wants_path(home, run, question);
+    std::fs::create_dir_all(at.parent().expect("a folder")).map_err(|e| e.to_string())?;
+    std::fs::write(&at, serde_json::to_vec(wants).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// What the agent wanted to write, as kept for `question`, if anything was.
+pub fn wants_kept(home: &Path, run: &str, question: &str) -> Option<crate::stop::Wants> {
+    serde_json::from_slice(&std::fs::read(wants_path(home, run, question)).ok()?).ok()
+}
+
 impl Permit {
     pub fn serve(&self) -> Result<(), String> {
         let stdin = std::io::stdin();
@@ -121,6 +165,10 @@ impl Permit {
         }) else {
             return Self::deny("this attempt is no longer under way");
         };
+        if let Some(wants) = wants_of(tool, &input, &self.cwd)
+            && let Err(e) = keep_wants(&self.home, &self.run, &question, &wants) {
+                say(&format!("! what the agent wants to write could not be kept: {e}"));
+            }
         say(&format!("? leave asked at {}: {} {}", self.step, tool, ask.target));
         let mark = waiting_mark(&self.home, &self.run);
         let _waiting = std::fs::write(&mark, b"").ok().map(|()| Waiting(mark));
@@ -156,5 +204,23 @@ mod tests {
         assert_eq!(b.target, "/etc/hosts");
         let c = ask_of("WebFetch", &json!({"url": "https://example.com"}), Path::new("/w"));
         assert_eq!(c.kind, AskKind::Network);
+    }
+
+    #[test]
+    fn what_the_agent_wants_to_write_is_the_file_as_it_would_leave_it() {
+        let cwd = std::env::temp_dir().join(format!("jaynes-wants-{}", std::process::id()));
+        std::fs::create_dir_all(cwd.join("tests")).expect("dir");
+        std::fs::write(cwd.join("tests/a.py"), "x = 1\ny = 1\n").expect("write");
+        let at = |f: &str| cwd.join(f).display().to_string();
+        let new = wants_of("Write", &json!({"file_path": at("tests/conftest.py"), "content": "import pytest\n"}), &cwd).expect("wants");
+        assert_eq!(new, crate::stop::Wants { file: "tests/conftest.py".into(), before: None, after: "import pytest\n".into() });
+        let edit = wants_of("Edit", &json!({"file_path": at("tests/a.py"), "old_string": "1", "new_string": "2"}), &cwd).expect("wants");
+        assert_eq!((edit.before.as_deref(), edit.after.as_str()), (Some("x = 1\ny = 1\n"), "x = 2\ny = 1\n"));
+        let all = wants_of("Edit", &json!({"file_path": at("tests/a.py"), "old_string": "1", "new_string": "2", "replace_all": true}), &cwd).expect("wants");
+        assert_eq!(all.after, "x = 2\ny = 2\n");
+        let multi = wants_of("MultiEdit", &json!({"file_path": at("tests/a.py"), "edits": [{"old_string": "x", "new_string": "a"}, {"old_string": "y", "new_string": "b"}]}), &cwd).expect("wants");
+        assert_eq!(multi.after, "a = 1\nb = 1\n");
+        assert_eq!(wants_of("Read", &json!({"file_path": at("tests/a.py")}), &cwd), None);
+        let _gone = std::fs::remove_dir_all(&cwd);
     }
 }

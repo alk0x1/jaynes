@@ -1867,8 +1867,8 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     if q.kind == QuestionKind::Permission {
         let about = &q.about;
         sentences.push(match answer.verdict("leave") {
-            Verdict::Keep => format!("The agent at {} may {about}.", q.step),
-            _ => format!("The agent at {} is refused leave to {about}, and goes on without it.", q.step),
+            Verdict::Keep => format!("The agent at “{}” may {about}.", q.step),
+            _ => format!("The agent at “{}” is refused leave to {about}, and goes on without it.", q.step),
         });
         return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
     }
