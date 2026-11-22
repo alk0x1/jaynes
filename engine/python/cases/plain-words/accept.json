@@ -1,0 +1,30 @@
+[
+ {
+  "id": "prices-and-words",
+  "keeps": "prices, decimals, accents, a person's parentheses and a brand",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "Total 10.00 (as before)",
+     "after": "Total 9,00, preço com ação, item(s) on Node.js"
+    }
+   ]
+  },
+  "expect": "accept"
+ },
+ {
+  "id": "not-there",
+  "keeps": "a field that is not there says nothing",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "bug": "It stops."
+  },
+  "expect": "accept"
+ }
+]

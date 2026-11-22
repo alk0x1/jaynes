@@ -38,6 +38,7 @@ fn holding() -> StopDecl {
         choose: false,
         redo: None,
         rounds: None,
+        answers: Default::default(),
     }
 }
 

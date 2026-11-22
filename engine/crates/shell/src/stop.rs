@@ -57,6 +57,17 @@ pub struct Stop {
     /// When the run went on without the person's answer to this stop: where it is now and what an answer still
     /// changes. Such a stop never covers what holds the run now: it is answered from the line below.
     pub passed: Option<Passed>,
+    /// The role's words for its verdicts, which the buttons say ([`Stop::label`]): "Yes" for keep, "No, it's
+    /// something else" for redo. Only at a stop of the role's: a question of Jaynes's own (a leave, a merge) has
+    /// none. What each verdict does is still Jaynes's sentence, shown under the button.
+    pub answers: BTreeMap<VerdictKind, String>,
+}
+
+impl Stop {
+    /// A verdict's name on its button: the role's word for it at this stop, or Jaynes's name ([`label_for`]).
+    pub fn label(&self, v: VerdictKind) -> &str {
+        self.answers.get(&v).map(String::as_str).unwrap_or_else(|| label_for(v, self.kind))
+    }
 }
 
 /// A stop the run went on without: it did not hold the run, and the run is now at a later step.
@@ -110,6 +121,14 @@ pub fn went_on(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<(String
     match (at(&q.question.step), at(&now)) {
         (Some(asked), Some(here)) if here > asked => Some((now, matches!(run.phase, jaynes_core::run::Phase::Blocked { .. }))),
         _ => None,
+    }
+}
+
+/// The role's words for the verdicts of a question: its stop's answers at a decision, none at a question of Jaynes's own.
+fn role_words(run: &Run, q: &jaynes_core::question::Question) -> BTreeMap<VerdictKind, String> {
+    match q.kind {
+        QuestionKind::Decision => run.manifest.index(&q.step).and_then(|i| run.manifest.steps[i].stop.as_ref()).map(|s| s.answers.clone()).unwrap_or_default(),
+        _ => BTreeMap::new(),
     }
 }
 
@@ -217,6 +236,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         now,
         blocked,
     });
+    let answers = role_words(run, &q.question);
     Stop {
         run: run.id.clone(),
         question: q.question.id.clone(),
@@ -237,6 +257,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         into,
         lands,
         passed,
+        answers,
     }
 }
 
@@ -523,6 +544,26 @@ mod tests {
         let fx = crate::drive::effects(&home, &r, &r.questions[&stop.question].question, &answer(&stop, &marks, "")).expect("effects");
         assert_eq!(fx.sentences, ["The delivery merges into “main”."]);
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // Alan, 21/11: "olha essa bosta, acho que a role tá mal escrita"
+    #[test]
+    fn a_stop_names_a_verdict_in_the_role_s_words_and_in_jaynes_s_otherwise() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-answers-{}", std::process::id()));
+        let mut r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
+        let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
+            verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, from_risk: Default::default(), release: false, budget: None,
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers: answers.clone(),
+        });
+        let stop = waiting(&home, &r).expect("a stop");
+        assert_eq!(stop.answers, answers);
+        assert_eq!((stop.label(VerdictKind::Keep), stop.label(VerdictKind::Redo), stop.label(VerdictKind::Drop)), ("Yes", "No, it's something else", "Drop"));
+        // a question of Jaynes's own at that step (a leave the agent asks) keeps Jaynes's words
+        r.questions.get_mut("q1").expect("asked").question.kind = QuestionKind::Permission;
+        let leave = waiting(&home, &r).expect("a stop");
+        assert!(leave.answers.is_empty());
+        assert_eq!((leave.label(VerdictKind::Keep), leave.label(VerdictKind::Drop)), ("Allow", "Refuse"));
     }
 
     #[test]

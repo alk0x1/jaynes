@@ -852,6 +852,47 @@ def field_max_length(call: Call, params: Params) -> Any:
     return Pass()
 
 
+# The extensions of files a program is made of or reads: a token that ends in one is a file's name, not a person's word
+_CODE_EXTENSIONS = ("py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "rs", "go", "rb", "java", "kt", "cs", "c", "h", "cpp",
+                    "hpp", "swift", "php", "sh", "sql", "json", "toml", "yaml", "yml", "xml", "html", "css", "scss", "md",
+                    "lock", "cfg", "ini", "env", "txt", "csv", "vue", "svelte", "lua", "ex", "exs", "scala", "dart")
+_CODE_SIGNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("braces", re.compile(r"[{}]")),
+    ("JSON", re.compile(r"\[\s*[\"\[{]")),
+    ("a file path", re.compile(r"[\w.-]+/[\w./-]*\.\w+")),
+    ("a file name", re.compile(r"(?<![\w.])[a-z0-9_][\w-]*\.(?:" + "|".join(_CODE_EXTENSIONS) + r")\b")),
+    # "item(s)" is a person's plural, not a call
+    ("a name called with parentheses", re.compile(r"[A-Za-z_]\w*\((?!s\))")),
+    ("a name with an underscore", re.compile(r"\b\w*[A-Za-z0-9]_\w*\b|\b_\w+")),
+    ("a quote of code", re.compile(r"`")),
+)
+
+
+def _strings(value: Any, at: str) -> list[tuple[str, str]]:
+    """Every text inside value, however deep, with where it is."""
+    if isinstance(value, str):
+        return [(at, value)]
+    if isinstance(value, list):
+        return [s for n, v in enumerate(value) for s in _strings(v, f"{at}[{n}]")]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in _strings(v, f"{at}.{k}")]
+    return []
+
+
+def plain_words(call: Call, params: Params) -> Any:
+    """What the person reads in a field is in plain words: no code in it, which they would have to read as code. Every
+    text inside the field is looked at, however deep; a field that is not there passes."""
+    field = str(params["field"])
+    reasons = []
+    for at, text in _strings(_field(call, params), field):
+        for what, sign in _CODE_SIGNS:
+            found = sign.search(text)
+            if found:
+                reasons.append(f"{at} has {what} ({found.group(0).strip()!r}): the person reads it, so write what they see, in plain words, with no code")
+                break
+    return Fail(*reasons) if reasons else Pass()
+
+
 def _own_role(path: str) -> tuple[Path, ...]:
     """The folder a check's script may read beyond the project: its run's own copy of the role, which the box hides
     with the rest of the runs. Only when the menu was started there (the engine starts it in the role's folder),
@@ -2052,6 +2093,7 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "field-max-length": field_max_length,
     "files-within": files_within,
     "quotes-found": quotes_found,
+    "plain-words": plain_words,
     "script": script,
 }
 

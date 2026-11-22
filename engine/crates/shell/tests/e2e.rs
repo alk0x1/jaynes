@@ -1000,7 +1000,7 @@ fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let q = events(&s, "redo").into_iter().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "reproduce").expect("asked")["question"]["id"].as_str().expect("id").to_string();
     // the person, at a terminal, sends reproduce back after the fix was made
     let mut c = tty();
-    c.args([BIN, "answer", "redo", &q, "examples-1=redo:also an empty name", "--send"]);
+    c.args([BIN, "answer", "redo", &q, "reproduce=redo:also an empty name", "--send"]);
     env(&mut c);
     let mut said = String::from_utf8_lossy(&c.output().expect("answer").stdout).to_string();
     // the first delivery waited at its merge, and the person's answer to reproduce replaced it: the fix made again

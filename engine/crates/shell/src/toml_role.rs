@@ -22,12 +22,12 @@
 //! | `effect`, `idempotent`     | `effect` (`irreversible`), `idempotent` |
 //! | `checks`                   | `checks` (name, kind, about, reads) |
 //! | `stop.ask`                 | `StopDecl::about`                |
-//! | `stop` verdicts, holds, from_risk, release, budget, audit_rate | the same names |
+//! | `stop` verdicts, holds, from_risk, release, budget, audit_rate, answers | the same names |
 //! | `from_risk`, `attempts`, `fixes`, `hidden`, `about` | the same names |
 //!
 //! The rest is the role's side of the protocol: `instructions` and `output` (the prompt and its schema), `use`
 //! and `with` (a step of Jaynes's own, from the menu), `script` (a step of the role's own: a file of its folder),
-//! `show` (what the person is shown of an output).
+//! `show` (what the person is shown of an output), and `engine` (the oldest Jaynes the role reads with).
 //!
 //! # Who does a step
 //!
@@ -100,6 +100,10 @@ pub const FILE: &str = "role.toml";
 struct RoleFile {
     role: String,
     version: String,
+    /// The oldest Jaynes the role reads with, as `">=0.2.5"`: an older one refuses it and says so. Read before the
+    /// rest of the file is, in `load`; here so the file's strict reading knows the key.
+    #[allow(dead_code)]
+    engine: Option<String>,
     #[serde(default)]
     target: Target,
     #[serde(default)]
@@ -332,6 +336,27 @@ struct StopFile {
     release: bool,
     budget: Option<f64>,
     audit_rate: Option<f64>,
+    /// The role's words for the verdicts it offers, on the buttons: `answers = { keep = "Yes", redo = "No, it's
+    /// something else" }`. What each one does is still said by Jaynes, under it.
+    #[serde(default)]
+    answers: BTreeMap<VerdictKind, String>,
+}
+
+/// The most characters a role's word for a verdict has: it goes on a button, and what it does is said under it.
+const ANSWER_MOST: usize = 40;
+
+/// Why `engine`, the oldest Jaynes a role reads with, does not let this one read it.
+pub(crate) fn engine_wrong(needs: &str) -> Option<String> {
+    let three = |v: &str| -> Option<Vec<u64>> {
+        let parts: Vec<Option<u64>> = v.split('.').map(|p| p.parse().ok()).collect();
+        (parts.len() == 3).then_some(())?;
+        parts.into_iter().collect()
+    };
+    let here = env!("CARGO_PKG_VERSION");
+    let Some(oldest) = needs.trim().strip_prefix(">=").map(str::trim).filter(|v| three(v).is_some()) else {
+        return Some(format!("engine is the oldest Jaynes the role reads with, as engine = \">=0.2.5\"; it says {needs:?}"));
+    };
+    (three(here) < three(oldest)).then(|| format!("the role needs Jaynes {oldest} or newer, and this is {here}: jaynes update"))
 }
 
 /// What the person is shown of an output: one item per element of a list field, or the whole output, with a
@@ -552,6 +577,14 @@ const MENU_CHECKS: &[MenuCheck] = &[
         about: |t| format!("every quote in {} is, word for word, in the text Jaynes downloaded from its page in {}", text(t, "field"), text(t, "pages")),
         runs: false,
     },
+    MenuCheck {
+        name: "plain-words",
+        kind: CheckKind::Open,
+        params: &[("field", Param::Text, true)],
+        auto: &[],
+        about: |t| format!("what {} says is in plain words: no braces or JSON, no file name or path, no name() and no name_with_underscores", text(t, "field")),
+        runs: false,
+    },
 ];
 
 fn network_name(n: Network) -> &'static str {
@@ -612,6 +645,7 @@ fn menu_cases(name: &str) -> Option<(&'static str, &'static str)> {
         "field-max-length" => cases!("field-max-length"),
         "files-within" => cases!("files-within"),
         "quotes-found" => cases!("quotes-found"),
+        "plain-words" => cases!("plain-words"),
         _ => return None,
     })
 }
@@ -1042,6 +1076,14 @@ impl TomlRole {
         let dir = absolute.as_path();
         let path = dir.join(FILE);
         let text = std::fs::read_to_string(&path).map_err(|e| vec![format!("{FILE} does not read: {e}")])?;
+        // the oldest Jaynes the role reads with, read before the rest: a role for a later Jaynes may use what this
+        // one does not know, and its errors would hide the one that matters
+        if let Ok(table) = text.parse::<toml::Table>()
+            && let Some(needs) = table.get("engine")
+            && let Some(why) = engine_wrong(needs.as_str().unwrap_or(&needs.to_string()))
+        {
+            return Err(vec![at(None, FILE, why)]);
+        }
         let file: RoleFile = toml::from_str(&text).map_err(|e| {
             let line = e.span().map(|s| line_of(&text, s.start));
             vec![at(line, FILE, e.message().trim())]
@@ -1376,6 +1418,18 @@ impl TomlRole {
                     (Some(_), true) => errs.push("has a stop that chooses, and its verdicts are Jaynes's: leave verdicts out".into()),
                     _ => {}
                 }
+                let offered = st.verdicts.clone().unwrap_or_else(|| if st.choose { vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop] } else { Vec::new() });
+                for (v, words) in &st.answers {
+                    let name = word(v);
+                    let n = words.trim().chars().count();
+                    if !offered.contains(v) {
+                        errs.push(format!("answers names {name}, which this stop does not offer ({})", offered.iter().map(|o| word(o)).collect::<Vec<_>>().join(", ")));
+                    } else if n == 0 {
+                        errs.push(format!("answers gives {name} no words: leave it out, and the button says Jaynes's name for it"));
+                    } else if n > ANSWER_MOST {
+                        errs.push(format!("answers gives {name} {n} characters; keep it to {ANSWER_MOST}: it goes on a button, and Jaynes says under it what it does"));
+                    }
+                }
                 if st.choose && s.show.as_ref().is_none_or(|sh| sh.each.is_none() || sh.id.is_none()) {
                     errs.push("chooses among options, so its show lists them with an id that stays: show = { each = \"FIELD\", id = \"{{name}}\", label = \"...\" }".into());
                 }
@@ -1395,6 +1449,7 @@ impl TomlRole {
                 budget: st.budget.map(Rate),
                 audit_rate: Rate(st.audit_rate.unwrap_or(0.1)),
                 about: st.ask.clone(),
+                answers: st.answers.iter().map(|(v, w)| (*v, w.trim().to_string())).collect(),
             });
             // a step of Jaynes's or of the role's own is never tried again by itself
             let default_attempts = if matches!(s.by, By::Jaynes | By::Role) { 1 } else { 3 };
@@ -2021,6 +2076,7 @@ pub fn template(name: &str) -> String {
 
 role = "{name}"
 version = "0.1.0"
+# engine = ">=0.2.5"         # the oldest Jaynes the role reads with: an older one refuses it, and says so
 target = "repository"        # what the run works on; a repository is the only kind this engine knows
 delivery = "branch"          # "branch": a branch jaynes/RUN; "merge": merged into the person's branch, with Undo
 
@@ -2051,6 +2107,11 @@ checks = ["output-follows-schema", "suite-passes"]
 # redo = "STEP" sends what the person sends back to the agent's step that made the work: from an agent's step that
 # reviews it, or from one of Jaynes's own that shows it (such as quotes in their pages), to an agent's step it needs.
 stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
+# answers puts the role's words on the buttons, for verdicts the stop offers, 40 characters at most; Jaynes still
+# says under each what it does. fix-bug asks one question so:
+#   stop = {{ ask = "Is this the bug?", verdicts = ["keep", "redo"], answers = {{ keep = "Yes", redo = "No, it's something else" }} }}
+#   show = {{ label = "{{{{bug}}}}", aspects = [{{ label = "Now", text = "{{{{examples.0.now}}}}" }}, {{ label = "After the fix", text = "{{{{examples.0.after}}}}" }}] }}
+# A field of show reaches into a list by place from 0; a text whose fields are all empty is left out.
 # A step that makes options asks the person to choose one: stop = {{ ask = "Which one?", choose = true, holds = true }},
 # with show = {{ each = "options", id = "{{{{name}}}}", label = "{{{{name}}}}", detail = "{{{{why}}}}", picture = "{{{{page}}}}" }}.
 # One click keeps the chosen option alone, without the agent; a note beside it has the agent adjust it, seeing all.
@@ -2200,21 +2261,36 @@ pub fn fill(text: &str, request: &str, given: &[Given]) -> String {
     out
 }
 
-/// A label with `{{field}}` filled plainly from `from`.
+/// A label with `{{field}}` filled plainly from `from`. A field may reach into what it holds, by name or by place
+/// in a list from 0: `{{examples.0.now}}`. A label whose fields are all empty, or missing, says nothing, so a part
+/// written for a second example is left out when there is none.
 fn label(template: &str, from: &Value) -> String {
     let mut out = String::new();
     let mut rest = template;
+    let (mut named, mut filled) = (0, 0);
     while let Some(open) = rest.find("{{") {
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
         let Some(close) = after.find("}}") else { break };
-        let shown = match &from[after[..close].trim()] {
+        let mut at = from;
+        for part in after[..close].trim().split('.') {
+            at = match (at, part.parse::<usize>()) {
+                (Value::Array(list), Ok(n)) => list.get(n).unwrap_or(&Value::Null),
+                _ => &at[part],
+            };
+        }
+        let shown = match at {
             Value::String(s) => s.clone(),
             Value::Null => String::new(),
             other => other.to_string(),
         };
+        named += 1;
+        filled += usize::from(!shown.trim().is_empty());
         out.push_str(&shown);
         rest = &after[close + 2..];
+    }
+    if named > 0 && filled == 0 {
+        return String::new();
     }
     out.push_str(rest);
     out
@@ -2684,8 +2760,9 @@ with = {{ pages = "read.sources" }}
     const BEFORE: &[(&str, &str)] = &[
         // its stop says why the run is risky since 18/11 ({{risk}} in its ask): a manifest of its own
         ("small-change", "0ef3e36cfe674de226a18953af676fac66bb992d53353b66c2cac2c1208108a0"),
-        // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own
-        ("fix-bug", "e1708e2c11ff3e65585ed6db58411e0a8b0d757b9a2d7c99104e064cee6f3777"),
+        // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own; since
+        // 21/11 it is 4.0.0, asking "Is this the bug?" with answers and checking for plain words: another one again
+        ("fix-bug", "2c5089ff749f96e721436a3c1556934fc3e17e2a2cbc589c23d1733f92392c9c"),
         ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
     ];
 
@@ -3449,7 +3526,7 @@ script = "requires/changelog.sh"
     #[test]
     fn a_new_role_s_comments_say_how_a_step_is_a_script_and_what_it_declares() {
         let text = template("tidy");
-        for said in ["by = \"role\"", "script = \"steps/", "JAYNES_OUTPUT", "effect = \"irreversible\"", "idempotent", "local_ports"] {
+        for said in ["by = \"role\"", "script = \"steps/", "JAYNES_OUTPUT", "effect = \"irreversible\"", "idempotent", "local_ports", "answers = { keep = \"Yes\"", "engine = \">=0.2.5\"", "{{examples.0.now}}"] {
             assert!(text.contains(said), "the template does not show {said}");
         }
     }
@@ -3510,5 +3587,87 @@ script = "requires/changelog.sh"
             assert!(r.manifest.steps.iter().all(|s| s.effect == Effect::None), "{name}: a step that declares no effect has none");
         }
         assert!(other.is_empty(), "these read into another manifest than before: {other:?}");
+    }
+
+    // Alan, 21/11: "olha essa bosta, acho que a role tá mal escrita"
+    #[test]
+    fn asked_role_is_badly_written() {
+        // fix-bug as this repository keeps it for its tests, the copy of the public one
+        let fix = TomlRole::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/fix-bug")).expect("reads");
+        let reproduce = fix.manifest.steps.iter().find(|s| s.name == "reproduce").expect("reproduce");
+        let stop = reproduce.stop.as_ref().expect("a stop");
+        // one question, answered in the role's words; what each answer does stays Jaynes's to say
+        assert_eq!(stop.about, "Is this the bug?");
+        assert_eq!(stop.verdicts, [VerdictKind::Keep, VerdictKind::Redo]);
+        assert_eq!(stop.answers, BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]));
+        // one item: the bug in a sentence, one example of now and after the fix under it, and the others after that
+        let out = json!({"bug": "The total shows a dollar too much when the cart has a coupon.", "tests": ["tests/test_total.py"], "failure": "expected 9.00, got 10.00", "examples": [
+            {"case": "A cart of 10.00 with a 1.00 coupon", "now": "Total 10.00", "after": "Total 9.00"},
+            {"case": "A cart with no coupon", "now": "Total 5.00", "after": "Total 5.00, as today"},
+        ]});
+        let show = fix.extras["reproduce"].show.as_ref();
+        let shown = items("reproduce", show, &out);
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert_eq!((shown[0].label.as_str(), shown[0].detail.as_str()), ("The total shows a dollar too much when the cart has a coupon.", "A cart of 10.00 with a 1.00 coupon"));
+        let aspects: Vec<(&str, &str)> = shown[0].aspects.iter().map(|a| (a.label.as_str(), a.text.as_str())).collect();
+        assert_eq!(aspects, [("Now", "Total 10.00"), ("After the fix", "Total 9.00"), ("Another example", "A cart with no coupon: now Total 5.00; after the fix Total 5.00, as today")]);
+        // with no example, the bug alone, and nothing empty under it
+        let bare = items("reproduce", show, &json!({"bug": "It stops when the name is empty.", "reproduced": true}));
+        assert_eq!((bare.len(), bare[0].label.as_str(), bare[0].detail.as_str(), bare[0].aspects.len()), (1, "It stops when the name is empty.", "", 0));
+        // what the person reads there carries no code: the bug and each example are checked for it
+        let plain = |field: &str| CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": field}).as_object().cloned().unwrap_or_default() };
+        assert_eq!(fix.extras["reproduce"].checks.get("plain-words"), Some(&plain("examples")));
+        assert_eq!(fix.extras["reproduce"].checks.get("plain-bug"), Some(&plain("bug")));
+    }
+
+    #[test]
+    fn a_stop_names_its_verdicts_in_a_few_words_of_the_role_and_only_those_it_offers() {
+        let with = |answers: &str| GOOD.replace("from_risk = \"high\", release = true }", &format!("from_risk = \"high\", release = true, answers = {answers} }}"));
+        let r = TomlRole::load(&role("answers", &with("{ keep = \"Yes\", redo = \"No, look again\" }"))).expect("reads");
+        let stop = r.manifest.steps[1].stop.as_ref().expect("stop");
+        assert_eq!(stop.answers, BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, look again".to_string())]));
+        // a verdict the stop does not offer, one that is no verdict, no words, and words too long for a button
+        let e = errors("answers-drop", &with("{ drop = \"Throw it away\" }"));
+        assert!(e.contains("answers names drop, which this stop does not offer (keep, redo)"), "{e}");
+        let e = errors("answers-nope", &with("{ maybe = \"Hm\" }"));
+        assert!(e.contains("maybe"), "{e}");
+        let e = errors("answers-empty", &with("{ keep = \"  \" }"));
+        assert!(e.contains("answers gives keep no words"), "{e}");
+        let e = errors("answers-long", &with(&format!("{{ keep = \"{}\" }}", "é".repeat(41))));
+        assert!(e.contains("answers gives keep 41 characters; keep it to 40"), "{e}");
+        TomlRole::load(&role("answers-40", &with(&format!("{{ keep = \"{}\" }}", "é".repeat(40))))).expect("forty characters read");
+        // a stop that chooses offers keep, change and drop, so those are the ones it may name
+        let choosing = GOOD.replace("stop = { ask = \"Keep it?\", verdicts = [\"keep\", \"redo\"], from_risk = \"high\", release = true }", "stop = { ask = \"Which?\", choose = true, ANSWERS }")
+            + "\n[step.show]\neach = \"files\"\nlabel = \"{{name}}\"\nid = \"{{name}}\"\n";
+        TomlRole::load(&role("answers-choose", &choosing.replace("ANSWERS", "answers = { keep = \"Go with it\", drop = \"Not this one\" }"))).expect("reads");
+        let e = errors("answers-choose-redo", &choosing.replace("ANSWERS", "answers = { redo = \"Again\" }"));
+        assert!(e.contains("answers names redo, which this stop does not offer (keep, change, drop)"), "{e}");
+        // a role without answers reads into the manifest it read into before: nothing of answers is written then
+        let plain = TomlRole::load(&role("answers-none", GOOD)).expect("reads");
+        assert!(!serde_json::to_string(&plain.manifest).expect("json").contains("answers"));
+    }
+
+    #[test]
+    fn a_role_names_the_oldest_jaynes_it_reads_with() {
+        let at = |needs: &str| GOOD.replacen("version = \"1.0.0\"\n", &format!("version = \"1.0.0\"\nengine = \"{needs}\"\n"), 1);
+        let here = env!("CARGO_PKG_VERSION");
+        TomlRole::load(&role("engine-here", &at(&format!(">={here}")))).expect("reads on this Jaynes");
+        TomlRole::load(&role("engine-older", &at(">=0.1.0"))).expect("reads on a Jaynes newer than it needs");
+        let e = errors("engine-later", &at(">=99.0.0"));
+        assert!(e.contains(&format!("needs Jaynes 99.0.0 or newer, and this is {here}: jaynes update")), "{e}");
+        for wrong in ["0.2.5", ">=two", "<=0.2.5", ">=0.2"] {
+            let e = errors("engine-wrong", &at(wrong));
+            assert!(e.contains("engine is the oldest Jaynes the role reads with, as engine = \">=0.2.5\""), "{wrong}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_label_reaches_into_a_list_and_says_nothing_when_all_it_names_is_empty() {
+        let out = json!({"bug": "b", "examples": [{"now": "n", "after": "a"}], "n": 3});
+        assert_eq!(label("{{examples.0.now}} → {{examples.0.after}}", &out), "n → a");
+        assert_eq!(label("now {{examples.1.now}}; after {{examples.1.after}}", &out), "");
+        assert_eq!(label("{{bug}}: {{examples.1.now}}", &out), "b: ");
+        assert_eq!(label("{{n}} files", &out), "3 files");
+        assert_eq!(label("no fields", &out), "no fields");
     }
 }

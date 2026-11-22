@@ -30,6 +30,7 @@ fn small_change(ask: &str) -> Manifest {
             choose: false,
             redo: None,
             rounds: None,
+            answers: Default::default(),
         }),
         from_risk: Risk::Low,
         attempts: 3,

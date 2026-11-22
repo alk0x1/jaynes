@@ -42,6 +42,7 @@ fn choosing() -> StopDecl {
         choose: true,
         redo: None,
         rounds: None,
+        answers: Default::default(),
     }
 }
 

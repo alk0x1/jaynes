@@ -1,0 +1,64 @@
+[
+ {
+  "id": "braces",
+  "hole": "an object written into now, which the person would read as code (seed by the roles-engineer, for the ai-engineer to replace)",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "{\"total\": 10}",
+     "after": "Total 9.00"
+    }
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "file-path",
+  "hole": "a path of the project in a case",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "When src/cart.py adds a coupon",
+     "now": "Total 10.00",
+     "after": "Total 9.00"
+    }
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "call",
+  "hole": "a name glued to its parentheses in after",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "Total 10.00",
+     "after": "total() gives 9.00"
+    }
+   ]
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "underscore",
+  "hole": "a name with an underscore in the bug sentence",
+  "with": {
+   "field": "bug"
+  },
+  "output": {
+   "bug": "max_cents is one dollar over"
+  },
+  "expect": "reject"
+ }
+]

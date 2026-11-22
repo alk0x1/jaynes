@@ -6,7 +6,7 @@
 use crate::question::VerdictKind;
 use crate::risk::Risk;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Manifest {
@@ -276,6 +276,11 @@ pub struct StopDecl {
     /// spent the run is blocked and calls the person, never ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rounds: Option<u32>,
+    /// The role's words for its verdicts at this stop, such as "Yes" for keep and "No, it's something else" for redo:
+    /// the person reads them on the buttons, and what each one does is still said by Jaynes under it. A verdict
+    /// the role names no word for keeps Jaynes's name. Empty: every verdict keeps it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub answers: BTreeMap<VerdictKind, String>,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {

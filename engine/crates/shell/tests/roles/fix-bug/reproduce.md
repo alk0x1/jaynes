@@ -14,3 +14,9 @@ Run your tests that way before you answer. Jaynes runs them again in a box witho
 fail, printing the line you quote in failure.
 
 If you find no bug a test can show, set reproduced to false, say what you tried and why in bug, and change nothing.
+
+The person is asked one question, "Is this the bug?", with your bug sentence and your first example under it. Write
+both for the person who asked, not for a programmer. In bug, what goes wrong as they see it, in one or two
+sentences. In examples, at most three, the one they know best first: each a situation they know (case), what they
+see today (now) and what they will see once it is fixed (after). No code in any of them: no file names or paths, no
+names from the code (none with an underscore or with parentheses), no braces or JSON. Jaynes refuses them otherwise.

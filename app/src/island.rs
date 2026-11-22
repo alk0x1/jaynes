@@ -1522,6 +1522,7 @@ mod tests {
             into: String::new(),
             lands: vec![],
             passed: None,
+            answers: Default::default(),
         }
     }
 

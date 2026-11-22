@@ -7,7 +7,7 @@
 # started from, never pushed; Undo on the run's page reverts it.
 
 role = "fix-bug"
-version = "3.0.0"
+version = "4.0.0"
 delivery = "merge"
 
 [[step]]
@@ -39,16 +39,28 @@ reach = { project = "write", commands = true, write = [
 ] }
 about = "Writes the smallest test that fails because of the bug."
 instructions = "reproduce.md"
-checks = ["output-follows-schema", "tests-fail-for-the-bug"]
-stop = { ask = "Do these tests show the bug?", verdicts = ["keep", "redo"], budget = 0.2 }
-show = { each = "examples", label = "{{case}}: now {{now}}; after the fix {{after}}" }
+checks = [
+  "output-follows-schema",
+  "tests-fail-for-the-bug",
+  { use = "plain-words", field = "examples" },
+  { use = "plain-words", field = "bug", name = "plain-bug" },
+]
+# One question: the bug as the person sees it, with one example of now and after under it, and any other after that.
+# The buttons say the role's words; what each one does, Jaynes says under it.
+stop = { ask = "Is this the bug?", verdicts = ["keep", "redo"], budget = 0.2, answers = { keep = "Yes", redo = "No, it's something else" } }
+show = { label = "{{bug}}", detail = "{{examples.0.case}}", aspects = [
+  { label = "Now", text = "{{examples.0.now}}" },
+  { label = "After the fix", text = "{{examples.0.after}}" },
+  { label = "Another example", text = "{{examples.1.case}}: now {{examples.1.now}}; after the fix {{examples.1.after}}" },
+  { label = "Another example", text = "{{examples.2.case}}: now {{examples.2.now}}; after the fix {{examples.2.after}}" },
+] }
 
 [step.output]
-bug = { type = "string", about = "what goes wrong, in one or two sentences" }
+bug = { type = "string", about = "what goes wrong as the person sees it, in one or two plain sentences, no code" }
 reproduced = { type = "boolean", optional = true, about = "false when no test shows the bug" }
 tests = { type = "array", items = "string", optional = true, about = "test files added or changed" }
 failure = { type = "string", optional = true, about = "a line the tests print because of the bug, copied exactly" }
-examples = { type = "array", optional = true, items = { type = "object", fields = {
+examples = { type = "array", optional = true, max_items = 3, items = { type = "object", fields = {
   case = { type = "string", max_length = 50, about = "a situation the person knows" },
   now = { type = "string", max_length = 70, about = "what they see today" },
   after = { type = "string", max_length = 70, about = "what they will see once fixed" },
