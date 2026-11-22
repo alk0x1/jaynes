@@ -1591,7 +1591,9 @@ impl Render for Compare {
                 let newest = k == last && !thread.asking;
                 let lit = newest && s.agent;
                 let (who, rest) = s.head.split_once(" · ").map(|(a, b)| (a.to_string(), format!(" · {b}"))).unwrap_or((s.head.clone(), String::new()));
-                let text = div().text_size(px(12.5)).text_color(rgb(look::text())).child(s.text.clone());
+                // the newest drawn as it means (bold, lists), an older one cut to a line of its words alone
+                let text = div().text_size(px(12.5)).text_color(rgb(look::text()));
+                let text = if newest { text.child(crate::summary_md::said(&s.text)) } else { text.child(crate::summary_md::plain(&s.text).split_whitespace().collect::<Vec<_>>().join(" ")).truncate() };
                 list = list.child(
                     div()
                         .flex()
@@ -1604,7 +1606,7 @@ impl Render for Compare {
                         .border_1()
                         .border_color(rgb(if lit { look::amber() } else { look::line() }))
                         .child(div().flex().text_size(px(11.5)).child(div().text_color(rgb(if lit { look::amber() } else { look::faint() })).child(who)).child(div().text_color(rgb(look::faint())).child(rest)))
-                        .child(if newest { text } else { text.truncate() }),
+                        .child(text),
                 );
             }
             if thread.asking {
