@@ -10,9 +10,13 @@ their own.
 
 Settings: $JAYNES_HOME/guard.json (default ~/.jaynes/guard.json) with "on", "watch" and "owners". On a free owner's
 repositories on GitHub, what can be taken back passes: a plain push, a pull request opened or merged. With no valid
-owners list, the free owner is the GitHub user gh is signed in as, read from gh's own hosts file. The guard never
-goes to the network, and writes no file but its notes: where it was not needed it does nothing, and a command it
-does not hold runs no program at all.
+owners list, the free owner is the GitHub user gh is signed in as, read from gh's own hosts file. On a free owner's
+repositories, what loses nothing by what git holds passes too, saying so in one line: git reset --hard with the tree
+clean and every commit it takes out of HEAD in another ref, or its same change there (the same patch id); a forced
+push whose commits taken off the remote are in what it pushes or in another ref, by their patch too; a branch
+deleted whose changes are in another ref. Elsewhere they ask. The guard goes to the network only to read the
+branches a forced push to a free owner's repository rewrites, and writes no file but its notes: where it was not
+needed it does nothing, and a command it does not hold runs no program at all.
 
 Watching ("watch": true beside "on": true, which only the Setup page writes), what it would ask that can be taken
 back it does not ask: it notes it instead, one JSON line in guard-watch.jsonl beside the settings, the person's alone
@@ -392,6 +396,19 @@ class Kept(str):
     """A branch deletion that loses nothing, as the line the guard says: another ref holds every commit."""
 
 
+class OwnedKept(Kept):
+    """What loses nothing by what git holds, as the line the guard says, which passes only on a free owner's
+    repository (the person's decision of 22/11): anywhere else the guard asks with `asks`, as before."""
+
+    asks = ""
+
+
+def owned_kept(line: str, asks: str) -> OwnedKept:
+    kept = OwnedKept(line)
+    kept.asks = asks
+    return kept
+
+
 SAME_CHANGES_MOST = 50  # lost commits the guard looks for elsewhere by their change; more, and it asks
 
 
@@ -469,18 +486,18 @@ def branch_holds(where: str, gitdir: list[str], names: list[str], gone: set[str]
             continue
         lost_out = run_quiet([*git, "rev-list", tip, "--not", *others], where, GIT_TIMEOUT) if holding is not None else None
         lost = (lost_out or "").split()
-        picked = same_changes(git, where, tip, lost, others) if lost_out is not None else None
-        if picked:
-            ref, hashes = picked
-            found.append((Kept(f"git branch -D {name}: nothing is lost: its changes are in {short_ref(ref)} as "
-                               f"{', '.join(h[:7] for h in hashes)}; the old commits stay in the reflog."), target))
-            continue
         count = str(len(lost)) if lost_out is not None else None
         short = tip[:7]
-        lost = (f"{count.strip()} commits" if count and count.strip() != "1" else "1 commit") if count else "commits"
-        found.append((f"git branch -D deletes the branch {name} in {{where}}, and {lost} of it no other branch, tag or "
-                      f"remote holds (its tip is {short}: while the reflog keeps it, `git branch {name} {short}` brings "
-                      "it back)", target))
+        lost_words = (f"{count.strip()} commits" if count and count.strip() != "1" else "1 commit") if count else "commits"
+        asks = (f"git branch -D deletes the branch {name} in {{where}}, and {lost_words} of it no other branch, tag or "
+                f"remote holds (its tip is {short}: while the reflog keeps it, `git branch {name} {short}` brings it back)")
+        picked = same_changes(git, where, tip, lost, others) if lost_out is not None and owned(target) else None
+        if picked:
+            ref, hashes = picked
+            found.append((owned_kept(f"git branch -D {name}: nothing is lost: its changes are in {short_ref(ref)} as "
+                                     f"{', '.join(h[:7] for h in hashes)}; the old commits stay in the reflog.", asks), target))
+            continue
+        found.append((asks, target))
     return found
 GH_SAYS = {
     ("pr", "create"): "gh pr create opens a pull request on {where}, which others see at once",
@@ -492,6 +509,119 @@ GH_SAYS = {
 }
 REPO_VALUE_FLAGS = {"-d", "--description", "-h", "--homepage", "-t", "--team", "-p", "--template", "-g",
                     "--gitignore", "-l", "--license", "-s", "--source", "-r", "--remote"}  # gh repo create's
+
+
+def owned(target: "Target") -> bool:
+    """Whether target is a GitHub repository of one of the free owners: what the guard reads before it looks for
+    what an action would lose, so it reads nothing anywhere else. A strict project asks all the same (decide)."""
+    return target.repo is not None and target.repo[0].lower() in [o.lower() for o in free_owners()]
+
+
+def refs_but(git: list[str], where: str, leaving: set[str]) -> list[str] | None:
+    """Every branch, tag and remote-tracking ref but those the action moves or removes, or None if git cannot say."""
+    out = run_quiet([*git, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"], where, GIT_TIMEOUT)
+    return None if out is None else [r for r in out.split() if r not in leaving and not r.endswith("/HEAD")]
+
+
+def commit_of(git: list[str], where: str, name: str) -> str | None:
+    out = run_quiet([*git, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{name}^{{commit}}"], where, GIT_TIMEOUT)
+    return (out or "").strip() or None
+
+
+def leaves_nothing(git: list[str], where: str, old: str, new: str, new_words: str, others: list[str]) -> str | None:
+    """Where the commits old reaches and new does not are kept, in words: in new or another ref, or their same change
+    there; None when one of them is in neither, or the guard cannot tell."""
+    lost_out = run_quiet([*git, "rev-list", old, "--not", new, *others, "--"], where, GIT_TIMEOUT)
+    if lost_out is None:
+        return None
+    lost = lost_out.split()
+    if not lost:
+        return f"every commit it leaves is in {new_words} or in another branch, tag or remote"
+    picked = same_changes(git, where, old, lost, [new]) or same_changes(git, where, old, lost, others)
+    if not picked:
+        return None
+    ref, hashes = picked
+    return f"its changes are in {new_words if ref == new else short_ref(ref)} as {', '.join(h[:7] for h in hashes)}"
+
+
+def reset_holds(where: str, gitdir: list[str], sub: list[str], target: "Target") -> list[tuple[str, "Target"]]:
+    """git reset --hard: kept when the tree is clean and every commit it takes out of HEAD is in another ref or has its
+    same change there, on a free owner's repository; else what it throws away, as before."""
+    asks = [(GIT_SAYS["reset"], target)]
+    args = sub[1:]
+    named = [a for a in args if not a.startswith("-")]
+    if not owned(target) or any(a not in ("--hard", "-q", "--quiet") for a in args if a.startswith("-")) or len(named) > 1:
+        return asks
+    git = ["git", *([f"--git-dir={gitdir[0]}"] if gitdir else [])]
+    to = named[0] if named else "HEAD"
+    status = run_quiet([*git, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], where, GIT_TIMEOUT)
+    head, new = commit_of(git, where, "HEAD"), commit_of(git, where, to)
+    if status is None or status.strip() or not head or not new:
+        return asks
+    branch = (run_quiet([*git, "symbolic-ref", "-q", "HEAD"], where, GIT_TIMEOUT) or "").strip()
+    others = refs_but(git, where, {branch})
+    kept = leaves_nothing(git, where, head, new, to, others) if others is not None else None
+    if kept is None:
+        return asks
+    tail = "; the old commits stay in the reflog." if kept.startswith("its changes") else "."
+    return [(owned_kept(f"git reset --hard {to}: nothing is lost: the tree is clean and {kept}{tail}", GIT_SAYS["reset"]), target)]
+
+
+PUSH_FLAGS = {"-f", "--force", "--force-with-lease", "--force-if-includes", "-q", "--quiet", "-v", "--verbose", "-u",
+              "--set-upstream", "--no-verify", "--atomic", "--porcelain"}
+
+
+def push_holds(where: str, gitdir: list[str], sub: list[str], target: "Target", remote: str) -> list[tuple[str, "Target"]]:
+    """A forced git push: kept when every commit it takes off the remote's branches is in what it pushes or in another
+    ref, or has its same change there, on a free owner's repository; else what it rewrites, as before. It reads the
+    remote's branches (the only time the guard goes to the network): a remote-tracking ref may be behind it."""
+    asks = [(GIT_SAYS["push-force"], target)]
+    args = sub[1:]
+    flags = [a for a in args if a.startswith("-")]
+    plain = all(a in PUSH_FLAGS or a.startswith(("--force-with-lease=", "--force-if-includes=")) or
+                re.fullmatch(r"-[fquv]+", a) for a in flags)
+    named = [a for a in args if not a.startswith("-")]
+    if not owned(target) or not plain or (named and named[0] != remote):
+        return asks
+    git = ["git", *([f"--git-dir={gitdir[0]}"] if gitdir else [])]
+    branch = (run_quiet([*git, "symbolic-ref", "-q", "HEAD"], where, GIT_TIMEOUT) or "").strip()
+    pairs: list[tuple[str, str]] = []
+    if len(named) <= 1:
+        # the branch's own push, as push.default makes it: where it goes, from git itself (@{push}, the
+        # remote-tracking ref of the branch it pushes to)
+        pushed = (run_quiet([*git, "rev-parse", "--symbolic-full-name", "@{push}"], where, GIT_TIMEOUT) or "").strip()
+        tracking = f"refs/remotes/{remote}/"
+        if not branch or not pushed.startswith(tracking):
+            return asks
+        pairs.append(("HEAD", "refs/heads/" + pushed[len(tracking):]))
+    for spec in named[1:]:
+        spec = spec[1:] if spec.startswith("+") else spec
+        src, _, dst = spec.partition(":")
+        if not dst:
+            dst = branch if src == "HEAD" else (src if src.startswith("refs/heads/") else f"refs/heads/{src}")
+        elif not dst.startswith("refs/"):
+            dst = f"refs/heads/{dst}"
+        if not src or not dst.startswith("refs/heads/") or "*" in spec:
+            return asks  # a deletion, a tag or a pattern
+        pairs.append((src, dst))
+    lines = []
+    for src, dst in pairs:
+        new = commit_of(git, where, src)
+        listed = run_quiet([*git, "ls-remote", "--end-of-options", remote, dst], where, GIT_TIMEOUT) if new else None
+        if listed is None:
+            return asks
+        olds = [line.split()[0] for line in listed.splitlines() if len(line.split()) == 2 and line.split()[1] == dst]
+        if not olds:
+            continue  # a new branch on the remote: nothing is taken off it
+        if not commit_of(git, where, olds[0]):
+            return asks  # the remote holds commits this clone has never seen
+        others = refs_but(git, where, {f"refs/remotes/{remote}/{dst[len('refs/heads/'):]}"})
+        kept = leaves_nothing(git, where, olds[0], new, f"what it pushes to {short_ref(dst)}", others) if others is not None else None
+        if kept is None:
+            return asks
+        lines.append(kept)
+    return [(owned_kept(f"git push, forced, to {target.words}: nothing is lost: " + "; ".join(lines or ["it only adds branches"]) + ".",
+                        GIT_SAYS["push-force"]), target)]
 
 
 def without_userinfo(url: str) -> str:
@@ -586,7 +716,12 @@ def holds(cmd: Simple, gone: set[str] | None = None) -> list[tuple[str, Target]]
             where = resolve(where, d)
         if gitdir:
             gitdir = [resolve(where, gitdir[0])]
-        target = remote_target(where, gitdir, push_remote(sub[1:]) if what == "push" else "origin")
+        remote = push_remote(sub[1:]) if what in ("push", "push-force") else "origin"
+        target = remote_target(where, gitdir, remote)
+        if what == "reset":
+            return reset_holds(where, gitdir, sub, target)
+        if what == "push-force":
+            return push_holds(where, gitdir, sub, target, remote)
         if what == "branch":
             names = deleted_branches(sub)
             if names:
@@ -799,6 +934,11 @@ def decide(event: dict[str, object]) -> Verdict | None:
     held = [h for cmd in commands for h in holds(cmd, gone)]
     if not held or switch.off_in(cwd, settings):
         return None  # off in this project is the person's word, in their settings; a project's file cannot say it
+    if any(isinstance(says, OwnedKept) for says, _ in held):
+        # what loses nothing passes only on a free owner's repository, and never in a strict project
+        free = [] if switch.read(cwd)["guard"] == "strict" else [o.lower() for o in free_owners()]
+        held = [(says, t) if not isinstance(says, OwnedKept) or (t.repo is not None and t.repo[0].lower() in free)
+                else (says.asks, t) for says, t in held]
     kept = [str(says) for says, _ in held if isinstance(says, Kept)]
     held = [h for h in held if not isinstance(h[0], Kept)]
     if not held:

@@ -203,6 +203,10 @@ fn a_kept_branch_beside_something_else_held_asks_for_that_and_says_the_branch_is
 #[test]
 fn a_branch_whose_changes_were_picked_into_another_is_deleted_saying_where_they_are() {
     let w = World::new("picked");
+    // only on a free owner's repository (22/11): gh signed in as alk0x1, whose repository this is
+    std::fs::create_dir_all(w.base.join("gh")).expect("dir");
+    std::fs::write(w.base.join("gh/hosts.yml"), "github.com:\n    user: alk0x1\n").expect("write");
+    w.git(&["remote", "add", "origin", "https://github.com/alk0x1/project.git"]);
     w.git(&["switch", "-q", "-c", "tty-and-v6"]);
     std::fs::write(w.project().join("tty.txt"), "v6\n").expect("write");
     w.git(&["add", "tty.txt"]);
