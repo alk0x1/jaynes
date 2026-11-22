@@ -82,9 +82,19 @@ pub struct Gone {
     pub said: String,
 }
 
+/// Whether an open run can no longer go on with `engine` here: another engine started it, and that engine's program is
+/// not kept on this machine. `engine` is a whole engine ("0.2.5+9f3c…"), or a version alone ("0.2.5", all `jaynes
+/// update` knows of the release it brings), compared then by version. One criterion for the card, the listing and the
+/// update's warning.
+pub fn left_behind(home: &Path, run: &Run, engine: &str) -> bool {
+    let started = run.engine.split('+').next().unwrap_or(&run.engine);
+    let same = if engine.contains('+') { run.engine == engine } else { started == engine };
+    !run.finished() && !same && crate::drive::engine_exe(home, &run.engine).is_none()
+}
+
 /// The engine a run started on, when it is older and gone from the machine; kept, it takes the run's answers.
 pub fn gone(home: &Path, run: &Run) -> Option<Gone> {
-    (run.engine != jaynes_core::ENGINE && crate::drive::engine_exe(home, &run.engine).is_none()).then(|| Gone {
+    left_behind(home, run, jaynes_core::ENGINE).then(|| Gone {
         version: run.engine.split('+').next().unwrap_or(&run.engine).to_string(),
         said: crate::drive::gone_said(run),
     })
@@ -470,12 +480,18 @@ mod tests {
         let gone = waiting(&home, &r).expect("a stop").gone.expect("its engine left");
         assert_eq!(gone.version, "0.2.3", "the number alone, without what follows the +");
         assert_eq!(gone.said, crate::drive::gone_said(&r), "the engine's own sentence, as Send would be refused with");
+        // one criterion for the card, the listing and `jaynes update`'s warning (the engineer lead, 22/11): the update
+        // knows the coming release by its version alone, and compares by it
+        assert!(left_behind(&home, &r, jaynes_core::ENGINE));
+        assert!(left_behind(&home, &r, "0.2.5") && !left_behind(&home, &r, "0.2.3"), "by version, when that is all there is");
+        assert!(!left_behind(&home, &r, "0.2.3+abc123"), "its own engine carries it on");
         assert!(gone.said.contains("0.2.3+abc123") && gone.said.contains("no longer on this machine"), "{}", gone.said);
         // kept on the machine, the older engine takes the answer: nothing to say
         let kept = home.join("engines").join("0.2.3+abc123");
         std::fs::create_dir_all(&kept).expect("dir");
         std::fs::write(kept.join("jaynes"), "").expect("program");
         assert_eq!(waiting(&home, &r).expect("a stop").gone, None, "its engine is here");
+        assert!(!left_behind(&home, &r, "0.2.5"), "kept, the older engine carries it on after an update too");
         std::fs::remove_dir_all(&home).ok();
     }
 

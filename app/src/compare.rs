@@ -1790,7 +1790,8 @@ impl Render for Compare {
             })
             .child(top)
             .child(div().flex_1().min_h_0().flex().child(left).child(side))
-            .child(bar)
+            // a run whose engine left the Mac takes no answer: the options stay to look at, nothing answers
+            .when(crate::island::takes_answers(&stop), |d| d.child(bar))
             .children(viewer)
             .into_any_element()
     }

@@ -323,10 +323,16 @@ pub fn gone_block(gone: &stop::Gone, open: bool, toggle: impl Fn(&ClickEvent, &m
         .when(open, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(gone.said.clone())))
 }
 
+/// Whether the card takes answers: not on a run whose engine left the Mac, where it keeps its head, the two lines,
+/// Details, Esc and See the diff, and nothing that answers (the design-lead, 22/11).
+pub fn takes_answers(stop: &Stop) -> bool {
+    stop.gone.is_none()
+}
+
 /// Whether an answer may go: every item judged (or something brought back), nothing refused, not already on its way,
 /// and its run's engine still here to take it.
 pub fn may_send(stop: &Stop, judged: usize, brought: bool, sending: bool, refused: bool) -> bool {
-    (judged == stop.items.len() || brought) && !sending && !refused && stop.gone.is_none()
+    (judged == stop.items.len() || brought) && !sending && !refused && takes_answers(stop)
 }
 
 /// The stop folded to one line: which run asks, and what.
@@ -1515,8 +1521,7 @@ impl Render for Island {
             .flex()
             .flex_col()
             .child(top)
-            .child(div().relative().min_h_0().flex_shrink(1.).flex().flex_col().child(middle).when(more_below, |d| d.child(fade)))
-            .child(foot);
+            .when(takes_answers(&stop), |d| d.child(div().relative().min_h_0().flex_shrink(1.).flex().flex_col().child(middle).when(more_below, |d| d.child(fade))).child(foot));
         // the card takes the room it needs, up to its cap; in a window too small for it, it gives way, and its middle
         // scrolls
         wrap.min_h_0().flex_shrink(1.).child(card).into_any_element()
@@ -1526,7 +1531,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, may_send, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1573,6 +1578,10 @@ mod tests {
         assert!(may_send(&stop, 1, false, false, false), "a run of this engine sends");
         stop.gone = Some(gone);
         assert!(!may_send(&stop, 1, false, false, false), "Send off: no answer reaches it");
+        // the design-lead, 22/11: a control that reaches nothing invites a try; the card keeps its head, the two lines,
+        // Details, Esc and See the diff (which reads the run's copy), and nothing that answers
+        assert!(!takes_answers(&stop), "no items, words, foot nor Send on it");
+        assert!(takes_answers(&judging(&["a"])), "a run of this engine is answered");
     }
 
     // Alan, 16/11 (direction D of the sketches, as the app's first handoff wrote what he chose): "the stop rises as a

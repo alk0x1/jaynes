@@ -74,6 +74,8 @@ pub struct Facts {
     pub stopped_by_ceiling: bool,
     /// Already delivered while an answer of the person's can still correct it.
     pub delivered: bool,
+    /// Started on an older engine no longer on this machine: every control goes to that engine, and is refused.
+    pub gone: bool,
 }
 
 impl Facts {
@@ -88,13 +90,14 @@ impl Facts {
             near_ceiling: r.spent.seconds * 5 >= r.ceiling.seconds * 4 || r.spent.tokens * 5 >= r.ceiling.tokens * 4,
             stopped_by_ceiling: matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }),
             delivered: !r.finished() && r.delivered.is_some(),
+            gone: jaynes_shell::stop::gone(&jaynes_shell::home(), r).is_some(),
         }
     }
 }
 
 /// The controls a run shows, in the page's order: Halt first while its agent works, as Command-period does on its tab.
 pub fn acts(f: &Facts) -> Vec<Act> {
-    if f.finished {
+    if f.finished || f.gone {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -157,7 +160,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn facts() -> Facts {
-        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false }
+        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false, gone: false }
     }
 
     #[test]
@@ -173,6 +176,8 @@ mod tests {
         assert_eq!(acts(&Facts { stopped_by_ceiling: true, blocked: true, running: false, ..facts() }), [Act::Continue, Act::RaiseCeiling, Act::Abandon]);
         // a finished run has none
         assert!(acts(&Facts { finished: true, ..facts() }).is_empty());
+        // the design-lead, 22/11 (row 9): a run whose engine left the Mac refuses Abandon too, so nothing shows
+        assert!(acts(&Facts { gone: true, halted: true, ..facts() }).is_empty());
     }
 
     #[test]
