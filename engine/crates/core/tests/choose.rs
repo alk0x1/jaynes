@@ -31,7 +31,7 @@ fn step(name: &str, needs: &[&str]) -> StepDecl {
 }
 
 fn choosing() -> StopDecl {
-    StopDecl {
+    StopDecl { unheld: None,
         verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
         holds: true,
         from_risk: Risk::Low,

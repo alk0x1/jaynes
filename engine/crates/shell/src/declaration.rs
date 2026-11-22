@@ -479,7 +479,7 @@ mod tests {
             changed: vec![jaynes_core::risk::Changed::file("plan.md".into(), 4)], usage: Usage { seconds: 70, tokens: 900, cached: 0 }, session: None, tree: None,
             reply: None,
         });
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![item],
             offered: vec![VerdictKind::Keep, VerdictKind::Change], holds: true, about: "Is the plan right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };

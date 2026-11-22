@@ -2951,7 +2951,7 @@ mod tests {
         .expect("manifest");
         let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
             offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
         };
@@ -2975,7 +2975,7 @@ mod tests {
             .expect("manifest");
             let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
             let mut events = decide(None, &start).expect("start").events;
-            let question = Question {
+            let question = Question { rides: Vec::new(),
                 id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
                 offered: vec![VerdictKind::Keep], holds: true, about: "Is the plan right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
             };
@@ -3205,7 +3205,7 @@ mod tests {
             let start = Input::Start { run: run.into(), request: format!("Build the {run} thing"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
             let mut events = decide(None, &start).expect("start").events;
             events.push(Event::QuestionOpened {
-                question: Question {
+                question: Question { rides: Vec::new(),
                     id: "q1".into(), step: "build".into(), round: 1, kind: QuestionKind::Permission,
                     items: vec![Item { id: "leave".into(), label: about.into(), digest: Digest(format!("d-{run}")) }],
                     offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: about.into(), choose: false, pass: 0, passes: 0, back: vec![],
@@ -3294,7 +3294,7 @@ mod tests {
             let mut events = decide(None, &start).expect("start").events;
             events.push(match run {
                 "asks" => Event::QuestionOpened {
-                    question: Question {
+                    question: Question { rides: Vec::new(),
                         id: "q1".into(), step: "change".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
                         offered: vec![VerdictKind::Keep], holds: true, about: "Is the change right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
                     },
@@ -3347,7 +3347,7 @@ mod tests {
         let start = Input::Start { run: "m".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         events.push(Event::QuestionOpened {
-            question: Question {
+            question: Question { rides: Vec::new(),
                 id: "merge-1".into(), step: "fix".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![VerdictKind::Keep, VerdictKind::Drop],
                 holds: true, about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![],
             },
@@ -3384,7 +3384,7 @@ mod tests {
         let start = Input::Start { run: "b".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         events.push(Event::QuestionOpened {
-            question: Question {
+            question: Question { rides: Vec::new(),
                 id: "q-repro".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
                 items: vec![Item { id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
                 offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],

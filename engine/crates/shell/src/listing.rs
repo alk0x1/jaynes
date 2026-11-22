@@ -2360,7 +2360,7 @@ mod tests {
     fn asked_a_stop_the_run_passed_is_listed_under_can_still_answer_and_the_run_shows_now() {
         let mut went = run("r1", "Fix the login redirect");
         went.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "the change could not be checked".into() };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: false,
             about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
@@ -2414,7 +2414,7 @@ mod tests {
     fn what_waits_for_the_person_comes_first_and_each_project_lists_its_runs_newest_first() {
         let mut waits = run("r1", "Make the onboarding friendlier");
         waits.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
             about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
@@ -2441,7 +2441,7 @@ mod tests {
         let agreed = "Agreed with Alan on 2026-11-21 (relayed by Otto): the plan tab of the page shows the plan's log and its checklist. Then the rest.";
         let mut waits = run("r1", agreed);
         waits.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
             about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
@@ -2503,7 +2503,7 @@ mod tests {
     #[test]
     fn a_merge_names_the_branch_it_merges_into_in_the_list_as_on_the_card() {
         let merge = QuestionState {
-            question: Question {
+            question: Question { rides: Vec::new(),
                 id: "merge-1".into(), step: "fix".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![], holds: true,
                 about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![],
             },
@@ -2520,7 +2520,7 @@ mod tests {
     fn a_choice_of_one_option_asks_whether_to_go_with_it() {
         let item = |id: &str, label: &str| jaynes_core::question::Item { id: id.into(), label: label.into(), digest: jaynes_core::Digest(id.into()) };
         let asked = |items, choose| QuestionState {
-            question: Question {
+            question: Question { rides: Vec::new(),
                 id: "q1".into(), step: "stack".into(), round: 1, kind: QuestionKind::Decision, items, offered: vec![], holds: true,
                 about: "Which stack goes on?".into(), choose, pass: 0, passes: 0, back: vec![],
             },
@@ -2540,7 +2540,7 @@ mod tests {
     fn asked_every_state_reads_the_same_in_jaynes_runs_on_the_page_and_in_the_app() {
         use jaynes_core::question::By;
         let stop = |r: &mut Run| {
-            let question = Question {
+            let question = Question { rides: Vec::new(),
                 id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
                 about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
             };

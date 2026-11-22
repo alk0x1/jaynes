@@ -22,7 +22,7 @@ fn step(name: &str, executor: Executor) -> StepDecl {
         reach: Reach { project: ProjectAccess::Write, write: vec!["design/**".into()], ..Reach::default() },
         effect: Effect::None,
         checks: vec![CheckDecl { name: "shape".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }],
-        stop: Some(StopDecl {
+        stop: Some(StopDecl { unheld: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
             holds: true,
             from_risk: Risk::Low,
