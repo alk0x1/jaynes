@@ -59,7 +59,8 @@ fn session_of(line: &str) -> Option<(String, jaynes_core::event::Confirmed)> {
 
 #[derive(Debug)]
 pub enum Ended {
-    Ran { usage: Usage, session: Option<String>, #[allow(dead_code)] model: String },
+    /// `said` is what the agent wrote last, its result's text: a question's answer when it wrote no reply file.
+    Ran { usage: Usage, session: Option<String>, #[allow(dead_code)] model: String, said: String },
     /// The agent's fault, with what it cost.
     Failed { reason: String, usage: Usage },
     /// Jaynes's or the machine's.
@@ -364,7 +365,7 @@ impl Agent for Shell {
                 let session = said["session"].as_str().map(str::to_string);
                 match code {
                     _ if timed_out => Ended::Failed { reason: "the turn ran past its deadline".to_string(), usage },
-                    Some(0) => Ended::Ran { usage, session, model: "command".to_string() },
+                    Some(0) => Ended::Ran { usage, session, model: "command".to_string(), said: said["said"].as_str().unwrap_or("").to_string() },
                     Some(75) => Ended::Interrupted { reason: "quota".to_string() },
                     Some(3) => Ended::Fault { reason: err.trim().chars().take(300).collect() },
                     _ => Ended::Failed { reason: with_said(&format!("the agent {}", exited(code)), &err.chars().take(300).collect::<String>()), usage },
@@ -870,7 +871,7 @@ impl CodexTurn {
         if code != Some(0) {
             return Ended::Failed { reason: with_said(&format!("Codex {}", exited(code)), &err.chars().take(300).collect::<String>()), usage };
         }
-        Ended::Ran { usage, session: self.session, model: String::new() }
+        Ended::Ran { usage, session: self.session, model: String::new(), said: String::new() }
     }
 }
 
@@ -963,7 +964,7 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
         return Ended::Fault { reason: format!("the Claude Code turn did not complete ({subtype}): {}", said.chars().take(300).collect::<String>()) };
     }
     match answered_by(model, out, &result) {
-        Ok(answered) => Ended::Ran { usage, session, model: answered },
+        Ok(answered) => Ended::Ran { usage, session, model: answered, said },
         Err(other) => Ended::Fault { reason: format!("asked for {model} and {other} answered; this turn does not count") },
     }
 }

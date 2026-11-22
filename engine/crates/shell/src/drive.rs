@@ -10,7 +10,7 @@ use crate::store::Store;
 use jaynes_core::event::{Event, Read};
 use jaynes_core::manifest::ProjectAccess;
 use jaynes_core::question::{Answer, Question};
-use jaynes_core::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
+use jaynes_core::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::File;
@@ -741,6 +741,51 @@ fn remove_all(dir: &Path) -> std::io::Result<()> {
 
 /// Where an agent writes why a step cannot be done as asked, in its exchange folder.
 const IMPOSSIBLE: &str = "impossible.txt";
+/// Where the agent writes its words to the person: beside the work a stop shows, never inside it, and a question's
+/// answer.
+const REPLY: &str = "reply.md";
+/// What a question is about, for an agent that answers it in a session of its own.
+const ASKED_ABOUT: &str = "asked-about.json";
+/// The most characters of a reply the person is shown.
+pub const REPLY_MOST: usize = 4000;
+
+/// A reply as words for the person: line breaks kept, at most one blank line between paragraphs, tabs as spaces,
+/// control characters and the invisible marks that turn or hide text taken out, cut at REPLY_MOST with "…". None when
+/// nothing is left.
+pub fn reply_text(raw: &str) -> Option<String> {
+    let invisible = |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
+    let mut out = String::new();
+    let mut blank = false;
+    for line in raw.replace("\r\n", "\n").split(['\n', '\r']) {
+        let line: String = line.chars().map(|c| if c == '\t' { ' ' } else { c }).filter(|&c| !c.is_control() && !invisible(c)).collect();
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            blank = true;
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(if blank { "\n\n" } else { "\n" });
+        }
+        blank = false;
+        out.push_str(line);
+    }
+    let out = out.trim();
+    if out.is_empty() {
+        return None;
+    }
+    if out.chars().count() <= REPLY_MOST {
+        return Some(out.to_string());
+    }
+    let mut cut: String = out.chars().take(REPLY_MOST - 1).collect::<String>().trim_end().to_string();
+    cut.push('…');
+    Some(cut)
+}
+
+/// What the agent wrote to the person in this turn's exchange, as words for them.
+#[allow(dead_code)] // WIRED into Delivered.reply with the types commit, then this line goes
+fn reply_in(exchange: &Path) -> Option<String> {
+    read_inside(exchange.parent().unwrap_or(exchange), &exchange.join(REPLY)).ok().and_then(|t| reply_text(&t))
+}
 
 /// What a person sees as the process goes: one line each.
 pub fn say(line: &str) {
@@ -1324,7 +1369,10 @@ impl<'a> Driver<'a> {
                     return fault(e.to_string());
                 }
             }
-            compose(&run.request, &text, &schema, &turn, &given)
+            let name = &run.manifest.steps[i].name;
+            let read = run.manifest.steps[i].stop.is_some()
+                || run.manifest.steps.iter().any(|s| s.stop.as_ref().and_then(|st| st.redo.as_deref()) == Some(name.as_str()));
+            compose(&run.request, &text, &schema, &turn, &given, read)
         } else {
             let _gone = std::fs::remove_file(exchange.join("output.json"));
             let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
@@ -1411,6 +1459,81 @@ impl<'a> Driver<'a> {
             Ended::Ran { usage, session, .. } => self.delivered(run, i, &turn, &exchange, usage, session),
         };
         Input::AttemptEnded { step: turn.step, attempt: turn.attempt, fix: turn.fix, outcome }
+    }
+
+    /// Answer the person's question at a stop: a turn that only reads, in the session of the step that made what the
+    /// stop shows (a session of its own, given that in asked-about.json, when there is none), and that redoes nothing.
+    /// Nothing it asks beyond its settings reaches the person, and its session is never one a cut-off attempt goes on
+    /// in. The answer is what it wrote in reply.md, else its result's last words. A turn that changed the copy fails,
+    /// and what it changed is put back.
+    #[cfg_attr(not(test), allow(dead_code))] // WIRED by the AnswerAsk dispatch, then this line goes
+    pub(crate) fn answer_ask(&mut self, run: &Run, turn: AskTurn) -> AskOutcome {
+        let failed = |reason: String, usage: jaynes_core::event::Usage| AskOutcome::Failed { reason, usage };
+        let Some(i) = run.manifest.index(&turn.step) else { return failed("no such step".into(), Default::default()) };
+        let copy = self.setup.copy.as_ref().filter(|_| run.manifest.steps[i].reach.project != ProjectAccess::None);
+        let cwd = match copy {
+            Some(c) => c.dir().to_path_buf(),
+            None => self.setup.dir.join("steps").join(&turn.step).join(format!("ask-{}", turn.ask)),
+        };
+        let exchange = cwd.join(EXCHANGE);
+        let about = self.output_of(&Some(turn.output.clone())).unwrap_or(Value::Null);
+        let _gone = std::fs::remove_file(exchange.join(REPLY));
+        if let Err(e) = std::fs::create_dir_all(&exchange).and_then(|()| std::fs::write(exchange.join(ASKED_ABOUT), about.to_string())) {
+            return failed(format!("Jaynes cannot write {}: {e}", exchange.display()), Default::default());
+        }
+        let before = match copy.map(|c| c.drifted()).transpose() {
+            Ok(b) => b.unwrap_or_default(),
+            Err(e) => return failed(e, Default::default()),
+        };
+        let prompt = ask_prompt(&run.request, &turn);
+        say(&format!("· {} answers a question", turn.step));
+        let transcript = self.setup.dir.join("steps").join(&turn.step).join(format!("ask-{}.jsonl", turn.ask));
+        let _made = std::fs::create_dir_all(transcript.parent().unwrap_or(Path::new(".")));
+        let reads = copy.map(|c| c.reads()).unwrap_or_default();
+        let spec = agent::Spec {
+            cwd: &cwd,
+            prompt: &prompt,
+            session: turn.session.as_deref(),
+            reach: &turn.reach,
+            deadline: Duration::from_secs(turn.deadline_seconds.max(1)),
+            reads: &reads,
+            env: AGENT_GIT_ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            transcript: Some(transcript),
+            pidfile: Some(self.setup.dir.join("agent.pid")),
+            paused: None,
+            on_session: None,
+            permit: None,
+        };
+        let done = self.setup.agent.turn(spec);
+        let reply = reply_in(&exchange);
+        let _gone = std::fs::remove_file(exchange.join(REPLY));
+        let _gone = std::fs::remove_file(exchange.join(ASKED_ABOUT));
+        let usage = match &done.ended {
+            Ended::Ran { usage, .. } | Ended::Failed { usage, .. } => *usage,
+            Ended::Fault { .. } | Ended::Interrupted { .. } => Default::default(),
+        };
+        if let Some(c) = copy {
+            let changed: Vec<String> = match c.drifted() {
+                Ok(after) => after.into_iter().filter(|p| !before.contains(p)).collect(),
+                Err(e) => return failed(e, usage),
+            };
+            if !changed.is_empty() {
+                let back = match c.put_back() {
+                    Ok(()) => "they were put back".to_string(),
+                    Err(e) => format!("putting them back failed: {e}"),
+                };
+                return failed(format!("the agent changed {} while it answered, which a question never may: {back}", changed.join(", ")), usage);
+            }
+        }
+        match done.ended {
+            Ended::Ran { usage, session, said, .. } => match reply.or_else(|| reply_text(&said)) {
+                Some(text) => AskOutcome::Answered { text, usage, session },
+                None => failed("the agent answered nothing: ask again".into(), usage),
+            },
+            Ended::Failed { reason, usage } => failed(reason, usage),
+            Ended::Fault { reason } => failed(reason, usage),
+            Ended::Interrupted { reason } => failed(format!("stopped from outside ({reason}): ask again"), usage),
+        }
     }
 
     fn delivered(&self, run: &Run, i: usize, turn: &AgentTurn, exchange: &Path, usage: jaynes_core::event::Usage, session: Option<String>) -> AttemptOutcome {
@@ -1752,6 +1875,7 @@ fn write_exchange(exchange: &Path, given: &[Given], previous: Option<&Value>) ->
     let _gone = std::fs::remove_file(exchange.join("output.json"));
     let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
     let _gone = std::fs::remove_file(exchange.join("previous.json"));
+    let _gone = std::fs::remove_file(exchange.join(REPLY));
     std::fs::create_dir_all(exchange.join("inputs")).map_err(|e| format!("Jaynes cannot write {}: {e}", exchange.display()))?;
     for g in given {
         std::fs::write(exchange.join("inputs").join(format!("{}.json", g.step)), g.output.to_string()).map_err(|e| e.to_string())?;
@@ -1763,7 +1887,8 @@ fn write_exchange(exchange: &Path, given: &[Given], previous: Option<&Value>) ->
 }
 
 /// The prompt of an attempt: the role's instructions, then what Jaynes says the same way for every role.
-pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, given: &[Given]) -> String {
+/// `read` says whether the person reads what the step makes at a stop: then the agent writes them a reply beside it.
+pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, given: &[Given], read: bool) -> String {
     let mut p = String::new();
     p.push_str(&format!("# The request\n\n{request}\n\n# Your step: {}\n\n{text}\n\n", turn.step));
     if !given.is_empty() {
@@ -1843,9 +1968,40 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
          .jaynes/impossible.txt. The person reads it and tells you how to go on; it costs you no attempt. Never write \
          an output you know is wrong to get past the checks.\n\n",
     );
+    if read {
+        p.push_str(
+            "# Your reply to the person\n\nThe person reads what you make at a stop. When you are done, write to \
+             .jaynes/reply.md, in their language and in a few plain sentences, what you made or changed and why, and \
+             answer there any question they asked. It goes beside your work, never inside it: no code, no JSON, no file \
+             names.\n\n",
+        );
+    }
     p.push_str(&format!(
         "# Your output\n\nWhen you are done, write your output as JSON to .jaynes/output.json, following this schema:\n\n{}\n",
         serde_json::to_string_pretty(schema).unwrap_or_default()
+    ));
+    p
+}
+
+/// What the agent is told when the person asks a question at a stop. An agent in the step's session knows the rest;
+/// one in a session of its own is told the request and where what it is asked about is.
+#[cfg_attr(not(test), allow(dead_code))] // WIRED by the AnswerAsk dispatch, then this line goes
+fn ask_prompt(request: &str, turn: &AskTurn) -> String {
+    let mut p = String::new();
+    if turn.session.is_none() {
+        p.push_str(&format!(
+            "# The request\n\n{request}\n\n# What the person is looking at\n\nWhat the step “{}” made, in .jaynes/{ASKED_ABOUT}.\n\n",
+            turn.step
+        ));
+    }
+    let text = turn.text.trim();
+    let end = if text.ends_with(['.', '!', '?', '…']) { "" } else { "." };
+    p.push_str(&format!(
+        "# A question from the person\n\nThe person asks about “{}”: {text}{end} Answer in your reply, in their language, in a few \
+         sentences. Change nothing: the option stays as it is. This turn only reads: look at the project if you need \
+         to, change nothing in it, and redo nothing.\n\n# Your reply\n\nWrite your answer to .jaynes/reply.md, as \
+         plain words for the person: no code, no JSON, no file names.\n",
+        turn.label
     ));
     p
 }
@@ -1894,6 +2050,8 @@ mod tests {
     use super::*;
     use jaynes_core::manifest::{Executor, Manifest, Reach, SessionKind, StepDecl};
     use jaynes_core::question::By;
+    use jaynes_core::risk::Changed;
+    use jaynes_core::{AskOutcome, AskTurn};
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -2201,5 +2359,339 @@ mod tests {
         keep_engine(&home).expect("kept");
         assert!(home.join("engines").join(jaynes_core::ENGINE).join("jaynes").is_file());
         assert!(jaynes_core::ENGINE.contains('+'), "the version names the core's code: {}", jaynes_core::ENGINE);
+    }
+
+    /// What a stand-in agent was given, and what it does: no model is ever reached.
+    #[derive(Default)]
+    struct Seen {
+        prompt: String,
+        session: Option<String>,
+        reach: Option<Reach>,
+        permit: bool,
+        on_session: bool,
+        cwd: PathBuf,
+        transcript: Option<PathBuf>,
+        previous: Option<String>,
+    }
+
+    struct StandIn {
+        seen: std::sync::Arc<std::sync::Mutex<Seen>>,
+        /// What it writes in the exchange folder's reply.md, if anything.
+        reply: Option<String>,
+        /// What its result says last.
+        said: String,
+        /// A file of the project it writes, which a question may never do.
+        writes: Option<&'static str>,
+    }
+
+    impl Agent for StandIn {
+        fn name(&self) -> String {
+            "stand-in".into()
+        }
+        fn probe(&self, _cwd: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn turn(&self, spec: agent::Spec<'_>) -> agent::Turn {
+            let exchange = spec.cwd.join(EXCHANGE);
+            {
+                let mut seen = self.seen.lock().expect("seen");
+                *seen = Seen {
+                    prompt: spec.prompt.to_string(),
+                    session: spec.session.map(str::to_string),
+                    reach: Some(spec.reach.clone()),
+                    permit: spec.permit.is_some(),
+                    on_session: spec.on_session.is_some(),
+                    cwd: spec.cwd.to_path_buf(),
+                    transcript: spec.transcript.clone(),
+                    previous: std::fs::read_to_string(exchange.join(ASKED_ABOUT)).ok(),
+                };
+            }
+            if let Some(r) = &self.reply {
+                std::fs::write(exchange.join("reply.md"), r).expect("reply");
+            }
+            if let Some(f) = self.writes {
+                std::fs::write(spec.cwd.join(f), "changed while answering").expect("write");
+            }
+            let usage = jaynes_core::event::Usage { seconds: 3, tokens: 1200, cached: 9000 };
+            agent::Turn { ended: Ended::Ran { usage, session: spec.session.map(str::to_string), model: "stand-in".into(), said: self.said.clone() }, applied: json!({}) }
+        }
+    }
+
+    /// A copy that only knows what changed in its folder since it was made: what a question checks.
+    struct Folder {
+        dir: PathBuf,
+        was: std::collections::BTreeMap<String, Vec<u8>>,
+    }
+
+    impl Folder {
+        fn new(dir: &Path) -> Folder {
+            Folder { dir: dir.to_path_buf(), was: Folder::files(dir) }
+        }
+        fn files(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_name() != EXCHANGE && e.path().is_file())
+                .map(|e| (e.file_name().to_string_lossy().to_string(), std::fs::read(e.path()).unwrap_or_default()))
+                .collect()
+        }
+    }
+
+    impl Workspace for Folder {
+        fn dir(&self) -> &Path {
+            &self.dir
+        }
+        fn source(&self) -> &Path {
+            &self.dir
+        }
+        fn measure(&self, _write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
+            unreachable!("a question measures nothing")
+        }
+        fn compose(&self, _changes: &[(String, String)]) -> Result<String, String> {
+            unreachable!()
+        }
+        fn keep(&self, _state: Option<&str>, _parent: &str, _message: &str) -> Result<Option<String>, String> {
+            unreachable!()
+        }
+        fn state_of(&self, _id: &str) -> Result<String, String> {
+            unreachable!()
+        }
+        fn base(&self) -> Result<String, String> {
+            unreachable!()
+        }
+        fn head(&self) -> Result<String, String> {
+            unreachable!()
+        }
+        fn discard(&self) -> Result<(), String> {
+            unreachable!()
+        }
+        fn deliver(&self, _changes: &[(String, String)]) -> Result<String, String> {
+            unreachable!()
+        }
+        fn land(&self, _head: &str, _run: &str) -> Result<Option<String>, String> {
+            unreachable!()
+        }
+        fn undo(&self, _landed: &[String], _run: &str) -> Result<String, String> {
+            unreachable!()
+        }
+        fn reads(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+        fn lay_out(&self, _id: &str) -> Result<crate::project::LaidOut, String> {
+            unreachable!()
+        }
+        fn left_out(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn drifted(&self) -> Result<Vec<String>, String> {
+            let now = Folder::files(&self.dir);
+            let mut names: Vec<String> = now.iter().filter(|(k, v)| self.was.get(*k) != Some(v)).map(|(k, _)| k.clone()).collect();
+            names.extend(self.was.keys().filter(|k| !now.contains_key(*k)).cloned());
+            Ok(names)
+        }
+        fn put_back(&self) -> Result<(), String> {
+            for k in Folder::files(&self.dir).keys().filter(|k| !self.was.contains_key(*k)) {
+                std::fs::remove_file(self.dir.join(k)).map_err(|e| e.to_string())?;
+            }
+            for (k, v) in &self.was {
+                std::fs::write(self.dir.join(k), v).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+    }
+
+    /// A run whose agent step "stack" stops to ask the person about what it made, driven with `agent` in a copy that
+    /// holds main.py; and the output the stop shows, in the record.
+    fn asking(name: &str, agent: StandIn) -> (PathBuf, Store, Setup, Run, Digest) {
+        let home = std::env::temp_dir().join(format!("jaynes-ask-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let copy = home.join("runs/r/project");
+        std::fs::create_dir_all(&copy).expect("copy");
+        std::fs::write(copy.join("main.py"), "print('hi')\n").expect("file");
+        let store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let output = store.put(&json!({"output": {"options": [{"id": "py", "label": "Python + FastAPI"}]}})).expect("put");
+        let mut stack = StepDecl {
+            name: "stack".into(),
+            needs: Vec::new(),
+            executor: Executor::Agent,
+            session: SessionKind::Fresh,
+            reach: Reach { project: jaynes_core::manifest::ProjectAccess::Write, write: vec!["**".into()], ..Reach::default() },
+            effect: jaynes_core::manifest::Effect::None,
+            checks: Vec::new(),
+            stop: None,
+            from_risk: jaynes_core::risk::Risk::Low,
+            attempts: 3,
+            fixes: 2,
+            hidden: false,
+            idempotent: false,
+            about: String::new(),
+        };
+        stack.stop = Some(jaynes_core::manifest::StopDecl {
+            verdicts: vec![jaynes_core::question::VerdictKind::Keep, jaynes_core::question::VerdictKind::Change, jaynes_core::question::VerdictKind::Drop],
+            holds: true,
+            from_risk: jaynes_core::risk::Risk::Low,
+            release: false,
+            budget: None,
+            audit_rate: jaynes_core::manifest::Rate(0.1),
+            about: "Which stack?".into(),
+            choose: true,
+            redo: None,
+            rounds: None,
+        });
+        let manifest = Manifest { role: "greenfield".into(), version: "1".into(), protocol: 1, steps: vec![stack], target: Default::default(), delivery: Default::default() };
+        let start = jaynes_core::decide(None, &Input::Start {
+            run: "r".into(),
+            request: "a habit tracker".into(),
+            manifest,
+            role_fingerprint: Digest("f".into()),
+            agent: "claude:m1".into(),
+            raise: None,
+            attention: Default::default(),
+            task: None,
+            arm: None,
+            never_merge: false,
+            starter: None,
+        })
+        .expect("start");
+        let run = Run::fold(&start.events).expect("run");
+        let dir = home.join("runs/r");
+        let setup = Setup {
+            run: "r".into(),
+            dir: dir.clone(),
+            role: RoleProgram::new(&dir.join("role"), &dir.join("library")),
+            copy: Some(Box::new(Folder::new(&copy))),
+            agent: Box::new(agent),
+            any_port: false,
+            servers: false,
+            home: home.clone(),
+            project: None,
+        };
+        (home, store, setup, run, output)
+    }
+
+    fn ask(output: &Digest, session: Option<&str>, text: &str) -> AskTurn {
+        AskTurn {
+            ask: "q1-stack-a1".into(),
+            question: "q1-stack".into(),
+            step: "stack".into(),
+            round: 0,
+            output: output.clone(),
+            item: Some("py".into()),
+            label: "Python + FastAPI".into(),
+            text: text.into(),
+            session: session.map(str::to_string),
+            reach: Reach { project: jaynes_core::manifest::ProjectAccess::Read, ..Reach::default() },
+            deadline_seconds: 600,
+            tokens_left: 500_000,
+        }
+    }
+
+    fn stand_in(reply: Option<&str>, said: &str, writes: Option<&'static str>) -> (StandIn, std::sync::Arc<std::sync::Mutex<Seen>>) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Seen::default()));
+        (StandIn { seen: seen.clone(), reply: reply.map(str::to_string), said: said.into(), writes }, seen)
+    }
+
+    #[test]
+    fn asked_question_is_answered_without_redoing_the_step() {
+        // Alan, 21/11, at the stack's one option: "e se fosse Go?"
+        let (agent, seen) = stand_in(Some("Go would make one binary and use less memory; FastAPI is quicker to write.\n\nI changed nothing."), "", None);
+        let (home, mut store, setup, run, output) = asking("answered", agent);
+        let mut d = Driver::take(&mut store, setup).expect("driver");
+        let outcome = d.answer_ask(&run, ask(&output, Some("s1"), "e se fosse Go?"));
+        let AskOutcome::Answered { text, usage, session } = outcome else { panic!("{outcome:?}") };
+        assert_eq!(text, "Go would make one binary and use less memory; FastAPI is quicker to write.\n\nI changed nothing.");
+        assert_eq!((usage.tokens, session.as_deref()), (1200, Some("s1")));
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.session.as_deref(), Some("s1"), "in the session of the step that made the option");
+        let reach = seen.reach.clone().expect("reach");
+        assert!(reach.project == jaynes_core::manifest::ProjectAccess::Read && reach.write.is_empty(), "only reads: {reach:?}");
+        assert!(!seen.permit, "nothing it asks beyond its settings reaches the person: it is refused");
+        assert!(!seen.on_session, "a question's session is never the one a cut-off attempt goes on in");
+        assert!(seen.prompt.contains("e se fosse Go?") && seen.prompt.contains("“Python + FastAPI”"), "{}", seen.prompt);
+        assert!(seen.prompt.contains("Change nothing") && seen.prompt.contains(".jaynes/reply.md"), "{}", seen.prompt);
+        assert!(seen.previous.as_deref().is_some_and(|p| p.contains("Python + FastAPI")), "what the stop shows: {:?}", seen.previous);
+        assert_eq!(seen.transcript.as_deref(), Some(home.join("runs/r/steps/stack/ask-q1-stack-a1.jsonl").as_path()));
+        assert!(!seen.cwd.join(".jaynes/reply.md").exists(), "the reply file is taken, and none lingers for the next turn");
+        assert_eq!(std::fs::read_to_string(seen.cwd.join("main.py")).expect("file"), "print('hi')\n");
+    }
+
+    #[test]
+    fn a_question_whose_agent_changes_a_file_fails_and_the_file_is_put_back() {
+        let (agent, _) = stand_in(Some("Done, I switched it to Go."), "", Some("main.py"));
+        let (home, mut store, setup, run, output) = asking("changed", agent);
+        let mut d = Driver::take(&mut store, setup).expect("driver");
+        let outcome = d.answer_ask(&run, ask(&output, Some("s1"), "e se fosse Go?"));
+        let AskOutcome::Failed { reason, usage } = outcome else { panic!("{outcome:?}") };
+        assert!(reason.contains("main.py") && reason.contains("put back"), "{reason}");
+        assert_eq!(usage.tokens, 1200, "what it cost is counted all the same");
+        assert_eq!(std::fs::read_to_string(home.join("runs/r/project/main.py")).expect("file"), "print('hi')\n");
+    }
+
+    #[test]
+    fn a_question_answered_without_a_reply_file_takes_the_agent_s_last_words_and_one_without_any_fails() {
+        let (agent, _) = stand_in(None, "Go: one binary, less memory.", None);
+        let (_home, mut store, setup, run, output) = asking("said", agent);
+        let mut d = Driver::take(&mut store, setup).expect("driver");
+        let outcome = d.answer_ask(&run, ask(&output, None, "e se fosse Go?"));
+        assert!(matches!(&outcome, AskOutcome::Answered { text, .. } if text == "Go: one binary, less memory."), "{outcome:?}");
+        let (agent, seen) = stand_in(None, "   ", None);
+        let (_home, mut store, setup, run, output) = asking("nothing", agent);
+        let mut d = Driver::take(&mut store, setup).expect("driver");
+        let outcome = d.answer_ask(&run, ask(&output, None, "e se fosse Go?"));
+        assert!(matches!(&outcome, AskOutcome::Failed { reason, .. } if reason.contains("answered nothing")), "{outcome:?}");
+        assert!(seen.lock().expect("seen").prompt.contains(".jaynes/asked-about.json"), "a new session is told where the option is");
+    }
+
+    #[test]
+    fn a_reply_reads_as_words_for_the_person_cleaned_and_cut() {
+        assert_eq!(reply_text("  Changed the API.\r\n\r\n\r\n\r\nKept the rest.\u{1b}[31m\u{202e}  "), Some("Changed the API.\n\nKept the rest.[31m".to_string()));
+        assert_eq!(reply_text("one\ttab"), Some("one tab".to_string()));
+        assert_eq!(reply_text(" \n\u{200b}\n "), None);
+        let long = "é".repeat(REPLY_MOST + 10);
+        let cut = reply_text(&long).expect("cut");
+        assert_eq!(cut.chars().count(), REPLY_MOST);
+        assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn a_round_the_person_reads_asks_the_agent_for_its_reply_and_one_nobody_reads_does_not() {
+        let turn = |notes: Vec<String>| AgentTurn {
+            step: "stack".into(),
+            round: 1,
+            attempt: 2,
+            fix: 0,
+            session: None,
+            reach: Reach::default(),
+            given: Vec::new(),
+            previous: None,
+            notes,
+            context: Vec::new(),
+            failure: Vec::new(),
+            checks: Vec::new(),
+            locked: Vec::new(),
+            dropped: Vec::new(),
+            keep: None,
+            review: None,
+            earlier: Vec::new(),
+            back: Vec::new(),
+            deadline_seconds: 60,
+            tokens_left: 1000,
+        };
+        let read = compose("r", "make it", &json!({}), &turn(vec!["use htmx".into()]), &[], true);
+        assert!(read.contains("# Your reply to the person") && read.contains(".jaynes/reply.md"), "{read}");
+        assert!(read.find("# Your reply").expect("reply") < read.find("# Your output").expect("output"));
+        let unread = compose("r", "make it", &json!({}), &turn(Vec::new()), &[], false);
+        assert!(!unread.contains("reply.md"), "{unread}");
+    }
+
+    #[test]
+    fn a_turn_s_exchange_keeps_no_reply_from_the_one_before() {
+        let dir = std::env::temp_dir().join(format!("jaynes-reply-left-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("reply.md"), "from the round before").expect("old");
+        write_exchange(&dir, &[], None).expect("written");
+        assert!(!dir.join("reply.md").exists());
     }
 }
