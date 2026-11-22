@@ -933,9 +933,8 @@ def plain_words(call: Call, params: Params) -> Any:
     return Fail(*reasons) if reasons else Pass()
 
 
-_NOT_BEFORE = re.compile(r"\b(not|no|never|without|but|except|instead of|rather than|avoid|don't|do not|nor|não|nao|nem|sem|nada de|exceto|menos|evite|evitar|fora)\s*$", re.I)
-_NOT_AFTER = re.compile(r"^\s*(not|no|never|não|nao|nunca|nem)\b", re.I)
-
+_REFUSES = re.compile(r"\b(not|no|never|without|but|except|instead|rather|avoid|don't|dont|do not|nor|não|nao|nem|sem|nada|exceto|menos|evite|evitar|fora|nunca)\b", re.I)
+_UNDECIDED = re.compile(r"\?|\b(or|either|whichever|maybe|perhaps|might|could|should we|unsure|not sure|ou|talvez|tanto faz|qualquer|não sei|nao sei|quem sabe|será)\b", re.I)
 
 def _as_compared(text: str) -> str:
     """Text as it is compared to the request: lower case, one space, straight quotes."""
@@ -958,17 +957,26 @@ def named_in_request(call: Call, params: Params) -> Any:
     for o in named:
         said = _as_compared(o[words])
         name = str(o.get("name", ""))
-        at = request.find(said)
-        if len(said) < 2 or at < 0:
+        found = re.search(rf"(?<!\w){re.escape(said)}(?!\w)", request)
+        if len(said) < 2 or not found:
             reasons.append(f"{name}: the request does not say \"{o[words].strip()}\" word for word, so it did not name this option")
             continue
         if not set(re.findall(r"\w+", said)) & set(re.findall(r"\w+", _as_compared(name))):
             reasons.append(f"{name}: \"{o[words].strip()}\" shares no word with the option's name, so it does not name it")
             continue
+        at = found.start()
         before = re.split(r"[.;!?,\n]", request[:at])[-1]
         after = re.split(r"[.;!?,\n]", request[at + len(said):])[0]
-        if _NOT_BEFORE.search(" ".join(before.split()[-4:])) or _NOT_AFTER.search(after):
+        start = max(request.rfind(c, 0, at) for c in ".;!\n")
+        ends = [i for i in (request.find(c, at + len(said)) for c in ".;!?\n") if i >= 0]
+        sentence = request[start + 1:min(ends) + 1 if ends else len(request)]
+        # a refusal inside the quote counts where the quote names this option: "Python, not Rust" names Python
+        names = set(re.findall(r"\w+", _as_compared(name)))
+        own = [c for c in re.split(r"[,;]", said) if set(re.findall(r"\w+", c)) & names]
+        if _REFUSES.search(" ".join(before.split()[-4:])) or any(_REFUSES.search(c) for c in own) or re.match(r"^\s*(not|no|never|não|nao|nunca|nem)\b", after, re.I):
             reasons.append(f"{name}: the request may refuse \"{o[words].strip()}\" rather than ask for it, so the person chooses")
+        elif _UNDECIDED.search(sentence):
+            reasons.append(f"{name}: the request asks or leaves it open where it says \"{o[words].strip()}\", so it did not decide; the person chooses")
     if named and len(options) > 1:
         reasons.append(f"{field} has {len(options)} options though the request named one: give it alone")
     return Fail(*reasons) if reasons else Pass()
