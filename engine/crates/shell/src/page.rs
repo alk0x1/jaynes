@@ -1326,8 +1326,10 @@ fn choose_button(id: &str) -> String {
 
 /// The button of a choice with one option while its field is empty; with words it says "Not yet: send my words",
 /// and sends them as a change that chooses nothing (the app's compare.rs, uma-opcao.md).
+/// Beside it, once there are words, a grey "Go with this one" goes with it anyway, the words as context, as the app
+/// does: who wrote and then decides to go on need not clear the field first (the design-lead, 22/11).
 fn go_with_button(id: &str) -> String {
-    format!("<button class=\"choose\" data-choose=\"{id}\">Go with this one</button>", id = esc(id))
+    format!("<button class=\"choose\" data-choose=\"{id}\">Go with this one</button><button class=\"choose alt\" data-keep=\"{id}\" hidden>Go with this one</button>", id = esc(id))
 }
 
 /// The row that sends every option away: "Not this one" when there is one, as the app says it.
@@ -1522,9 +1524,10 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     // a stop about what an agent's step made may be asked about, while it is open; the agent's answer joins the thread
     let can_ask = question.kind == QuestionKind::Decision && q.open() && run.manifest.steps.get(i).is_some_and(|d| d.executor == jaynes_core::manifest::Executor::Agent);
     let answering = run.asking.values().any(|x| *x == question.id);
+    let solo = question.choose && one;
     format!(
         "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
-         <div class=\"say\"><label>Your words</label>{modes}<input id=\"ctx\" placeholder=\"Say what you think, in any language: what stays, what changes (or answer with the buttons)\"><button class=\"read\" id=\"read\">Read my words</button>{ask}</div>{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
+         {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
          {rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
@@ -1537,11 +1540,16 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         tail = if leave { "" } else { changes },
         strip = strip(run),
         thread = thread_html(run, q),
-        modes = if can_ask { "<span class=\"mode\" hidden><button data-mode=\"ask\">Question</button><button data-mode=\"change\">Change</button></span>" } else { "" },
-        ask = if can_ask { "<button class=\"go\" id=\"ask\" hidden>Ask the agent ↵</button>" } else { "" },
+        // with one option its own field is the stop's words: a second field above it left the person unsure where to
+        // write (the design-lead, 22/11)
+        say = if solo { String::new() } else { format!(
+            "<div class=\"say\"><label>Your words</label>{modes}<input id=\"ctx\" placeholder=\"Say what you think, in any language: what stays, what changes (or answer with the buttons)\"><button class=\"read\" id=\"read\">Read my words</button>{ask}</div>",
+            modes = if can_ask { "<span class=\"mode\" hidden><button data-mode=\"ask\">Question</button><button data-mode=\"change\">Change</button></span>" } else { "" },
+            ask = if can_ask { "<button class=\"go\" id=\"ask\" hidden>Ask the agent ↵</button>" } else { "" },
+        ) },
         askline = if answering {
             format!("<div class=\"askline\" id=\"askline\">Your question went to the agent at “{}”. It answers here; nothing is redone and nothing is chosen.</div>", esc(&question.step))
-        } else if can_ask {
+        } else if can_ask && !solo {
             "<div class=\"askline\" id=\"askline\" hidden>The agent answers here. Nothing is redone and nothing is chosen.</div>".to_string()
         } else {
             String::new()
@@ -2192,6 +2200,11 @@ function choice(id) {
   if (note) n[id] = note;
   return JSON.stringify({ ...base, verdicts: v, notes: n, context: ctxOf() });
 }
+// one option, with words: go with it anyway, the words as context (the design-lead, 22/11)
+function keepWith(id) {
+  const v = {}; for (const x of base.items) v[x] = x === id ? "keep" : "drop";
+  return JSON.stringify({ ...base, verdicts: v, notes: {}, context: [noteOf(id), ctxOf()].filter(t => t.trim()).join(" ") });
+}
 // the shortlist: each developed by the agent with its note (the engine's, decide::SHORTLISTED, without one), the rest leave
 const SHORTLISTED = "Shortlisted: develop it further, keeping what it is.";
 const finals = new Set();
@@ -2279,9 +2292,11 @@ async function said(id, body, ulId, btn) {
   await window.jaynesKey;
   const r = await (await fetch("/api/effects", { method: "POST", headers: { "Content-Type": "application/json" }, body: body || choice(id) })).json();
   const ul = ulId ? document.getElementById(ulId) : document.querySelector(`.fx-row[data-i="${CSS.escape(id)}"]`);
-  // what follows stays in front; what happens to each option is folded
+  // what follows stays in front; what happens to each option is folded; with one there is no "each option": in
+  // their order under the button, what becomes of it first (the design-lead, 22/11)
   const all = r.sentences || [], each = all.filter(s => s.startsWith("“")), next = all.filter(s => !s.startsWith("“"));
-  if (ul) ul.innerHTML = next.map(s => `<li>${esc(s)}</li>`).join("")
+  if (base.items.length === 1) { if (ul) ul.innerHTML = [...each, ...next].map(s => `<li>${esc(s)}</li>`).join("") + (r.ok ? "" : `<li class="bad">${esc(r.refused || "")}</li>`); }
+  else if (ul) ul.innerHTML = next.map(s => `<li>${esc(s)}</li>`).join("")
     + (each.length ? `<li class="more"><details><summary>What happens to each option</summary><ul>${each.map(s => `<li>${esc(s)}</li>`).join("")}</ul></details></li>` : "")
     + (r.ok ? "" : `<li class="bad">${esc(r.refused || "")}</li>`);
   const b = btn ? document.getElementById(btn) : document.querySelector(`.choose[data-choose="${CSS.escape(id)}"]`);
@@ -2303,7 +2318,7 @@ if (base && base.choose) {
     if (!e.target.classList.contains("adjust")) return;
     const id = e.target.dataset.i;
     // one option: go with it while the field is empty, not yet once it has words (uma-opcao.md)
-    if (base.items.length === 1) { const b = document.querySelector(`button.choose[data-choose="${CSS.escape(id)}"]`); if (b) b.textContent = e.target.value.trim() ? "Not yet: send my words" : "Go with this one"; }
+    if (base.items.length === 1) { const b = document.querySelector(`button.choose[data-choose="${CSS.escape(id)}"]`); if (b) b.textContent = e.target.value.trim() ? "Not yet: send my words" : "Go with this one"; const alt = document.querySelector(`button.alt[data-keep="${CSS.escape(id)}"]`); if (alt) alt.hidden = !e.target.value.trim(); }
     clearTimeout(later[id]); later[id] = setTimeout(() => { said(id); if (finals.has(id)) sayFinals(); }, 250);
   });
   document.addEventListener("click", async e => {
@@ -2314,7 +2329,7 @@ if (base && base.choose) {
       const words = [(document.getElementById("why") || {}).value || "", ctxOf()].filter(t => t.trim()).join(" ");
       readWords(words, document.getElementById("none").textContent, none()); return;
     }
-    const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : choice(b.dataset.choose);
+    const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : b.dataset.keep ? keepWith(b.dataset.keep) : choice(b.dataset.choose);
     document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
     const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
     if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/", 900); }
@@ -2522,6 +2537,7 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .pick .fin { background:var(--panel); color:var(--dim); border:1px solid var(--line-2); border-radius:8px; padding:8px 14px; } .pick .fin.on { border-color:var(--amber); color:var(--amber); background:var(--amber-soft); }
 .finsay { flex:1; align-self:center; font-size:13.5px; color:var(--dim); }
 .pick .choose { background:var(--blue); color:#04121f; border:0; border-radius:8px; padding:8px 20px; font-weight:600; } .pick .choose:disabled { background:var(--line-2); color:var(--faint); }
+.pick .choose.alt { background:var(--panel-2); color:var(--dim); border:1px solid var(--line-2); font-weight:500; } .pick .choose[hidden] { display:none; }
 .fx-row { margin:6px 0 0; padding-left:18px; font-size:12.5px; color:var(--dim); } .fx-row .bad { color:var(--red); list-style:none; margin-left:-18px; } .fx-row .more { list-style:none; margin-left:-18px; } .fx-row summary { cursor:pointer; color:var(--faint); }
 .seg button { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:6px 12px; font-size:13px; color:var(--dim); }
 .seg button.on.keep { border-color:var(--green); color:var(--green); background:var(--green-soft); }
@@ -2904,6 +2920,15 @@ mod tests {
         assert!(html.contains("<button class=\"choose\" data-choose=\"o0\">Go with this one</button>"), "the button, field empty");
         assert!(!html.contains("Choose this one") && !html.contains("class=\"fin\"") && !html.contains("id=\"finals\""), "nothing to choose among, nothing to shortlist");
         assert!(html.contains(">Not this one<"), "not this one stays");
+        // the design-lead, 22/11, at the photo: the option's field is the stop's words, so no second field above it;
+        // with words a grey "Go with this one" beside goes with it anyway, the words as context, as the app does; and
+        // the engine's sentences under the button in their order, "is not chosen yet" first, nothing folded, since
+        // with one there is no "each option"
+        assert!(!html.contains("id=\"ctx\""), "one field of words");
+        assert!(html.contains("<button class=\"choose alt\" data-keep=\"o0\" hidden>Go with this one</button>"), "go with it anyway");
+        assert!(SCRIPT.contains("alt.hidden = !e.target.value.trim();"), "beside the button once there are words");
+        assert!(SCRIPT.contains("function keepWith(id) {"), "keep, the words as context");
+        assert!(SCRIPT.contains("if (base.items.length === 1) { if (ul) ul.innerHTML = [...each, ...next].map(s => `<li>${esc(s)}</li>`).join(\"\")"), "in order, not folded");
         // with words the button sends them and chooses nothing, and the engine says so
         assert!(SCRIPT.contains("b.textContent = e.target.value.trim() ? \"Not yet: send my words\" : \"Go with this one\";"), "the button with words");
         let body = json!({"run": "one", "question": q, "verdicts": {"o0": "change"}, "notes": {"o0": "entender onde o python entra antes de decidir"}, "context": ""});
@@ -2918,6 +2943,7 @@ mod tests {
         let q = run.questions.keys().next().expect("the stop").clone();
         let html = page.render(View::Question("two".into(), q), now).expect("the stop");
         assert!(html.contains(">Choose this one<") && html.contains("class=\"fin\"") && html.contains("placeholder=\"Adjust it (optional): what to change, what to take from the others\""), "two as before");
+        assert!(html.contains("id=\"ctx\"") && !html.contains("data-keep="), "two keep the stop's field");
         let _gone = std::fs::remove_dir_all(&home);
     }
 
