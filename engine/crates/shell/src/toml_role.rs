@@ -2222,7 +2222,7 @@ pub fn template(name: &str) -> String {
 #
 {menu}# A check the menu lacks is a script of the role, run in a box on a copy of the project:
 #   {{ script = "checks/files-exist.sh", kind = "open", about = "every file named in files is in the project", cases = "cases/files-exist" }}
-#   It reads {{"output", "given", "project"}} as JSON on standard input and exits 0 to pass, 1 to fail with its
+#   It reads {{"output", "given", "project", "request"}} as JSON on standard input and exits 0 to pass, 1 to fail with its
 #   reasons on standard output, 3 when it cannot judge.
 #   A check comes with cases: inputs it must reject (reject.json, each a near miss that names the hole it closes)
 #   and inputs it must accept (accept.json), in the folder cases names. `jaynes check` runs the check on each, in
@@ -2321,8 +2321,8 @@ pub fn scaffold() -> Vec<(&'static str, &'static str, bool)> {
 const FILES_EXIST: &str = r#"#!/bin/sh
 # Holds a step's output to the project: every file it names in "files" is there.
 #
-# A check reads {"output", "given", "project"} as JSON on standard input, from the folder of the project, and exits
-# 0 to pass, 1 to fail with why (a line each, on standard output), 3 when it cannot judge. It comes with the cases
+# A check reads {"output", "given", "project", "request"} as JSON on standard input, from the folder of the project,
+# and exits 0 to pass, 1 to fail with why (a line each, on standard output), 3 when it cannot judge. It comes with the cases
 # in cases/files-exist: `jaynes check` runs it on each, and it must fail every reject and pass every accept.
 exec python3 -c '
 import json, os, sys

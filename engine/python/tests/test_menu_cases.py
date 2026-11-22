@@ -115,6 +115,16 @@ class ACase(unittest.TestCase):
         self.assertIsInstance(got, Fail)
         self.assertEqual((ran.call_args.args[0]["output"], ran.call_args.args[1]), ({"a": 1}, {"path": "/roles/r/checks/c.sh"}))
 
+    def test_asked_of_a_role_s_own_check_carries_the_request_to_its_script(self):
+        # the roles-engineer, 22/11: a check that vouches for words a stop lets the run go on with (vouched_by)
+        # reads them in the request, and the script was given only the output, the given and the project
+        with mock.patch.object(menu, "_box", return_value=Blocked("stop")) as boxed:
+            menu.script({"output": {"a": 1}, "given": [], "request": "for the phone", "project": "/p"}, {"path": "/roles/r/checks/c.sh"})
+        self.assertEqual(json.loads(boxed.call_args.kwargs["stdin"]), {"output": {"a": 1}, "given": [], "project": ".", "request": "for the phone"})
+        with mock.patch.object(menu, "script", return_value=Pass()) as ran:
+            menu.judge_case("script", {"path": "/roles/r/checks/c.sh"}, {"output": {}, "request": "for the phone"})
+        self.assertEqual(ran.call_args.args[0]["request"], "for the phone")
+
     def test_of_a_step_is_judged_by_what_the_step_does(self):
         # a step's reject is a refusal, said as a failure with the step's words; a step that goes on passes
         got = menu.judge_case("refuse-when-false", {}, {"with": {"field": "a.ok", "says": "not shown"}, "given": [{"step": "a", "output": {"ok": False}}], "output": {}})

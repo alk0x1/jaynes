@@ -13,8 +13,8 @@ Every check comes with cases: inputs it must reject and inputs it must accept, i
 asks what the check says of one case, run as in a run.
 
 A check the menu lacks is a script of the role (``use: "script"``): it runs in the box on a copy of the project,
-reads ``{"output", "given", "project"}`` on standard input, and exits 0 to pass, 1 to fail with its reasons on
-standard output, 3 when it cannot judge.
+reads ``{"output", "given", "project", "request"}`` on standard input, and exits 0 to pass, 1 to fail with its reasons
+on standard output, 3 when it cannot judge.
 
 A step the menu lacks is a script of the role too (``use: "script"``, kind ``step``): it runs in the box with the
 reach its step declares, reads ``{"request", "given", "project", "round", "attempt", "key"}`` on standard input,
@@ -1048,7 +1048,8 @@ def script(call: Call, params: Params) -> Any:
     """A check of the role's own: a script run in the box on a copy of the project, able to read the role's own
     folder (its other files, the modules it imports) and to write none of it."""
     path = str(params["path"])
-    given = json.dumps({"output": call.get("output"), "given": call.get("given") or [], "project": "."})
+    # the request too, for a check that vouches for words the request said (a stop's vouched_by)
+    given = json.dumps({"output": call.get("output"), "given": call.get("given") or [], "project": ".", "request": call.get("request") or ""})
     ran = _box(call, _quote(path) if _executable(path) else f"sh {_quote(path)}", stdin=given, readable=_own_role(path), alone=True,
                browser=True)
     if isinstance(ran, Blocked):
