@@ -28,6 +28,8 @@ pub struct Changes {
     pub shown: Vec<String>,
     /// Their changes, read again with the folder.
     pub diffs: HashMap<String, FileDiff>,
+    /// While a run's tab is in the middle: what its steps changed, shown in place of the folder, read only.
+    pub run: Option<RunChange>,
 }
 
 impl Changes {
@@ -54,7 +56,7 @@ impl Changes {
             }
         })
         .detach();
-        Changes { folder: String::new(), status: None, message, error: None, note: None, tabs, shown: vec![], diffs: HashMap::new() }
+        Changes { folder: String::new(), status: None, message, error: None, note: None, tabs, shown: vec![], diffs: HashMap::new(), run: None }
     }
 
     /// The folder's status, read on the main loop's turn.
@@ -74,6 +76,14 @@ impl Changes {
                 self.tabs.update(cx, |t, cx| t.changes_count(n, cx));
             }
             self.read_diffs(self.shown.clone(), cx);
+            cx.notify();
+        }
+    }
+
+    /// What the steps of the run in the middle changed, or None when no run's tab is there.
+    pub fn set_run(&mut self, run: Option<RunChange>, cx: &mut Context<Self>) {
+        if self.run != run {
+            self.run = run;
             cx.notify();
         }
     }
@@ -223,10 +233,105 @@ impl Changes {
     }
 
     /// How many files differ, for the switch in the tabs bar.
-    pub fn count(&self) -> usize {
-        self.status.as_ref().map_or(0, Status::count)
+    /// How many files the switch says differ: the run's, while a run's tab is in the middle, else the folder's.
+    pub fn count(&self, cx: &App) -> usize {
+        match self.shows(cx) {
+            Shows::Run(run) => run.map_or(0, RunChange::files),
+            Shows::Folder => self.status.as_ref().map_or(0, Status::count),
+        }
+    }
+
+    /// What the panel shows, from the tab in the middle at once: a run's change only while that run's tab is there.
+    fn shows(&self, cx: &App) -> Shows<'_> {
+        match self.tabs.read(cx).middle() {
+            crate::tabs::Middle::Run(id) => Shows::Run(self.run.as_ref().filter(|r| r.id == id)),
+            _ => Shows::Folder,
+        }
     }
 }
+
+/// What the panel shows: the run's change (None while it is read), or the folder's git.
+enum Shows<'a> {
+    Run(Option<&'a RunChange>),
+    Folder,
+}
+
+/// What the steps of a run changed, as its tab's panel shows it: from the run's own copy of the project, read only,
+/// as the page shows it (drive::step_diff), never the folder's git.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunChange {
+    pub id: String,
+    /// The steps that changed something, in the run's order.
+    pub steps: Vec<StepChange>,
+}
+
+impl RunChange {
+    /// How many files its steps changed, each once.
+    pub fn files(&self) -> usize {
+        self.steps.iter().flat_map(|s| s.files.iter().map(|e| e.path.as_str())).collect::<std::collections::BTreeSet<_>>().len()
+    }
+}
+
+/// What one step changed: its files with their lines gained and lost, and the lines to show.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StepChange {
+    pub step: String,
+    pub files: Vec<Entry>,
+    pub lines: Vec<DiffLine>,
+}
+
+/// A line of a step's change as the panel draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffLine {
+    /// A file's head: the index of its entry in `files`.
+    File(usize),
+    Piece(String),
+    Added(String),
+    Removed(String),
+    Kept(String),
+}
+
+/// The title over what a step changed, in the page's words (page.rs changes_title).
+pub fn step_title(step: &str, n: usize) -> String {
+    format!("Changes made at “{step}” · {n} file{}", if n == 1 { "" } else { "s" })
+}
+
+/// A step's change from its unified diff; None when it changed nothing.
+pub fn step_change(step: &str, text: &str) -> Option<StepChange> {
+    let mut c = StepChange { step: step.to_owned(), ..Default::default() };
+    for l in text.lines() {
+        if let Some(rest) = l.strip_prefix("diff --git ") {
+            let path = rest.split(" b/").last().unwrap_or(rest).to_owned();
+            c.files.push(Entry { path, add: Some(0), del: Some(0) });
+            c.lines.push(DiffLine::File(c.files.len() - 1));
+            continue;
+        }
+        let Some(file) = c.files.last_mut() else { continue };
+        if l.starts_with("Binary files ") {
+            (file.add, file.del) = (None, None);
+        } else if l.starts_with("+++ ") || l.starts_with("--- ") || l.starts_with("index ") || l.starts_with("new file mode") || l.starts_with("deleted file mode") || l.starts_with("similarity ") || l.starts_with("rename ") {
+        } else if l.starts_with("@@") {
+            c.lines.push(DiffLine::Piece(l.to_owned()));
+        } else if let Some(t) = l.strip_prefix('+') {
+            file.add = file.add.map(|n| n + 1);
+            c.lines.push(DiffLine::Added(t.to_owned()));
+        } else if let Some(t) = l.strip_prefix('-') {
+            file.del = file.del.map(|n| n + 1);
+            c.lines.push(DiffLine::Removed(t.to_owned()));
+        } else {
+            c.lines.push(DiffLine::Kept(l.strip_prefix(' ').unwrap_or(l).to_owned()));
+        }
+    }
+    (!c.files.is_empty()).then_some(c)
+}
+
+/// What each of these steps of a run changed, off the window's thread: the steps that changed nothing are left out.
+pub fn read_run(home: &std::path::Path, id: &str, steps: &[String]) -> RunChange {
+    RunChange { id: id.to_owned(), steps: steps.iter().filter_map(|s| step_change(s, &jaynes_shell::drive::step_diff(home, id, s)?)).collect() }
+}
+
+/// How many lines of a step's change the panel draws; the page and Open live version show the rest.
+const RUN_LINES: usize = 400;
 
 /// The lines a file gained and lost, as "+118 −34"; "binary" when git does not count it in lines.
 fn counts(e: &Entry) -> Div {
@@ -301,6 +406,50 @@ fn row(path: &str, shown: bool, cx: &mut Context<Changes>) -> Stateful<Div> {
         .child(div().min_w_0().flex_1().truncate().text_size(z(11.5)).text_color(rgb(look::faint())).child(dir))
 }
 
+impl Changes {
+    /// The panel while a run's tab is in the middle: what each step changed, read only, with no commit box: the run's
+    /// change is delivered by Jaynes, never committed here.
+    fn run_panel(&self, frame: Stateful<Div>, run: &RunChange) -> Stateful<Div> {
+        let mut panel = frame.child(heading("Changes", "this run · read only".into()));
+        if run.steps.is_empty() {
+            return panel.child(div().px(px(16.)).text_size(z(12.5)).text_color(rgb(look::faint())).child("No step of this run has changed a file yet."));
+        }
+        for s in &run.steps {
+            panel = panel.child(section(&step_title(&s.step, s.files.len())));
+            let mono = |t: &str, color: u32| {
+                div().px(px(16.)).font_family(look::MONO_FONT).text_size(z(11.5)).line_height(z(17.)).text_color(rgb(color)).truncate().child(if t.is_empty() { " ".to_owned() } else { t.to_owned() })
+            };
+            for l in s.lines.iter().take(RUN_LINES) {
+                panel = panel.child(match l {
+                    DiffLine::File(i) => {
+                        let e = &s.files[*i];
+                        let (name, dir) = split(&e.path);
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .px(px(16.))
+                            .pt(px(8.))
+                            .pb(px(2.))
+                            .text_size(z(12.5))
+                            .child(div().flex_none().max_w(px(200.)).truncate().text_color(rgb(look::text())).child(name))
+                            .child(div().min_w_0().flex_1().truncate().text_size(z(11.5)).text_color(rgb(look::faint())).child(dir))
+                            .child(counts(e))
+                    }
+                    DiffLine::Piece(t) => mono(t, look::faint()),
+                    DiffLine::Added(t) => mono(&format!("+{t}"), look::green()),
+                    DiffLine::Removed(t) => mono(&format!("-{t}"), look::red()),
+                    DiffLine::Kept(t) => mono(&format!(" {t}"), look::dim()),
+                });
+            }
+            if s.lines.len() > RUN_LINES {
+                panel = panel.child(div().px(px(16.)).py(px(6.)).text_size(z(12.)).text_color(rgb(look::faint())).child(format!("… {} more lines: the page shows them all", s.lines.len() - RUN_LINES)));
+            }
+        }
+        panel
+    }
+}
+
 impl Render for Changes {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let frame = div()
@@ -319,6 +468,12 @@ impl Render for Changes {
             .border_l_1()
             .border_color(rgb(look::line()));
         let home = std::env::var("HOME").unwrap_or_default();
+        if let Shows::Run(run) = self.shows(cx) {
+            return match run {
+                Some(run) => self.run_panel(frame, run),
+                None => frame.child(heading("Changes", "this run · read only".into())).child(div().px(px(16.)).text_size(z(12.5)).text_color(rgb(look::faint())).child("Reading…")),
+            };
+        }
         let place = crate::home_short(&self.folder, &home);
         let Some(status) = self.status.clone() else {
             return frame.child(heading("Changes", place)).child(div().px(px(16.)).text_size(z(12.5)).text_color(rgb(look::faint())).child("Not a git folder."));
@@ -699,8 +854,37 @@ pub fn enter_commits(s: &crate::git::Status) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_label, enter_commits, key_act, split, stack, Key, KEYS};
+    use super::{commit_label, enter_commits, key_act, read_run, split, stack, step_change, step_title, DiffLine, Key, KEYS};
     use crate::git::{Entry, Status};
+
+    #[test]
+    fn a_run_s_tab_shows_what_its_steps_changed_read_only_never_not_a_git_folder() {
+        // the page's words over a step's change
+        assert_eq!(step_title("directions", 3), "Changes made at “directions” · 3 files");
+        assert_eq!(step_title("copy", 1), "Changes made at “copy” · 1 file");
+        let text = "diff --git a/site/index.html b/site/index.html\nindex 1..2 100644\n--- a/site/index.html\n+++ b/site/index.html\n@@ -1,2 +1,2 @@ <body>\n <h1>Notes</h1>\n-<p>Start free</p>\n+<p>Try it free</p>\ndiff --git a/logo.png b/logo.png\nnew file mode 100644\nBinary files /dev/null and b/logo.png differ\n";
+        let c = step_change("copy", text).expect("a change");
+        assert_eq!(c.files.iter().map(|e| (e.path.as_str(), e.add, e.del)).collect::<Vec<_>>(), [("site/index.html", Some(1), Some(1)), ("logo.png", None, None)]);
+        assert_eq!(
+            c.lines,
+            [DiffLine::File(0), DiffLine::Piece("@@ -1,2 +1,2 @@ <body>".into()), DiffLine::Kept("<h1>Notes</h1>".into()), DiffLine::Removed("<p>Start free</p>".into()), DiffLine::Added("<p>Try it free</p>".into()), DiffLine::File(1)]
+        );
+        assert_eq!(step_change("plan", ""), None);
+        // from the run's own record, as the page reads it: a step that changed nothing is left out, and a run
+        // without a copy shows no step, never the folder's git
+        let home = std::env::temp_dir().join(format!("jaynes-run-changes-{}", std::process::id()));
+        let saved = home.join("runs/r1/changes");
+        std::fs::create_dir_all(&saved).unwrap();
+        std::fs::write(saved.join("copy.diff"), text).unwrap();
+        std::fs::write(saved.join("plan.diff"), "").unwrap();
+        let run = read_run(&home, "r1", &["plan".into(), "copy".into(), "write".into()]);
+        assert_eq!((run.id.as_str(), run.steps.iter().map(|s| s.step.as_str()).collect::<Vec<_>>()), ("r1", vec!["copy"]));
+        // the switch over the panel counts the run's files, each once, not the folder's
+        std::fs::write(saved.join("write.diff"), "diff --git a/site/index.html b/site/index.html\n@@ -1 +1 @@\n-a\n+b\n").unwrap();
+        assert_eq!(read_run(&home, "r1", &["copy".into(), "write".into()]).files(), 2);
+        assert!(read_run(&home, "no-such-run", &["copy".into()]).steps.is_empty());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 
     fn status(staged: &[&str], changed: &[&str]) -> Status {
         let e = |p: &&str| Entry { path: p.to_string(), add: None, del: None };

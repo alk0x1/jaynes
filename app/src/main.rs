@@ -1519,7 +1519,7 @@ impl Root {
 
     /// The Changes panel's switch, as the familiar look has it: its name and how many files differ, bright while on.
     fn changes_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let n = self.changes.read(cx).count();
+        let n = self.changes.read(cx).count(cx);
         own_press(
             div()
                 .id("changes-switch")
@@ -1867,6 +1867,13 @@ impl Root {
     }
 
     /// Where the middle works: the open agent's space and folder, else the folder Claude Code works in.
+    /// The run whose tab is in the middle, with its steps' names, for Changes to show what they changed.
+    fn run_in_middle(&self, cx: &App) -> Option<(String, Vec<String>)> {
+        let tabs::Middle::Run(id) = self.tabs.read(cx).middle() else { return None };
+        let steps = self.runs.read(cx).snap.details.get(&id).map(|d| d.stages.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+        Some((id, steps))
+    }
+
     fn place(&self, cx: &App) -> (Option<String>, String) {
         if let Some((open, _)) = &self.agent_view {
             let spaces = &self.agents.read(cx).spaces;
@@ -2360,6 +2367,13 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
             })
             .detach();
             let branch = cx.spawn(async move |this, cx| loop {
+                // a run's tab in the middle: Changes shows what its steps changed, from the run's own copy
+                let Ok(run) = this.update(cx, |root: &mut Root, cx| root.run_in_middle(cx)) else { break };
+                let read = cx.background_executor().spawn(async move { run.map(|(id, steps)| changes::read_run(&jaynes_shell::home(), &id, &steps)) });
+                let run = read.await;
+                if this.update(cx, |root: &mut Root, cx| root.changes.update(cx, |c, cx| c.set_run(run, cx))).is_err() {
+                    break;
+                }
                 let Ok(at) = this.update(cx, |root: &mut Root, cx| root.place(cx).1) else { break };
                 let status = cx.background_executor().spawn({
                     let at = at.clone();
