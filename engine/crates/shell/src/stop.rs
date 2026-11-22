@@ -74,6 +74,9 @@ pub struct Stop {
     /// The run's engine, when an older one started it and is no longer on this machine: no answer reaches the run,
     /// and the card says so before Send.
     pub gone: Option<Gone>,
+    /// At the merge, the stops still open that its touch keeps, each with what it holds in Jaynes's words: the card
+    /// shows them before the touch, which counts only for what it showed. Empty elsewhere.
+    pub rides: Vec<jaynes_core::question::Ride>,
 }
 
 /// An older engine a run started on, gone from the machine.
@@ -434,6 +437,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         consequences: if permission { leave_consequences(run, &q.question.about) } else { BTreeMap::new() },
         wants,
         gone: gone(home, run),
+        rides: q.question.rides.clone(),
     }
 }
 
