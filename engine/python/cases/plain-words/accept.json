@@ -1,7 +1,8 @@
 [
  {
-  "id": "prices-and-words",
-  "keeps": "prices, decimals, accents, a person's parentheses and a brand",
+  "id": "quoted-word",
+  "expect": "accept",
+  "keeps": "an after that quotes a word between quotes",
   "with": {
    "field": "examples"
   },
@@ -9,22 +10,258 @@
    "examples": [
     {
      "case": "A cart with a coupon",
-     "now": "Total 10.00 (as before)",
-     "after": "Total 9,00, preço com ação, item(s) on Node.js"
+     "now": "The button says \"Apply\"",
+     "after": "The button says \"Applied\" and the total drops"
     }
    ]
+  }
+ },
+ {
+  "id": "curly-and-single-quotes",
+  "expect": "accept",
+  "keeps": "curly and single quotes",
+  "with": {
+   "field": "examples"
   },
-  "expect": "accept"
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "It says “Invalid code”",
+     "after": "It says 'Saved'"
+    }
+   ]
+  }
+ },
+ {
+  "id": "numbers",
+  "expect": "accept",
+  "keeps": "a number, a count and a percent",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "Three items and a coupon",
+     "now": "Shows 3 items and 0% off",
+     "after": "Shows 3 items and 10% off"
+    }
+   ]
+  }
+ },
+ {
+  "id": "sentence-with-colon",
+  "expect": "accept",
+  "keeps": "a sentence with a colon, and a time",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "An order placed at 14:02",
+     "now": "Total: 10.00",
+     "after": "Total: 9.00, sent at 14:02"
+    }
+   ]
+  }
+ },
+ {
+  "id": "prices",
+  "expect": "accept",
+  "keeps": "prices in dollars, reais and euros, with their marks",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "$10.00, R$ 49,90 and €1.234,56",
+     "after": "$9.00, R$ 44,91 and €1.111,10"
+    }
+   ]
+  }
+ },
+ {
+  "id": "decimals-and-units",
+  "expect": "accept",
+  "keeps": "decimals with a unit and a version",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A 2.5 kg parcel",
+     "now": "Costs 12.50 on version 2.1",
+     "after": "Costs 11.25"
+    }
+   ]
+  }
+ },
+ {
+  "id": "accents",
+  "expect": "accept",
+  "keeps": "accents and a cedilla",
+  "with": {
+   "field": "bug"
+  },
+  "output": {
+   "bug": "A ação de pagar não aplica o cupom no preço único"
+  }
+ },
+ {
+  "id": "person-parentheses",
+  "expect": "accept",
+  "keeps": "the person's own parentheses, after a space",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon (as today)",
+     "now": "Total 10.00 (no discount)",
+     "after": "Total 9.00 (a tenth off)"
+    }
+   ]
+  }
+ },
+ {
+  "id": "plural-parentheses",
+  "expect": "accept",
+  "keeps": "item(s), a word with its plural in parentheses",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart",
+     "now": "Shows 1 item(s)",
+     "after": "Shows 1 item"
+    }
+   ]
+  }
+ },
+ {
+  "id": "brands",
+  "expect": "accept",
+  "keeps": "brands with a dot in them",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "The shop on Node.js",
+     "now": "Breaks on Next.js and ASP.NET",
+     "after": "Works on Vue.js too"
+    }
+   ]
+  }
+ },
+ {
+  "id": "abbreviations",
+  "expect": "accept",
+  "keeps": "abbreviations with dots",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A coupon, e.g. SAVE10",
+     "now": "Ignored, i.e. no discount",
+     "after": "A tenth off, etc."
+    }
+   ]
+  }
+ },
+ {
+  "id": "dates-and-fractions",
+  "expect": "accept",
+  "keeps": "a date with slashes and a fraction, which are not paths",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "An order on 21/11/2026",
+     "now": "Charges 3/4 of the price twice",
+     "after": "Charges 3/4 of the price once"
+    }
+   ]
+  }
+ },
+ {
+  "id": "arrows-and-ellipsis",
+  "expect": "accept",
+  "keeps": "an arrow, an ellipsis and a hyphen",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "Sign-in → checkout",
+     "now": "Loading...",
+     "after": "The total shows at once"
+    }
+   ]
+  }
+ },
+ {
+  "id": "capital-words",
+  "expect": "accept",
+  "keeps": "a code the person types, in capitals without underscores",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "The coupon SAVE10",
+     "now": "Says the code is wrong",
+     "after": "Takes a tenth off"
+    }
+   ]
+  }
+ },
+ {
+  "id": "clean-bug",
+  "expect": "accept",
+  "keeps": "a plain bug sentence",
+  "with": {
+   "field": "bug"
+  },
+  "output": {
+   "bug": "The coupon is accepted but the total does not drop."
+  }
  },
  {
   "id": "not-there",
+  "expect": "accept",
   "keeps": "a field that is not there says nothing",
   "with": {
    "field": "examples"
   },
   "output": {
    "bug": "It stops."
+  }
+ },
+ {
+  "id": "empty-list",
+  "expect": "accept",
+  "keeps": "no examples at all says nothing",
+  "with": {
+   "field": "examples"
   },
-  "expect": "accept"
+  "output": {
+   "examples": []
+  }
  }
 ]

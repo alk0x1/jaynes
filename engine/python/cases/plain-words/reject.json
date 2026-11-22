@@ -1,7 +1,8 @@
 [
  {
-  "id": "braces",
-  "hole": "an object written into now, which the person would read as code (seed by the roles-engineer, for the ai-engineer to replace)",
+  "id": "object-in-now",
+  "expect": "reject",
+  "hole": "a JSON object in now, which the person reads as code",
   "with": {
    "field": "examples"
   },
@@ -13,29 +14,119 @@
      "after": "Total 9.00"
     }
    ]
-  },
-  "expect": "reject"
+  }
  },
  {
-  "id": "file-path",
-  "hole": "a path of the project in a case",
+  "id": "array-in-after",
+  "expect": "reject",
+  "hole": "a JSON list in after",
   "with": {
    "field": "examples"
   },
   "output": {
    "examples": [
     {
-     "case": "When src/cart.py adds a coupon",
+     "case": "Two items in the cart",
+     "now": "Shows one item",
+     "after": "[\"pen\", \"cup\"]"
+    }
+   ]
+  }
+ },
+ {
+  "id": "template-braces",
+  "expect": "reject",
+  "hole": "a template's double braces left in the text",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "Total 10.00",
+     "after": "Total {{total}}"
+    }
+   ]
+  }
+ },
+ {
+  "id": "braces-in-the-bug",
+  "expect": "reject",
+  "hole": "a brace block in the bug sentence",
+  "with": {
+   "field": "bug"
+  },
+  "output": {
+   "bug": "The coupon gives { discount: 0 } instead of a tenth off"
+  }
+ },
+ {
+  "id": "code-file-name",
+  "expect": "reject",
+  "hole": "a file name with a code extension, no folder",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "When cart.py adds a coupon",
      "now": "Total 10.00",
      "after": "Total 9.00"
     }
    ]
-  },
-  "expect": "reject"
+  }
  },
  {
-  "id": "call",
-  "hole": "a name glued to its parentheses in after",
+  "id": "code-file-in-the-bug",
+  "expect": "reject",
+  "hole": "a code file named in the bug sentence",
+  "with": {
+   "field": "bug"
+  },
+  "output": {
+   "bug": "The total in checkout.ts ignores the coupon"
+  }
+ },
+ {
+  "id": "project-path",
+  "expect": "reject",
+  "hole": "a path of the project, folder and file",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "Total 10.00",
+     "after": "Fixed in src/cart/total.rs"
+    }
+   ]
+  }
+ },
+ {
+  "id": "path-other-extension",
+  "expect": "reject",
+  "hole": "a path a/b.ext whose extension is not code",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "The settings page",
+     "now": "Reads config/app.yaml",
+     "after": "Opens the settings"
+    }
+   ]
+  }
+ },
+ {
+  "id": "empty-call",
+  "expect": "reject",
+  "hole": "a name glued to empty parentheses",
   "with": {
    "field": "examples"
   },
@@ -47,18 +138,145 @@
      "after": "total() gives 9.00"
     }
    ]
-  },
-  "expect": "reject"
+  }
  },
  {
-  "id": "underscore",
+  "id": "call-with-arguments",
+  "expect": "reject",
+  "hole": "a name glued to parentheses with arguments",
+  "with": {
+   "field": "bug"
+  },
+  "output": {
+   "bug": "applyCoupon(code) adds the coupon twice"
+  }
+ },
+ {
+  "id": "method-call",
+  "expect": "reject",
+  "hole": "a method call on an object",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "cart.total() is 10.00",
+     "after": "Total 9.00"
+    }
+   ]
+  }
+ },
+ {
+  "id": "underscore-name",
+  "expect": "reject",
   "hole": "a name with an underscore in the bug sentence",
   "with": {
    "field": "bug"
   },
   "output": {
    "bug": "max_cents is one dollar over"
+  }
+ },
+ {
+  "id": "constant-name",
+  "expect": "reject",
+  "hole": "a constant written as code, capitals and underscores",
+  "with": {
+   "field": "examples"
   },
-  "expect": "reject"
+  "output": {
+   "examples": [
+    {
+     "case": "A big order",
+     "now": "Stops at MAX_ITEMS",
+     "after": "Takes every item"
+    }
+   ]
+  }
+ },
+ {
+  "id": "backquoted",
+  "expect": "reject",
+  "hole": "a name in backquotes",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "`total` is 10.00",
+     "after": "Total 9.00"
+    }
+   ]
+  }
+ },
+ {
+  "id": "hole-in-the-case",
+  "expect": "reject",
+  "hole": "the code is in case, not in now or after",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "When parse_coupon gets an empty code",
+     "now": "It stops",
+     "after": "It says the code is empty"
+    }
+   ]
+  }
+ },
+ {
+  "id": "hole-in-a-later-example",
+  "expect": "reject",
+  "hole": "the first example is clean and the third is not: every example is read",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": "Total 10.00",
+     "after": "Total 9.00"
+    },
+    {
+     "case": "A cart with no coupon",
+     "now": "Total 10.00",
+     "after": "Total 10.00"
+    },
+    {
+     "case": "A cart with two coupons",
+     "now": "Total 8.00",
+     "after": "{\"total\": 9}"
+    }
+   ]
+  }
+ },
+ {
+  "id": "hole-deeper-down",
+  "expect": "reject",
+  "hole": "a hole one level deeper than case, now and after",
+  "with": {
+   "field": "examples"
+  },
+  "output": {
+   "examples": [
+    {
+     "case": "A cart with a coupon",
+     "now": {
+      "lines": [
+       "Total 10.00",
+       "coupon_id is empty"
+      ]
+     },
+     "after": "Total 9.00"
+    }
+   ]
+  }
  }
 ]
