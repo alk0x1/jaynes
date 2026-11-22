@@ -114,10 +114,33 @@ fn live(transcript: Option<&Path>) -> Option<&Path> {
     transcript
 }
 
+/// git's variables that point it at a repository, an index or objects of its own (`git rev-parse --local-env-vars`).
+/// From the process that started the run (a hook, an editor, a shell that set GIT_DIR) they would have the agent's git
+/// and a project's commands read and write that repository in place of the copy: no turn and no role inherits them.
+pub const GIT_LOCAL_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR", "GIT_INTERNAL_SUPER_PREFIX",
+];
+
+/// Take [`GIT_LOCAL_ENV`] out of what `cmd` inherits, and the numbered settings GIT_CONFIG_COUNT counts; what Jaynes
+/// itself set on `cmd` stays.
+pub fn without_git_local(cmd: &mut Command) {
+    let set: Vec<std::ffi::OsString> = cmd.get_envs().map(|(k, _)| k.to_os_string()).collect();
+    let inherited = std::env::vars_os().map(|(k, _)| k).filter(|k| {
+        let k = k.to_string_lossy();
+        GIT_LOCAL_ENV.contains(&k.as_ref()) || k.starts_with("GIT_CONFIG_KEY_") || k.starts_with("GIT_CONFIG_VALUE_")
+    });
+    for k in inherited.filter(|k| !set.contains(k)).collect::<Vec<_>>() {
+        cmd.env_remove(k);
+    }
+}
+
 /// `live`: a file the program's output is added to line by line as it comes, so the person can watch the agent work.
 #[allow(clippy::too_many_arguments)]
 fn run(mut cmd: Command, input: &str, deadline: Duration, idle: Option<Duration>, pidfile: Option<&Path>, paused: Option<&Path>, on_session: OnSession, live: Option<&Path>) -> Result<Watched, String> {
     use std::os::unix::process::CommandExt;
+    without_git_local(&mut cmd);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let started = Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("the agent program did not start: {e}"))?;

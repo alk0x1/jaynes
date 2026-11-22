@@ -973,6 +973,20 @@ mod git_tests {
         let _gone = std::fs::remove_dir_all(&base);
     }
 
+    /// Every variable git itself names as pointing at a repository of its own is taken out of a turn and a role, and the
+    /// box of the role library takes out the same ones.
+    #[test]
+    fn git_s_own_list_of_variables_of_a_repository_is_taken_out_whole_by_the_engine_and_the_box() {
+        let out = git_command().args(["rev-parse", "--local-env-vars"]).output().expect("git");
+        let named: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect();
+        assert!(named.iter().any(|n| n == "GIT_DIR"), "{named:?}");
+        let boxed = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../python/jaynes_box.py")).expect("box");
+        for n in &named {
+            assert!(crate::agent::GIT_LOCAL_ENV.contains(&n.as_str()), "the engine leaves {n} to a turn");
+            assert!(boxed.contains(&format!("\"{n}\"")), "the box leaves {n} to a project's commands");
+        }
+    }
+
     #[test]
     fn no_git_of_the_engine_runs_on_a_copy_but_through_its_own_repository() {
         // only project.rs runs git on a run's copy; install.rs and index.rs clone roles and indexes, never a copy. A net,

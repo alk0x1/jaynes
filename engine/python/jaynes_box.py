@@ -1037,6 +1037,21 @@ def _wait_in_box(argv: list[str], *, cwd: Path | None, env: dict[str, str], stdi
     return code, b"".join(chunks["out"]), b"".join(chunks["err"]), timed_out
 
 
+# git's variables that point it at a repository, an index or objects of its own (`git rev-parse --local-env-vars`), as
+# the engine's GIT_LOCAL_ENV: inherited from whoever started the run, a project's commands would read and write that
+# repository in place of the copy
+GIT_LOCAL = ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+             "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+             "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+             "GIT_INTERNAL_SUPER_PREFIX")
+
+
+def inherited() -> dict[str, str]:
+    """This process's environment without git's variables of another repository (``GIT_LOCAL``)."""
+    return {k: v for k, v in os.environ.items()
+            if k not in GIT_LOCAL and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+
+
 def suite_environment(work: Path, scratch: Path) -> dict[str, str]:
     """What a project's own commands run with in ``work``: caches in ``scratch``, package managers offline, and
     the copy's code and virtualenv first."""
@@ -1101,7 +1116,7 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
                   local_ports=declared, any_port=anyone)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
-        code, out, _, late = _wait_in_box(argv, cwd=work, env={**os.environ, **suite_environment(work, scratch), **(env or {}), **given},
+        code, out, _, late = _wait_in_box(argv, cwd=work, env={**inherited(), **suite_environment(work, scratch), **(env or {}), **given},
                                           stdin=stdin, timeout=timeout)
         if late:
             out += f"\n(stopped after {timeout:.0f} s)".encode()
@@ -1185,7 +1200,7 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
         reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
         reads += installed
         argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads))
-        env = {**os.environ, **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
+        env = {**inherited(), **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
         code, said, _, late = _wait_in_box(argv, cwd=work, env=env, stdin=stdin, timeout=timeout)
         if late:
             said += f"\n(stopped after {timeout:.0f} s)".encode()
@@ -1291,7 +1306,7 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
             argv = command_in_box(script, Box((Path(tmp),), ports=ports))
             # Chrome keeps its default folders under the home macOS reports; the box lets it write none there, so
             # it is given one of its own, inside the temporary folder
-            env = {**os.environ, "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
+            env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
             code, _, errors, late = _wait_in_box(argv, cwd=None, env=env, stdin=None, timeout=90, stderr_apart=True)
         except Unavailable as e:
             return str(e)

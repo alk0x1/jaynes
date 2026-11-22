@@ -84,6 +84,8 @@ impl RoleProgram {
             _ => self.library.display().to_string(),
         };
         c.current_dir(&self.dir).env("PYTHONPATH", path).env("PYTHONDONTWRITEBYTECODE", "1");
+        // nor its checks' commands read another repository, from git's variables of whoever started the run
+        crate::agent::without_git_local(&mut c);
         // where its commands in the box note their groups, beside the call's own note, so a halt stops them too
         if let Some(f) = &self.pidfile {
             c.env("JAYNES_BOX_GROUPS", f.with_file_name(crate::drive::BOX_GROUPS));

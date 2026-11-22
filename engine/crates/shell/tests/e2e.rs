@@ -2578,12 +2578,106 @@ fn the_agent_s_git_reads_none_of_the_person_s_configuration_and_its_commits_are_
     assert!(out.contains("delivered"), "{out}");
     let said = std::fs::read_to_string(&said).expect("said");
     let lines: Vec<&str> = said.lines().collect();
-    assert_eq!(lines, ["start", "no-global", "Jaynes agent <agent@jaynes.invalid>"], "{said}");
+    // its global configuration is the one Jaynes writes, never the person's
+    assert_eq!(lines, ["start", "agent@jaynes.invalid", "Jaynes agent <agent@jaynes.invalid>"], "{said}");
     // what the agent committed is not what is delivered: the delivery is the change Jaynes measured
     let log = Command::new("git").arg("-C").arg(&s.project).args(["log", "--format=%an %s", "jaynes/agentgit"]).output().expect("git");
     assert!(!String::from_utf8_lossy(&log.stdout).contains("Jaynes agent mine"), "{}", String::from_utf8_lossy(&log.stdout));
     let shown = Command::new("git").arg("-C").arg(&s.project).args(["show", "jaynes/agentgit:greeting.txt"]).output().expect("git");
     assert_eq!(String::from_utf8_lossy(&shown.stdout), "hi\n");
+}
+
+/// A project's tests that make a repository of their own and give it an identity read their own names back, as when the
+/// person runs them; a repository that gives none commits as Jaynes's agent.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_repository_the_agent_s_commands_make_commits_with_the_identity_it_sets_and_one_without_as_jaynes_s_agent() {
+    let s = scratch("own-identity");
+    let base = s.home.parent().expect("base").to_path_buf();
+    let said = base.join("said.txt");
+    let repos = base.join("repos");
+    std::fs::create_dir_all(&repos).expect("dir");
+    let commit = "echo a > a && git add a && git commit -qm one && git log -1 --format='%an <%ae>, %cn <%ce>'";
+    let agent = format!(
+        "perl -pi -e 's/hello/hi/' greeting.txt && (cd {r} && git init -q own && cd own && git config user.name 'quitanda tests' && \
+         git config user.email tests@quitanda.test && {commit}; cd {r} && git init -q plain && cd plain && {commit}) > {} 2>&1 && {OUTPUT}",
+        said.display(),
+        r = repos.display()
+    );
+    let out = start(&s, "ownid", &agent);
+    assert!(out.contains("delivered"), "{out}");
+    let said = std::fs::read_to_string(&said).expect("said");
+    let lines: Vec<&str> = said.lines().collect();
+    assert_eq!(
+        lines,
+        ["quitanda tests <tests@quitanda.test>, quitanda tests <tests@quitanda.test>", "Jaynes agent <agent@jaynes.invalid>, Jaynes agent <agent@jaynes.invalid>"],
+        "{said}"
+    );
+}
+
+/// A role whose one step changes the greeting and whose check reads the history where it runs, failing when git
+/// reads another repository's.
+fn history_role(s: &Scratch) -> PathBuf {
+    let role = s.home.parent().expect("base").join("history-role");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "history-role"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Make the change: {{request}}"
+checks = [{ use = "field-required", field = "summary" }, { script = "checks/history.py", about = "git reads this project's history" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+files = { type = "array", items = "string" }
+"#).expect("write");
+    std::fs::write(role.join("checks/history.py"), r#"#!/usr/bin/env python3
+import subprocess, sys
+said = subprocess.run(["git", "log", "-1", "--format=%s"], capture_output=True, text=True)
+if "elsewhere" in said.stdout:
+    print("git read another repository: " + said.stdout.strip())
+    sys.exit(1)
+"#).expect("write");
+    let script = role.join("checks/history.py");
+    let mut mode = std::fs::metadata(&script).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&script, mode).expect("chmod");
+    role
+}
+
+/// A run started from inside another repository's git (a hook, an editor, a shell that set GIT_DIR) does not have the
+/// agent's git nor the checks' read and write that repository in place of the project's copy.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn git_s_variables_of_the_process_that_starts_a_run_point_neither_the_agent_nor_the_checks_at_another_repository() {
+    let s = scratch("git-vars");
+    let base = s.home.parent().expect("base").to_path_buf();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("dir");
+    for args in [&["init", "-q", "-b", "main"][..], &["-c", "user.name=t", "-c", "user.email=t@t.test", "commit", "-q", "--allow-empty", "-m", "elsewhere"]] {
+        assert!(Command::new("git").arg("-C").arg(&elsewhere).args(args).status().expect("git").success());
+    }
+    let said = base.join("said.txt");
+    let role = history_role(&s);
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && git log -1 --format=%s > {} 2>&1 && {OUTPUT}", said.display());
+    let git = elsewhere.join(".git");
+    let out = jaynes()
+        .args(["start", "--run", "gitvars", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .env("GIT_DIR", &git).env("GIT_WORK_TREE", &elsewhere).env("GIT_INDEX_FILE", git.join("index"))
+        .output().expect("start");
+    let out = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let said = std::fs::read_to_string(&said).unwrap_or_default();
+    assert_eq!(said.trim(), "start", "the agent's git read another repository\n{out}");
+    let e = events(&s, "gitvars");
+    let judged = e.iter().rev().find(|x| x["type"] == "ChecksJudged").unwrap_or_else(|| panic!("{:?}\n{out}", types(&e)));
+    let history = judged["checks"].as_array().into_iter().flatten().find(|c| c["check"] == "history").expect("history");
+    assert_eq!(history["passed"], true, "the check's git read another repository: {judged}\n{out}");
+    assert!(out.contains("delivered"), "{out}");
 }
 
 #[test]

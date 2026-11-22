@@ -413,15 +413,13 @@ pub fn act_here(home: &Path, exe: &Path, run_id: &str, act: &Value) -> Value {
 
 // --- what a run changed, and clearing its copy ----------------------------------------------------------------
 
-/// The git settings of every agent's turn: no configuration of the person or of the system, and an identity of its own.
-pub const AGENT_GIT_ENV: &[(&str, &str)] = &[
-    ("GIT_CONFIG_GLOBAL", "/dev/null"),
-    ("GIT_CONFIG_NOSYSTEM", "1"),
-    ("GIT_AUTHOR_NAME", "Jaynes agent"),
-    ("GIT_AUTHOR_EMAIL", "agent@jaynes.invalid"),
-    ("GIT_COMMITTER_NAME", "Jaynes agent"),
-    ("GIT_COMMITTER_EMAIL", "agent@jaynes.invalid"),
-];
+/// The git settings of every agent's turn: no configuration of the system's, and in place of the person's global one
+/// [`AGENT_GITCONFIG`], which Jaynes writes in the turn's exchange (`GIT_CONFIG_GLOBAL`).
+pub const AGENT_GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1")];
+
+/// The global git configuration of every agent's turn: an identity of its own and nothing else. As the lowest of git's
+/// settings, a repository that says its own identity (a project's tests that make one) commits with it.
+pub const AGENT_GITCONFIG: &str = "[user]\n\tname = Jaynes agent\n\temail = agent@jaynes.invalid\n";
 
 /// The most Jaynes reads of a file an agent left in its folder.
 const MOST_READ: u64 = 1 << 20;
@@ -1257,7 +1255,13 @@ impl<'a> Driver<'a> {
         env.push(("GOTOOLCHAIN".into(), "local".into()));
         env.push(("GOTELEMETRY".into(), "off".into()));
         // the agent's git reads none of the person's configuration (their identity, filters, global hooks), which the
-        // box hides anyway, and commits in the copy as Jaynes's agent: what it commits there is never what is delivered
+        // box hides anyway, and commits in the copy as Jaynes's agent where a repository says no identity of its own:
+        // what it commits there is never what is delivered
+        let gitconfig = exchange.join("gitconfig");
+        if let Err(e) = std::fs::write(&gitconfig, AGENT_GITCONFIG) {
+            return fault(format!("Jaynes could not write the agent's git configuration: {e}"));
+        }
+        env.push(("GIT_CONFIG_GLOBAL".into(), gitconfig.display().to_string()));
         for (k, v) in AGENT_GIT_ENV {
             env.push((k.to_string(), v.to_string()));
         }
