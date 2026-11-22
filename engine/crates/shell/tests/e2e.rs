@@ -2495,7 +2495,7 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     let role = root().join("crates/shell/tests/roles/directions");
     let (ok, out) = engine(&s, &["start", "--run", "photo", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
                                  "--request", "two looks", "--agent", &format!("command:{DRAW}")]);
-    assert!(ok && out.contains("Which direction goes on?") && out.contains("- Ink: Ink"), "{out}");
+    assert!(ok && out.contains("Which direction goes on?") && out.lines().any(|l| l.trim() == "- Ink"), "{out}");
     // each page was photographed, kept by its fingerprint as a picture, and left in the copy for later agents
     let kept: Vec<String> = std::fs::read_dir(s.home.join("pictures")).expect("kept").flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
     assert_eq!(kept.iter().filter(|k| k.ends_with(".png")).count(), 2, "{kept:?}");
