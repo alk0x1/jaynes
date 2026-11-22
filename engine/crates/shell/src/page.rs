@@ -1324,6 +1324,12 @@ fn choose_button(id: &str) -> String {
     format!("<button class=\"choose\" data-choose=\"{id}\">Choose this one</button>", id = esc(id))
 }
 
+/// The button of a choice with one option while its field is empty; with words it says "Not yet: send my words",
+/// and sends them as a change that chooses nothing (the app's compare.rs, uma-opcao.md).
+fn go_with_button(id: &str) -> String {
+    format!("<button class=\"choose\" data-choose=\"{id}\">Go with this one</button>", id = esc(id))
+}
+
 /// The row that sends every option away: "Not this one" when there is one, as the app says it.
 fn none_row(options: usize) -> String {
     let words = if options == 1 { "Not this one" } else { "None of these" };
@@ -1445,22 +1451,28 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         _ => String::new(),
     };
     // a stop that chooses: one click on an option sends the choice; a note beside it adjusts the chosen one
+    // with one option there is nothing to choose among nor to shortlist: go with it, or not yet (uma-opcao.md)
+    let one = question.items.len() == 1;
     let choose_rows = || -> String {
         let rows = question
             .items
             .iter()
             .map(|it| {
-                let more_ways = format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\">{}", shortlist_button(&it.id), id = esc(&it.id));
+                let more_ways = if one {
+                    format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Not sure yet? Ask the agent, or say what to change\">", id = esc(&it.id))
+                } else {
+                    format!("<input class=\"adjust\" data-i=\"{id}\" placeholder=\"Adjust it (optional): what to change, what to take from the others\">{}", shortlist_button(&it.id), id = esc(&it.id))
+                };
                 format!(
                     "<div class=\"row choose\" data-item=\"{id}\"><h3>{label}</h3>{more}<div class=\"pick\">{more_ways}{choose}</div><ul class=\"fx-row\" data-i=\"{id}\"></ul></div>",
                     id = esc(&it.id),
                     label = esc(&it.label),
                     more = shown(it),
-                    choose = choose_button(&it.id)
+                    choose = if one { go_with_button(&it.id) } else { choose_button(&it.id) }
                 )
             })
             .collect::<String>();
-        rows + FINALS_ROW + &none_row(question.items.len())
+        rows + if one { "" } else { FINALS_ROW } + &none_row(question.items.len())
     };
     let leave = question.kind == QuestionKind::Permission;
     let rows: String = if question.choose { choose_rows() } else if leave { leave_rows(run, question) } else { question
@@ -2289,7 +2301,10 @@ if (base && base.choose) {
     if (e.target.classList.contains("bring")) { const id = e.target.dataset.b; clearTimeout(later["b" + id]); later["b" + id] = setTimeout(() => said(null, bringBack(id), `fx-b-${id}`, `bring-${id}`), 250); return; }
     if (e.target.id === "why") { clearTimeout(later.why); later.why = setTimeout(() => e.target.value.trim() ? said(null, none(), "fx-none", "none") : (document.getElementById("none").disabled = true), 250); return; }
     if (!e.target.classList.contains("adjust")) return;
-    const id = e.target.dataset.i; clearTimeout(later[id]); later[id] = setTimeout(() => { said(id); if (finals.has(id)) sayFinals(); }, 250);
+    const id = e.target.dataset.i;
+    // one option: go with it while the field is empty, not yet once it has words (uma-opcao.md)
+    if (base.items.length === 1) { const b = document.querySelector(`button.choose[data-choose="${CSS.escape(id)}"]`); if (b) b.textContent = e.target.value.trim() ? "Not yet: send my words" : "Go with this one"; }
+    clearTimeout(later[id]); later[id] = setTimeout(() => { said(id); if (finals.has(id)) sayFinals(); }, 250);
   });
   document.addEventListener("click", async e => {
     const f = e.target.closest("button.fin");
@@ -2833,6 +2848,77 @@ mod tests {
             store.put_setup(run, &json!({})).expect("setup");
         }
         home
+    }
+
+    /// A run waiting at a stop of "stack" that chooses among what its agent made: `labels`, one option or more.
+    fn a_choice_of(run: &str, labels: &[&str]) -> PathBuf {
+        use jaynes_core::question::Item;
+        use jaynes_core::{AttemptOutcome, Command, Digest, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-choice-{run}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs").join(run)).expect("home");
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "r", "version": "1", "protocol": 1,
+            "steps": [{"name": "stack", "executor": "agent", "stop": {"verdicts": ["keep", "change", "drop"], "holds": true, "choose": true, "about": "Which stack goes on?"}}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: run.into(), request: "Choose the stack".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let out = decide(None, &start).expect("start");
+        let mut events = out.events.clone();
+        let mut r = Run::fold(&out.events).expect("run");
+        let mut feed = |r: &mut Run, input: Input| -> Vec<Command> {
+            let out = decide(Some(r), &input).unwrap_or_else(|e| panic!("refused {input:?}: {e}"));
+            out.events.iter().for_each(|e| r.apply(e));
+            events.extend(out.events);
+            out.commands
+        };
+        let cmds = feed(&mut r, Input::ProbeEnded { step: "stack".into(), ok: true, reason: String::new() });
+        let t = cmds.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.clone()) } else { None }).expect("a turn");
+        let items = labels.iter().enumerate().map(|(n, l)| Item { id: format!("o{n}"), label: (*l).into(), digest: Digest(format!("d{n}")) }).collect();
+        let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items, changed: vec![], usage: Default::default(), session: Some("s1".into()), tree: None, reply: None };
+        let cmds = feed(&mut r, Input::AttemptEnded { step: "stack".into(), attempt: t.attempt, fix: t.fix, outcome });
+        if cmds.iter().any(|c| matches!(c, Command::RunChecks { .. })) {
+            feed(&mut r, Input::ChecksEnded { step: "stack".into(), attempt: t.attempt, fix: t.fix, results: vec![] });
+        }
+        if let Some(digest) = r.delivering.clone() {
+            feed(&mut r, Input::DeliveryEnded { digest, ok: true, reference: format!("jaynes/{run}") });
+        }
+        store.append(run, &events).expect("append");
+        store.put_setup(run, &json!({})).expect("setup");
+        home
+    }
+
+    // Alan, 21/11, at a choice with one option, the stack: "entender onde o python entra antes de decidir" became a
+    // change and the engine said "is chosen": with one option the page asks go with it or not yet (uma-opcao.md)
+    #[test]
+    fn asked_one_option_with_words_is_not_chosen_yet_on_the_page() {
+        let home = a_choice_of("one", &["Python + FastAPI: small and known"]);
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let run = Store::open(&home.join("record.sqlite3")).expect("store").state("one").expect("read").expect("run");
+        let q = run.questions.keys().next().expect("the stop").clone();
+        let html = page.render(View::Question("one".into(), q.clone()), now).expect("the stop");
+        assert!(html.contains("<h1>Go with “Python + FastAPI”?</h1>"), "the title asks yes or not yet");
+        assert!(html.contains("<input class=\"adjust\" data-i=\"o0\" placeholder=\"Not sure yet? Ask the agent, or say what to change\">"), "the field");
+        assert!(html.contains("<button class=\"choose\" data-choose=\"o0\">Go with this one</button>"), "the button, field empty");
+        assert!(!html.contains("Choose this one") && !html.contains("class=\"fin\"") && !html.contains("id=\"finals\""), "nothing to choose among, nothing to shortlist");
+        assert!(html.contains(">Not this one<"), "not this one stays");
+        // with words the button sends them and chooses nothing, and the engine says so
+        assert!(SCRIPT.contains("b.textContent = e.target.value.trim() ? \"Not yet: send my words\" : \"Go with this one\";"), "the button with words");
+        let body = json!({"run": "one", "question": q, "verdicts": {"o0": "change"}, "notes": {"o0": "entender onde o python entra antes de decidir"}, "context": ""});
+        let fx = page.effects(&body, By::Person).expect("effects");
+        let said: Vec<&str> = fx["sentences"].as_array().expect("sentences").iter().filter_map(|s| s.as_str()).collect();
+        assert!(said.iter().any(|s| s.contains("is not chosen yet")) && !said.iter().any(|s| s.contains("is chosen")), "{said:?}");
+        let _gone = std::fs::remove_dir_all(&home);
+        // two options read as before
+        let home = a_choice_of("two", &["Python + FastAPI", "Go + Echo"]);
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let run = Store::open(&home.join("record.sqlite3")).expect("store").state("two").expect("read").expect("run");
+        let q = run.questions.keys().next().expect("the stop").clone();
+        let html = page.render(View::Question("two".into(), q), now).expect("the stop");
+        assert!(html.contains(">Choose this one<") && html.contains("class=\"fin\"") && html.contains("placeholder=\"Adjust it (optional): what to change, what to take from the others\""), "two as before");
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     /// A run waiting at plan's stop, whose agent said what it made, where the person asked it twice: "e se fosse Go só
