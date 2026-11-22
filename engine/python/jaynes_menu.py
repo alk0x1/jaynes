@@ -903,6 +903,8 @@ _CODE_SIGNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("a name called with parentheses", re.compile(r"[A-Za-z_]\w*\((?!s\))")),
     ("a name with an underscore", re.compile(r"\b\w*[A-Za-z0-9]_\w*\b|\b_\w+")),
     ("a quote of code", re.compile(r"`")),
+    # a page's element by its tag and class or id, as a selector names it: div.row, span#tick; never "p.m."
+    ("a selector", re.compile(r"(?<![\w.])(?:div|span|a|p|li|ul|ol|button|input|section|article|tr|td|th|table|form|label|img|nav|header|footer|main|h[1-6])[.#][A-Za-z][\w-]+")),
 )
 
 
