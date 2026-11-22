@@ -837,9 +837,17 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
             let any = prefs.ports.as_ref().is_some_and(|p| p.any);
             let opened = prefs.ports.as_ref().filter(|p| p.any).map(|p| p.opened).unwrap_or_else(store::now);
             let freed_ports = prefs.ports.as_ref().filter(|p| p.servers).map(|p| p.freed_ports.clone()).unwrap_or_default();
+            let named: Vec<u16> = listing::held_named(&dir).into_iter().filter(|p| !freed_ports.contains(p)).collect();
             prefs.ports = Some(project_prefs::Ports { any, servers: true, opened, freed_ports });
             project_prefs::save(&home(), &dir, &prefs)?;
             println!("Done. Go back to the run and press Continue.");
+            // known beforehand where the project's files name one (the tech-lead's, 22/11): tests that serve on a
+            // port Jaynes holds fail at every check, and the run would stop at its start saying so
+            if !named.is_empty() {
+                let ports = named.iter().map(u16::to_string).collect::<Vec<_>>().join(" ");
+                println!("The files of {name} name {}, which Jaynes holds while checks run. If its tests serve on {}, let them:", listing::ports_named(&named), if named.len() == 1 { "it" } else { "them" });
+                println!("  jaynes project test-servers {} {ports}", listing::shell_word(&name.to_string()));
+            }
             Ok(())
         }
         "open-ports" | "close-ports" => {

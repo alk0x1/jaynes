@@ -1325,7 +1325,7 @@ fn held(said: &str) -> Option<Held<'_>> {
 }
 
 /// A word for the person's shell: as it is when it needs no quotes, else in single quotes.
-fn shell_word(s: &str) -> String {
+pub fn shell_word(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-~+@%:,=".contains(c)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
@@ -1399,6 +1399,47 @@ pub const HELD_PORTS: &[(u16, &str)] = &[
     (8200, "secrets"),
 ];
 
+/// The held ports a project's own files write as a number of their own ("PORT = 5432", "localhost:6379"), in the
+/// order of [`HELD_PORTS`]: where its tests may serve on one. The rules of the box's check (jaynes_menu.py
+/// held_named): what git keeps, Jaynes's own, installed dependencies and lock files are never read, nor a link, nor
+/// a file past 256 KiB or one not in UTF-8, and at most 2000 files.
+pub fn held_named(project: &Path) -> Vec<u16> {
+    const NOT_READ: &[&str] = &[".git", ".jaynes", "__pycache__", "node_modules", ".venv", "venv", "vendor", "bower_components"];
+    const LOCKS: &[&str] = &["uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "Cargo.lock", "go.sum", "composer.lock", "Gemfile.lock", "mix.lock"];
+    let mut texts = Vec::new();
+    let mut dirs = vec![project.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() && !NOT_READ.contains(&name.as_str()) {
+                dirs.push(e.path());
+            } else if kind.is_file() && !LOCKS.contains(&name.as_str()) && texts.len() < 2000
+                && e.metadata().is_ok_and(|m| m.len() <= 256 * 1024)
+                && let Ok(text) = std::fs::read_to_string(e.path())
+            {
+                texts.push(text);
+            }
+        }
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let named = |port: u16| {
+        let p = port.to_string();
+        texts.iter().any(|t| {
+            t.match_indices(&p).any(|(at, _)| {
+                let before = t[..at].chars().next_back();
+                let mut after = t[at + p.len()..].chars();
+                let next = after.next();
+                !before.is_some_and(|c| word(c) || c == '.') && !next.is_some_and(word) && !(next == Some('.') && after.next().is_some_and(|c| c.is_ascii_digit()))
+            })
+        })
+    };
+    HELD_PORTS.iter().map(|(p, _)| *p).filter(|p| named(*p)).collect()
+}
+
 /// The ports Jaynes holds, as a person reads them: the first four, then "and 13 more".
 pub fn held_ports_said() -> String {
     let first: Vec<String> = HELD_PORTS.iter().take(4).map(|(p, _)| p.to_string()).collect();
@@ -1454,6 +1495,27 @@ fn port_way(project: &str, own: bool) -> Way {
             still_open: Vec::new(),
         }
     }
+}
+
+/// A step of Jaynes's own that ran the project's tests before any agent worked and found they serve on ports Jaynes
+/// holds while the checks run (the tech-lead's, 22/11): every check would fail for that, whatever the change, so the
+/// run stopped there; the way out is one line, and Continue runs the tests again.
+fn held_at_start(said: &mut BlockedSaid, h: &Held<'_>) {
+    said.what = format!("Your tests serve on {}, which Jaynes holds while checks run.", ports_named(&h.ports));
+    said.why = "So every check would fail, whatever the change. The run stopped before any agent worked.".into();
+    said.continue_does = "Continue runs the tests again, then the run goes on.".into();
+    if let Some(project) = h.project {
+        said.ways.push(Way {
+            says: format!("Let this project's tests use {}, then Continue.", ports_named(&h.ports)),
+            then: Some(freed_risk(&h.ports)),
+            command: Some(format!("jaynes project test-servers {} {}", shell_word(project), h.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(" "))),
+            still_open: Vec::new(),
+        });
+    }
+    said.ways.push(Way { says: "Or abandon: the run ends. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() });
+    let mut details: Vec<String> = once(h.lines.iter().copied());
+    details.push(format!("It tried {}, which Jaynes holds while the checks run.", ports_named(&h.ports)));
+    said.details = details;
 }
 
 /// A check that could not judge: the change is done and Jaynes could not check it. When the box kept the check's
@@ -1622,7 +1684,10 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
             Some((inner, not_given)) => judged(&mut said, inner, not_given),
             None => {
                 said.what = format!("Jaynes or {} stopped {at}. It is not the agent's fault.", this_machine());
-                if let Some(why) = after(step.map(|s| format!("a fault of Jaynes or of the machine stopped {s}: "))) {
+                let inner = step.and_then(|s| reason.strip_prefix(&format!("a fault of Jaynes or of the machine stopped {s}: ")));
+                if let Some(h) = inner.and_then(held).filter(|h| !h.ports.is_empty()) {
+                    held_at_start(&mut said, &h);
+                } else if let Some(why) = after(step.map(|s| format!("a fault of Jaynes or of the machine stopped {s}: "))) {
                     said.why = why;
                 }
             }
@@ -1909,6 +1974,55 @@ mod blocked_tests {
         assert_eq!(two.ways[0].then.as_deref(), Some("Only if nothing of yours runs on 5432 and 6379 while the tests run: the tests could reach them, or answer in their place."));
         assert_eq!(two.ways[0].command.as_deref(), Some("jaynes project test-servers /Users/x/Projects/app 5432 6379"));
         assert_eq!(two.details[1], "It tried ports 5432 and 6379, which Jaynes holds while the checks run.");
+    }
+
+    #[test]
+    fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_before_any_agent_with_the_one_line_way_out() {
+        // the tech-lead's, 22/11 (the real-user's estoque): the suite of the start serves on a port Jaynes holds, so
+        // every check would fail for Jaynes, never for the run; the run stops at its first step, the agent never works
+        let bind = "E       OSError: [Errno 48] Address already in use";
+        let inner = format!("Jaynes held a port the command tried to serve on, so its failure says nothing about the project: {bind} It tried held port 5432. The person lets this project's tests use them with `jaynes project test-servers /Users/x/Projects/estoque`, naming the ports.");
+        let b = blocked_said(Some("runner"), Fault::Jaynes, &format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent"));
+        assert_eq!(b.what, "Your tests serve on port 5432, which Jaynes holds while checks run.");
+        assert_eq!(b.why, "So every check would fail, whatever the change. The run stopped before any agent worked.");
+        assert_eq!(b.ways, [
+            Way {
+                says: "Let this project's tests use port 5432, then Continue.".into(),
+                then: Some("Only if nothing of yours runs on 5432 while the tests run: the tests could reach it, or answer in its place.".into()),
+                command: Some("jaynes project test-servers /Users/x/Projects/estoque 5432".into()),
+                still_open: Vec::new(),
+            },
+            Way { says: "Or abandon: the run ends. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() },
+        ]);
+        assert_eq!(b.details, [bind.to_string(), "It tried port 5432, which Jaynes holds while the checks run.".to_string()]);
+        assert_eq!(b.holds.as_deref(), Some(NO_ATTEMPT_USED));
+        assert_eq!(b.continue_does, "Continue runs the tests again, then the run goes on.");
+        // any other fault of Jaynes at a step of its own keeps its words
+        let other = blocked_said(Some("runner"), Fault::Jaynes, "a fault of Jaynes or of the machine stopped runner: the disk is full. No attempt was spent");
+        assert_eq!(other.why, "The disk is full.");
+    }
+
+    #[test]
+    fn the_held_ports_a_project_s_files_name_are_found_as_the_box_s_check_finds_them() {
+        // the same rules as jaynes_menu.py held_named (python/tests/test_held_ports.py): a number of its own, never
+        // digits inside another, a version or a hash; locks, dependencies and git unread; the box's order, each once
+        let root = std::env::temp_dir().join(format!("jaynes-held-named-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&root);
+        let write = |path: &str, text: &str| {
+            let p = root.join(path);
+            std::fs::create_dir_all(p.parent().expect("parent")).expect("dir");
+            std::fs::write(p, text).expect("write");
+        };
+        write("estoque/db.py", "HOST = \"127.0.0.1\"\nPORT = 5432\n");
+        write("compose.yml", "redis: 6379\n");
+        write("b.env", "PG=5432\n");
+        write("a.py", "N = 15432\nX = 54321\nV = '1.3306'\nH = 'sha256:ab27017cd'\nREADME = 'on 11211.'\n");
+        for (path, text) in [("uv.lock", "9200"), ("node_modules/pg/index.js", "5672"), (".git/config", "9092"), (".venv/x.py", "1433"), ("go.sum", "1521")] {
+            write(path, text);
+        }
+        let found = held_named(&root);
+        let _gone = std::fs::remove_dir_all(&root);
+        assert_eq!(found, [5432, 6379, 11211]);
     }
 
     #[test]
