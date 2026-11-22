@@ -4396,6 +4396,48 @@ if b"hi" not in open("greeting.txt", "rb").read():
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box has a network of its own)")]
+fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_at_its_start_before_any_agent_works() {
+    // the tech-lead's, 22/11 (the real-user's estoque): a suite whose fake database serves on a port Jaynes holds,
+    // the port only in the project's own file, never in what the suite prints. Never 5432, a port of the person's
+    let _one = holding_alone();
+    let s = scratch("held-start");
+    let project = s.project.to_str().expect("path").to_string();
+    let held = free_everywhere(&DATA_PORTS[1..]);
+    std::fs::write(s.project.join("config.py"), format!("HOST = \"127.0.0.1\"\nPORT = {held}\n")).expect("write");
+    std::fs::write(s.project.join("serve.py"), "import socket\nimport config\nfake = socket.socket()\nfake.bind((config.HOST, config.PORT))\nfake.listen()\n").expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tpython3 serve.py\n\tgrep -q hi greeting.txt\n").expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a fake database"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success(), "git {args:?}");
+    }
+    // known beforehand: letting the test servers says the project names a port Jaynes holds, and the line that lets it
+    let said = typed_at_terminal(&s, &["project", "test-servers", &project], None, "y\n");
+    let real = std::fs::canonicalize(&project).expect("real path").display().to_string();
+    assert!(said.contains(&format!("name port {held}, which Jaynes holds while checks run")), "{said}");
+    assert!(said.contains(&format!("  jaynes project test-servers {real} {held}")), "{said}");
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    start(&s, "held-start", &agent);
+    let e = events(&s, "held-start");
+    let blocked = e.iter().rev().find(|x| x["type"] == "Blocked").unwrap_or_else(|| panic!("{:?}", types(&e)));
+    assert_eq!((&blocked["step"], &blocked["fault"]), (&serde_json::json!("runner"), &serde_json::json!("jaynes")), "{blocked}");
+    let reason = blocked["reason"].as_str().unwrap_or("");
+    for words in ["Jaynes held a port the command tried to serve on, so its failure says nothing about the project: ",
+        "Address already in use", &format!(" It tried held port {held}."), &format!("`jaynes project test-servers {real}`")] {
+        assert!(reason.contains(words), "{words}: {reason}");
+    }
+    let agent_worked = |e: &[Value]| e.iter().filter(|x| x["type"] == "AttemptStarted" && x["step"] == "change").count();
+    assert_eq!(agent_worked(&e), 0, "no agent worked: {:?}", types(&e));
+    // the one line the card gives, then Continue: the tests run again, and the run goes on to its delivery
+    let said = typed_at_terminal(&s, &["project", "test-servers", &project, &held.to_string()], None, "y\n");
+    assert!(said.contains("Done."), "{said}");
+    let said = at_terminal(&s, &["continue", "held-start"], None);
+    let e = events(&s, "held-start");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+    assert_eq!(agent_worked(&e), 1, "{:?}", types(&e));
+    assert_eq!(free_everywhere(&[held]), held, "the hold ends with the check, and the fake database with the suite");
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
 fn continue_after_the_person_opens_the_ports_checks_the_same_change_again_and_the_agent_does_not_work_again() {
     let s = scratch("reopen");

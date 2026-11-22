@@ -1481,9 +1481,17 @@ class _holding:
 _IN_USE = ("address already in use", "eaddrinuse", "address in use")
 
 
+# How far above a line that says a port was in use its port may be named: pytest prints a traceback's frames with
+# their arguments ("host = '127.0.0.1', port = 5432") six lines and more above the error; a line that opens another
+# test's report ("____ ERROR at setup of ...", "==== short test summary ====") ends the search there.
+_NEAR = 12
+_REPORT = re.compile(r"^\s*(?:_{3,}|={3,})")
+
+
 def held_hit(ran: "Ran") -> tuple[tuple[int, ...], list[str]]:
-    """The ports Jaynes held that a failed command names where it says a port was in use (on that line or in the five
-    before it), and those lines, each once. Nothing when it did not fail or Jaynes held none."""
+    """The ports Jaynes held that a failed command names where it says a port was in use (on that line or in the
+    report of the same failure above it, see ``_NEAR``), and those lines, each once. Nothing when it did not fail or
+    Jaynes held none."""
     if ran.code == 0 or not ran.held:
         return (), []
     lines = ran.printed.splitlines()
@@ -1492,7 +1500,12 @@ def held_hit(ran: "Ran") -> tuple[tuple[int, ...], list[str]]:
     for i, line in enumerate(lines):
         if not any(w in line.lower() for w in _IN_USE):
             continue
-        near = "\n".join(lines[max(0, i - 5):i + 1])
+        start = max(0, i - _NEAR)
+        for j in range(i - 1, start - 1, -1):
+            if _REPORT.match(lines[j]):
+                start = j + 1
+                break
+        near = "\n".join(lines[start:i + 1])
         named = {p for p in ran.held if re.search(rf"(?<!\d){p}(?!\d)", near)}
         if named:
             hit |= named

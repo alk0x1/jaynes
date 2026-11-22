@@ -60,6 +60,54 @@ def _freed(call: Call) -> tuple[int, ...]:
     return tuple(int(p) for p in call.get("freed_ports") or () if isinstance(p, int) and not isinstance(p, bool))
 
 
+# The words of a command whose test server hit a port Jaynes held (the card reads them, listing.rs HELD_KEPT).
+HELD_KEPT = "Jaynes held a port the command tried to serve on, so its failure says nothing about the project: "
+
+# What is never read for the held ports a project names: what git keeps, Jaynes's own, installed dependencies and
+# lock files, whose hashes and versions hold any digits.
+_NOT_READ_DIRS = {".git", ".jaynes", "__pycache__", *box.DEPENDENCIES}
+_LOCKS = {"uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock",
+          "Cargo.lock", "go.sum", "composer.lock", "Gemfile.lock", "mix.lock"}
+_READ_AT_MOST = (2000, 256 * 1024)  # files, and bytes of one
+
+
+def held_named(project: Path) -> tuple[int, ...]:
+    """The ports Jaynes holds while the checks run (``box.HELD_PORTS``) that ``project``'s own files write as a
+    number of their own ("PORT = 5432", "localhost:6379"), in the box's order: where its tests may serve on one."""
+    texts: list[str] = []
+    for top, dirs, files in os.walk(project):
+        dirs[:] = sorted(d for d in dirs if d not in _NOT_READ_DIRS)
+        for name in sorted(files):
+            path = Path(top) / name
+            if name in _LOCKS or path.is_symlink() or len(texts) >= _READ_AT_MOST[0]:
+                continue
+            try:
+                if path.stat().st_size <= _READ_AT_MOST[1]:
+                    texts.append(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                continue
+    text = "\n".join(texts)
+    return tuple(p for p in box.HELD_PORTS if re.search(rf"(?<![\w.]){p}(?![\w]|\.\d)", text))
+
+
+# A number in a line that says a port was in use, beside the error's own and an address's: a port it names.
+_NOT_A_PORT = re.compile(r"\[errno \d+\]|errno \d+|\d+\.\d+\.\d+\.\d+", re.I)
+_A_PORT = re.compile(r"(?<![\w.])\d{2,5}(?![\w.])")
+
+
+def _held_by_files(ran: Any, project: Path) -> tuple[tuple[int, ...], list[str]]:
+    """When a failed command says a port was in use and names none (a fixture of pytest's with no arguments, a
+    constant), the held ports the project's own files name: Jaynes held them, so the failure is Jaynes's. Nothing
+    when a line names a port, which is then the one."""
+    if not box.in_use_said(ran) or not ran.held:
+        return (), []
+    lines = [line.strip() for line in ran.printed.splitlines() if any(w in line.lower() for w in box._IN_USE)]
+    if any(_A_PORT.search(_NOT_A_PORT.sub(" ", line)) for line in lines):
+        return (), []
+    hit = tuple(p for p in held_named(project) if p in ran.held)
+    return (hit, list(dict.fromkeys(lines))) if hit else ((), [])
+
+
 def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = None, readable: tuple[Path, ...] = (),
          alone: bool = False, over: dict[str, str | None] | None = None, browser: bool = False) -> Any:
     """Run ``command`` on a copy of the run's project in the box: a ``Ran``, or ``Blocked``. ``readable`` names
@@ -112,10 +160,11 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
         return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
                        + "; ".join(box.refused(ran)[:3]) + tried + ways)
     hit, lines = box.held_hit(ran)
+    if not hit and call.get("project"):
+        hit, lines = _held_by_files(ran, Path(call["project"]))
     if hit:
         # a test server on a port Jaynes held: Jaynes's doing, never the project's, and the card offers the port
-        return Blocked("Jaynes held a port the command tried to serve on, so its failure says nothing about the project: "
-                       + "; ".join(lines[:3]) + f" It tried held port {', '.join(map(str, hit))}."
+        return Blocked(HELD_KEPT + "; ".join(lines[:3]) + f" It tried held port {', '.join(map(str, hit))}."
                        " The person lets this project's tests use them with"
                        f" `jaynes project test-servers {_source(call) or call['project']}`, naming the ports.")
     if (ran.any_port or ran.test_servers) and ran.code != 0:
@@ -152,6 +201,14 @@ def find_suite(call: Call, params: Params) -> Any:
         return Blocked(str(e))
     if why:
         return Refused(why)
+    # tests that serve on a port Jaynes holds while the checks run fail at every check for it, the project's doing
+    # never: with the project's test servers on and a held port its files name, the suite runs once now, before any
+    # agent works, and the run stops here saying so (the tech-lead's, 22/11)
+    if call.get("test_servers") is True and call.get("any_port") is not True \
+            and any(p not in _freed(call) for p in held_named(Path(project))):
+        ran = _box(call, found.suite)
+        if isinstance(ran, Blocked) and ran.reason.startswith(HELD_KEPT):
+            return ran
     return found.to_dict()
 
 
