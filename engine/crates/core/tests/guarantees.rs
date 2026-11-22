@@ -58,6 +58,8 @@ fn cases_from_high(rng: &mut Rng) -> Manifest {
         fixes,
         hidden: false,
         idempotent: false,
+        model: Default::default(),
+        turns: None,
         about: String::new(),
     };
     let mut cases = step("s0", Vec::new(), Reach { project: ProjectAccess::Read, commands: true, ..Reach::default() }, Vec::new());
@@ -71,7 +73,7 @@ fn cases_from_high(rng: &mut Rng) -> Manifest {
     let mut steps = vec![cases, fix];
     if rng.chance(50) {
         let mut look = step("s2", vec!["s1".to_string()], Reach::default(), vec![check("shapecheck2x0", CheckKind::Open, Vec::new())]);
-        look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: rng.chance(50), from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default() });
+        look.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: rng.chance(50), from_risk: Risk::Low, release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.3), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
         steps.push(look);
     }
     let delivery = if rng.chance(50) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };

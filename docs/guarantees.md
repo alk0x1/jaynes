@@ -13,10 +13,10 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 - **G1.** A run takes the steps of its role in the role's order, one at a time, and a step
   starts only when every step it needs is done.
 - **G2.** A step's output reaches a later step only after every check of that step passed. A
-  check that reads a step the run does not take at its risk (one a role runs only from high
-  risk, such as fix-bug's hidden cases) is not a check of that run, and the run's claims say so
-  in the role's words; if the risk goes up, the run takes that step, and the step is judged by
-  the check before anything is delivered.
+  step a role runs only at high risk (such as fix-bug's hidden cases) does not run in a
+  low-risk run, and its checks are not checks of that run: the run's claims say so in the
+  role's words. If the risk rises to high during the run, that step runs, and its checks judge
+  the change before anything is delivered.
 - **G3.** A check marked hidden is never given to the agent: not its name, not its inputs. When
   it fails, the agent gets only the sentence the check wrote for it.
 

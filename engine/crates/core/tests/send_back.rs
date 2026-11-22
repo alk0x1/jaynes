@@ -28,6 +28,8 @@ fn manifest() -> Manifest {
         fixes: 0,
         hidden: false,
         idempotent: false,
+        model: Default::default(),
+        turns: None,
         about: String::new(),
     };
     Manifest { role: "fix-bug".into(), version: "1".into(), protocol: 1, steps: vec![fix], target: Default::default(), delivery: Default::default() }
@@ -68,7 +70,7 @@ fn turn(cmds: &[Command]) -> Option<AgentTurn> {
 /// The turn delivers and the hidden case fails: an attempt spent.
 fn fails(run: &mut Run, t: &AgentTurn) -> Vec<Command> {
     let output = Digest(format!("out-{}", t.attempt));
-    let usage = Usage { seconds: 1, tokens: 10, cached: 0 };
+    let usage = Usage { seconds: 1, tokens: 10, cached: 0, uncounted: 0 };
     feed(run, Input::AttemptEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage, session: None, tree: None, reply: None } });
     let reasons = vec!["A check you cannot see found that this does not hold: greet says hi with the name".to_string()];
     let failed = CheckVerdict::Fail { reasons, detail: String::new(), cases: Vec::new() };
