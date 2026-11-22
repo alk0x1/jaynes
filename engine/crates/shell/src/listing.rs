@@ -812,7 +812,7 @@ pub fn settled_shows(display: &serde_json::Value) -> Option<String> {
 pub fn changed_tests(diff: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current: Option<String> = None;
-    let mut push = |file: Option<String>, out: &mut Vec<String>| {
+    let push = |file: Option<String>, out: &mut Vec<String>| {
         if let Some(f) = file.filter(|f| jaynes_core::risk::test_file(f)) {
             out.push(f);
         }
