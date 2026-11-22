@@ -349,9 +349,7 @@ pub fn title_into(q: &QuestionState, into: &str) -> String {
 /// before the colon, as the app names a direction): the role's question goes on the line under it.
 pub fn title(q: &QuestionState) -> String {
     if q.question.one_option() {
-        let label = &q.question.items[0].label;
-        let name = label.split_once(':').map_or(label.as_str(), |(n, _)| n).trim();
-        format!("Go with “{name}”?")
+        format!("Go with “{}”?", q.question.items[0].name())
     } else if q.question.kind == QuestionKind::Merge {
         merge_title("")
     } else if q.question.kind == QuestionKind::Permission {

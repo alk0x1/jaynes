@@ -65,6 +65,14 @@ pub struct Item {
     pub digest: Digest,
 }
 
+impl Item {
+    /// The item's name: its label before the colon, as the app names a direction ("Python + FastAPI" of "Python +
+    /// FastAPI: small and known"); a label with no colon is its own name.
+    pub fn name(&self) -> &str {
+        self.label.split_once(':').map_or(self.label.as_str(), |(n, _)| n).trim()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuestionKind {

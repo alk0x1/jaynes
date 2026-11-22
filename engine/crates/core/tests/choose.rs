@@ -334,6 +334,24 @@ fn asked_one_option_with_words_is_not_chosen_yet() {
     assert!(said.contains(&"“Python + FastAPI” is chosen: no later round of directions may change it.".to_string()), "{said:?}");
 }
 
+// The design-lead, at the one-option stop: its title asks "Go with “Python + FastAPI”?", by the name before the colon,
+// and what an answer does named the whole label, "“Python + FastAPI: small and known” is not chosen yet…".
+#[test]
+fn asked_one_option_s_sentences_name_it_as_its_title_does() {
+    let (run, q) = asked_one("Python + FastAPI: small and known");
+    assert_eq!(q.items[0].name(), "Python + FastAPI");
+    let words = "where does python come in?";
+    let said = effects_of(&run, &q, &[("py", Verdict::Change { text: words.into() })]);
+    assert!(said.contains(&format!("“Python + FastAPI” is not chosen yet: your words go to the agent at “directions”: “{words}”.")), "{said:?}");
+    let said = effects_of(&run, &q, &[("py", Verdict::Change { text: String::new() })]);
+    assert_eq!(said[0], "“Python + FastAPI” is not chosen yet: write what to ask or change.");
+    let said = effects_of(&run, &q, &[("py", Verdict::Keep)]);
+    assert!(said.contains(&"“Python + FastAPI” is chosen: no later round of directions may change it.".to_string()), "{said:?}");
+    assert!(said.iter().all(|s| !s.contains("small and known")), "{said:?}");
+    // a label with no colon is its own name
+    assert_eq!(Item { id: "a".into(), label: " Go ".into(), digest: Digest("d".into()) }.name(), "Go");
+}
+
 #[test]
 fn a_change_without_words_says_what_to_write_in_its_field() {
     let empty = || Verdict::Change { text: String::new() };

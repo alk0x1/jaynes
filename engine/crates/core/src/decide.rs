@@ -1881,7 +1881,8 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
     let not_yet = q.one_option() && answer.choice(q) == Some(Choice::One) && matches!(answer.verdict(&q.items[0].id), Verdict::Change { .. });
     for item in &q.items {
         let v = answer.verdict(&item.id);
-        let label = &item.label;
+        // one option is asked by its name, as its title asks "Go with “name”?": what an answer does names it so too
+        let label = if q.one_option() { item.name() } else { item.label.as_str() };
         sentences.push(match (&v, person) {
             (Verdict::Keep, _) if q.choose => format!("“{label}” is chosen: no later round of {} may change it.", q.step),
             (Verdict::Change { text }, _) if q.choose && answer.choice(q) == Some(Choice::Finalists) => shortlisted(label, text),
