@@ -219,6 +219,12 @@ pub enum Event {
         attempt: u32,
         question: Question,
     },
+    /// The person took a hidden case of `step` out of this run after seeing it fail, by its sentence.
+    CaseDropped {
+        by: By,
+        step: String,
+        case: String,
+    },
     /// What each check of an attempt said, passed or not: its kind, and the earlier steps whose outputs it read.
     ChecksJudged {
         step: String,
@@ -448,6 +454,7 @@ impl Event {
             Event::AttemptImpossible { .. } => "AttemptImpossible",
             Event::SessionStarted { .. } => "SessionStarted",
             Event::ChecksJudged { .. } => "ChecksJudged",
+            Event::CaseDropped { .. } => "CaseDropped",
             Event::StepDone { .. } => "StepDone",
             Event::DefectPlanted { .. } => "DefectPlanted",
             Event::DefectRemoved { .. } => "DefectRemoved",

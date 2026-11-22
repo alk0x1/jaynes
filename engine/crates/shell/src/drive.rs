@@ -1498,7 +1498,7 @@ impl<'a> Driver<'a> {
             Command::RunRole { step, round, attempt, given, previous, answers, key } => {
                 Some(self.role_step(run, step, round, attempt, given, previous, answers, key))
             }
-            Command::RunChecks { step, attempt, fix, output, given, checks } => {
+            Command::RunChecks { step, attempt, fix, output, given, checks, .. } => {
                 let results = self.checks(run, &step, &output, &given, &checks, None);
                 let results = self.keep_failed_cases(run, &step, attempt, results);
                 Some(Input::ChecksEnded { step, attempt, fix, results })

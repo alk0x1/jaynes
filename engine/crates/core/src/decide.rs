@@ -258,6 +258,7 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.emit(Event::Granted { question: question.clone(), offer: *offer, by: by.clone() });
         }
+        Input::DropCase { .. } => return refuse("not yet"),
         Input::PortsChosen { any, servers, opened, freed_ports } => {
             if c.run.finished() {
                 return refuse("the run is finished");
@@ -1086,7 +1087,7 @@ impl Ctx {
                     self.checks_ended(step, attempt, fix, &[])?;
                 } else {
                     let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
-                    self.command(Command::RunChecks { step: step.to_string(), attempt, fix, output: output.clone(), given, checks });
+                    self.command(Command::RunChecks { step: step.to_string(), attempt, fix, output: output.clone(), given, checks, without: Vec::new() });
                 }
             }
             AttemptOutcome::Failed { reasons, usage } => {
@@ -1366,7 +1367,7 @@ impl Ctx {
         let Status::Checking { attempt, fix } = self.run.steps[i].status else { return };
         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
         let checks = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
-        self.command(Command::RunChecks { step: self.name(i), attempt, fix, output: p.output, given, checks });
+        self.command(Command::RunChecks { step: self.name(i), attempt, fix, output: p.output, given, checks, without: Vec::new() });
     }
 
     /// What a delivered output breaks of what the person kept or dropped.
@@ -1500,7 +1501,7 @@ impl Ctx {
                     if let Some(p) = self.run.steps[i].pending.clone() {
                         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
                         let checks = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
-                        self.command(Command::RunChecks { step: name, attempt, fix, output: p.output, given, checks });
+                        self.command(Command::RunChecks { step: name, attempt, fix, output: p.output, given, checks, without: Vec::new() });
                     }
                 }
                 Status::Probing => self.command(Command::Probe { step: name, reach: decl.reach.clone() }),

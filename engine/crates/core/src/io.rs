@@ -111,6 +111,14 @@ pub enum Input {
         by: By,
         words: String,
     },
+    /// The person takes out of the run a hidden case they saw fail on the card of a run the agent's attempts left
+    /// blocked, by the sentence the card shows: the last attempt spent is judged again without it, and every later
+    /// check of that step in this run leaves it out. The person's alone; one case at a time; never the role's.
+    DropCase {
+        by: By,
+        step: String,
+        case: String,
+    },
     DeliveryEnded {
         digest: Digest,
         ok: bool,
@@ -345,6 +353,9 @@ pub enum Command {
         output: Digest,
         given: Vec<Read>,
         checks: Vec<String>,
+        /// The hidden cases the person took out of this run, by their sentence: the checks run without them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        without: Vec<String>,
     },
     /// Show the person a question.
     Ask { question: Question },

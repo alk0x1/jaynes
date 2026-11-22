@@ -579,6 +579,7 @@ impl Run {
                 }
             }
             Event::StaleReport { .. } => {}
+            Event::CaseDropped { .. } => {}
             Event::ChecksJudged { step, checks, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.checks = checks.clone();

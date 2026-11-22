@@ -283,7 +283,7 @@ impl Node {
                     Command::AnswerAsk(t)
                 }
                 Command::RunRole { step, round, given, previous, answers, key, .. } => Command::RunRole { step, round, attempt: 0, given, previous, answers, key },
-                Command::RunChecks { step, fix, output, given, checks, .. } => Command::RunChecks { step, attempt: 0, fix, output, given, checks },
+                Command::RunChecks { step, fix, output, given, checks, without, .. } => Command::RunChecks { step, attempt: 0, fix, output, given, checks, without },
                 other => other,
             })
             .collect();
