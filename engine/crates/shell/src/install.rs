@@ -193,7 +193,8 @@ fn install(home: &Path, source: &str, folder: &Path, commit: Option<String>, pro
     // a role in TOML is installed only when every promise it makes is proved again here
     if folder.join(crate::toml_role::FILE).is_file() && !proved {
         let toml = crate::toml_role::TomlRole::load(folder).map_err(|e| format!("the role does not read:\n  {}", e.join("\n  ")))?;
-        let (lines, all) = toml.prove();
+        // a search of minutes says how far it is as it goes, so the person installing it sees it work
+        let (lines, all) = toml.prove_told(std::time::Duration::from_secs(5), &mut |l| eprintln!("{l}"));
         if !all {
             return Err(format!("a promise of the role does not hold, so it was not installed:\n{}", lines.join("\n")));
         }

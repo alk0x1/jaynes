@@ -720,6 +720,11 @@ pub fn prove(m: &Manifest, promises: &[Promise]) -> Vec<Proof> {
 }
 
 pub fn prove_within(m: &Manifest, promises: &[Promise], most: usize) -> Vec<Proof> {
+    prove_told(m, promises, most, &mut |_| {})
+}
+
+/// As [`prove_within`], telling `searched` the states seen so far after each level of the search.
+pub fn prove_told(m: &Manifest, promises: &[Promise], most: usize, searched: &mut dyn FnMut(usize)) -> Vec<Proof> {
     let named: BTreeSet<String> = promises
         .iter()
         .filter_map(|p| match &p.form {
@@ -792,6 +797,7 @@ pub fn prove_within(m: &Manifest, promises: &[Promise], most: usize) -> Vec<Proo
             }
         }
         frontier = next;
+        searched(seen.len());
     }
     let states = seen.len();
     broken

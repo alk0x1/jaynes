@@ -2012,6 +2012,34 @@ impl TomlRole {
         self.prove_lines(&jaynes_core::promise::prove(&self.manifest, &promises))
     }
 
+    /// As [`TomlRole::prove`], telling `tell` first what it proves, then how far the search is, at most once per
+    /// `every`: a role's search can take minutes, and a person who installs it sees it work.
+    pub fn prove_told(&self, every: std::time::Duration, tell: &mut dyn FnMut(String)) -> (Vec<String>, bool) {
+        let promises: Vec<Promise> = self.promises.iter().map(|(_, p)| p.clone()).collect();
+        if promises.is_empty() {
+            return self.prove_lines(&[]);
+        }
+        let most = jaynes_core::promise::MOST_STATES;
+        let one = if promises.len() == 1 { "the promise".to_string() } else { format!("the {} promises", promises.len()) };
+        tell(format!("Proving {one} of {} over every way a run of it can go, up to {} states:", self.manifest.role, thousands(most)));
+        let line = |n: usize| format!("  searched {} states so far, of at most {}", thousands(n), thousands(most));
+        let (mut last, mut said) = (None::<std::time::Instant>, 0);
+        let mut seen = 0;
+        let proofs = jaynes_core::promise::prove_told(&self.manifest, &promises, most, &mut |states| {
+            seen = states;
+            if states != said && last.is_none_or(|t| t.elapsed() >= every) {
+                last = Some(std::time::Instant::now());
+                said = states;
+                tell(line(states));
+            }
+        });
+        // where the search ended, unless the last line said it
+        if seen != said {
+            tell(line(seen));
+        }
+        self.prove_lines(&proofs)
+    }
+
     /// The lines of proofs already made, one per promise in order, and whether all hold.
     pub fn prove_lines(&self, proofs: &[Proof]) -> (Vec<String>, bool) {
         let mut lines = Vec::new();
@@ -2692,6 +2720,28 @@ with = {{ pages = "read.sources" }}
         assert!(text.contains("or from one of Jaynes's own that shows it"), "where a stop may send work back is said");
         let (lines, all) = r.prove();
         assert!(all, "{lines:?}");
+    }
+
+    // the real-user, 22/11: "Instalar o fix-bug levou uns 10 min em silêncio", and the engineer lead: a line that
+    // says what it is proving and how much is left
+    #[test]
+    fn asked_proving_a_role_says_what_it_proves_and_how_far_it_is() {
+        let fix = TomlRole::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/fix-bug")).expect("reads");
+        let mut told: Vec<String> = Vec::new();
+        let began = std::time::Instant::now();
+        let (lines, all) = fix.prove_told(std::time::Duration::ZERO, &mut |line| told.push(line));
+        eprintln!("fix-bug proved in {:.1} s", began.elapsed().as_secs_f64());
+        assert!(all, "{lines:?}");
+        assert_eq!(told[0], format!("Proving the {} promises of fix-bug over every way a run of it can go, up to {} states:", fix.promises.len(), thousands(jaynes_core::promise::MOST_STATES)));
+        let counts: Vec<usize> = told[1..].iter().map(|l| {
+            let n = l.trim().strip_prefix("searched ").and_then(|r| r.split(" states").next()).unwrap_or_else(|| panic!("{l}"));
+            assert!(l.ends_with(&format!(" states so far, of at most {}", thousands(jaynes_core::promise::MOST_STATES))), "{l}");
+            n.replace(',', "").parse().unwrap_or_else(|_| panic!("{l}"))
+        }).collect();
+        assert!(counts.len() > 2, "{told:?}");
+        assert!(counts.windows(2).all(|w| w[0] < w[1]), "{counts:?}");
+        // the last count is the search's whole, as the proof says it
+        assert!(lines[0].contains(&format!("({} states)", thousands(*counts.last().expect("a count")))), "{lines:?} {told:?}");
     }
 
     #[test]

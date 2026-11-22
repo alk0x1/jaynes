@@ -2280,8 +2280,13 @@ fn a_role_whose_promise_does_not_hold_is_refused_with_the_path_that_breaks_it() 
     assert!(out.contains("✔ \"Nothing is delivered before the project's suite passed on the change\": proved"), "{out}");
     assert!(out.contains("✘ \"Nothing is delivered unless you answered at change\" (role.toml:"), "{out}");
     assert!(out.contains("low risk → runner's reach is tested → runner done → change's reach is tested → change delivers a small change → change's checks pass → change's stop asks only from high risk → deliver, with no answer of yours at change"), "{out}");
+    // the real-user, 22/11: "Instalar o fix-bug levou uns 10 min em silêncio": checking and installing say what they
+    // prove and how far the search is
+    let proving = "Proving the 2 promises of asks-late over every way a run of it can go, up to 2,000,000 states:";
+    assert!(out.contains(proving) && out.contains("  searched ") && out.contains(" states so far, of at most 2,000,000"), "{out}");
     let (ok, out) = engine(&s, &["add", role.to_str().expect("path")]);
     assert!(!ok && out.contains("a promise of the role does not hold, so it was not installed"), "{out}");
+    assert!(out.contains(proving), "{out}");
     let (_, roles) = engine(&s, &["roles"]);
     assert!(!roles.contains("asks-late"), "{roles}");
 }

@@ -262,7 +262,8 @@ fn run(args: &[String]) -> Result<(), String> {
                     for l in &lines {
                         println!("{l}");
                     }
-                    let (lines, all) = role.prove();
+                    // a search of minutes says how far it is as it goes, on stderr, beside what it proves on stdout
+                    let (lines, all) = role.prove_told(std::time::Duration::from_secs(5), &mut |l| eprintln!("{l}"));
                     for l in &lines {
                         println!("{l}");
                     }
