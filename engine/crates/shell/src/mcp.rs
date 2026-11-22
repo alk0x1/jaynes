@@ -105,6 +105,12 @@ fn state(home: &Path, run: &str) -> Result<Run, String> {
     Store::open(&home.join("record.sqlite3"))?.state(run)?.ok_or_else(|| format!("there is no run {run}"))
 }
 
+/// A run as it is said: what the turn under way has spent so far counts too (agent::spent_now).
+fn shown(home: &Path, mut r: Run) -> Run {
+    r.spent = crate::agent::spent_now(home, &r);
+    r
+}
+
 fn text<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args[key].as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| format!("{key} is needed"))
 }
@@ -134,7 +140,7 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
                 install::ensure_page(home)
             ))
         }
-        "run" => Ok(run_text(&state(home, text(args, "run")?)?)),
+        "run" => Ok(run_text(&shown(home, state(home, text(args, "run")?)?))),
         "answer" => {
             let run = state(home, text(args, "run")?)?;
             let qid = text(args, "question")?;

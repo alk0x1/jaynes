@@ -807,7 +807,9 @@ impl Page {
         let mut older: Vec<Run> = Vec::new();
         let mut moved: std::collections::BTreeSet<String> = Default::default();
         for id in store.runs()? {
-            let Some(run) = store.state(&id)? else { continue };
+            let Some(mut run) = store.state(&id)? else { continue };
+            // the page only says: what the turn under way has spent so far counts too (agent::spent_now)
+            run.spent = crate::agent::spent_now(&self.home, &run);
             runs.push(run.clone());
             if run.finished() {
                 continue;
@@ -1318,7 +1320,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
     let data = json!({"run": r.id}).to_string();
     format!(
         "<div class=\"where\">{project}{role} {version} · run {id} · {risk} risk</div><h1>{title}</h1>{request}{why}{strip}{phase}{answers}\
-         <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens{cached} · {work}{back}{corr}</p>\
+         <p class=\"sub\">Spent {sm} of {cm} min, {st}{cached} · {work}{back}{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{passed}{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
@@ -1353,8 +1355,16 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         cm = r.ceiling.seconds / 60,
         // thousands as the run's summary writes them; what the cache gave only when it gave something (a count of
         // zero is left out; the spent against the ceiling stays, zero or not)
-        st = crate::summary::thousands(r.spent.tokens),
-        ct = crate::summary::thousands(r.ceiling.tokens),
+        // a turn whose stream said nothing yet is not counted yet, never 0 (agent::spent_now)
+        st = {
+            let (t, c) = (crate::summary::thousands(r.spent.tokens), crate::summary::thousands(r.ceiling.tokens));
+            match (r.spent.uncounted, r.spent.tokens) {
+                (0, _) => format!("{t} of {c} tokens"),
+                (_, 0) => format!("tokens not counted yet, of {c}"),
+                (1, _) => format!("{t} of {c} tokens, and one attempt's not counted yet"),
+                (n, _) => format!("{t} of {c} tokens, and {n} attempts' not counted yet"),
+            }
+        },
         cached = if r.spent.cached > 0 { format!(" ({} read from the cache)", crate::summary::thousands(r.spent.cached)) } else { String::new() },
         // the agents' work as the app and the summary count it (listing::work)
         work = esc(&crate::listing::work(r).said()),

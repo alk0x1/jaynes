@@ -1012,12 +1012,14 @@ fn phase(p: &Phase) -> String {
 }
 
 fn print_state(r: &jaynes_core::Run) {
+    // what the turn under way has spent so far is said too (agent::spent_now); the engine decides on the record alone
+    let spent = agent::spent_now(&home(), r);
     println!("run {} — {} {} — {} risk", r.id, r.manifest.role, r.manifest.version, r.risk.word());
     let aside = " (abandoned by the agent that started it: its work is kept; resume brings it back, abandon ends it)";
     println!("{}{}", phase(&r.phase), if r.set_aside.is_some() { aside } else if r.halted { " (halted)" } else { "" });
     println!(
         "spent {} of {} s, {} ({} read from cache)",
-        r.spent.seconds, r.ceiling.seconds, r.spent.tokens_of(r.ceiling.tokens), r.spent.cached
+        spent.seconds, r.ceiling.seconds, spent.tokens_of(r.ceiling.tokens), spent.cached
     );
     let path = r.path();
     for (i, s) in r.steps.iter().enumerate() {
