@@ -24,6 +24,7 @@
 //! | `stop.ask`                 | `StopDecl::about`                |
 //! | `stop` verdicts, holds, from_risk, release, budget, audit_rate, answers | the same names |
 //! | `from_risk`, `attempts`, `fixes`, `hidden`, `about` | the same names |
+//! | `model` (`small` or `default`), `turns` | the same names: Jaynes names the model of each size |
 //!
 //! The rest is the role's side of the protocol: `instructions` and `output` (the prompt and its schema), `use`
 //! and `with` (a step of Jaynes's own, from the menu), `script` (a step of the role's own: a file of its folder),
@@ -284,6 +285,11 @@ struct StepFile {
     hidden: bool,
     #[serde(default)]
     about: String,
+    /// The size of model the step's agent works with, `"small"` or `"default"`; Jaynes names the model.
+    #[serde(default)]
+    model: jaynes_core::manifest::StepModel,
+    /// At most this many turns of the agent's model in one attempt.
+    turns: Option<u32>,
     instructions: Option<String>,
     #[serde(rename = "use")]
     uses: Option<String>,
@@ -1476,6 +1482,8 @@ impl TomlRole {
                 fixes: s.fixes.unwrap_or(2),
                 hidden: s.hidden, idempotent,
                 about: if s.about.is_empty() { s.uses.as_deref().and_then(menu_step).map(|m| m.about.to_string()).unwrap_or_default() } else { s.about.clone() },
+                model: s.model,
+                turns: s.turns,
             });
             let script = s.script.clone().filter(|_| s.by == By::Role);
             extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, script, checks: impls, check_ports, show: s.show.clone() });
@@ -2569,6 +2577,35 @@ stop = { ask = "Keep it?", verdicts = ["keep", "redo"], from_risk = "high", rele
 summary = { type = "string", about = "what changed" }
 files = { type = "array", items = "string" }
 "#;
+
+    /// The roles-engineer's ask for fix-bug's cases step (22/11): a step says the size of model its agent works with
+    /// and how many turns it may take, and the engine, never the role, names the model.
+    #[test]
+    fn asked_a_step_says_its_model_and_its_turns_and_only_an_agent_s_step_does() {
+        use jaynes_core::manifest::StepModel;
+        let small = GOOD.replacen("needs = [\"runner\"]", "needs = [\"runner\"]\nmodel = \"small\"\nturns = 12", 1);
+        let r = TomlRole::load(&role("model-small", &small)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        assert_eq!((r.manifest.steps[1].model, r.manifest.steps[1].turns), (StepModel::Small, Some(12)));
+        let r = TomlRole::load(&role("model-unsaid", GOOD)).expect("reads");
+        assert_eq!((r.manifest.steps[1].model, r.manifest.steps[1].turns), (StepModel::Default, None), "left out, the run's model and no cap");
+        let json = serde_json::to_value(&r.manifest).expect("json");
+        assert!(json["steps"][1].get("model").is_none() && json["steps"][1].get("turns").is_none(), "a role that says neither describes itself as before: {json}");
+        for (name, from, to, says) in [
+            ("model-named", "needs = [\"runner\"]", "needs = [\"runner\"]\nmodel = \"claude-sonnet-5-5\"", "role.toml:13: unknown variant `claude-sonnet-5-5`, expected `default` or `small`"),
+            ("turns-none", "needs = [\"runner\"]", "needs = [\"runner\"]\nturns = 0", "role.toml:10: step change gives its agent no turn: turns is at least 1"),
+            ("model-menu", "use = \"find-suite\"", "use = \"find-suite\"\nmodel = \"small\"", "role.toml:5: step runner names a model or a number of turns, and only an agent's step has them"),
+            ("turns-menu", "use = \"find-suite\"", "use = \"find-suite\"\nturns = 3", "role.toml:5: step runner names a model or a number of turns, and only an agent's step has them"),
+        ] {
+            let e = errors(name, &GOOD.replacen(from, to, 1));
+            assert!(e.contains(says), "{name}:\n{e}");
+        }
+        // a session is one model's: the step that goes on in it works with the same
+        let two = format!("{GOOD}\n[[step]]\nname = \"tidy\"\nneeds = [\"change\"]\nsession = \"continue\"\nmodel = \"small\"\nreach = {{ project = \"write\", write = [\"**\"] }}\ninstructions = \"Tidy it.\"\n");
+        let e = errors("continue-other-model", &two);
+        assert!(e.contains("step tidy goes on in the session of change, which works with another model"), "{e}");
+        let same = two.replacen("needs = [\"runner\"]", "needs = [\"runner\"]\nmodel = \"small\"", 1);
+        TomlRole::load(&role("continue-same-model", &same)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    }
 
     /// A role whose fetch step, a step of Jaynes's own that downloads addresses an agent chose, reaches as given.
     fn fetching(reach: &str) -> String {

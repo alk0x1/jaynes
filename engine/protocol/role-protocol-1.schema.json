@@ -1130,6 +1130,10 @@
           "description": "Doing the step's act again does no harm (the far side keeps the act's key, or the act sets a state rather than\nadding one): only then may Jaynes start it again after a fault, with the same key. Any step that acts, whatever\ncan undo it; for an effect that cannot be undone it may also be said inside the effect, as before.",
           "type": "boolean"
         },
+        "model": {
+          "$ref": "#/$defs/StepModel",
+          "description": "The size of model the step's agent works with: \"small\" for a step that needs less (fix-bug's cases). The\nengine maps it to a model of the run's agent; a role never names one."
+        },
         "name": {
           "type": "string"
         },
@@ -1164,6 +1168,15 @@
             }
           ],
           "default": null
+        },
+        "turns": {
+          "description": "At most this many turns of the agent's model in one attempt, after which it delivers what it has; none, no\ncap but the agent program's own.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1171,6 +1184,21 @@
         "executor"
       ],
       "type": "object"
+    },
+    "StepModel": {
+      "description": "The size of model a step's agent works with.",
+      "oneOf": [
+        {
+          "const": "default",
+          "description": "The run's own model.",
+          "type": "string"
+        },
+        {
+          "const": "small",
+          "description": "A smaller model of the run's agent, which the engine names.",
+          "type": "string"
+        }
+      ]
     },
     "StopDecl": {
       "properties": {

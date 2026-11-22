@@ -29,6 +29,8 @@ fn step() -> StepDecl {
         hidden: false,
         idempotent: false,
         about: String::new(),
+        model: Default::default(),
+        turns: None,
     }
 }
 

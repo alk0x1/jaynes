@@ -1472,6 +1472,8 @@ impl<'a> Driver<'a> {
             servers: self.setup.servers || self.setup.any_port,
             any_port: self.setup.any_port,
             budget: Some(turn.tokens_left),
+            model: run.manifest.steps[i].model,
+            turns: run.manifest.steps[i].turns,
         };
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));
@@ -1531,6 +1533,8 @@ impl<'a> Driver<'a> {
             servers: self.setup.servers || self.setup.any_port,
             any_port: self.setup.any_port,
             budget: Some(turn.tokens_left),
+            model: run.manifest.steps[i].model,
+            turns: None,
         };
         let done = self.setup.agent.turn(spec);
         let reply = reply_in(&exchange);
@@ -2297,6 +2301,8 @@ mod tests {
         let step = StepDecl {
             name: "change".into(), needs: vec![], executor: Executor::Agent, session: SessionKind::Fresh, reach: Reach::default(),
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
+            model: Default::default(),
+            turns: None,
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
         let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
@@ -2412,6 +2418,8 @@ mod tests {
         let step = StepDecl {
             name: "look".into(), needs: vec![], executor: Executor::Person, session: SessionKind::Fresh, reach: Reach::default(),
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
+            model: Default::default(),
+            turns: None,
         };
         let mut look = step.clone();
         look.name = "look".into();
@@ -2654,6 +2662,8 @@ mod tests {
             hidden: false,
             idempotent: false,
             about: String::new(),
+            model: Default::default(),
+            turns: None,
         };
         stack.stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![jaynes_core::question::VerdictKind::Keep, jaynes_core::question::VerdictKind::Change, jaynes_core::question::VerdictKind::Drop],

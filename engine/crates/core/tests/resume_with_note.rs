@@ -41,6 +41,8 @@ fn manifest() -> Manifest {
         hidden: false,
         idempotent: false,
         about: String::new(),
+        model: Default::default(),
+        turns: None,
     };
     let mut scaffold = stacks.clone();
     scaffold.name = "scaffold".into();

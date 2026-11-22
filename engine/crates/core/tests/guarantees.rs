@@ -138,6 +138,8 @@ fn role(rng: &mut Rng) -> Manifest {
                 fixes: rng.below(3) as u32,
                 hidden, idempotent: false,
                 about: String::new(),
+                model: Default::default(),
+                turns: None,
             });
         }
         let delivery = if rng.chance(30) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };
@@ -160,6 +162,8 @@ fn role(rng: &mut Rng) -> Manifest {
         fixes: 0,
         hidden: false, idempotent: false,
         about: String::new(),
+        model: Default::default(),
+        turns: None,
     };
     Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one], target: Default::default(), delivery: Default::default() }
 }
@@ -1211,6 +1215,8 @@ fn step(name: &str, executor: Executor) -> StepDecl {
         fixes: 2,
         hidden: false, idempotent: false,
         about: String::new(),
+        model: Default::default(),
+        turns: None,
     }
 }
 

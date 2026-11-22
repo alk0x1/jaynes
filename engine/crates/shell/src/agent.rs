@@ -5,7 +5,7 @@
 //! reach, and records the settings it applied (`Turn::applied`).
 
 use jaynes_core::event::Usage;
-use jaynes_core::manifest::{Network, ProjectAccess, Reach};
+use jaynes_core::manifest::{Network, ProjectAccess, Reach, StepModel};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -47,6 +47,12 @@ pub struct Spec<'a> {
     /// The tokens the run's ceiling leaves the turn (G5): one whose stream says it spent more is cut as it passes
     /// them. None: no ceiling.
     pub budget: Option<u64>,
+    /// The size of model the step asks its agent to work with.
+    pub model: StepModel,
+    /// The turns the step lets its agent take (Claude Code's `--max-turns`), when it says: a turn that runs out of
+    /// them ends as the step asked, and is judged by its checks. None: the agent program's own ceiling, which a turn
+    /// that runs out of has not finished.
+    pub turns: Option<u32>,
 }
 
 /// The session a line of the agent program's output names as its turn starts (`{"type":"system","session_id":..}`),
@@ -513,6 +519,20 @@ pub struct Claude {
     pub library: Option<PathBuf>,
 }
 
+/// The model of Claude Code a step that asks for a small one works with (`model = "small"`): Jaynes names it, a
+/// role never does.
+pub const SMALL_MODEL: &str = "claude-sonnet-5-5";
+
+impl Claude {
+    /// The model a step's agent works with: the run's own, or the small one the step asks for.
+    pub fn model_for(&self, size: StepModel) -> &str {
+        match size {
+            StepModel::Default => &self.model,
+            StepModel::Small => SMALL_MODEL,
+        }
+    }
+}
+
 impl Default for Claude {
     fn default() -> Self {
         Claude {
@@ -910,6 +930,8 @@ impl Agent for Claude {
             None => (json!({"mcpServers": {}}), "dontAsk"),
         };
         let tools = tools(spec.reach);
+        let model = self.model_for(spec.model);
+        let max_turns = spec.turns.map_or(self.max_messages, |t| t.min(self.max_messages));
         // the model's text comes as it is written, so a silent connection shows
         let command = |session: Option<&str>| {
             let mut cmd = Command::new(&claude);
@@ -918,7 +940,7 @@ impl Agent for Claude {
                 .arg(settings.to_string())
                 .args(["--strict-mcp-config", "--mcp-config", &servers.to_string(), "--permission-mode", mode])
                 .args(["--tools", &tools.join(",")])
-                .args(["--max-turns", &self.max_messages.to_string(), "--model", &self.model, "--effort", &self.effort]);
+                .args(["--max-turns", &max_turns.to_string(), "--model", model, "--effort", &self.effort]);
             if let Some(s) = session {
                 cmd.args(["--resume", s]);
             }
@@ -933,7 +955,7 @@ impl Agent for Claude {
             }
             cmd
         };
-        let applied = json!({"program": "claude", "model": self.model, "effort": self.effort, "settings": settings,
+        let applied = json!({"program": "claude", "model": model, "max_turns": max_turns, "effort": self.effort, "settings": settings,
                              "tools": tools, "resume": spec.session});
         // A connection that went silent is taken up again in the same session, a few times, with nothing lost.
         let mut on_session = spec.on_session;
@@ -999,7 +1021,7 @@ impl Agent for Claude {
                             paths.join(", ")
                         ),
                     },
-                    None => claude_ended(&self.model, code, &out, &err, took, timed_out, &meter),
+                    None => claude_ended(model, code, &out, &err, took, timed_out, &meter, spec.turns.is_some()),
                 }
             }
         };
@@ -1262,7 +1284,9 @@ fn refused_writes(out: &str, cwd: &Path, reach: &Reach) -> Option<Vec<String>> {
 
 /// How a Claude Code turn ended, and what it spent: its result's count, or what its stream said when that is more
 /// (its subagents' messages, a turn that died before its result); "not counted yet" when neither said anything.
-fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Duration, timed_out: bool, meter: &Meter) -> Ended {
+/// `capped`: the step set the turn's number of turns, so a turn that runs out of them ended as it asked.
+#[allow(clippy::too_many_arguments)]
+fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Duration, timed_out: bool, meter: &Meter, capped: bool) -> Ended {
     let mut result = Value::Null;
     let mut session: Option<String> = None;
     for line in out.lines() {
@@ -1295,8 +1319,9 @@ fn claude_ended(model: &str, code: Option<i32>, out: &str, err: &str, took: Dura
         }
         return Ended::Fault { usage, reason: format!("Claude Code ended with no result (it {}): {}", exited(code), text.trim().chars().take(300).collect::<String>()) };
     }
-    if result["is_error"].as_bool().unwrap_or(false) || code != Some(0) {
-        let subtype = result["subtype"].as_str().unwrap_or("");
+    let subtype = result["subtype"].as_str().unwrap_or("");
+    let ran_out = subtype == "error_max_turns";
+    if (result["is_error"].as_bool().unwrap_or(false) || code != Some(0)) && !(ran_out && capped) {
         if subtype == "error_max_turns" {
             return Ended::Failed { reason: "the turn ran out of messages before it finished".to_string(), usage };
         }
@@ -1665,7 +1690,7 @@ mod tests {
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![5432] };
         let spec = |reach: &Reach, servers, any_port| {
             box_spec(&Spec { cwd: &cwd, prompt: "", session: None, reach, deadline: Duration::from_secs(1), reads: &reads, env: vec![],
-                             transcript: None, pidfile: None, permit: None, servers, any_port, paused: None, on_session: None, budget: None },
+                             transcript: None, pidfile: None, permit: None, servers, any_port, paused: None, on_session: None, budget: None, model: StepModel::Default, turns: None },
                      Path::new("/py"), Path::new("/lib"))
         };
         let s = spec(&reach, true, false);
@@ -1754,7 +1779,7 @@ mod tests {
     fn a_result_names_its_cost_and_session() {
         let out = r#"{"type":"system","session_id":"abc"}
 {"type":"result","is_error":false,"result":"done","usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":100,"output_tokens":7},"modelUsage":{"claude-opus-5-5":{"outputTokens":7}}}"#;
-        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false, &Meter::default()) {
+        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false, &Meter::default(), false) {
             Ended::Ran { usage, session, .. } => {
                 assert_eq!((usage.tokens, usage.cached, usage.seconds), (22, 100, 4));
                 assert_eq!(session.as_deref(), Some("abc"));
@@ -1770,7 +1795,7 @@ mod tests {
     fn a_resumed_turn_records_its_own_tokens_never_the_whole_session_s() {
         let out = r#"{"type":"system","session_id":"s1"}
 {"type":"result","is_error":false,"result":"done","session_id":"s1","total_cost_usd":1.43,"duration_ms":208000,"duration_api_ms":337633,"num_turns":12,"usage":{"input_tokens":12,"cache_creation_input_tokens":48132,"cache_read_input_tokens":221917,"output_tokens":21973},"modelUsage":{"claude-opus-5-5":{"inputTokens":40,"outputTokens":40908,"cacheReadInputTokens":385350,"cacheCreationInputTokens":82536,"costUSD":1.43}}}"#;
-        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(208), false, &Meter::default()) {
+        match claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(208), false, &Meter::default(), false) {
             Ended::Ran { usage, session, .. } => {
                 assert_eq!((usage.tokens, usage.cached, usage.seconds), (12 + 48_132 + 21_973, 221_917, 208));
                 assert_eq!(session.as_deref(), Some("s1"));
@@ -1797,7 +1822,7 @@ mod tests {
             meter.read(l);
         }
         let out = lines.join("\n");
-        match claude_ended("claude-opus-5-5", None, &out, "", Duration::from_secs(1200), true, &meter) {
+        match claude_ended("claude-opus-5-5", None, &out, "", Duration::from_secs(1200), true, &meter, false) {
             Ended::Failed { usage, reason } => {
                 assert_eq!(reason, "the turn ran past its deadline");
                 // m1 9 + 40000 + 1500, the subagent's 3000 + 200, m2 4 + 1; the cache's reads apart
@@ -1806,7 +1831,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         // nothing said: not counted yet, never 0
-        match claude_ended("claude-opus-5-5", None, "", "", Duration::from_secs(1200), true, &Meter::default()) {
+        match claude_ended("claude-opus-5-5", None, "", "", Duration::from_secs(1200), true, &Meter::default(), false) {
             Ended::Failed { usage, .. } => assert_eq!((usage.tokens, usage.uncounted), (0, 1)),
             other => panic!("{other:?}"),
         }
@@ -1828,7 +1853,7 @@ mod tests {
     }
 
     fn ended(out: &str) -> Ended {
-        claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false, &Meter::default())
+        claude_ended("claude-opus-5-5", Some(0), out, "", Duration::from_secs(4), false, &Meter::default(), false)
     }
 
     #[test]

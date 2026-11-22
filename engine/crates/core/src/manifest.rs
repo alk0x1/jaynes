@@ -94,6 +94,31 @@ pub struct StepDecl {
     pub idempotent: bool,
     #[serde(default)]
     pub about: String,
+    /// The size of model the step's agent works with: "small" for a step that needs less (fix-bug's cases). The
+    /// engine maps it to a model of the run's agent; a role never names one.
+    #[serde(default, skip_serializing_if = "StepModel::is_default")]
+    pub model: StepModel,
+    /// At most this many turns of the agent's model in one attempt, after which it delivers what it has; none, no
+    /// cap but the agent program's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u32>,
+}
+
+/// The size of model a step's agent works with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StepModel {
+    /// The run's own model.
+    #[default]
+    Default,
+    /// A smaller model of the run's agent, which the engine names.
+    Small,
+}
+
+impl StepModel {
+    pub fn is_default(&self) -> bool {
+        *self == StepModel::Default
+    }
 }
 
 /// A rate in (0, 1), compared by its bits so a role stays comparable.
@@ -429,10 +454,20 @@ impl Manifest {
                     }
                 }
             }
+            if s.executor != Executor::Agent && (s.model != StepModel::Default || s.turns.is_some()) {
+                errors.push(format!("{at} names a model or a number of turns, and only an agent's step has them"));
+            }
+            if s.turns == Some(0) {
+                errors.push(format!("{at} gives its agent no turn: turns is at least 1"));
+            }
             if s.session == SessionKind::Continue {
                 let before = self.steps[..i].iter().rev().find(|b| b.executor == Executor::Agent);
                 match before {
                     None => errors.push(format!("{at} goes on in a session, and no agent step comes before it")),
+                    // a session is the one model's: going on in it with another would start over in a new one
+                    Some(b) if b.model != s.model => {
+                        errors.push(format!("{at} goes on in the session of {}, which works with another model", b.name))
+                    }
                     Some(b) if b.hidden || s.hidden => {
                         errors.push(format!("{at} would share a session with a hidden step"))
                     }

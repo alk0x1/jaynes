@@ -38,6 +38,8 @@ fn small_change(ask: &str) -> Manifest {
         hidden: false,
         idempotent: false,
         about: String::new(),
+        model: Default::default(),
+        turns: None,
     };
     Manifest { role: "small-change".into(), version: "1".into(), protocol: 1, steps: vec![change], target: Default::default(), delivery: Default::default() }
 }
