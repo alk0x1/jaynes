@@ -234,3 +234,53 @@ fn a_reading_that_never_ends_is_stopped_at_its_deadline() {
     let alive = Command::new("kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status().expect("kill").success();
     assert!(!alive, "the model's process {pid} still runs after the deadline");
 }
+
+/// The first item of the run's question.
+fn first_item(s: &Scratch) -> String {
+    let (_, log) = engine(s, &["log", "u"]);
+    log.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["items"][0]["id"]
+        .as_str().expect("item").to_string()
+}
+
+/// Ask the page to read `text`, with the key.
+fn read_words(port: u16, question: &str, text: &str) -> Value {
+    let body = serde_json::json!({"run": "u", "question": question, "text": text}).to_string();
+    let raw = format!(
+        "POST /api/understand HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\nContent-Type: application/json\r\nX-Jaynes-Key: {KEY}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(20))).expect("timeout");
+    stream.write_all(raw.as_bytes()).expect("write");
+    let mut out = Vec::new();
+    let _read = stream.read_to_end(&mut out);
+    let out = String::from_utf8(out).expect("utf-8");
+    serde_json::from_str(out.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap_or(Value::Null)
+}
+
+// The real-user, 22/11 (estoque): "pode deixar o banco falso dos testes numa porta livre, do jeito que você fez.
+// entrega assim." came back as "you wrote: … A 5432 continua ocupada …", which the person never said.
+#[test]
+fn the_person_s_words_are_kept_as_written_and_the_model_only_reads_the_verdict() {
+    let s = scratch("words");
+    let q = asking(&s);
+    let id = first_item(&s);
+    let words = "pode deixar o banco falso dos testes numa porta livre, do jeito que você fez. entrega assim.";
+    let invented = "A 5432 continua ocupada";
+    // the model reads a change, and writes its own note with a fact the person did not say
+    let said = s.base.join("model.json");
+    std::fs::write(&said, serde_json::json!({
+        "verdicts": {&id: "change"},
+        "notes": {&id: format!("Aceita a opção 1: o banco falso fica numa porta livre. {invented}. Entregar assim.")},
+        "back": {}, "unsure": "", "repeats": []
+    }).to_string()).expect("write");
+    let port = port();
+    let _page = page(&s, port, &format!("cat > /dev/null; cat {}", said.display()), "30");
+    let r = read_words(port, &q, words);
+    assert_eq!(r["body"]["verdicts"][&id], "change", "the model's verdict is read: {r}");
+    assert_eq!(r["body"]["notes"][&id].as_str(), Some(words), "the change carries the person's words, byte for byte: {r}");
+    assert_eq!(r["body"]["context"].as_str(), Some(words), "{r}");
+    assert!(!r.to_string().contains(invented), "a fact the person did not say reached the reading: {r}");
+    let sentences: Vec<&str> = r["sentences"].as_array().expect("sentences").iter().filter_map(Value::as_str).collect();
+    assert!(sentences.iter().any(|t| t.contains(words)), "what Jaynes says it does quotes the person's words: {sentences:?}");
+}

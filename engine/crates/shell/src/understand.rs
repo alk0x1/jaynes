@@ -1,6 +1,7 @@
 //! The person's own words at a stop, read into the answer they mean. A reading is only a proposal: the person sees
 //! it with what Jaynes says it will do, written by the engine and not by the reader, and sends it or corrects it. It
-//! answers nothing by itself, and the words always go with the answer as the person's context.
+//! answers nothing by itself. The reader gives only verdicts: what a change or a bringing back says is the person's
+//! words as they wrote them, never the reader's retelling, which can add a fact they did not say.
 
 use jaynes_core::question::{Item, Question, VerdictKind};
 use jaynes_core::Run;
@@ -55,7 +56,7 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
         .iter()
         .filter_map(|v| match v {
             VerdictKind::Keep => Some("keep (as it is)"),
-            VerdictKind::Change => Some("change (say what changes and what stays)"),
+            VerdictKind::Change => Some("change (they want it different)"),
             VerdictKind::Drop => Some("drop (it leaves; it comes back only if the person brings it back)"),
             _ => None,
         })
@@ -67,15 +68,15 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
     p.push_str(&format!(
         "# How to read it\n\n\
          - Verdicts for an item now: {}. An item you leave out is kept as it is.\n\
-         - To bring back something dropped earlier, name it in back, with how it comes back (empty: as it was).\n\
-         - Only reject what they reject. When they say they liked a part of an option, it is not dropped: change it, \
-         saying in its note what stays and what changes.\n\
-         - Write each note in the person's language, short.\n\
+         - To bring back something dropped earlier, name it in back: \"as it was\", or \"changed\" when they want it \
+         different.\n\
+         - Only reject what they reject. When they say they liked a part of an option, it is not dropped: change it.\n\
+         - Their words go with a change as they wrote them: you write no note and no summary of them.\n\
          - If they ask again for something they asked in an earlier round, quote it in repeats.\n\
          - If you cannot tell what they mean, still give your best reading, and ask one short question in unsure, in \
          their language.\n\n\
          Answer with this JSON only:\n\
-         {{\"verdicts\": {{\"<id>\": \"keep|change|drop\"}}, \"notes\": {{\"<id>\": \"what changes\"}}, \"back\": {{\"<id>\": \"how, or empty\"}}, \"unsure\": \"\", \"repeats\": []}}\n",
+         {{\"verdicts\": {{\"<id>\": \"keep|change|drop\"}}, \"back\": {{\"<id>\": \"as it was|changed\"}},\"unsure\": \"\", \"repeats\": []}}\n",
         offered.join(", ")
     ));
     p
@@ -98,10 +99,14 @@ fn said_before(run: &Run, q: &Question) -> Vec<String> {
 }
 
 /// What the reader proposed, kept only where it fits the question: items and verdicts it offers, things that were
-/// dropped. The person's words always go as context.
+/// dropped. Of the reader only the verdicts are kept: a change, and a thing brought back changed, carry the person's
+/// words as they wrote them, and the words always go as context. Nothing the reader wrote is kept as theirs (the
+/// real-user, 22/11: "do jeito que você fez. entrega assim." came back as "you wrote: … A 5432 continua ocupada", which
+/// the person never said).
 pub fn proposal(q: &Question, read: &Value, text: &str) -> Value {
     let mut verdicts = Map::new();
     let mut notes = Map::new();
+    let words = text.trim();
     for (id, v) in read["verdicts"].as_object().into_iter().flatten() {
         let Some(v) = v.as_str() else { continue };
         let kind = match v {
@@ -113,20 +118,21 @@ pub fn proposal(q: &Question, read: &Value, text: &str) -> Value {
         if !q.items.iter().any(|x| &x.id == id) || !q.offered.contains(&kind) {
             continue;
         }
-        let note = read["notes"][id.as_str()].as_str().unwrap_or("").trim().to_string();
         // a change with nothing said is no change: it would be refused
-        if kind == VerdictKind::Change && note.is_empty() {
+        if kind == VerdictKind::Change && words.is_empty() {
             continue;
         }
         verdicts.insert(id.clone(), json!(v));
         if kind == VerdictKind::Change {
-            notes.insert(id.clone(), json!(note));
+            notes.insert(id.clone(), json!(words));
         }
     }
     let mut back = Map::new();
     for (id, how) in read["back"].as_object().into_iter().flatten() {
         if q.back.iter().any(|x| &x.id == id) {
-            back.insert(id.clone(), json!(how.as_str().unwrap_or("").trim()));
+            // as it was is empty; changed carries the person's words, never the reader's
+            let as_it_was = matches!(how.as_str().map(|h| h.trim().to_lowercase()).as_deref(), None | Some("" | "as it was"));
+            back.insert(id.clone(), json!(if as_it_was { "" } else { words }));
         }
     }
     let repeats: Vec<Value> = read["repeats"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).map(|r| json!(r)).collect();
@@ -134,7 +140,7 @@ pub fn proposal(q: &Question, read: &Value, text: &str) -> Value {
         "verdicts": verdicts,
         "notes": notes,
         "back": back,
-        "context": text.trim(),
+        "context": words,
         "unsure": read["unsure"].as_str().unwrap_or("").trim(),
         "repeats": repeats,
     })
@@ -263,15 +269,21 @@ mod tests {
         });
         let p = proposal(&question(), &read, "  I liked the colours, but money should be green ");
         assert_eq!(p["verdicts"], json!({"Razão": "drop", "Prumo": "change"}));
-        assert_eq!(p["notes"], json!({"Prumo": "keep its colours, money in green"}));
-        assert_eq!(p["back"], json!({"Lastro": "money in green"}));
+        // the reader's notes are never kept: the change carries the person's words
+        assert_eq!(p["notes"], json!({"Prumo": "I liked the colours, but money should be green"}));
+        assert_eq!(p["back"], json!({"Lastro": "I liked the colours, but money should be green"}));
         assert_eq!(p["context"], "I liked the colours, but money should be green");
+        let as_it_was = proposal(&question(), &json!({"back": {"Lastro": "as it was"}}), "bring Lastro back");
+        assert_eq!(as_it_was["back"], json!({"Lastro": ""}));
         assert_eq!(p["repeats"], json!(["money in green"]));
     }
 
     #[test]
     fn a_change_with_nothing_said_is_left_out_rather_than_refused() {
-        let p = proposal(&question(), &json!({"verdicts": {"Prumo": "change"}, "notes": {}}), "hm");
+        let p = proposal(&question(), &json!({"verdicts": {"Prumo": "change"}}), "  ");
+        assert_eq!(p["verdicts"], json!({}));
+        // a note the reader wrote is not words the person said
+        let p = proposal(&question(), &json!({"verdicts": {"Prumo": "change"}, "notes": {"Prumo": "money in green"}}), " ");
         assert_eq!(p["verdicts"], json!({}));
     }
 
