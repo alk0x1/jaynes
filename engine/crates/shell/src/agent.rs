@@ -212,8 +212,65 @@ const RESUME: &str = "Your connection to the model dropped in the middle of the 
 fn live(transcript: Option<&Path>) -> Option<&Path> {
     if let Some(t) = transcript {
         let _emptied = std::fs::write(t, "");
+        let _gone = std::fs::remove_file(spent_path(t));
     }
     transcript
+}
+
+/// Beside a turn's transcript, what its stream counted so far and when the turn began, for show and the page to say
+/// while the turn runs: the record has a turn's spend only once the turn ends (the real-user, 22/11: "spent 0 of
+/// 1200 s, 0 of 2000000 tokens" with the agent at work for over a minute).
+fn spent_path(transcript: &Path) -> PathBuf {
+    let mut name = transcript.file_name().unwrap_or_default().to_os_string();
+    name.push(".spent");
+    transcript.with_file_name(name)
+}
+
+/// What a turn under way has spent so far, written whole each time its stream says more: `base` is what earlier
+/// programs of the same turn said (a silent connection taken up again), `meter` what this one says.
+fn note_spent(path: &Path, began: u64, base: (u64, u64, bool), meter: &Meter) {
+    let said = json!({
+        "began": began,
+        "tokens": base.0 + meter.tokens(),
+        "cached": base.1 + meter.cached(),
+        "said": base.2 || meter.said(),
+    });
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    if std::fs::write(&tmp, said.to_string()).is_ok() {
+        let _moved = std::fs::rename(&tmp, path);
+    }
+}
+
+/// What a run has spent as show, the MCP and the page say it: the record's count, and for each step whose turn runs
+/// now, what its stream counted so far and the seconds since it began. A turn whose stream said nothing yet is not
+/// counted yet, never 0. Only for saying: the engine decides on the record alone.
+pub fn spent_now(home: &Path, r: &jaynes_core::Run) -> Usage {
+    let mut spent = r.spent;
+    let now = crate::store::now();
+    for (i, st) in r.steps.iter().enumerate() {
+        let jaynes_core::run::Status::Running { attempt, fix } = st.status else { continue };
+        let Some(d) = r.manifest.steps.get(i) else { continue };
+        let t = home.join("runs").join(&r.id).join("steps").join(&d.name).join(format!("turn-{attempt}-{fix}.jsonl"));
+        let said: Value = std::fs::read_to_string(spent_path(&t)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        if said["said"].as_bool() == Some(true) {
+            spent.tokens += said["tokens"].as_u64().unwrap_or(0);
+            spent.cached += said["cached"].as_u64().unwrap_or(0);
+        } else {
+            spent.uncounted += 1;
+        }
+        // its seconds only while its program is at work: a run whose engine died keeps no clock going
+        if let Some(began) = said["began"].as_u64().filter(|_| at_work(&home.join("runs").join(&r.id).join("agent.pid"))) {
+            spent.seconds += now.saturating_sub(began);
+        }
+    }
+    spent
+}
+
+/// Whether the agent program a run noted is still at work: its process group answers.
+fn at_work(pidfile: &Path) -> bool {
+    let Some(pgid) = std::fs::read_to_string(pidfile).ok().and_then(|t| t.trim().parse::<u32>().ok()) else { return false };
+    Command::new("kill").args(["-0", "--", &format!("-{pgid}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
 /// git's variables that point it at a repository, an index or objects of its own (`git rev-parse --local-env-vars`).
@@ -302,6 +359,14 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     // what the stream says was spent, the model's partial messages included: they say a message's count as it starts
     let meter = std::sync::Arc::new(std::sync::Mutex::new(Meter::default()));
     let metered = meter.clone();
+    // what show and the page read while the turn runs; an earlier program of the same turn's count stays under it
+    let spent_at = live.map(spent_path);
+    let earlier: Value = spent_at.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let began = earlier["began"].as_u64().unwrap_or_else(crate::store::now);
+    let base = (earlier["tokens"].as_u64().unwrap_or(0), earlier["cached"].as_u64().unwrap_or(0), earlier["said"].as_bool().unwrap_or(false));
+    if let Some(p) = &spent_at {
+        note_spent(p, began, base, &Meter::default());
+    }
     let mut live = live.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
     let out = std::thread::spawn(move || {
         use std::io::BufRead;
@@ -314,6 +379,9 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             }
             if let Ok(mut m) = metered.lock() {
                 m.read(&line);
+                if let Some(p) = spent_at.as_ref().filter(|_| line.contains("usage")) {
+                    note_spent(p, began, base, &m);
+                }
             }
             if let Some(f) = on_session.as_mut()
                 && let Some((session, confirmed)) = session_of(&line)
