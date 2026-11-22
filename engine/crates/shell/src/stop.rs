@@ -278,6 +278,13 @@ pub fn role_note(run: &Run, q: &jaynes_core::question::Question) -> String {
     }
 }
 
+/// Whether the request settled this stop for the person: the role says what the request settles there (its stop's
+/// `settled`), or a merge's touch named it. Any other stop the run went on without is one the person did not answer.
+pub fn settled_by_request(run: &Run, q: &jaynes_core::run::QuestionState) -> bool {
+    run.manifest.index(&q.question.step).and_then(|i| run.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.settled.is_some())
+        || run.questions.values().any(|m| m.question.rides.iter().any(|x| x.question == q.question.id))
+}
+
 /// The answer a stop the request settled offers in place of what the request said, on the button that opens it from
 /// the run's story: "Change" at a choice, otherwise the first verdict other than keep in the role's words ("Not this
 /// bug"), or Jaynes's name for it.

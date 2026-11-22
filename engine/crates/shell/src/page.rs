@@ -849,6 +849,8 @@ impl Page {
                     let on = current.as_ref().is_some_and(|(r, c)| r.id == run.id && c.question.id == q.question.id);
                     let status = if released {
                         "an agent let it go on · you can change it".to_string()
+                    } else if went_on(run, q) && crate::stop::settled_by_request(run, q) {
+                        "your request answered it · the run went on".to_string()
                     } else if went_on(run, q) {
                         "the run went on without your answer".to_string()
                     } else if q.question.holds {
@@ -951,7 +953,8 @@ impl Page {
                         .values()
                         .filter_map(|q| Some((q.question.id.clone(), crate::listing::settled_shows(&store.display(&q.question.items.first()?.digest))?)))
                         .collect();
-                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left, crate::listing::blocked(&self.home, r), &showed)
+                    let extra = RunExtra { older: left, blocked: crate::listing::blocked(&self.home, r), showed, into: crate::listing::into_of(&self.home, &r.id) };
+                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), extra)
                 }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
@@ -1205,8 +1208,19 @@ fn tokens_said(n: u64) -> String {
 }
 
 #[cfg(test)]
+/// What the run's page reads beyond the record: a run from an older Jaynes says where its work is (`older`), a blocked
+/// run what failed (`blocked`), each stop the request settled what it showed (`showed`, by question), and a merge the
+/// branch it merges into (`into`).
+#[derive(Default)]
+struct RunExtra {
+    older: Option<String>,
+    blocked: Option<crate::listing::BlockedSaid>,
+    showed: std::collections::BTreeMap<String, String>,
+    into: String,
+}
+
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
-    run_html_of(r, changes, summary, halted_by, name, None, None, &Default::default())
+    run_html_of(r, changes, summary, halted_by, name, RunExtra::default())
 }
 
 /// What a run whose engine left the Mac says in place of its controls (motor-velho.md, row 28): why it cannot go
@@ -1230,8 +1244,8 @@ fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String 
 /// stops when `older` is given.
 /// `blocked`: a blocked run's words as listing::blocked reads them from the engine's home, with the hidden cases that
 /// failed; None, its record's reason alone.
-#[allow(clippy::too_many_arguments)]
-fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>, blocked: Option<crate::listing::BlockedSaid>, showed: &std::collections::BTreeMap<String, String>) -> String {
+fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, extra: RunExtra) -> String {
+    let RunExtra { older, blocked, showed, into } = extra;
     let path = r.path();
     let gone = older.is_some();
     let steps = stage_list(r, gone);
@@ -1244,6 +1258,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         // in the app's words: where, why, and what Continue does
         Phase::Blocked { step, reason, fault } => blocked_notice(&blocked.unwrap_or_else(|| crate::listing::blocked_said(step.as_deref(), *fault, reason))),
         Phase::Running if r.halted => format!("<div class=\"notice\">{}</div>", esc(&crate::listing::halted_said(halted_by.unwrap_or("halted"), crate::listing::halted_step(r).as_deref()))),
+        Phase::Waiting { why, .. } if why.trim().is_empty() => String::new(),
         Phase::Waiting { why, .. } => format!("<div class=\"notice\">{}</div>", esc(why)),
         Phase::Finished { outcome } => format!("<div class=\"notice ok\">Finished: {}</div>", format!("{outcome:?}").to_lowercase()),
         Phase::Running => String::new(),
@@ -1255,7 +1270,11 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         .filter(|q| q.open() && crate::stop::went_on(r, q).is_none())
         .map(|q| {
             // a leave is named as its card asks it, the file in mono; the role's stops by what they ask
-            let asks = if q.question.kind == QuestionKind::Permission { ticks(&crate::listing::title(q)) } else { esc(&q.question.about) };
+            let asks = match q.question.kind {
+                QuestionKind::Permission => ticks(&crate::listing::title(q)),
+                QuestionKind::Merge => esc(&crate::listing::title_into(q, &into)),
+                _ => esc(&q.question.about),
+            };
             format!("<a class=\"answer\" href=\"/q/{}/{}\">Answer: {asks}</a>", esc(&r.id), esc(&q.question.id))
         })
         .collect();
@@ -1308,11 +1327,9 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         .filter(|q| !q.superseded)
         .filter_map(|q| {
             let went_on = crate::stop::went_on(r, q).is_some();
-            // a stop the role says the request settles, or one a merge's touch named; any other the run went on without
-            // keeps its line with Answer (the tech-lead's rule, 21/11)
-            let settles = r.manifest.index(&q.question.step).and_then(|i| r.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.settled.is_some())
-                || r.questions.values().any(|m| m.question.rides.iter().any(|x| x.question == q.question.id));
-            if let Some(line) = crate::listing::settled_line(r, q).filter(|_| settles) {
+            // a stop the request settled; any other the run went on without keeps its line with Answer (the tech-lead's
+            // rule, 21/11)
+            if let Some(line) = crate::listing::settled_line(r, q).filter(|_| crate::stop::settled_by_request(r, q)) {
                 let other = if went_on {
                     format!("<a href=\"/q/{}/{}\">{}</a>", esc(&r.id), esc(&q.question.id), esc(&crate::stop::other_answer(r, &q.question)))
                 } else {
@@ -1756,7 +1773,7 @@ fn rides_html(run: &str, question: &jaynes_core::question::Question) -> String {
         })
         .collect();
     format!(
-        "<div class=\"rides\"><div class=\"qh\">Your touch also keeps these</div>{rows}<p class=\"dim\">Merging keeps each as it is. To answer one differently, open it before you merge.</p></div>"
+        "<div class=\"rides\"><div class=\"qh\">Merging also keeps these</div>{rows}<p class=\"dim\">Merging keeps each as it is. To answer one differently, open it before you merge.</p></div>"
     )
 }
 
@@ -3482,7 +3499,8 @@ mod tests {
         let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
         let now = crate::store::now();
         let asked = page.render(View::Question("o".into(), "merge-1".into()), now).expect("the merge");
-        assert!(asked.contains("Your touch also keeps these"), "the stops it keeps");
+        assert!(asked.contains("Merging also keeps these"), "the stops it keeps");
+        assert!(asked.contains("your request answered it · the run went on</small>"), "the list beside: the request answered it");
         assert!(asked.contains("<span class=\"st\">“reproduce”</span><span>The bug, as your request says.</span><a href=\"/q/o/q-bug\">Open</a>"), "each with its step, what it holds, and Open");
         assert!(asked.contains("Merging keeps each as it is. To answer one differently, open it before you merge."), "under them");
         assert!(asked.contains("Merging also keeps the answer above."), "what the merge keeps, for one");
@@ -3491,6 +3509,8 @@ mod tests {
         assert!(run.contains("href=\"/q/o/q-bug\">Not this bug</a>"), "the stop's other answer opens it");
         assert!(run.contains("now: Exporting a note with a comma breaks the CSV. → after the fix: The comma stays inside its quotes."), "what it showed");
         assert!(!run.contains("Is this the bug? · The run went on without your answer."), "never the passed stop's line too");
+        assert!(run.contains("Answer: Merge into “main”?</a>"), "the merge's invitation says what it asks");
+        assert!(!run.contains("<div class=\"notice\"></div>"), "no notice without words");
         let _gone = std::fs::remove_dir_all(&home);
     }
 
