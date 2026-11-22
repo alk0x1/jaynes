@@ -1293,7 +1293,6 @@ fn tokens_said(n: u64) -> String {
     if n >= 1_000_000 && n.is_multiple_of(1_000_000) { format!("{} million", n / 1_000_000) } else { n.to_string() }
 }
 
-#[cfg(test)]
 /// What the run's page reads beyond the record: a run from an older Jaynes says where its work is (`older`), a blocked
 /// run what failed (`blocked`), each stop the request settled what it showed (`showed`, by question), and a merge the
 /// branch it merges into (`into`).
@@ -1305,6 +1304,7 @@ struct RunExtra {
     into: String,
 }
 
+#[cfg(test)]
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
     run_html_of(r, changes, summary, halted_by, name, RunExtra::default())
 }
