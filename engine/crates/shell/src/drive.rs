@@ -373,6 +373,11 @@ fn engines(home: &Path) -> PathBuf {
     home.join("engines")
 }
 
+/// What is said of a run whose older engine is no longer on this machine, when something goes to it.
+pub fn gone_said(run: &Run) -> String {
+    format!("run {} started on engine {}, which is no longer on this machine: it cannot be carried on by this one ({})", run.id, run.engine, jaynes_core::ENGINE)
+}
+
 /// The program of an engine, if it is still kept on this machine.
 pub fn engine_exe(home: &Path, engine: &str) -> Option<PathBuf> {
     Some(engines(home).join(engine).join("jaynes")).filter(|p| p.is_file())
@@ -412,9 +417,7 @@ pub fn sweep_engines(home: &Path, store: &Store) -> Result<(), String> {
 /// Hand an act on a run to the engine the run started on: `{"submit": input}`, `{"effects": {question, answer}}`
 /// or `{"undo": {note, by}}`, answered as JSON.
 fn act_elsewhere(home: &Path, run: &Run, act: &Value) -> Result<Value, String> {
-    let exe = engine_exe(home, &run.engine).ok_or_else(|| {
-        format!("run {} started on engine {}, which is no longer on this machine: it cannot be carried on by this one ({})", run.id, run.engine, jaynes_core::ENGINE)
-    })?;
+    let exe = engine_exe(home, &run.engine).ok_or_else(|| gone_said(run))?;
     let mut child = std::process::Command::new(&exe)
         .args(["act", &run.id])
         .env("JAYNES_ENGINE_HOME", home)

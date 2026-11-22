@@ -36,6 +36,8 @@ pub struct Island {
     bring_words: HashMap<String, Entity<InputState>>,
     show_back: bool,
     reckoned: Reckoned,
+    /// Whether the engine's words on a run whose engine left show, under Details.
+    gone_open: bool,
     reading: bool,
     understood: Option<Result<Understood, String>>,
     /// At the stop before the merge, what its two ways out do, in the engine's words: the question, then Merge's and
@@ -299,6 +301,34 @@ pub fn card_head(run: &str, project: &str, step: &str, round: u32) -> (String, S
     (run.to_string(), under)
 }
 
+/// A stop of a run whose older engine left the Mac: what the card says in place of its question, in the design-lead's
+/// words (22/11); under it, dim, [`GONE_HOW`]; the engine's own sentence is in Details, closed.
+pub fn gone_head(gone: &stop::Gone) -> String {
+    format!("This run can't go on: it started on Jaynes {}, which is no longer on this Mac.", gone.version)
+}
+
+/// What the person does about a run whose engine left: no other way out exists without that engine.
+pub const GONE_HOW: &str = "No answer reaches it, Halt included. To do this work, start it again: a new run starts on this Jaynes.";
+
+/// The question's place on a card of a run whose engine left: what can't go on, what to do, and the engine's words
+/// folded in Details, which `toggle` opens.
+pub fn gone_block(gone: &stop::Gone, open: bool, toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(div().text_size(px(16.)).text_color(rgb(look::text())).child(gone_head(gone)))
+        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(GONE_HOW))
+        .child(div().id("gone-details").cursor_pointer().text_size(px(12.)).text_color(rgb(look::faint())).child(if open { "▾ Details" } else { "▸ Details" }).on_click(toggle))
+        .when(open, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(gone.said.clone())))
+}
+
+/// Whether an answer may go: every item judged (or something brought back), nothing refused, not already on its way,
+/// and its run's engine still here to take it.
+pub fn may_send(stop: &Stop, judged: usize, brought: bool, sending: bool, refused: bool) -> bool {
+    (judged == stop.items.len() || brought) && !sending && !refused && stop.gone.is_none()
+}
+
 /// The stop folded to one line: which run asks, and what.
 pub fn pill(run: &str, question: &str) -> String {
     if run.is_empty() { format!("◆ {question} · open") } else { format!("◆ {run}: {question} · open") }
@@ -473,6 +503,7 @@ impl Island {
             bring_words: HashMap::new(),
             show_back: false,
             reckoned: Reckoned::default(),
+            gone_open: false,
             reading: false,
             understood: None,
             merge_said: None,
@@ -707,7 +738,7 @@ impl Island {
     /// already on its way.
     fn can_send(&self, stop: &Stop) -> bool {
         let judged = stop.items.iter().filter(|i| self.marks.contains_key(&i.id)).count();
-        (judged == stop.items.len() || !self.bring.is_empty()) && !self.sending && self.reckoned.refused.is_none()
+        may_send(stop, judged, !self.bring.is_empty(), self.sending, self.reckoned.refused.is_some())
     }
 
     /// The stop the island shows open as its card (not folded away, not only a pill): its run and question.
@@ -1406,7 +1437,8 @@ impl Render for Island {
             .pt(px(16.))
             .pb(px(10.))
             .child(head)
-            .child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED))));
+            .when_some(stop.gone.as_ref(), |d, gone| d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }))))
+            .when(stop.gone.is_none(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED)))));
         // the middle scrolls between the fixed head and foot; while there is more below, its bottom edge fades
         let max = self.scroll.max_offset().y;
         let more_below = fades_below(max, self.scroll.offset().y);
@@ -1494,7 +1526,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, not_judged, pill, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, may_send, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1526,7 +1558,21 @@ mod tests {
             why: None,
             consequences: Default::default(),
             wants: None,
+            gone: None,
         }
+    }
+
+    // the engineer lead, 22/11 (row 9), in the design-lead's words: at a stop of a run whose older engine left the Mac,
+    // the app heard the refusal only after Send; the card says before it that the run can't go on, and what to do
+    #[test]
+    fn asked_a_stop_of_a_run_whose_engine_left_says_so_before_send() {
+        let gone = jaynes_shell::stop::Gone { version: "0.2.3".into(), said: "run r started on engine 0.2.3+abc, which is no longer on this machine: it cannot be carried on by this one (0.2.5+def)".into() };
+        assert_eq!(gone_head(&gone), "This run can't go on: it started on Jaynes 0.2.3, which is no longer on this Mac.");
+        assert_eq!(GONE_HOW, "No answer reaches it, Halt included. To do this work, start it again: a new run starts on this Jaynes.");
+        let mut stop = judging(&["a"]);
+        assert!(may_send(&stop, 1, false, false, false), "a run of this engine sends");
+        stop.gone = Some(gone);
+        assert!(!may_send(&stop, 1, false, false, false), "Send off: no answer reaches it");
     }
 
     // Alan, 16/11 (direction D of the sketches, as the app's first handoff wrote what he chose): "the stop rises as a

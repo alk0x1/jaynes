@@ -7,7 +7,7 @@
 //! one layer at a time: the picture shown large, the list of what the answer does, the field with the keys, the mode.
 
 use crate::answer::{self, Reckoned, Understood};
-use crate::island::{button, focus_field, primary, sentences, tabbed};
+use crate::island::{button, focus_field, gone_block, primary, sentences, tabbed};
 use crate::key::Key;
 use crate::look;
 use crate::viewer::{self, Does, Sizes, View};
@@ -489,6 +489,8 @@ pub struct Compare {
     why: Option<Entity<InputState>>,
     words: Option<Entity<InputState>>,
     reckoned: Reckoned,
+    /// Whether the engine's words on a run whose engine left show, under Details.
+    gone_open: bool,
     reading: bool,
     understood: Option<Result<Understood, String>>,
     sending: bool,
@@ -544,6 +546,7 @@ impl Compare {
             why: None,
             words: None,
             reckoned: Reckoned::default(),
+            gone_open: false,
             reading: false,
             understood: None,
             sending: false,
@@ -740,7 +743,7 @@ impl Compare {
     fn ask(&mut self, cx: &mut Context<Self>) {
         let Some(stop) = self.stop.clone() else { return };
         let words = Self::text(self.words.as_ref(), cx);
-        if self.sending || words.trim().is_empty() || self.thread(cx).asking {
+        if self.sending || words.trim().is_empty() || self.thread(cx).asking || stop.gone.is_some() {
             return;
         }
         let item = stop.items.get(self.marks.dir).map(|i| i.id.clone());
@@ -767,6 +770,10 @@ impl Compare {
     }
 
     fn go(&mut self, cx: &mut Context<Self>) {
+        // no answer reaches a run whose engine left the Mac, not even a question
+        if self.stop.as_ref().is_some_and(|s| s.gone.is_some()) {
+            return;
+        }
         if self.stop.as_ref().is_some_and(|s| self.asks(s, cx)) {
             return self.ask(cx);
         }
@@ -780,7 +787,7 @@ impl Compare {
 
     /// The button beside the main one: with one option and words, going with it anyway.
     fn go_also(&mut self, cx: &mut Context<Self>) {
-        if self.sending {
+        if self.sending || self.stop.as_ref().is_some_and(|s| s.gone.is_some()) {
             return;
         }
         let Some(stop) = self.stop.as_ref() else { return };
@@ -1399,7 +1406,8 @@ impl Render for Compare {
                 a.push_str(" · Touch ID");
             }
         }
-        let can = if asks { !self.sending && !thread.asking } else { !self.sending && self.reckoned.refused.is_none() && proposal.is_some() };
+        let gone = self.stop.as_ref().is_some_and(|s| s.gone.is_some());
+        let can = !gone && if asks { !self.sending && !thread.asking } else { !self.sending && self.reckoned.refused.is_none() && proposal.is_some() };
         let field = self.some_field_focused(window, cx);
         // the line over the stage: the screens, the direction's name and idea, and the two ways to see it larger
         let mut head = div().flex().gap(px(6.)).items_center();
@@ -1726,7 +1734,7 @@ impl Render for Compare {
                     }))
                     .when_some(self.reckoned.refused.clone(), |d, r| d.child(div().max_w(px(360.)).text_size(px(12.)).text_color(rgb(look::red())).child(r)))
                     .when_some(self.said.clone(), |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(s)))
-                    .when_some(also.filter(|_| !self.sending), |d, a| d.child(button("also".into(), &a, false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.go_also(cx)))))
+                    .when_some(also.filter(|_| !self.sending && stop.gone.is_none()), |d, a| d.child(button("also".into(), &a, false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.go_also(cx)))))
                     .child(go),
             )
             .children(panel);
@@ -1741,7 +1749,8 @@ impl Render for Compare {
             .bg(rgb(look::panel()))
             .pl(px(84.))
             .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
-            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, under_about(&stop)), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under))))
+            .when_some(stop.gone.as_ref(), |d, gone| d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); })).flex_1().min_w_0()))
+            .when(stop.gone.is_none(), |d| d.child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, under_about(&stop)), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under)))))
             .when(stop.round > 0, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("round {}", stop.round))))
             // as wide as its longer words, so "round" does not move when they change; a press on it keeps the keys
             // where they are, so it does what it says
@@ -1856,6 +1865,7 @@ mod tests {
             why: None,
             consequences: Default::default(),
             wants: None,
+            gone: None,
         }
     }
 

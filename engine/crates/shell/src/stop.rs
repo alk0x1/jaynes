@@ -68,6 +68,26 @@ pub struct Stop {
     /// What the agent wants to write, for a leave to change a file: the file as it is in the step's copy, and as the
     /// agent would leave it.
     pub wants: Option<Wants>,
+    /// The run's engine, when an older one started it and is no longer on this machine: no answer reaches the run,
+    /// and the card says so before Send.
+    pub gone: Option<Gone>,
+}
+
+/// An older engine a run started on, gone from the machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Gone {
+    /// Its version, the number alone: "0.2.3".
+    pub version: String,
+    /// What the engine says when an answer goes to the run.
+    pub said: String,
+}
+
+/// The engine a run started on, when it is older and gone from the machine; kept, it takes the run's answers.
+pub fn gone(home: &Path, run: &Run) -> Option<Gone> {
+    (run.engine != jaynes_core::ENGINE && crate::drive::engine_exe(home, &run.engine).is_none()).then(|| Gone {
+        version: run.engine.split('+').next().unwrap_or(&run.engine).to_string(),
+        said: crate::drive::gone_said(run),
+    })
 }
 
 /// What an agent asked leave to write, kept beside the run as it asked (`runs/<run>/wants/<question>.json`).
@@ -309,6 +329,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         why: permission.then(|| WHY_YOU.to_string()),
         consequences: if permission { leave_consequences(run, &q.question.about) } else { BTreeMap::new() },
         wants,
+        gone: gone(home, run),
     }
 }
 
@@ -434,6 +455,28 @@ mod tests {
         q.items[0].label = "Python + FastAPI: small and known".into();
         let stop = waiting(&home, &r).expect("a stop");
         assert_eq!((stop.title.as_str(), stop.asks.as_str()), ("Go with “Python + FastAPI”?", "Which plan goes on?"));
+    }
+
+    // the engineer lead, 22/11 (row 9): at a stop of a run an older engine started, the app heard the refusal only after
+    // Send; the stop says before it that the run's engine left the Mac, when it did
+    #[test]
+    fn asked_a_stop_of_a_run_whose_engine_left_the_mac_says_so_before_send() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-gone-{}", std::process::id()));
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::create_dir_all(&home).expect("home");
+        let mut r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
+        assert_eq!(waiting(&home, &r).expect("a stop").gone, None, "a run of this engine goes on");
+        r.engine = "0.2.3+abc123".into();
+        let gone = waiting(&home, &r).expect("a stop").gone.expect("its engine left");
+        assert_eq!(gone.version, "0.2.3", "the number alone, without what follows the +");
+        assert_eq!(gone.said, crate::drive::gone_said(&r), "the engine's own sentence, as Send would be refused with");
+        assert!(gone.said.contains("0.2.3+abc123") && gone.said.contains("no longer on this machine"), "{}", gone.said);
+        // kept on the machine, the older engine takes the answer: nothing to say
+        let kept = home.join("engines").join("0.2.3+abc123");
+        std::fs::create_dir_all(&kept).expect("dir");
+        std::fs::write(kept.join("jaynes"), "").expect("program");
+        assert_eq!(waiting(&home, &r).expect("a stop").gone, None, "its engine is here");
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]

@@ -39,6 +39,11 @@ pub fn reckon(body: &Value) -> Reckoned {
         Ok(read) => read,
         Err(e) => return Reckoned { sentences: Vec::new(), refused: Some(e) },
     };
+    // a run whose engine left the Mac: the card says so in place of its question, the engine's words in Details; the
+    // foot has nothing to add (the design-lead, 22/11)
+    if jaynes_shell::stop::gone(&home, &run).is_some() {
+        return Reckoned::default();
+    }
     let sentences = match jaynes_shell::drive::effects(&home, &run, &q.question, &answer) {
         // before it goes: a choice is being made, not made yet ("Choosing “Harbor”: …")
         Ok(fx) => fx.sentences.iter().map(|s| jaynes_core::decide::before_sending(s)).collect(),
