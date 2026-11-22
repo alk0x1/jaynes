@@ -242,7 +242,7 @@ mod tests {
     }
 
     fn question() -> Question {
-        Question {
+        Question { rides: Vec::new(),
             back: vec![item("Lastro")],
             id: "q1".into(),
             step: "pick".into(),

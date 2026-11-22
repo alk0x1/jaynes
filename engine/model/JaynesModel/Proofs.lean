@@ -466,4 +466,33 @@ theorem g19_merge_answer (a : AnswerCase) (hm : a.merge = true) (hx : a.acted = 
 theorem g19_merge_answer_reruns_nothing (c : EffectCase) (h : c.merge = true) : c.said = [] ∧ c.did = [] := by
   simp [EffectCase.said, EffectCase.did, h]
 
+/-! ## The merge's touch keeps the stops still open -/
+
+/-- **G9** and **G19**, at the merge's touch: the stops it keeps are kept by the person, by the answer taken about the
+    very delivery that would land, as it was shown, and only when it merges. -/
+theorem g9_touch_is_the_persons (t : TouchCase) (h : t.kept ≠ []) :
+    t.answer.who = .person ∧ t.answer.current = true ∧ t.answer.shownMatches = true ∧ t.lands = true := by
+  unfold TouchCase.kept at h
+  split at h
+  · rename_i hc
+    simp only [Bool.and_eq_true, Bool.not_eq_true'] at hc
+    obtain ⟨⟨⟨hm, hx⟩, ha⟩, hl⟩ := hc
+    unfold AnswerCase.accepts at ha
+    simp only [hx, hm, ↓reduceIte, Bool.false_eq_true] at ha
+    unfold AnswerCase.acceptsMerge at ha
+    cases hw : t.answer.who <;> simp_all
+  · simp at h
+
+/-- **G19**, the other way out: branch only keeps nothing. -/
+theorem g19_branch_only_keeps_nothing (t : TouchCase) (h : t.lands = false) : t.kept = [] := by
+  simp [TouchCase.kept, h]
+
+/-- **G17**: a stop that holds the run, a braked one among them, is never one the merge's touch keeps. -/
+theorem g17_touch_never_keeps_what_holds (opens : List Open) (s : Nat) (h : s ∈ ridesOf opens) :
+    ∃ o ∈ opens, o.step = s ∧ o.holds = false ∧ o.decision = true := by
+  simp only [ridesOf, List.mem_map, List.mem_filter] at h
+  obtain ⟨o, ⟨ho, hr⟩, hs⟩ := h
+  simp only [Open.rides, Bool.and_eq_true, Bool.not_eq_true'] at hr
+  exact ⟨o, ho, hs, hr.1.1.2, hr.1.1.1⟩
+
 end Jaynes

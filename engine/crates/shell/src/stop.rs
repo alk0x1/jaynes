@@ -606,7 +606,7 @@ mod tests {
 
     fn asking(mut r: Run) -> Run {
         let item = |id: &str, label: &str| QItem { id: id.into(), label: label.into(), digest: jaynes_core::Digest(format!("d-{id}")) };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![item("a", "Plan A"), item("b", "Plan B")],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, about: "Which plan goes on?".into(),
             choose: false, pass: 2, passes: 0, back: vec![item("c", "Plan C")],
@@ -685,7 +685,7 @@ mod tests {
     fn went_on_from_reproduce(holds: bool) -> Run {
         let mut r = run(&[("reproduce", false), ("found", false), ("fix", false)], DeliveryKind::Branch);
         let item = QItem { id: "examples".into(), label: "The examples".into(), digest: jaynes_core::Digest("d-examples".into()) };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision, items: vec![item],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds, about: "Is this the bug?".into(),
             choose: false, pass: 1, passes: 0, back: vec![],
@@ -722,7 +722,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("jaynes-stop-passed-words-{}", std::process::id()));
         let mut r = went_on_from_reproduce(false);
         let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { unheld: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers, note: String::new(),
             offers: Default::default(),
@@ -842,7 +842,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("jaynes-stop-answers-{}", std::process::id()));
         let mut r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
         let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { unheld: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers: answers.clone(), note: String::new(),
             offers: Default::default(),
@@ -864,7 +864,7 @@ mod tests {
         r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Which colours and fonts do we keep?".into(), choose: false, redo: None, rounds: None,
-            answers: BTreeMap::new(), note: "The layout of your screens comes later.".into(),
+            answers: BTreeMap::new(), note: "The layout of your screens comes later.".into(), unheld: None,
             offers: Default::default(),
         });
         assert_eq!(waiting(&home, &r).expect("a stop").note, "The layout of your screens comes later.");
@@ -883,7 +883,7 @@ mod tests {
     }
 
     fn leave(mut r: Run, about: &str) -> Run {
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Permission,
             items: vec![QItem { id: "leave".into(), label: about.into(), digest: jaynes_core::Digest("d-leave".into()) }],
             offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: about.into(),

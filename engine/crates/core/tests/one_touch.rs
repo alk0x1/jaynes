@@ -4,7 +4,7 @@
 use jaynes_core::decide::{routine, WRITE_THE_STEP_MAY_WRITE};
 use jaynes_core::event::Usage;
 use jaynes_core::manifest::{DeliveryKind, Effect, Executor, Manifest, ProjectAccess, Reach, SessionKind, StepDecl};
-use jaynes_core::question::{Answer, Ask, AskKind, By, QuestionKind, Verdict};
+use jaynes_core::question::{Answer, Ask, AskKind, By, QuestionKind, Ride, Verdict};
 use jaynes_core::risk::Changed;
 use jaynes_core::run::Run;
 use jaynes_core::{decide, AttemptOutcome, Command, Digest, Input};
@@ -174,4 +174,97 @@ fn every_merge_waits_for_the_person_even_with_nothing_that_runs_later() {
     }
     let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
     assert_eq!(delivered_merge(&ends(&mut branch, attempt, vec![file("src/app.py", 1, 0, "a")])), Some(false));
+}
+
+/// A fix-bug run whose reproduce stop does not hold: the bug as the request says it goes on, and the stop stays open.
+fn reproduce_then_fix(starter: Option<String>, holds: bool) -> (Run, Vec<Command>) {
+    use jaynes_core::manifest::StopDecl;
+    use jaynes_core::question::VerdictKind;
+    let stop = StopDecl {
+        verdicts: vec![VerdictKind::Keep, VerdictKind::Redo],
+        holds,
+        from_risk: Default::default(),
+        release: false,
+        budget: None,
+        audit_rate: jaynes_core::manifest::Rate(0.1),
+        about: "Is this the bug?".to_string(),
+        choose: false,
+        redo: None,
+        rounds: None,
+        answers: [(VerdictKind::Redo, "Not this bug".to_string())].into_iter().collect(),
+        unheld: Some("the bug".to_string()),
+        note: String::new(),
+    };
+    let reproduce = StepDecl { name: "reproduce".to_string(), stop: Some(stop), ..build() };
+    let fix = StepDecl { name: "fix".to_string(), needs: vec!["reproduce".to_string()], ..build() };
+    let manifest = Manifest { role: "fix-bug".to_string(), version: "1".to_string(), protocol: 1, steps: vec![reproduce, fix], target: Default::default(), delivery: DeliveryKind::Merge };
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "the comma breaks the CSV".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter }).expect("start");
+    let mut run = Run::fold(&out.events).expect("run");
+    let mut todo = out.commands;
+    let mut seen = Vec::new();
+    while let Some(cmd) = (!todo.is_empty()).then(|| todo.remove(0)) {
+        match &cmd {
+            Command::Probe { step, .. } => todo.extend(feed(&mut run, Input::ProbeEnded { step: step.clone(), ok: true, reason: String::new() })),
+            Command::RunAgent(t) => {
+                let (items, changed) = if t.step == "reproduce" {
+                    (vec![jaynes_core::question::Item { id: "bug".to_string(), label: "A note with a comma breaks the CSV".to_string(), digest: Digest("b".to_string()) }], vec![file("tests/test_comma.py", 9, 0, "t")])
+                } else {
+                    (Vec::new(), vec![file("src/export.py", 3, 1, "e")])
+                };
+                let outcome = AttemptOutcome::Delivered { output: Digest(format!("o-{}", t.step)), items, changed, usage: Usage::default(), session: None, tree: None, reply: None };
+                todo.extend(feed(&mut run, Input::AttemptEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, outcome }));
+            }
+            _ => {}
+        }
+        seen.push(cmd);
+    }
+    (run, seen)
+}
+
+// The tech-lead, 22/11: the cut in cost leaves the person one moment, the merge, with one touch. A stop the request
+// already answers does not hold the run; the merge's card lists it, and the touch that merges keeps it, by the person,
+// with its own answer in the record.
+#[test]
+fn asked_one_moment_at_the_merge() {
+    let (mut run, seen) = reproduce_then_fix(None, false);
+    // the run went on past the stop that does not hold: the fix was made, and the person was asked only the merge
+    assert!(seen.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "fix")), "{seen:?}");
+    assert_eq!(asked(&seen), [QuestionKind::Decision, QuestionKind::Merge]);
+    let open = run.open_questions().into_iter().map(|q| q.question.clone()).collect::<Vec<_>>();
+    let bug = open.iter().find(|q| q.step == "reproduce").expect("the stop is still open").clone();
+    assert!(!bug.holds);
+    let merge = open.iter().find(|q| q.kind == QuestionKind::Merge).expect("the merge waits").clone();
+    // the merge's question names each open stop its touch keeps, with what it holds now in Jaynes's words
+    assert_eq!(merge.rides, vec![Ride { question: bug.id.clone(), step: "reproduce".to_string(), said: "the bug, as your request says".to_string() }]);
+    // one touch, the person's: the stop is kept first, by the person, then the merge goes out
+    let keep = Answer { back: Default::default(), question: merge.id.clone(), shown: merge.shown(), verdicts: merge.items.iter().map(|x| (x.id.clone(), Verdict::Keep)).collect(), by: By::Person, context: String::new() };
+    let out = decide(Some(&run), &Input::Answer { answer: keep }).expect("the touch");
+    let answered: Vec<(&str, &By)> = out.events.iter().filter_map(|e| if let jaynes_core::Event::AnswerRecorded { answer, .. } = e { Some((answer.question.as_str(), &answer.by)) } else { None }).collect();
+    assert_eq!(answered, [(bug.id.as_str(), &By::Person), (merge.id.as_str(), &By::Person)]);
+    for e in &out.events {
+        run.apply(e);
+    }
+    let kept = run.questions[&bug.id].answer.clone().expect("kept");
+    assert_eq!((kept.shown, kept.verdicts.get("bug")), (bug.shown(), Some(&Verdict::Keep)));
+    assert_eq!(delivered_merge(&out.commands), Some(true), "{:?}", out.commands);
+    // nothing ran again: keeping it as it is sends nothing back
+    assert!(!out.commands.iter().any(|c| matches!(c, Command::RunAgent(_))), "{:?}", out.commands);
+}
+
+#[test]
+fn branch_only_keeps_nothing_and_a_stop_that_holds_is_never_in_the_merge() {
+    // the other way out of the merge answers nothing else: the stop stays open for the person
+    let (mut run, _) = reproduce_then_fix(None, false);
+    let merge = run.open_questions().into_iter().map(|q| q.question.clone()).find(|q| q.kind == QuestionKind::Merge).expect("merge");
+    let drop = Answer { back: Default::default(), question: merge.id.clone(), shown: merge.shown(), verdicts: merge.items.iter().map(|x| (x.id.clone(), Verdict::Drop)).collect(), by: By::Person, context: String::new() };
+    assert_eq!(delivered_merge(&feed(&mut run, Input::Answer { answer: drop })), Some(false));
+    assert!(run.open_questions().iter().any(|q| q.question.step == "reproduce"), "branch only keeps nothing");
+    // a run an agent started says whose request it was
+    let (run, _) = reproduce_then_fix(Some("4242@1".to_string()), false);
+    let merge = run.open_questions().into_iter().map(|q| q.question.clone()).find(|q| q.kind == QuestionKind::Merge).expect("merge");
+    assert_eq!(merge.rides[0].said, "the bug, as the request the agent that started the run wrote says");
+    // a stop that holds is answered on its own before anything goes on: never one the merge's touch keeps
+    let (run, seen) = reproduce_then_fix(None, true);
+    assert!(!seen.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "fix")), "the stop held: {seen:?}");
+    assert!(run.open_questions().iter().all(|q| q.question.kind != QuestionKind::Merge && q.question.rides.is_empty()));
 }
