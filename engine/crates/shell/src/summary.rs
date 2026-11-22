@@ -754,7 +754,7 @@ mod tests {
 
     fn question(id: &str, step: &str, holds: bool) -> Question {
         Question { rides: Vec::new(),
-            id: id.into(), step: step.into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+            id: id.into(), step: step.into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds, about: "Does the plan go on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         }
     }

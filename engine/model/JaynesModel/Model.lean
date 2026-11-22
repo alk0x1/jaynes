@@ -420,3 +420,29 @@ def TouchCase.kept (t : TouchCase) : List Nat :=
   else []
 
 end Jaynes
+
+/-! ## When a stop holds the run (`ask_output` and `named` in `decide.rs`) -/
+
+namespace Jaynes
+
+/-- A stop's question as it opens: what its stop and its step say. -/
+structure Hold where
+  /-- it asks about what an agent's or the role's step made: its stop's question. Any other (the person's own step,
+      what a role asks, a step that cannot be done) holds the run -/
+  ofOutput : Bool
+  holds : Bool
+  /-- the stop does not hold when the request or the brief named the one option (`holds_unless`) -/
+  unlessNamed : Bool
+  /-- the step has the check that vouches for those words -/
+  vouchDeclared : Bool
+  /-- the output offers one option, and it carries the words that named it -/
+  oneNamed : Bool
+  braked : Bool
+  deriving Repr, FromJson, ToJson, Inhabited
+
+/-- Whether the question holds the run: the stop holds unless the one option was named and vouched for; a braked stop
+    holds whatever its role says (G17). -/
+def Hold.holdsNow (h : Hold) : Bool :=
+  !h.ofOutput || (h.holds && !(h.unlessNamed && h.vouchDeclared && h.oneNamed)) || h.braked
+
+end Jaynes

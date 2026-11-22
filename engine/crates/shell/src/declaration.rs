@@ -473,7 +473,7 @@ mod tests {
             starter: None,
         };
         let mut events = jaynes_core::decide(None, &start).expect("start").events;
-        let item = Item { id: "a".into(), label: "the plan".into(), digest: Digest("d".into()) };
+        let item = Item { named: None, id: "a".into(), label: "the plan".into(), digest: Digest("d".into()) };
         events.push(Event::AttemptDelivered {
             step: "plan".into(), attempt: 1, fix: 0, output: Digest("o".into()), items: vec![item.clone()],
             changed: vec![jaynes_core::risk::Changed::file("plan.md".into(), 4)], usage: Usage { seconds: 70, tokens: 900, cached: 0, ..Default::default() }, session: None, tree: None,

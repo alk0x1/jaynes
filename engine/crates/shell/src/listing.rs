@@ -2770,10 +2770,10 @@ mod tests {
     fn asked_one_moment_at_the_merge_the_story_says_what_a_stop_that_did_not_wait_holds() {
         use jaynes_core::question::{Answer, By, Item, Ride, Verdict};
         let mut r = run("one-moment", "the CSV breaks on a comma");
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: Some("the bug".into()), verdicts: vec![], holds: false, from_risk: Default::default(), release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: Some("the bug".into()), holds_unless: None, vouched_by: None, verdicts: vec![], holds: false, from_risk: Default::default(), release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
         let bug = Question { rides: Vec::new(),
             id: "q-bug".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision,
-            items: vec![Item { id: "bug".into(), label: "A note with a comma breaks the CSV".into(), digest: jaynes_core::Digest("b".into()) }],
+            items: vec![Item { named: None, id: "bug".into(), label: "A note with a comma breaks the CSV".into(), digest: jaynes_core::Digest("b".into()) }],
             offered: vec![], holds: false, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
         r.questions.insert(bug.id.clone(), QuestionState { question: bug.clone(), answer: None, effects: None, superseded: false });
@@ -3087,7 +3087,7 @@ mod tests {
 
     #[test]
     fn a_choice_of_one_option_asks_whether_to_go_with_it() {
-        let item = |id: &str, label: &str| jaynes_core::question::Item { id: id.into(), label: label.into(), digest: jaynes_core::Digest(id.into()) };
+        let item = |id: &str, label: &str| jaynes_core::question::Item { named: None, id: id.into(), label: label.into(), digest: jaynes_core::Digest(id.into()) };
         let asked = |items, choose| QuestionState {
             question: Question { rides: Vec::new(),
                 id: "q1".into(), step: "stack".into(), round: 1, kind: QuestionKind::Decision, items, offered: vec![], holds: true,

@@ -495,4 +495,17 @@ theorem g17_touch_never_keeps_what_holds (opens : List Open) (s : Nat) (h : s �
   simp only [Open.rides, Bool.and_eq_true, Bool.not_eq_true'] at hr
   exact ⟨o, ho, hs, hr.1.1.2, hr.1.1.1⟩
 
+/-! ## A named option lets the run go on, never a braked stop -/
+
+/-- **G17**: a braked stop holds the run, whatever its role says and whatever was named. -/
+theorem g17_braked_holds (h : Hold) (hb : h.braked = true) : h.holdsNow = true := by
+  simp [Hold.holdsNow, hb]
+
+/-- A stop the role makes hold lets the run go on only for the one option the request or the brief named, with the
+    check that vouched for the words declared on its step. -/
+theorem named_lets_go_only_vouched (h : Hold) (hh : h.holds = true) (hn : h.holdsNow = false) :
+    h.unlessNamed = true ∧ h.vouchDeclared = true ∧ h.oneNamed = true ∧ h.braked = false := by
+  cases hu : h.unlessNamed <;> cases hv : h.vouchDeclared <;> cases ho : h.oneNamed <;> cases hb : h.braked <;>
+    cases hf : h.ofOutput <;> simp_all [Hold.holdsNow]
+
 end Jaynes
