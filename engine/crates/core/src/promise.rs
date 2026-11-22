@@ -688,7 +688,7 @@ fn late_now(node: &Node) -> Vec<String> {
 fn went_past(r: &Run, q: &crate::question::Question) -> bool {
     q.kind == QuestionKind::Decision
         && !q.holds
-        && r.manifest.steps.iter().enumerate().any(|(j, d)| d.needs.iter().any(|n| *n == q.step) && r.steps[j].status != Status::Idle)
+        && r.manifest.steps.iter().enumerate().any(|(j, d)| d.needs.contains(&q.step) && r.steps[j].status != Status::Idle)
 }
 
 /// Every child of the nodes of `part` that the level may keep, with its key: one not `seen` at an earlier level nor
