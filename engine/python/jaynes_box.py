@@ -1770,11 +1770,13 @@ def agent_box(spec: dict[str, Any]) -> tuple[Box, Path, Path, dict[str, str]]:
     return b, _agent_start(work, pwd), pwd, {"JAYNES_PORTS": ",".join(map(str, ports))}
 
 
-def agent_run(spec_path: Path, command: str) -> int:
+def agent_run(spec_path: Path | str, command: str) -> int:
     """Run one of an agent's shell commands in its box, with this process's standard streams, and say its exit code.
-    What the engine keeps is found from the spec's ``engine``, never from the command's environment."""
+    The box is a file, or its text itself (a ``str``), as the leave server gives it in each command, read once as it
+    started: never a file the agent's own tools may write. What the engine keeps is found from the spec's
+    ``engine``, never from the command's environment."""
     try:
-        spec = json.loads(spec_path.read_text())
+        spec = json.loads(spec_path if isinstance(spec_path, str) else spec_path.read_text())
         if not isinstance(spec, dict):
             raise ValueError("not an object")
         if spec.get("engine"):
@@ -1834,6 +1836,9 @@ if __name__ == "__main__":
             print(e)
             sys.exit(3)
         sys.exit(0)
+    if len(args) >= 5 and args[:2] == ["agent-run", "--spec"] and args[3] == "--":
+        # the leave server's form: the turn's box in the command itself
+        sys.exit(agent_run(args[2], " ".join(args[4:])))
     if len(args) >= 4 and args[0] == "agent-run" and args[2] == "--":
         # jaynes_box.py agent-run SPEC -- COMMAND: one shell command of a Claude Code agent, in its box
         sys.exit(agent_run(Path(args[1]), " ".join(args[3:])))

@@ -111,6 +111,24 @@ class TheAgentSCommandsRunInJaynesSBox(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertNotIn("ran\n", said)
 
+    def test_its_box_comes_whole_in_the_command_and_no_file_can_widen_it(self):
+        # the leave server reads the turn's box once, as it starts, and gives it in each command: a file the agent's
+        # own tools may write is never read again
+        spec = self.spec()
+        given = spec.read_text()
+        spec.write_text(json.dumps({"work": str(self.tmp), "writable": [str(self.tmp)], "readable": [], "hidden": [],
+                                    "home": str(self.home), "engine": str(self.engine), "pwd": str(self.tmp / "pwd")}))
+        env = {k: v for k, v in os.environ.items() if k != "JAYNES_ENGINE_HOME"}
+        done = subprocess.run([sys.executable, str(BOX_PY), "agent-run", "--spec", given, "--", f"pwd -P; echo out > {self.outside}/there.txt"],
+                              capture_output=True, text=True, timeout=60, cwd=self.work, env=env)
+        self.assertTrue(done.stdout.startswith(f"{self.work}\n"), done.stdout + done.stderr)
+        self.assertFalse((self.outside / "there.txt").exists())
+        done = subprocess.run([sys.executable, str(BOX_PY), "agent-run", "--spec", "not a box", "--", "echo ran"],
+                              capture_output=True, text=True, timeout=60, cwd=self.work, env=env)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("ran\n", done.stdout)
+        self.assertIn("Jaynes ran none of this command", done.stderr)
+
     def test_the_command_gets_its_arguments_whole(self):
         code, said = self.agent_run("printf '%s|' \"a b\" 'c'\"'\"'d' $HOME_UNSET; echo")
         self.assertEqual((code, said), (0, "a b|c'd|\n"))
