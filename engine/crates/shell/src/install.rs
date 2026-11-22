@@ -12,6 +12,8 @@ const LIBRARY: &str = include_str!("../../../python/jaynes_role.py");
 const BOX: &str = include_str!("../../../python/jaynes_box.py");
 /// The menu of checks and steps that roles written in TOML pick by name.
 const MENU: &str = include_str!("../../../python/jaynes_menu.py");
+/// The box's preload for node (jaynes_box.py LISTEN_PRELOAD): a listen the box refuses is said at once.
+const LISTEN: &str = include_str!("../../../python/jaynes_listen.cjs");
 
 /// Where Jaynes is published, for `jaynes update` and for the roles that come with it.
 pub const SOURCE: &str = "https://github.com/alk0x1/jaynes";
@@ -23,7 +25,7 @@ pub fn library(home: &Path) -> PathBuf {
         return PathBuf::from(dir);
     }
     let dir = home.join("library");
-    for (name, text) in [("jaynes_role.py", LIBRARY), ("jaynes_box.py", BOX), ("jaynes_menu.py", MENU)] {
+    for (name, text) in [("jaynes_role.py", LIBRARY), ("jaynes_box.py", BOX), ("jaynes_menu.py", MENU), ("jaynes_listen.cjs", LISTEN)] {
         let file = dir.join(name);
         if std::fs::read_to_string(&file).ok().as_deref() != Some(text) {
             let _made = std::fs::create_dir_all(&dir);
@@ -787,6 +789,22 @@ pub fn update(home: &Path) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_library_written_under_the_home_carries_the_box_s_preload_for_node() {
+        // the box adds it to node's NODE_OPTIONS only where it is there: an installed Jaynes without it said no
+        // refused listen at once (the engineer lead's listen(0), 22/11)
+        if std::env::var_os("JAYNES_ROLE_LIBRARY").is_some() {
+            return;
+        }
+        let home = std::env::temp_dir().join(format!("jaynes-library-preload-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let dir = library(&home);
+        let preload = std::fs::read_to_string(dir.join("jaynes_listen.cjs")).expect("the preload is written");
+        assert!(preload.contains("Jaynes's box refused listen on"), "{preload}");
+        assert!(std::fs::read_to_string(dir.join("jaynes_box.py")).expect("box").contains("jaynes_listen.cjs"));
+        let _gone = std::fs::remove_dir_all(&home);
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).status().expect("git").success();

@@ -284,6 +284,11 @@ def profile(box: Box) -> str:
             lines.append(f"(deny file-read* {_subpaths(box.hidden)})")
     if box.writable:
         lines.append(f"(allow file-read* {_subpaths(box.writable)})")
+    # the folders above what it reads and writes, only their own metadata: a program that resolves where it runs
+    # (node's realpath, npm's) looks at each, and a hidden home above the step's folder refused it EPERM
+    above = sorted({str(a) for p in (*box.writable, *box.readable) for a in Path(os.path.realpath(p)).parents} - {"/"})
+    if above:
+        lines.append("(allow file-read-metadata " + " ".join(f"(literal {_lit(a)})" for a in above) + ")")
     lines.append("(deny network-outbound)")
     # TCP only: the box sends no UDP, not even to its own machine. Only listed ports: a deny under a wildcard does not
     # hold in sandbox-exec
@@ -1061,13 +1066,29 @@ def _exits(pid: int, timeout: float) -> bool:
     return False
 
 
+def _ends(pid: int, timeout: float, refused: Path | None) -> tuple[bool, bool]:
+    """Wait until ``pid`` exits, as ``_exits``, or until the box refused it a listen (``refused``, the command's file
+    of refusals) and ``REFUSED_GRACE`` more went by: a child's server that died of it leaves its parent waiting, and
+    the refusal is said at once, never at the end of the time. Whether it exited, and whether it was stopped for that."""
+    if refused is None:
+        return _exits(pid, timeout), False
+    deadline = time.monotonic() + timeout
+    while (left := deadline - time.monotonic()) > 0:
+        if _exits(pid, min(0.5, left)):
+            return True, False
+        if refusals_said(refused):
+            return (True, False) if _exits(pid, min(REFUSED_GRACE, max(0.0, deadline - time.monotonic()))) else (True, True)
+    return False, False
+
+
 def _wait_in_box(argv: list[str], *, cwd: Path | None, env: dict[str, str], stdin: str | None, timeout: float,
-                 stderr_apart: bool = False) -> tuple[int, bytes, bytes, bool]:
+                 stderr_apart: bool = False, refused: Path | None = None) -> tuple[int, bytes, bytes, bool]:
     """Run ``argv`` (a command in the box) as a group of its own and wait for it: its code, what it printed (stdout,
     and stderr when apart), and whether it ran out of time. While it runs its group is noted for a halt; when it
     ends, whatever it left running in its group is stopped, as when it runs out of time. It is waited for without
     being reaped, so its number cannot name another group when the group is stopped; what it left holding its
-    output in a session of its own no longer keeps the call waiting."""
+    output in a session of its own no longer keeps the call waiting. With ``refused``, it is stopped soon after the box
+    refused it a listen (``_ends``), its code then 1."""
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE if stderr_apart else subprocess.STDOUT,
                             start_new_session=True)
@@ -1094,7 +1115,8 @@ def _wait_in_box(argv: list[str], *, cwd: Path | None, env: dict[str, str], stdi
         readers[-1].start()
     try:
         # exited, not reaped: its pid, and so its group's number, stays its own until wait()
-        timed_out = not _exits(proc.pid, timeout)
+        exited, stopped = _ends(proc.pid, timeout, refused)
+        timed_out = not exited
     finally:
         _kill(proc)  # the whole group: what it left running ends with it
         proc.wait()
@@ -1102,7 +1124,7 @@ def _wait_in_box(argv: list[str], *, cwd: Path | None, env: dict[str, str], stdi
             note.unlink(missing_ok=True)
     for r in readers:
         r.join(timeout=2)  # what holds the pipe in a session of its own keeps nobody waiting
-    code = 124 if timed_out else proc.returncode
+    code = 124 if timed_out else 1 if stopped else proc.returncode
     return code, b"".join(chunks["out"]), b"".join(chunks["err"]), timed_out
 
 
@@ -1113,6 +1135,39 @@ GIT_LOCAL = ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAM
              "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
              "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
              "GIT_INTERNAL_SUPER_PREFIX")
+
+
+# Jaynes's preload for node (jaynes_listen.cjs, beside this file, only read in the box): a listen the box refuses is
+# said as the box's and its process ends at once, where Node's own test runner would swallow it and wait. Its words go
+# to the command's output and to the file named in REFUSED_FILE, which Jaynes makes new for every command and reads
+# after it: the command may write that file too, so it is read only as words of a refusal, and the most it does is
+# block, with those words.
+LISTEN_PRELOAD = Path(__file__).resolve().with_name("jaynes_listen.cjs")
+REFUSED_FILE = "JAYNES_BOX_REFUSED"
+REFUSED_SAID = "Jaynes's box refused listen on "
+REFUSED_GRACE = 3.0  # seconds a command has to end after its listen was refused, before Jaynes stops it
+
+
+def listen_said(env: dict[str, str], said: Path) -> dict[str, str]:
+    """``env`` with Jaynes's preload added to the NODE_OPTIONS it has, never in their place, and the file of
+    refusals named; ``env`` as it is where the preload is not beside this file, since node would then start nothing."""
+    if not LISTEN_PRELOAD.is_file():
+        return env
+    preload = f'--require "{LISTEN_PRELOAD}"'
+    given = env.get("NODE_OPTIONS", "").strip()
+    return {**env, "NODE_OPTIONS": f"{given} {preload}" if given else preload, REFUSED_FILE: str(said)}
+
+
+def refusals_said(said: Path) -> list[str]:
+    """The refusals the preload wrote to ``said``: only lines in its words, a few, each short."""
+    try:
+        with open(said, "rb") as f:
+            text = f.read(65536).decode(errors="replace")
+    except OSError:
+        return []
+    lines = [line.strip() for line in text.splitlines()]
+    kept = [line for line in dict.fromkeys(lines) if line.startswith(REFUSED_SAID) and len(line) <= 300]
+    return kept[:5]
 
 
 def inherited() -> dict[str, str]:
@@ -1488,17 +1543,23 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         anyone = any_port is True
         own = test_servers is True and not anyone
         window = servers_window() if own and sys.platform == "darwin" else ()
-        box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *installed, *readable), reserved=ports,
+        box = Box((work, scratch), hidden=hidden, local=True, readable=(project, *installed, *readable, LISTEN_PRELOAD),
+                  reserved=ports,
                   local_ports=declared, any_port=anyone, window=window, browser=_browser() if browser else None)
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
         holds = tuple(p for p in HELD_PORTS if p not in declared and p not in ports) if window else ()
         with _holding(holds) if window else contextlib.nullcontext() as holding:
-            code, out, _, late = _wait_in_box(argv, cwd=work, env={**inherited(), **suite_environment(work, scratch), **(env or {}), **given},
-                                              stdin=stdin, timeout=timeout)
+            said = scratch / "jaynes-refused.txt"
+            said.unlink(missing_ok=True)
+            code, out, _, late = _wait_in_box(argv, cwd=work, env=listen_said({**inherited(), **suite_environment(work, scratch),
+                                                                              **(env or {}), **given}, said),
+                                              stdin=stdin, timeout=timeout, refused=said)
         if late:
             out += f"\n(stopped after {timeout:.0f} s)".encode()
         text = out.decode(errors="replace")
+        if kept := refusals_said(said):
+            text += "\n" + "\n".join(kept) + "\n"
         return Ran(code, text[-TAIL:], text, reserved=ports, local_ports=declared, any_port=anyone, test_servers=own,
                    held=holding.held if holding is not None else (), window=window)
 
@@ -1577,15 +1638,19 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
                 link_dependencies(source, work)
         # what it reads is said, so the engine's runs are hidden from it but for its role's folder
         reads = tuple(p for p in (role, None if write or project is None else project) if p is not None) or (scratch,)
-        reads += installed
+        reads += (*installed, LISTEN_PRELOAD)
         # a role's own script starts the Chrome Jaynes photographs with, as a photograph does
         argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads,
                                            browser=_browser()))
-        env = {**inherited(), **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")}
-        code, said, _, late = _wait_in_box(argv, cwd=work, env=env, stdin=stdin, timeout=timeout)
+        refusals = scratch / "jaynes-refused.txt"
+        env = listen_said({**inherited(), **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")},
+                          refusals)
+        code, said, _, late = _wait_in_box(argv, cwd=work, env=env, stdin=stdin, timeout=timeout, refused=refusals)
         if late:
             said += f"\n(stopped after {timeout:.0f} s)".encode()
         text = said.decode(errors="replace")
+        if kept := refusals_said(refusals):
+            text += "\n" + "\n".join(kept) + "\n"
         output, unread = _output(out / "output.json")
         return Stepped(Ran(code, text[-TAIL:], text), output, unread)
 
@@ -1901,9 +1966,31 @@ def agent_box(spec: dict[str, Any]) -> tuple[Box, Path, Path, dict[str, str]]:
     own = spec.get("test_servers") is True and not anyone
     ports = reserve()
     b = Box(writable, hidden=tuple(Path(p) for p in spec.get("hidden") or ()), hide_home=True, local=True,
-            readable=(work, *(Path(p) for p in spec.get("readable") or ())), reserved=ports, local_ports=local_ports,
+            readable=(work, *(Path(p) for p in spec.get("readable") or ()), LISTEN_PRELOAD), reserved=ports,
+            local_ports=local_ports,
             any_port=anyone, window=servers_window() if own else (), home=home)
     return b, _agent_start(work, pwd), pwd, {"JAYNES_PORTS": ",".join(map(str, ports))}
+
+
+def _agent_wait(argv: list[str], start: Path, env: dict[str, str], said: Path) -> int:
+    """Run an agent's command with this process's standard streams, in a process group of its own, and its code: when
+    the box refused it a listen, the group is stopped soon after (``_ends``), as a check's command is. A signal that
+    ends this process (the agent's tool giving up on the command) ends the group too."""
+    proc = subprocess.Popen(argv, cwd=start, env=env, preexec_fn=lambda: os.setpgid(0, 0))
+
+    def stop(signum, _frame):
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        raise SystemExit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, stop)
+    _, stopped = _ends(proc.pid, float(365 * 24 * 3600), said)
+    if stopped:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait()
+    return 1 if stopped else proc.returncode
 
 
 def agent_run(spec_path: Path | str, command: str) -> int:
@@ -1925,6 +2012,9 @@ def agent_run(spec_path: Path | str, command: str) -> int:
             proxy = PackageProxy(tuple(str(h) for h in packages["hosts"]), int(packages.get("port", 443)))
             b = _replaced(b, ports=(*b.ports, proxy.port))
             adds = adds | proxy.env()
+        # the command's own folder for what the box refused, new for it, gone after it
+        refusals = Path(tempfile.mkdtemp(prefix="jaynes-refused-"))
+        b = _replaced(b, writable=(*b.writable, refusals))
         argv = [str(SANDBOX_EXEC), "-p", profile(b), "/bin/bash", "-c", AGENT_SCRIPT, "jaynes-agent", str(start), command,
                 str(pwd)]
     except AgentRefused as e:
@@ -1933,14 +2023,20 @@ def agent_run(spec_path: Path | str, command: str) -> int:
     except (OSError, ValueError) as e:
         print(f"Jaynes ran none of this command: it could not read the turn's box ({e})", file=sys.stderr)
         return 126
-    env = {k: v for k, v in inherited().items() if k != "JAYNES_ENGINE_HOME"} | adds
+    said = refusals / "said.txt"
+    env = listen_said({k: v for k, v in inherited().items() if k != "JAYNES_ENGINE_HOME"} | adds, said)
     holds = tuple(p for p in HELD_PORTS if p not in b.local_ports and p not in b.reserved) if b.window else ()
     try:
         with _holding(holds) if b.window else contextlib.nullcontext():
-            return subprocess.call(argv, cwd=start, env=env)
+            code = _agent_wait(argv, start, env, said)
+        # said again after the command, where a test runner that started the server swallowed its words
+        for line in refusals_said(said):
+            print(line, file=sys.stderr)
+        return code
     finally:
         if proxy is not None:
             proxy.close()
+        shutil.rmtree(refusals, ignore_errors=True)
 
 
 if __name__ == "__main__":
