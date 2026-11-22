@@ -35,6 +35,9 @@ pub struct Run {
     /// judges the same change again, and set the run aside. None: only the person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starter: Option<String>,
+    /// The person's asks the agent is answering, by ask, with the question each is about.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub asking: BTreeMap<String, String>,
     /// Set aside by the agent that started it, which abandoned it: halted with its work kept, until the person
     /// brings it back or abandons it for good.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +155,10 @@ pub struct StepState {
     /// rested on changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// The stop's conversation, round by round: the person's words and asks, the agent's answers, and the agent's
+    /// few words beside each new output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thread: Vec<Entry>,
     /// The step acts on something real, is not safe to repeat, and delivered in this intent: it acted, whatever its
     /// checks say after; nothing but the person's order of a second act starts it again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -198,6 +205,41 @@ pub struct Done {
     pub changed: Vec<Changed>,
 }
 
+/// What an entry of a stop's conversation is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    /// The person's words for a change, sent back with the stop's answer.
+    Change,
+    /// The person's question to the agent, which changes nothing.
+    Ask,
+    /// The agent's answer to it, in a turn that only read.
+    Answer,
+    /// Why the question got no answer.
+    AskFailed,
+    /// The agent's few words beside a new output: what it changed and why.
+    Reply,
+}
+
+/// One entry of a stop's conversation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Entry {
+    pub round: u32,
+    /// The stop's question it was said at; empty for a reply, which comes before its round's question.
+    pub question: String,
+    pub kind: EntryKind,
+    pub text: String,
+    /// The item the words are about, when they are about one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    /// An answer that came after the stop was answered or replaced: it changed nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub late: bool,
+    /// The ask an ask, its answer or its failure belong to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Pending {
     pub output: Digest,
@@ -232,6 +274,18 @@ fn nothing_carried(n: &u64) -> bool {
 impl StepState {
     /// An attempt that ended in `session`, having used `tokens`: in the session the step had, its tokens add to what
     /// that session carries; in a new one, they are all it carries.
+    /// The asks of `round`, each with its answer, as the next round's agent is given them.
+    pub fn asked(&self, round: u32) -> Vec<crate::io::Asked> {
+        self.thread
+            .iter()
+            .filter(|e| e.kind == EntryKind::Ask && e.round == round)
+            .map(|e| crate::io::Asked {
+                text: e.text.clone(),
+                answer: self.thread.iter().find(|a| a.kind == EntryKind::Answer && a.ask == e.ask).map(|a| a.text.clone()),
+            })
+            .collect()
+    }
+
     fn carry(&mut self, session: Option<&String>, tokens: u64) {
         let Some(new) = session else { return };
         self.carried = if self.session.as_ref() == Some(new) { self.carried + tokens } else { tokens };
@@ -298,6 +352,7 @@ impl Run {
             halted: false,
             starter: starter.clone(),
             set_aside: None,
+            asking: BTreeMap::new(),
             delivering: None,
             delivered: None,
             counts: Counts::default(),
@@ -460,6 +515,9 @@ impl Run {
             Event::StepDone { step, round, output, items, reads, changed } => {
                 self.unwait();
                 if let Some(s) = self.step_mut(step) {
+                    if let Some(text) = s.pending.as_ref().and_then(|p| p.reply.clone()).filter(|t| !t.trim().is_empty()) {
+                        s.thread.push(Entry { round: *round, question: String::new(), kind: EntryKind::Reply, text, item: None, late: false, ask: None });
+                    }
                     s.done = Some(Done {
                         round: *round,
                         output: output.clone(),
@@ -557,6 +615,22 @@ impl Run {
                 q.answer = Some(answer.clone());
                 q.effects = Some(effects.clone());
                 let question = q.question.clone();
+                if question.kind == QuestionKind::Decision {
+                    let words: Vec<(String, String)> = question
+                        .items
+                        .iter()
+                        .filter_map(|x| match answer.verdict(&x.id) {
+                            Verdict::Change { text } if !text.trim().is_empty() => Some((x.id.clone(), text.trim().to_string())),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(s) = self.step_mut(&question.step) {
+                        let round = s.round;
+                        for (item, text) in words {
+                            s.thread.push(Entry { round, question: question.id.clone(), kind: EntryKind::Change, text, item: Some(item), late: false, ask: None });
+                        }
+                    }
+                }
                 if answer.by.person() && !answer.context.trim().is_empty() {
                     self.context.push((question.step.clone(), answer.context.trim().to_string()));
                 }
@@ -663,8 +737,20 @@ impl Run {
             }
             Event::PortsChosen { any, servers, opened } => self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened }),
             Event::Halted { .. } => self.halted = true,
-            // the thread of a stop: folded with the asking, which the core does not take yet
-            Event::AgentAsked { .. } | Event::AgentAnswered { .. } | Event::AskFailed { .. } => {}
+            Event::AgentAsked { ask, question, step, round, item, text, .. } => {
+                self.asking.insert(ask.clone(), question.clone());
+                if let Some(s) = self.step_mut(step) {
+                    s.thread.push(Entry { round: *round, question: question.clone(), kind: EntryKind::Ask, text: text.clone(), item: item.clone(), late: false, ask: Some(ask.clone()) });
+                }
+            }
+            Event::AgentAnswered { ask, text, usage, session, late } => {
+                self.spent.add(*usage);
+                self.ask_ended(ask, EntryKind::Answer, text, *late, session.as_ref(), usage.tokens);
+            }
+            Event::AskFailed { ask, reason, usage } => {
+                self.spent.add(*usage);
+                self.ask_ended(ask, EntryKind::AskFailed, reason, false, None, usage.tokens);
+            }
             Event::SetAside { by } => {
                 self.halted = true;
                 self.set_aside = Some(by.clone());
@@ -857,6 +943,20 @@ impl Run {
     /// Whether `by`, giving `starter`, is the agent that started the run: never the person, nor a run with none.
     pub fn started_by(&self, by: &By, starter: Option<&str>) -> bool {
         matches!(by, By::Agent { .. }) && starter.is_some() && starter == self.starter.as_deref()
+    }
+
+    /// An ask ended: its answer or failure joins the thread, and an answer in time carries its session on.
+    fn ask_ended(&mut self, ask: &str, kind: EntryKind, text: &str, late: bool, session: Option<&String>, tokens: u64) {
+        let Some(question) = self.asking.remove(ask) else { return };
+        let Some(step) = self.questions.get(&question).map(|q| q.question.step.clone()) else { return };
+        let Some(s) = self.step_mut(&step) else { return };
+        let Some(asked) = s.thread.iter().find(|e| e.kind == EntryKind::Ask && e.ask.as_deref() == Some(ask)).cloned() else { return };
+        s.thread.push(Entry { round: asked.round, question, kind, text: text.to_string(), item: asked.item, late, ask: Some(ask.to_string()) });
+        // the answer is in the session now: the next round that goes on in it knows what was asked
+        if let (Some(new), false) = (session, late) {
+            s.carried += tokens;
+            s.session = Some(new.clone());
+        }
     }
 
     pub fn open_questions(&self) -> Vec<&QuestionState> {

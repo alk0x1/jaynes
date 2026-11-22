@@ -488,6 +488,45 @@ fn a_change_to_a_file_that_runs_later_raises_the_risk_and_asks_the_person() {
 
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_person_asks_the_agent_at_a_stop_and_its_answer_joins_the_stop_with_nothing_redone() {
+    let s = scratch("ask");
+    let prompt = s.base.join("ask-prompt.txt");
+    // the stand-in agent answers a question in its reply, and otherwise makes the change
+    let agent = format!(
+        "cat > {p} && if grep -q 'what if it were Go' {p}; then printf 'Go would be warmer here.' > .jaynes/reply.md && echo '{{\"tokens\":40,\"session\":\"s2\"}}'; \
+         else perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT} && echo '{{\"session\":\"s1\"}}'; fi",
+        p = prompt.display()
+    );
+    let out = start(&s, "ask", &agent);
+    assert!(out.contains("waiting: delivered"), "{out}");
+    let e = events(&s, "ask");
+    let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let attempts = e.iter().filter(|e| e["type"] == "AttemptStarted").count();
+    // a program without a terminal is an agent: asking is the person's
+    let (ok, said) = engine(&s, &["ask", "ask", &q, "--text", "what if it were Go?"]);
+    assert!(!ok && said.contains("only you ask"), "{said}");
+    let script = tty()
+        .args([BIN, "ask", "ask", &q, "--text", "what if it were Go?"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .output()
+        .expect("script");
+    let said = String::from_utf8_lossy(&script.stdout);
+    assert!(said.contains("Go would be warmer here."), "{said}{}", String::from_utf8_lossy(&script.stderr));
+    let e = events(&s, "ask");
+    let answered = e.iter().find(|e| e["type"] == "AgentAnswered").unwrap_or_else(|| panic!("answered: {:?}", types(&e)));
+    assert_eq!(answered["text"].as_str(), Some("Go would be warmer here."), "{answered}");
+    assert!(answered.get("late").is_none(), "an answer in time: {answered}");
+    // nothing redone, nothing chosen: no attempt, no answer, the stop still open
+    assert_eq!(e.iter().filter(|e| e["type"] == "AttemptStarted").count(), attempts, "{:?}", types(&e));
+    assert!(!e.iter().any(|e| e["type"] == "AnswerRecorded"), "{:?}", types(&e));
+    let (_, state) = engine(&s, &["show", "ask"]);
+    assert!(state.contains(&q), "{state}");
+    assert!(std::fs::read_to_string(&prompt).expect("prompt").contains("what if it were Go?"));
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn an_agent_lets_a_change_that_is_not_small_go_on_and_it_counts_as_the_agent_s() {
     let s = scratch("release");
     let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && printf 'test:\\n\\tgrep -q hi greeting.txt\\n\\n.PHONY: test\\n' > Makefile && {OUTPUT}");

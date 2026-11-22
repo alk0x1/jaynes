@@ -373,8 +373,19 @@ pub struct AgentTurn {
     /// What the person brings back of what they dropped, with the output it was in, so the agent can make it again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub back: Vec<Brought>,
+    /// What the person asked the agent at this step's stop in the round before, with its answer: nothing it changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asked: Vec<Asked>,
     pub deadline_seconds: u64,
     pub tokens_left: u64,
+}
+
+/// A question the person asked at a stop, and the agent's answer, if one came.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Asked {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
 }
 
 /// Whether `text` is a label: what a run carries of an evaluation (its task's id, its arm), and so what the export of

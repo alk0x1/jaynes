@@ -10,6 +10,7 @@ use jaynes_core::question::{Answer, Ask, AskKind, By, Item, Question, QuestionKi
 use jaynes_core::risk::{self, Changed, Risk};
 use jaynes_core::run::{Phase, Run, Status};
 use jaynes_core::attention::{stop_key, Count};
+use jaynes_core::io::AskOutcome;
 use jaynes_core::{chain, decide, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -180,6 +181,8 @@ struct World {
     cases: Option<Vec<String>>,
     /// Continues that had the checks judge again a change they could not judge.
     rechecked: u32,
+    /// Questions the person asked a stop's agent that the core took.
+    asked: u32,
 }
 
 impl World {
@@ -195,6 +198,7 @@ impl World {
             seed,
             cases: None,
             rechecked: 0,
+            asked: 0,
         }
     }
 
@@ -478,6 +482,29 @@ impl World {
             );
             self.rechecked += 1;
         }
+        // A question to a stop's agent redoes nothing and chooses nothing: no attempt starts, no answer is recorded,
+        // no output changes, and the stop stays open in the same round with the same items; only the agent's turn
+        // that reads is asked for. Its answer changes no step either, and starts nothing.
+        if let (Input::AskAgent { .. } | Input::AskEnded { .. }, Some(b)) = (input, before)
+            && !events.is_empty()
+        {
+            let mut after = b.clone();
+            for e in events {
+                after.apply(e);
+            }
+            for (x, y) in b.steps.iter().zip(&after.steps) {
+                assert!(x.done == y.done && x.round == y.round && x.status == y.status, "seed {seed}: an ask or its answer changed a step");
+            }
+            if let Input::AskAgent { question, .. } = input {
+                assert!(events.iter().all(|e| matches!(e, Event::AgentAsked { .. })), "seed {seed}: an ask did more than ask: {events:?}");
+                assert!(commands.len() == 1 && matches!(commands[0], Command::AnswerAsk(_)), "seed {seed}: an ask started more: {commands:?}");
+                let (was, now) = (&b.questions[question], &after.questions[question]);
+                assert!(now.open() && was.question.shown() == now.question.shown(), "seed {seed}: an ask changed or closed the stop");
+                self.asked += 1;
+            } else {
+                assert!(commands.is_empty(), "seed {seed}: an answer to an ask started something: {commands:?}");
+            }
+        }
         // The agent that started the run goes on only where Jaynes judges the same change again, and sets the run
         // aside, never ends it; another agent does neither. Each tells the person.
         if let Some(b) = before {
@@ -521,6 +548,11 @@ impl World {
         // G5: every accepted report's time and tokens are counted.
         if !events.iter().any(|e| matches!(e, Event::StaleReport { .. }))
             && let Input::AttemptEnded { outcome: AttemptOutcome::Delivered { usage, .. } | AttemptOutcome::Failed { usage, .. } | AttemptOutcome::Impossible { usage, .. }, .. } = input {
+                self.usage.add(*usage);
+            }
+        // and so are those of the agent's turn that answered an ask
+        if !events.is_empty()
+            && let Input::AskEnded { outcome: AskOutcome::Answered { usage, .. } | AskOutcome::Failed { usage, .. }, .. } = input {
                 self.usage.add(*usage);
             }
         assert_eq!(post.spent, self.usage, "seed {seed}: G5 the run's spending differs from what was reported");
@@ -647,8 +679,15 @@ impl World {
     fn respond(&mut self, c: Command) {
         let run = self.run().clone();
         match c {
-            // the core takes no ask yet, so it never sends one
-            Command::AnswerAsk(_) => {}
+            // the agent answers the person's ask, or does not; it may come after the stop was answered
+            Command::AnswerAsk(t) => {
+                let outcome = if self.rng.chance(80) {
+                    AskOutcome::Answered { text: "it would be warmer".to_string(), usage: Usage { tokens: 50, ..Usage::default() }, session: self.rng.chance(50).then(|| "asked".to_string()) }
+                } else {
+                    AskOutcome::Failed { reason: "the agent wrote nothing".to_string(), usage: Usage::default() }
+                };
+                self.send(Input::AskEnded { ask: t.ask, outcome });
+            }
             Command::Probe { step, .. } => {
                 let ok = self.rng.chance(95);
                 self.send(Input::ProbeEnded { step, ok, reason: "the box refused /tmp".to_string() });
@@ -740,6 +779,12 @@ impl World {
         let run = self.run().clone();
         let open: Vec<&jaynes_core::run::QuestionState> = run.questions.values().collect();
         let Some(q) = self.rng.pick(&open).map(|q| q.question.clone()) else { return };
+        // now and then the person asks the stop's agent instead: refused where it does not apply
+        if self.rng.chance(20) {
+            let item = if self.rng.chance(60) { q.items.first().map(|x| x.id.clone()) } else { None };
+            self.send(Input::AskAgent { question: q.id.clone(), item, text: "what if it were warmer?".to_string(), by: By::Person });
+            return;
+        }
         let mut verdicts = BTreeMap::new();
         // a merge is answered file by file, so most of its answers say something of each file
         let each = if q.kind == QuestionKind::Merge { 95 } else { 70 };
@@ -1846,6 +1891,9 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         if w.rechecked > 0 {
             hit("a change judged again on the person's continue");
         }
+        if w.asked > 0 {
+            hit("a stop's agent asked");
+        }
         for e in &w.log {
             match e {
                 Event::StepInvalidated { because, .. } if because.iter().any(|b| b.contains("second act")) => hit("a second act ordered"),
@@ -1868,6 +1916,9 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::QuestionOpened { question } if question.kind == QuestionKind::Merge => hit("a merge held for the person"),
                 Event::Continued { by: By::Agent { .. } } => hit("continued by the agent that started the run"),
                 Event::SetAside { .. } => hit("set aside by the agent that started the run"),
+                Event::AgentAnswered { late: false, .. } => hit("an ask answered in time"),
+                Event::AgentAnswered { late: true, .. } => hit("an ask answered late"),
+                Event::AskFailed { .. } => hit("an ask that got no answer"),
                 _ => {}
             }
         }
@@ -1880,6 +1931,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         "waits before what cannot be undone", "fault of Jaynes", "leave granted by a rule", "released by an agent", "a certified stop skipped", "question superseded", "delivered",
         "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
         "a change judged again on the person's continue", "continued by the agent that started the run", "set aside by the agent that started the run",
+        "a stop's agent asked", "an ask answered in time", "an ask answered late", "an ask that got no answer",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }

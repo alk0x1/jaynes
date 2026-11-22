@@ -243,7 +243,7 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         // An input that starts work is left to the process carried on here, which recovers first and then takes it:
         // decided here, the attempt it begins would be taken by that process for one Jaynes stopped. The rest is
         // recorded at once.
-        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::Resume { .. }) {
+        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::Resume { .. } | Input::AskAgent { .. }) {
             store.inbox_put(&run.id, &input)?;
         } else {
             store.decide(&run.id, &input)?;
@@ -1202,8 +1202,11 @@ impl<'a> Driver<'a> {
                 Some(Input::ProbeEnded { step, ok: result.is_ok(), reason: result.err().unwrap_or_default() })
             }
             Command::RunAgent(turn) => Some(self.agent_turn(run, turn)),
-            // the person's ask to a stop's agent: the core takes none yet, so it never sends one
-            Command::AnswerAsk(_) => None,
+            // the person's ask to a stop's agent: a turn that only reads, whose answer joins the stop
+            Command::AnswerAsk(turn) => {
+                let ask = turn.ask.clone();
+                Some(Input::AskEnded { ask, outcome: self.answer_ask(run, turn) })
+            }
             Command::RunRole { step, round, attempt, given, previous, answers, key } => {
                 Some(self.role_step(run, step, round, attempt, given, previous, answers, key))
             }
@@ -2676,6 +2679,7 @@ mod tests {
             review: None,
             earlier: Vec::new(),
             back: Vec::new(),
+            asked: Vec::new(),
             deadline_seconds: 60,
             tokens_left: 1000,
         };

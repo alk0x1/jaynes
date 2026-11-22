@@ -4,12 +4,12 @@
 //! out the commands, and reports what happened as the next input. A refusal records nothing.
 
 use crate::digest::Digest;
-use crate::event::{Effects, Event, Fault, Outcome, Read};
-use crate::io::{AgentTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Input};
-use crate::manifest::{CheckKind, Executor, ProjectAccess, SessionKind};
+use crate::event::{Effects, Event, Fault, Outcome, Read, Usage};
+use crate::io::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Input};
+use crate::manifest::{CheckKind, Executor, ProjectAccess, Reach, SessionKind};
 use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Verdict, VerdictKind};
 use crate::risk::{self, Ceiling, Ceilings, Changed};
-use crate::run::{Phase, QuestionState, Run, Status};
+use crate::run::{EntryKind, Phase, QuestionState, Run, Status};
 use crate::{ENGINE, FORMAT, PROTOCOL};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -54,6 +54,9 @@ pub const ANSWERED_BEFORE: &str = "answered-before";
 pub const WHAT_THE_CHANGE_TOUCHES: &str = "what-the-change-touches";
 /// The rule that continues a run paused from outside once the pause is over.
 pub const PAUSE_OVER: &str = "pause-over";
+
+/// The most characters a question to a stop's agent may have.
+const ASK_WORDS: usize = 2000;
 
 const SET_ASIDE_IS_YOURS: &str = "only you bring back, or abandon for good, a run the agent that started it set aside";
 
@@ -119,13 +122,25 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
         && c.run.unplanted.contains(id) {
             return refuse(format!("the defect {id} was already taken out"));
         }
-    if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. }) {
+    // an ask's answer that comes after the run finished is kept, late: the ask is not left under way for ever
+    if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. } | Input::AskEnded { .. }) {
         return refuse("the run is finished");
     }
     match input {
         Input::Start { .. } => return refuse("the run already started"),
         Input::Tick => c.advance(),
-        Input::AskAgent { .. } | Input::AskEnded { .. } => return refuse("asking the agent at a stop is not built yet"),
+        Input::AskAgent { question, item, text, by } => c.ask_agent(question, item.as_deref(), text, by)?,
+        Input::AskEnded { ask, outcome } => {
+            let Some(question) = c.run.asking.get(ask).cloned() else { return refuse("no such ask is under way") };
+            // the stop answered or replaced meanwhile: the answer is kept, and changes nothing
+            let late = c.run.finished() || !c.run.questions.get(&question).is_some_and(|q| q.open());
+            match outcome {
+                AskOutcome::Answered { text, usage, session } => {
+                    c.emit(Event::AgentAnswered { ask: ask.clone(), text: text.clone(), usage: *usage, session: session.clone(), late });
+                }
+                AskOutcome::Failed { reason, usage } => c.emit(Event::AskFailed { ask: ask.clone(), reason: reason.clone(), usage: *usage }),
+            }
+        }
         Input::ProbeEnded { step, ok, reason } => c.probe_ended(step, *ok, reason)?,
         Input::AttemptEnded { step, attempt, fix, outcome } => c.attempt_ended(step, *attempt, *fix, outcome)?,
         Input::ChecksEnded { step, attempt, fix, results } => c.checks_ended(step, *attempt, *fix, results)?,
@@ -705,6 +720,7 @@ impl Ctx {
             }),
             earlier: s.earlier.clone(),
             back: s.bring.clone(),
+            asked: s.asked(s.round.saturating_sub(1)),
             keep: s
                 .narrow
                 .as_ref()
@@ -1224,7 +1240,80 @@ impl Ctx {
         }
     }
 
+    /// The person asks the agent of a stop's step about what it shows: a turn that only reads, in the session that
+    /// made it. Nothing is redone and nothing is chosen: the stop stays open in the same round, with the same items.
+    fn ask_agent(&mut self, question: &str, item: Option<&str>, text: &str, by: &By) -> Result<(), Refusal> {
+        if !by.person() {
+            return Err(Refusal("only you ask the agent at a stop".into()));
+        }
+        let Some(q) = self.run.questions.get(question).cloned() else { return Err(Refusal(format!("there is no such question {question}"))) };
+        if !q.open() {
+            return Err(Refusal("the stop is not open: it was answered or replaced".into()));
+        }
+        if q.question.kind != QuestionKind::Decision {
+            return Err(Refusal("only a stop about what a step made takes a question to its agent".into()));
+        }
+        let i = self.index(&q.question.step)?;
+        let decl = self.run.manifest.steps[i].clone();
+        if decl.executor != Executor::Agent {
+            return Err(Refusal(format!("“{}” is made by the role: it has no agent to ask", decl.name)));
+        }
+        let label = match item {
+            Some(id) => match q.question.items.iter().find(|x| x.id == id) {
+                Some(x) => x.label.clone(),
+                None => return Err(Refusal(format!("{id} is not among what the stop shows"))),
+            },
+            None => String::new(),
+        };
+        let words = text.trim();
+        if words.is_empty() || words.chars().count() > ASK_WORDS {
+            return Err(Refusal(format!("the words to ask are 1 to {ASK_WORDS} characters")));
+        }
+        if self.run.asking.values().any(|x| x == question) {
+            return Err(Refusal("the agent is answering a question at this stop: its answer comes first".into()));
+        }
+        if self.run.halted {
+            return Err(Refusal("the run is halted: resume it to ask".into()));
+        }
+        let (ceiling, spent) = (self.run.ceiling, self.run.spent);
+        let tokens_left = ceiling.tokens.saturating_sub(spent.tokens);
+        let deadline_seconds = ceiling.seconds.saturating_sub(spent.seconds);
+        if tokens_left == 0 || deadline_seconds == 0 {
+            return Err(Refusal("the run's tokens or time are spent: raise its ceiling to ask".into()));
+        }
+        let s = &self.run.steps[i];
+        let Some(done) = s.done.clone() else { return Err(Refusal("the step has no output to ask about".into())) };
+        let n = s.thread.iter().filter(|e| e.kind == EntryKind::Ask && e.question == question).count() + 1;
+        let ask = format!("{question}-a{n}");
+        let (round, session) = (s.round, s.session.clone());
+        let reach = Reach {
+            project: if decl.reach.project == ProjectAccess::None { ProjectAccess::None } else { ProjectAccess::Read },
+            ..Reach::default()
+        };
+        self.emit(Event::AgentAsked { ask: ask.clone(), question: question.to_string(), step: decl.name.clone(), round, item: item.map(str::to_string), text: words.to_string(), by: by.clone() });
+        self.command(Command::AnswerAsk(AskTurn {
+            ask,
+            question: question.to_string(),
+            step: decl.name,
+            round,
+            output: done.output,
+            item: item.map(str::to_string),
+            label,
+            text: words.to_string(),
+            session,
+            reach,
+            deadline_seconds,
+            tokens_left,
+        }));
+        Ok(())
+    }
+
     fn recovered(&mut self) {
+        // the turn that answered the person's ask stopped with Jaynes: nothing of it is kept, and they may ask again
+        let asking: Vec<String> = self.run.asking.keys().cloned().collect();
+        for ask in asking {
+            self.emit(Event::AskFailed { ask, reason: "Jaynes stopped while the agent answered: ask again".into(), usage: Usage::default() });
+        }
         for i in 0..self.run.steps.len() {
             let name = self.name(i);
             let decl = self.run.manifest.steps[i].clone();

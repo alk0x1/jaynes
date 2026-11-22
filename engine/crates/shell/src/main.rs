@@ -362,6 +362,26 @@ fn run(args: &[String]) -> Result<(), String> {
             say(&format!("undone: {reverted}"));
             Ok(())
         }
+        "ask" => {
+            // the person asks a stop's agent about what it shows: a turn that only reads, which redoes nothing
+            let id = rest.first().ok_or("which run?")?;
+            let question = rest.get(1).ok_or("which question?")?.clone();
+            let text = flag(rest, "--text").ok_or("--text WORDS says what you ask")?;
+            let input = Input::AskAgent { question, item: flag(rest, "--item"), text, by: who() };
+            let s = store()?;
+            let before = s.state(id)?.ok_or("no such run")?;
+            let asked = before.steps.iter().map(|x| x.thread.len()).sum::<usize>();
+            send(s, id, input)?;
+            let after = store()?.state(id)?.ok_or("no such run")?;
+            let said: Vec<&jaynes_core::run::Entry> = after.steps.iter().flat_map(|x| &x.thread).collect();
+            for e in said.iter().skip(asked).filter(|e| e.kind != jaynes_core::run::EntryKind::Ask) {
+                match e.kind {
+                    jaynes_core::run::EntryKind::AskFailed => say(&format!("no answer: {}", e.text)),
+                    _ => say(&format!("the agent answered, nothing redone:\n{}", e.text)),
+                }
+            }
+            Ok(())
+        }
         "correct" => {
             let id = rest.first().ok_or("which run?")?;
             let note = flag(rest, "--note").ok_or("--note TEXT says what was wrong")?;
