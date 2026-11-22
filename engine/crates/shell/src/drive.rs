@@ -2086,7 +2086,9 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
          an output you know is wrong to get past the checks.\n\nA command that fails with \"Operation not permitted\", \
          \"Permission denied\" or EPERM was most likely refused by Jaynes's box, not by the project: never change the \
          project's tests or code to get around it (another port, a test removed, skipped or rewritten to need less); write \
-         to .jaynes/impossible.txt the command and the error it printed instead.\n\n",
+         to .jaynes/impossible.txt the command and the error it printed instead. Wherever you tell of it, say \"Jaynes's box \
+         refused\" and what it refused, then the error as the command printed it, never \"this environment's protection\" \
+         nor a sandbox of your own.\n\n",
     );
     if read {
         p.push_str(
@@ -2846,6 +2848,12 @@ mod tests {
             "A command that fails with \"Operation not permitted\", \"Permission denied\" or EPERM was most likely refused by \
              Jaynes's box, not by the project: never change the project's tests or code to get around it (another port, a test \
              removed, skipped or rewritten to need less); write to .jaynes/impossible.txt the command and the error it printed instead."
+        ), "{unread}");
+        // and named as the box's, wherever the agent says it (the tech-lead, 0.2.5: an agent called it "this environment's
+        // protection" and the person could not tell who refused)
+        assert!(unread.contains(
+            "Wherever you tell of it, say \"Jaynes's box refused\" and what it refused, then the error as the command printed it, \
+             never \"this environment's protection\" nor a sandbox of your own."
         ), "{unread}");
     }
 
