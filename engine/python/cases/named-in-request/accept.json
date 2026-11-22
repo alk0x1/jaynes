@@ -2,23 +2,212 @@
  {
   "id": "named-alone",
   "expect": "accept",
-  "keeps": "the request names the stack and it is the only option",
+  "keeps": "the request named it and it is the only option",
   "with": {
    "field": "stacks",
    "words": "named"
   },
-  "request": "We want Python, Postgres and Qdrant for this.",
   "output": {
    "stacks": [
     {
-     "name": "Python, Postgres and Qdrant",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
-     "named": "Python, Postgres and Qdrant"
+     "named": "in Python with FastAPI"
     }
    ]
-  }
+  },
+  "request": "Build it in Python with FastAPI"
+ },
+ {
+  "id": "pt-named-alone",
+  "expect": "accept",
+  "keeps": "the same in Portuguese",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "em Go, com SQLite"
+    }
+   ]
+  },
+  "request": "Quero em Go, com SQLite"
+ },
+ {
+  "id": "python-not-rust",
+  "expect": "accept",
+  "keeps": "Python, not Rust: the refusal is of Rust, and the option is Python",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Python"
+    }
+   ]
+  },
+  "request": "Python, not Rust"
+ },
+ {
+  "id": "python-not-rust-quoted-whole",
+  "expect": "accept",
+  "keeps": "the whole sentence quoted, naming Python",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Python, not Rust"
+    }
+   ]
+  },
+  "request": "Python, not Rust"
+ },
+ {
+  "id": "pt-python-sem-rust",
+  "expect": "accept",
+  "keeps": "the same in Portuguese",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Em Python"
+    }
+   ]
+  },
+  "request": "Em Python, sem Rust"
+ },
+ {
+  "id": "case-spaces-quotes",
+  "expect": "accept",
+  "keeps": "case, extra spaces and curly against straight quotes do not count",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Next.js + Tailwind",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "use “next.js” and tailwind"
+    }
+   ]
+  },
+  "request": "Use \"Next.js\"  and   Tailwind"
+ },
+ {
+  "id": "brand-with-a-dot",
+  "expect": "accept",
+  "keeps": "a name with a dot in it",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Node.js + Express",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "on Node.js"
+    }
+   ]
+  },
+  "request": "A small API on Node.js"
+ },
+ {
+  "id": "name-shares-a-word-in-another-case",
+  "expect": "accept",
+  "keeps": "the name shares the word in another case and place",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "FastAPI (Python)",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "python"
+    }
+   ]
+  },
+  "request": "it has to be python"
+ },
+ {
+  "id": "accents",
+  "expect": "accept",
+  "keeps": "accents in the request and in the words",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "em Python, com usuário único"
+    }
+   ]
+  },
+  "request": "Feito em Python, com usuário único"
+ },
+ {
+  "id": "refusal-elsewhere",
+  "expect": "accept",
+  "keeps": "a refusal of something else in the same request",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Go with SQLite"
+    }
+   ]
+  },
+  "request": "Go with SQLite, no Docker"
  },
  {
   "id": "nothing-named",
@@ -28,24 +217,76 @@
    "field": "stacks",
    "words": "named"
   },
-  "request": "Build the notes app.",
   "output": {
    "stacks": [
     {
-     "name": "Go",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
      "named": ""
     },
     {
-     "name": "Next.js",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
      "named": ""
     }
    ]
-  }
+  },
+  "request": "A habit tracker for one person"
+ },
+ {
+  "id": "empty-words-beside-others",
+  "expect": "accept",
+  "keeps": "empty words among several options",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": ""
+    },
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": ""
+    }
+   ]
+  },
+  "request": "Algo simples"
+ },
+ {
+  "id": "no-list",
+  "expect": "accept",
+  "keeps": "a list that is not there says nothing",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {},
+  "request": "A habit tracker"
+ },
+ {
+  "id": "empty-list",
+  "expect": "accept",
+  "keeps": "an empty list says nothing",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": []
+  },
+  "request": "A habit tracker"
  }
 ]

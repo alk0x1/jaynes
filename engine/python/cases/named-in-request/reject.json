@@ -2,92 +2,526 @@
  {
   "id": "not-in-request",
   "expect": "reject",
+  "hole": "the option says the request named it, and the request never did",
   "with": {
    "field": "stacks",
    "words": "named"
   },
-  "request": "Build the notes app.",
   "output": {
    "stacks": [
     {
-     "name": "Go and HTML templates",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
-     "named": "Go and HTML templates"
+     "named": "in Go"
     }
    ]
   },
-  "hole": "words the request never said"
+  "request": "A habit tracker for one person"
  },
  {
-  "id": "negated",
+  "id": "paraphrased",
   "expect": "reject",
+  "hole": "the words are the agent's paraphrase, not the request's",
   "with": {
    "field": "stacks",
    "words": "named"
   },
-  "request": "Anything but Rust, please.",
   "output": {
    "stacks": [
     {
-     "name": "Rust and Axum",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "using Python"
+    }
+   ]
+  },
+  "request": "Build it with Python please"
+ },
+ {
+  "id": "pt-paraphrased",
+  "expect": "reject",
+  "hole": "a paraphrase in Portuguese",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "feito com Python"
+    }
+   ]
+  },
+  "request": "Quero que seja feito em Python"
+ },
+ {
+  "id": "part-of-a-word",
+  "expect": "reject",
+  "hole": "the quote is inside a longer word of the request, not a word of it",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "python"
+    }
+   ]
+  },
+  "request": "Keep the code pythonic and small"
+ },
+ {
+  "id": "anything-but",
+  "expect": "reject",
+  "hole": "the request refuses what the option names",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
      "named": "Rust"
     }
    ]
   },
-  "hole": "a stack the request refuses"
+  "request": "Anything but Rust, I want it simple"
  },
  {
-  "id": "named-among-several",
+  "id": "not-x",
   "expect": "reject",
+  "hole": "the request names it only to refuse it",
   "with": {
    "field": "stacks",
    "words": "named"
   },
-  "request": "Use Python and Postgres.",
   "output": {
    "stacks": [
     {
-     "name": "Python and Postgres",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
-     "named": "Python and Postgres"
+     "named": "not Rust"
+    }
+   ]
+  },
+  "request": "Python, not Rust"
+ },
+ {
+  "id": "no-x",
+  "expect": "reject",
+  "hole": "a no before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Next.js + Prisma",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Next.js"
+    }
+   ]
+  },
+  "request": "No Next.js this time, a plain server"
+ },
+ {
+  "id": "without-x",
+  "expect": "reject",
+  "hole": "without, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Django + Postgres",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Django"
+    }
+   ]
+  },
+  "request": "A small API without Django"
+ },
+ {
+  "id": "never-x",
+  "expect": "reject",
+  "hole": "never, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "PHP + Laravel",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "PHP"
+    }
+   ]
+  },
+  "request": "Never PHP again"
+ },
+ {
+  "id": "except-x",
+  "expect": "reject",
+  "hole": "except, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Ruby on Rails",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Ruby"
+    }
+   ]
+  },
+  "request": "Any language except Ruby"
+ },
+ {
+  "id": "pt-sem",
+  "expect": "reject",
+  "hole": "sem, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Go"
+    }
+   ]
+  },
+  "request": "Um rastreador de hábitos sem Go"
+ },
+ {
+  "id": "pt-nao-after",
+  "expect": "reject",
+  "hole": "não after the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Next.js + Prisma",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Next"
+    }
+   ]
+  },
+  "request": "Next não, prefiro algo simples"
+ },
+ {
+  "id": "pt-nada-de",
+  "expect": "reject",
+  "hole": "nada de, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Rust"
+    }
+   ]
+  },
+  "request": "Nada de Rust, por favor"
+ },
+ {
+  "id": "pt-nao-quero",
+  "expect": "reject",
+  "hole": "não quero, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Vue + Vite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Vue"
+    }
+   ]
+  },
+  "request": "Não quero Vue nesse projeto"
+ },
+ {
+  "id": "pt-exceto",
+  "expect": "reject",
+  "hole": "exceto, before the name",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Java + Spring",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Java"
+    }
+   ]
+  },
+  "request": "Qualquer linguagem exceto Java"
+ },
+ {
+  "id": "a-question",
+  "expect": "reject",
+  "hole": "the request only asks whether to use it",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "use Go"
+    }
+   ]
+  },
+  "request": "Should we use Go for this?"
+ },
+ {
+  "id": "pt-talvez",
+  "expect": "reject",
+  "hole": "talvez is not a decision",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Go"
+    }
+   ]
+  },
+  "request": "Talvez Go, ainda não sei"
+ },
+ {
+  "id": "one-of-two",
+  "expect": "reject",
+  "hole": "the request names two and the option makes one the decision",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Go"
+    }
+   ]
+  },
+  "request": "Go or Rust, whichever is simpler"
+ },
+ {
+  "id": "pt-um-de-dois",
+  "expect": "reject",
+  "hole": "the same in Portuguese",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Rust + Axum",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "em Rust"
+    }
+   ]
+  },
+  "request": "Em Go ou em Rust, tanto faz"
+ },
+ {
+  "id": "named-among-several",
+  "expect": "reject",
+  "hole": "the request decided, and other options were invented beside it",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "in Python with FastAPI"
     },
     {
-     "name": "Go",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
      "named": ""
     }
    ]
   },
-  "hole": "the request decided, yet more options are offered"
+  "request": "Build it in Python with FastAPI"
  },
  {
-  "id": "not-its-name",
+  "id": "two-named",
   "expect": "reject",
+  "hole": "two options each say the request named them",
   "with": {
    "field": "stacks",
    "words": "named"
   },
-  "request": "Make it fast.",
   "output": {
    "stacks": [
     {
-     "name": "Go and HTML templates",
-     "idea": "x",
-     "tradeoffs": "y",
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
      "page": "design/architecture/a.html",
-     "named": "Make it fast"
+     "named": "Python"
+    },
+    {
+     "name": "Python + Django",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Python"
     }
    ]
   },
-  "hole": "words of the request that do not name the option"
+  "request": "In Python with FastAPI"
+ },
+ {
+  "id": "named-last",
+  "expect": "reject",
+  "hole": "the named option is not the first",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": ""
+    },
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "em Go, com SQLite"
+    }
+   ]
+  },
+  "request": "Quero em Go, com SQLite"
+ },
+ {
+  "id": "not-its-name",
+  "expect": "reject",
+  "hole": "the words the option quotes name something else",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Python + FastAPI",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "Use Postgres"
+    }
+   ]
+  },
+  "request": "Use Postgres for the data"
+ },
+ {
+  "id": "pt-not-its-name",
+  "expect": "reject",
+  "hole": "the same in Portuguese",
+  "with": {
+   "field": "stacks",
+   "words": "named"
+  },
+  "output": {
+   "stacks": [
+    {
+     "name": "Go + SQLite",
+     "idea": "One process serves the pages.",
+     "tradeoffs": "Quick to start, slower to change later.",
+     "page": "design/architecture/a.html",
+     "named": "no Postgres"
+    }
+   ]
+  },
+  "request": "Os dados ficam no Postgres"
  }
 ]
