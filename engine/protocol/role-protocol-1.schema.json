@@ -414,6 +414,30 @@
         }
       ]
     },
+    "Photo": {
+      "description": "The window a page is photographed in, in CSS pixels, and whether down to its last line when taller.",
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "whole": {
+          "type": "boolean"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "whole"
+      ],
+      "type": "object"
+    },
     "ProjectAccess": {
       "enum": [
         "none",
@@ -1049,6 +1073,17 @@
         "label": {
           "type": "string"
         },
+        "photo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Photo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a page among the pictures is photographed: its window, and whether whole. None: a computer's window."
+        },
         "pictures": {
           "default": [],
           "description": "Pictures of the item: files in the step's copy of the project, by path from its root. Jaynes keeps a copy of\neach, by its fingerprint, so what the person sees never changes under them.",
@@ -1243,6 +1278,10 @@
           "default": false,
           "description": "Whether the steps after it wait for the answer. Otherwise the run goes on and the answer corrects it later.",
           "type": "boolean"
+        },
+        "note": {
+          "description": "A line of the role's under the question, said before the person looks, such as \"The layout of your screens\ncomes later.\" at a stop that keeps only colours and fonts. Empty: nothing is said.",
+          "type": "string"
         },
         "redo": {
           "description": "The earlier step whose work this stop asks about, when the step that asks only reviews it: what the person\nsends back goes to that step, and this one looks again at what comes back before the person sees it.",
