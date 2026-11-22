@@ -7,7 +7,7 @@ use crate::digest::Digest;
 use crate::event::{Effects, Event, Fault, Outcome, Read, Usage};
 use crate::io::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Input};
 use crate::manifest::{CheckKind, Executor, ProjectAccess, Reach, SessionKind};
-use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Verdict, VerdictKind};
+use crate::question::{Answer, Ask, AskKind, By, Choice, Item, Question, QuestionKind, Ride, Verdict, VerdictKind};
 use crate::risk::{self, Ceiling, Ceilings, Changed};
 use crate::run::{Phase, QuestionState, Run, Status};
 use crate::{ENGINE, FORMAT, PROTOCOL};
@@ -489,7 +489,7 @@ impl Ctx {
         let s = &self.run.steps[i];
         let items = s.done.as_ref().map(|d| d.items.clone()).unwrap_or_default();
         let items = if items.is_empty() { vec![whole(&name, s.done.as_ref().map(|d| &d.output))] } else { items };
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: self.question_id(&name),
             step: name,
             round: s.round,
@@ -749,7 +749,7 @@ impl Ctx {
             .filter_map(|n| self.run.manifest.index(n))
             .map(|j| whole(&self.name(j), self.run.output(j)))
             .collect();
-        let question = Question { back: Default::default(),
+        let question = Question { rides: Vec::new(), back: Default::default(),
             id: self.question_id(&name),
             step: name.clone(),
             round: self.run.steps[i].round,
@@ -825,7 +825,8 @@ impl Ctx {
         } else {
             format!("This is what lands on your branch. Keep merges it; drop delivers the change on the branch jaynes/{} only, and nothing lands.", self.run.id)
         };
-        let question = Question { back: Default::default(),
+        let rides = self.rides();
+        let question = Question { rides, back: Default::default(),
             id: self.question_id("merge"),
             step,
             round,
@@ -842,6 +843,34 @@ impl Ctx {
         self.emit(Event::QuestionOpened { question: question.clone() });
         self.command(Command::Ask { question });
         self.wait(None, on, why.to_string());
+    }
+
+    /// The stops still open that do not hold the run, in the path's order, that the person's touch at the merge keeps:
+    /// those a keep of every item answers (a choice with one option, or no choice). A braked stop holds, so it is never
+    /// one: the person answers it on its own.
+    fn rides(&self) -> Vec<Ride> {
+        self.run
+            .path()
+            .into_iter()
+            .filter_map(|j| {
+                let q = &self.run.open_question(j)?.question;
+                let keeps = q.kind == QuestionKind::Decision && !q.holds && q.offered.contains(&VerdictKind::Keep) && (!q.choose || q.one_option());
+                keeps.then(|| Ride { question: q.id.clone(), step: q.step.clone(), said: self.ride_said(j, q) })
+            })
+            .collect()
+    }
+
+    /// What an open stop holds now, in Jaynes's words: the role's words for what the request settles there, then whose
+    /// request it was; without them, the option as it was made.
+    fn ride_said(&self, j: usize, q: &Question) -> String {
+        let whose = if self.run.starter.is_some() { "as the request the agent that started the run wrote says" } else { "as your request says" };
+        match self.run.manifest.steps[j].stop.as_ref().and_then(|s| s.unheld.as_ref()) {
+            Some(words) => format!("{}, {whose}", words.replace("{{name}}", q.items.first().map(Item::name).unwrap_or_default())),
+            None => match q.items.as_slice() {
+                [one] => format!("“{}”, as it was made", one.name()),
+                many => format!("its {} items, as they were made", many.len()),
+            },
+        }
     }
 
     fn deliver(&mut self) -> bool {
@@ -980,7 +1009,7 @@ impl Ctx {
                 if offered.is_empty() || items.is_empty() {
                     return refuse("a question needs items and verdicts");
                 }
-                let question = Question { back: Default::default(),
+                let question = Question { rides: Vec::new(), back: Default::default(),
                     id: self.question_id(step),
                     step: step.to_string(),
                     round: self.run.steps[i].round,
@@ -1003,7 +1032,7 @@ impl Ctx {
                     return refuse("only an agent says a step cannot be done; a role step refuses");
                 }
                 self.emit(Event::AttemptImpossible { step: step.to_string(), attempt, reason: reason.clone(), usage: *usage, session: session.clone() });
-                let question = Question { back: Default::default(),
+                let question = Question { rides: Vec::new(), back: Default::default(),
                     id: self.question_id(step),
                     step: step.to_string(),
                     round: self.run.steps[i].round,
@@ -1362,7 +1391,7 @@ impl Ctx {
             return Ok(());
         }
         let about = describe_ask(ask);
-        let question = Question { back: Default::default(),
+        let question = Question { rides: Vec::new(), back: Default::default(),
             id: self.question_id(step),
             step: step.to_string(),
             round: self.run.steps[i].round,
@@ -1566,7 +1595,7 @@ impl Ctx {
         let about = format!(
             "{name} cannot be undone, and it already acted. Since then {why}. It is not done again on its own: keep the act as it is, or act again, a second act with its own key."
         );
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             back: Default::default(),
             id: self.question_id(&name),
             step: name.clone(),
@@ -1611,6 +1640,22 @@ impl Ctx {
         }
         if !items.iter().all(|id| matches!(answer.verdicts.get(*id), Some(Verdict::Keep | Verdict::Drop))) {
             return refuse("keep or drop each file it shows");
+        }
+        // the touch that merges keeps each open stop the question named, by the person, each with its own answer
+        if items.iter().all(|id| answer.verdicts.get(*id) == Some(&Verdict::Keep)) {
+            for ride in &q.question.rides {
+                let Some(r) = self.run.questions.get(&ride.question).filter(|r| r.open()).map(|r| r.question.clone()) else { continue };
+                let kept = Answer {
+                    question: r.id.clone(),
+                    shown: r.shown(),
+                    verdicts: r.items.iter().map(|x| (x.id.clone(), Verdict::Keep)).collect(),
+                    by: By::Person,
+                    context: String::new(),
+                    back: Default::default(),
+                };
+                let effects = effects(&self.run, &r, &kept);
+                self.emit(Event::AnswerRecorded { answer: kept, effects });
+            }
         }
         let effects = effects(&self.run, &q.question, answer);
         self.emit(Event::AnswerRecorded { answer: answer.clone(), effects });

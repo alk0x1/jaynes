@@ -357,3 +357,46 @@ def EffectCase.did (c : EffectCase) : List Nat :=
   else []
 
 end Jaynes
+
+/-! ## What the merge's touch keeps (`rides` and `answer_merge` in `decide.rs`) -/
+
+namespace Jaynes
+
+/-- An open stop as the merge's question finds it. -/
+structure Open where
+  step : Nat
+  decision : Bool
+  holds : Bool
+  keepOffered : Bool
+  /-- a keep of every item answers it: it chooses nothing, or chooses with one option -/
+  keepAnswers : Bool
+  deriving Repr, FromJson, ToJson, Inhabited
+
+/-- Whether the merge's touch keeps this stop: an open decision that does not hold the run, which a keep answers. A
+    braked stop holds, so it is never one: the person answers it on its own. -/
+def Open.rides (o : Open) : Bool := o.decision && !o.holds && o.keepOffered && o.keepAnswers
+
+/-- The stops the merge's question names, in the path's order. -/
+def ridesOf (opens : List Open) : List Nat := (opens.filter Open.rides).map (·.step)
+
+/-- A stop the merge's question named, and whether it is still open at the touch. -/
+structure Rode where
+  step : Nat
+  stillOpen : Bool
+  deriving Repr, FromJson, ToJson, Inhabited
+
+structure TouchCase where
+  /-- the person's answer about the merge, as the core judges it -/
+  answer : AnswerCase
+  /-- every file shown is kept: it merges -/
+  lands : Bool
+  rides : List Rode
+  deriving Repr, FromJson, ToJson, Inhabited
+
+/-- The stops the touch keeps, each with its own answer: only when the answer about the merge is taken and it merges,
+    and only those still open. -/
+def TouchCase.kept (t : TouchCase) : List Nat :=
+  if t.answer.merge && !t.answer.acted && t.answer.accepts && t.lands then (t.rides.filter (·.stillOpen)).map (·.step)
+  else []
+
+end Jaynes
