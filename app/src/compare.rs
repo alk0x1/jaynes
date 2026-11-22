@@ -678,7 +678,7 @@ impl Compare {
         self.reading = true;
         self.understood = None;
         cx.notify();
-        let read = cx.background_spawn(async move { answer::understand(&stop, &words, pressed.as_deref()) });
+        let read = cx.background_spawn(async move { crate::signals::open(|| answer::understand(&stop, &words, pressed.as_deref())) });
         cx.spawn(async move |this, cx| {
             let read = read.await;
             let _ = this.update(cx, |this, cx| {
@@ -709,7 +709,7 @@ impl Compare {
         self.live_said = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let said = cx.background_executor().spawn(async move { crate::open_page::live(&page) }).await;
+            let said = cx.background_executor().spawn(async move { crate::signals::open(|| crate::open_page::live(&page)) }).await;
             let _ = this.update(cx, |this, cx| {
                 this.live_opening = false;
                 this.live_said = said.err();

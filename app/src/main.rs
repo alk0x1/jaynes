@@ -9,6 +9,7 @@
 // theme switching); the later steps use them.
 #![allow(dead_code)]
 
+mod signals;
 mod agents;
 mod app_state;
 mod bars;
@@ -659,7 +660,7 @@ impl Root {
         self.page_trouble = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let said = cx.background_executor().spawn(async move { open_page::open() }).await;
+            let said = cx.background_executor().spawn(async move { signals::open(open_page::open) }).await;
             let _ = this.update(cx, |this, cx| {
                 if let Err(why) = &said {
                     tracing::warn!("the page did not open: {why}");
@@ -817,7 +818,7 @@ impl Root {
         self.armed = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let sent = cx.background_executor().spawn(async move { run_actions::send(&run, act) }).await;
+            let sent = cx.background_executor().spawn(async move { signals::open(|| run_actions::send(&run, act)) }).await;
             let _ = this.update(cx, |this, cx| {
                 if let Err(e) = sent {
                     tracing::warn!("{} was not sent: {e}", act.word());
@@ -2048,6 +2049,8 @@ fn main() {
     core_bin::fill_path();
     // what the app says goes to its own log too, and it ends saying why (trail.rs)
     trail::start(tracing_subscriber::EnvFilter::try_from_env("JAYNES_APP_LOG").unwrap_or_else(|_| "warn,jaynes_app=info".into()));
+    #[cfg(unix)]
+    tracing::info!("signals at start: {}", signals::said());
     if let Some(bin) = core_bin::find(None) {
         core_bin::use_core(bin);
     }

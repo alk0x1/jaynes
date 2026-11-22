@@ -607,7 +607,7 @@ impl Island {
         // down to where the reading comes, so it never arrives out of view
         self.scroll.scroll_to_item(READ_ROW);
         cx.notify();
-        let read = cx.background_spawn(async move { answer::understand(&stop, &words, None) });
+        let read = cx.background_spawn(async move { crate::signals::open(|| answer::understand(&stop, &words, None)) });
         cx.spawn(async move |this, cx| {
             let read = read.await;
             let _ = this.update(cx, |this, cx| {
@@ -786,7 +786,7 @@ impl Island {
 
 #[cfg(feature = "test-driver")]
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `focus-words`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `focus-words`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `signals?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -937,6 +937,21 @@ impl Island {
             }
             // after this line, as the Dock's click comes: from outside the window's own update
             "reopen" => cx.defer(crate::show_main),
+            // how the app holds the ending signals now, and whether a program it starts ends on TERM
+            #[cfg(unix)]
+            "signals?" => {
+                tracing::info!("signals now: {}", crate::signals::said());
+                let ended = std::process::Command::new("/bin/sh").args(["-c", "kill -TERM $$; sleep 1; exit 7"]).status();
+                tracing::info!("a program the app starts, sent TERM: {ended:?}");
+                // and from a background thread, which blocks TERM, through what the app's work that starts programs
+                // goes through (signals.rs)
+                cx.background_spawn(async {
+                    let blocked = crate::signals::blocked_here(libc::SIGTERM);
+                    let ended = crate::signals::open(|| std::process::Command::new("/bin/sh").args(["-c", "kill -TERM $$; sleep 1; exit 7"]).status());
+                    tracing::info!("from a background thread (TERM blocked there: {blocked}), sent TERM: {ended:?}");
+                })
+                .detach();
+            }
             "shown?" => {
                 let shown = crate::shown(window);
                 tracing::info!("the main window is {}", if shown { "on the screen" } else { "hidden" });
