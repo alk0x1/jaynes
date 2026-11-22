@@ -782,6 +782,8 @@ impl Page {
             .map(|l| l.needs.into_iter().chain(l.projects.into_iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.clone(), r)).collect())
             .unwrap_or_default();
         let name_of = |r: &Run| names.get(&r.id).map(name_html).unwrap_or_else(|| esc(&short(&r.request)));
+        // a stop says whose it is, its project first in dim, as a run's name does
+        let whose = |r: &Run| names.get(&r.id).map(|n| format!("<span class=\"proj\">{}</span><span class=\"sep\"> · </span>", esc(&n.project))).unwrap_or_default();
         for id in store.runs()? {
             let Some(run) = store.state(&id)? else { continue };
             runs.push(run.clone());
@@ -791,7 +793,8 @@ impl Page {
             for q in run.questions.values() {
                 if crate::stop::went_on(&run, q).is_some() {
                     still.push((run.clone(), q.clone()));
-                } else if q.open() {
+                } else if q.open() && !run.blocked() {
+                    // a blocked run waits as blocked (listing::stands): its open questions stay inside it
                     waiting.push((run.clone(), q.clone()));
                 } else if !q.superseded && q.answer.as_ref().is_some_and(|a| matches!(a.by, By::Agent { .. })) {
                     let i = run.manifest.index(&q.question.step).unwrap_or(0);
@@ -828,10 +831,11 @@ impl Page {
                         "<span class=\"goes\">the run goes on</span>".to_string()
                     };
                     format!(
-                        "<a class=\"q{}\" href=\"/q/{}/{}\">{}<small>{} · {} · {}</small>{}</a>",
+                        "<a class=\"q{}\" href=\"/q/{}/{}\">{}{}<small>{} · {} · {}</small>{}</a>",
                         if on { " on" } else { "" },
                         esc(&run.id),
                         esc(&q.question.id),
+                        whose(run),
                         ticks(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id))),
                         esc(&run.manifest.role),
                         where_in(run),
@@ -934,7 +938,8 @@ impl Page {
                     QuestionKind::Permission => crate::permit::wants_kept(&self.home, &run.id, &q.question.id).map(|w| wants_html(&w)).unwrap_or_default(),
                     _ => changes_html(&self.home, run, i),
                 };
-                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id))
+                let project = names.get(&run.id).map(|n| format!("{} · ", esc(&n.project))).unwrap_or_default();
+                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project)
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
@@ -1410,7 +1415,8 @@ fn thread_story(s: &jaynes_core::run::StepState) -> String {
     crate::listing::talk(s).iter().map(|line| format!("<small class=\"talk\">{}</small>", esc(line))).collect()
 }
 
-fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str) -> String {
+/// `project`: the stop's project and its separator, ready to show, or "" when the run has no name yet.
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
@@ -1520,7 +1526,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let answering = run.asking.values().any(|x| *x == question.id);
     let solo = question.choose && one;
     format!(
-        "<div class=\"where\"><a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
+        "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
          {rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
@@ -3038,7 +3044,8 @@ mod tests {
                 },
             });
             store.append(run, &events).expect("append");
-            store.put_setup(run, &json!({})).expect("setup");
+            // one leave of a named project, the others of none
+            store.put_setup(run, &if run == "new" { json!({"project": "/w/tidepool"}) } else { json!({}) }).expect("setup");
             if let Some(w) = wants {
                 crate::permit::keep_wants(&home, run, "q1", &w).expect("kept");
             }
@@ -3236,6 +3243,41 @@ mod tests {
         let _gone = std::fs::remove_dir_all(&home);
     }
 
+    // The real-user's app, 22/11 (recibo, fix-bug): a run blocked at "fix" showed beside as "Is this the bug?", its
+    // old question still open. The tech-lead's rule: a blocked run says so first, its open questions stay inside it.
+    #[test]
+    fn asked_a_blocked_run_waits_as_blocked_on_the_page() {
+        use jaynes_core::event::Fault;
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-blocked-open-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "fix-bug", "version": "4.0.0", "protocol": 1,
+            "steps": [{"name": "reproduce", "executor": "agent"}, {"name": "fix", "executor": "agent", "needs": ["reproduce"]}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "b".into(), request: "O total do recibo sai errado".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let mut events = decide(None, &start).expect("start").events;
+        events.push(Event::QuestionOpened {
+            question: Question {
+                id: "q-repro".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
+                items: vec![Item { id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
+                offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            },
+        });
+        events.push(Event::Blocked { step: Some("fix".into()), fault: Fault::Agent, reason: "fix spent its 3 attempts".into() });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("b", &events).expect("append");
+        store.put_setup("b", &json!({"project": "/w/recibo"})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let listed = page.render(View::Overview, crate::store::now()).expect("home");
+        assert!(listed.contains("Waiting for you · 1"), "the run waits once, as blocked");
+        assert!(!listed.contains("Is this the bug?<small>"), "its open question is not an item of its own");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
     // Alan, 21/11: "não consigo saber fácil qual run é de qual projeto". Two runs side by side read "Agreed with Alan on
     // 2026-11-21…". The page names a run as the app does (listing::name): its project first, then its title, then
     // what tells it apart; the run's page and the browser's tab too (the design-lead's nome-da-run.md).
@@ -3270,6 +3312,25 @@ mod tests {
         assert!(run.contains(&esc(request)), "the whole request under it");
         let row = crate::listing::Row { id: "c".into(), project: "tidepool".into(), title: "Fix the export".into(), apart: Some("at “fix”".into()), line: String::new(), mark: crate::listing::Mark::Working };
         assert_eq!(name_html(&row), "<span class=\"nm\"><span class=\"proj\">tidepool</span><span class=\"sep\"> · </span><span class=\"tt\">Fix the export</span><span class=\"sep\"> · </span><span class=\"apart\">at “fix”</span></span>");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The real-user's round 2026-11-22-01: with two projects waiting, "Merge into “main”?" and "Is this the bug?" did
+    // not say whose; the stop's own head did not either. Each item of "Waiting for you" starts with its project in
+    // dim, as a run's name does (the design-lead's nome-da-run.md, item 7), and so does the stop's where line.
+    #[test]
+    fn asked_whose_stop_waits() {
+        let home = at_a_leave();
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let listed = page.render(View::Overview, now).expect("home");
+        assert!(
+            listed.contains("<span class=\"proj\">tidepool</span><span class=\"sep\"> · </span>May the agent change <code>tests/conftest.py</code>?<small>"),
+            "the item beside starts with its project"
+        );
+        assert!(listed.contains("<span class=\"proj\">no project</span><span class=\"sep\"> · </span>May the agent read <code>/etc/hosts</code>?<small>"), "a run without a project says so");
+        let asked = page.render(View::Question("new".into(), "q1".into()), now).expect("the leave");
+        assert!(asked.contains("<div class=\"where\">tidepool · <a href=\"/run/new\">"), "the stop's where line starts with its project");
         let _gone = std::fs::remove_dir_all(&home);
     }
 

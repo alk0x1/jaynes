@@ -115,10 +115,11 @@ pub fn entry_of(home: &Path, run: Run) -> Entry {
     Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into }
 }
 
-/// How a run stands in the list: its mark, its line, and whether it waits for the person.
+/// How a run stands in the list: its mark, its line, and whether it waits for the person. A blocked run says so first:
+/// its open questions stay inside it, never in its line (the tech-lead's rule, for every role).
 pub fn stands(e: &Entry) -> (Mark, String, bool) {
     let r = &e.run;
-    let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
+    let waiting = if r.finished() || r.blocked() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
     match waiting {
         Some(q) => (Mark::Needs, title_into(q, &e.into), true),
         None => {
@@ -323,10 +324,15 @@ pub fn short(s: &str) -> String {
     if s.chars().count() <= 60 { s.to_string() } else { format!("{}…", s.chars().take(59).collect::<String>()) }
 }
 
-/// Where the run is on its path: "step 2 of 5".
+/// Where the run is on its path: "step 2 of 5". A run held at a step's stop is at that step, though the step is done:
+/// the next one has not begun.
 pub fn where_in(r: &Run) -> String {
     let path = r.path();
-    let at = path.iter().position(|&i| !r.fresh(i)).map(|n| n + 1).unwrap_or(path.len());
+    let held = match &r.phase {
+        Phase::Waiting { step: Some(name), .. } => r.manifest.index(name).and_then(|i| path.iter().position(|&j| j == i)),
+        _ => None,
+    };
+    let at = held.or_else(|| path.iter().position(|&i| !r.fresh(i))).map(|n| n + 1).unwrap_or(path.len());
     format!("step {at} of {}", path.len())
 }
 
@@ -1931,6 +1937,43 @@ mod tests {
         assert_eq!(listing.projects[0].1.iter().map(|r| r.mark).collect::<Vec<_>>(), [Mark::Blocked]);
         let still = can_still_answer(&entries);
         assert_eq!(still.iter().map(|r| (r.id.as_str(), r.title.as_str(), r.line.as_str())).collect::<Vec<_>>(), [("r1", "Fix the login redirect", "At “plan”: Is this the bug? · The run went on without your answer.")]);
+    }
+
+    // The real-user's round 2026-11-22-01 (scaffold, its stop at "stacks"): the stop's head said "step 1 of 2" and
+    // the column "step 2 of 2". A run held at a step's stop is at that step: its step is done and waits for the
+    // person, so the next one has not begun. One count everywhere: where the run is.
+    #[test]
+    fn asked_a_run_held_at_a_stop_is_at_the_stop_s_step() {
+        let mut held = run("r1", "Build the notes service");
+        held.steps[0].status = jaynes_core::run::Status::Done;
+        held.steps[0].done = Some(jaynes_core::run::Done { round: 1, output: jaynes_core::Digest("o".into()), items: vec![], reads: held.reads(0), changed: vec![] });
+        held.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
+        assert_eq!(where_in(&held), "step 1 of 2", "held at plan's stop, the run is at plan");
+        // once the person answers, the run goes on to the next step
+        held.phase = Phase::Running;
+        assert_eq!(where_in(&held), "step 2 of 2");
+    }
+
+    // The real-user's app, 22/11 (recibo, fix-bug): the run was blocked at "fix", and "Needs you" showed it as "Is
+    // this the bug?", the old question still open at "reproduce". The tech-lead's rule, for every role: a blocked run
+    // says so first; its open questions stay inside, never in its line.
+    #[test]
+    fn asked_a_blocked_run_says_it_is_blocked_before_its_open_question() {
+        let mut stuck = run("r1", "O total do recibo sai errado");
+        stuck.phase = Phase::Blocked { step: Some("change".into()), fault: jaynes_core::event::Fault::Agent, reason: "change spent its 3 attempts".into() };
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
+            about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        stuck.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        let e = entry(stuck, "/w/recibo", 30);
+        let (mark, line, _) = stands(&e);
+        assert_eq!(mark, Mark::Blocked, "blocked first");
+        assert!(line.contains("blocked: change spent its 3 attempts"), "{line}");
+        assert!(!line.contains("Is this the bug?"), "the open question stays inside: {line}");
+        let listing = arrange(&[e]);
+        assert!(listing.needs.is_empty(), "listed as blocked, not as its question");
+        assert_eq!(said(&listing.projects[0].1[0]), format!("blocked · {line}"), "jaynes runs says the same");
     }
 
     #[test]
