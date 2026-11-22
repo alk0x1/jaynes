@@ -10,12 +10,13 @@ case "$prompt" in
   *"# Your step: reproduce"*)
     mkdir -p tests
     case "$prompt" in *"empty name"*)
-      printf '[ "$(sh greet.sh)" = "hi " ] || { echo "expected hi with nothing after"; exit 1; }\n' > tests/test_empty.sh ;;
+      printf 'out=$(sh greet.sh)\n[ "$out" = "hi " ] || { echo "expected hi with nothing after, got $out"; exit 1; }\n' > tests/test_empty.sh ;;
     esac
     printf 'out=$(sh greet.sh ana)\ncase "$out" in hi*) ;; *) echo "expected hi, got $out"; exit 1;; esac\n' > tests/test_hi.sh
     failure="expected hi, got hello ana"
-    case "$prompt" in *"empty name"*) failure="expected hi with nothing after" ;; esac
-    printf '{"bug":"greet says hello","tests":["tests/test_hi.sh"],"failure":"%s","examples":[{"case":"greeting ana","now":"hello ana","after":"hi ana"}]}' "$failure" > .jaynes/output.json ;;
+    saw="hello ana"
+    case "$prompt" in *"empty name"*) failure="expected hi with nothing after"; saw="got hello" ;; esac
+    printf '{"bug":"greet says hello","tests":["tests/test_hi.sh"],"failure":"%s","saw":"%s","examples":[{"case":"greeting ana","now":"hello ana","after":"hi ana"}]}' "$failure" "$saw" > .jaynes/output.json ;;
   *"# Your step: fix"*)
     case "$prompt" in
       *"A check you cannot see"*|*"runs again on top"*) printf 'echo "hi $1"\n' > greet.sh ;;

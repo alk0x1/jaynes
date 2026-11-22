@@ -617,10 +617,37 @@ def _quoted(failure: str, ran: Any, why: str) -> Any:
     return None
 
 
+_TRACE_FILE = re.compile(r'^[E>\s]*File "([^"]+)", line \d+', re.M)
+_TRACE_END = re.compile(r"^[E>\s]*([A-Za-z_][\w.]*(?:Error|Exception))\b[^\n]*$", re.M)
+_JS_OWN = re.compile(r"^\s*(SyntaxError|ReferenceError|TypeError)\b[^\n]*\n(?:[^\n]*\n){0,3}?\s*at [^\n]*?\(?([^\s()]+):\d+:\d+\)?$", re.M)
+
+
+def _own_error(printed: str, tests: list[str]) -> str | None:
+    """The line that says a named test broke on its own code, not on the bug: a Python traceback whose last frame is
+    in the test and whose error is no assertion, a JavaScript SyntaxError, ReferenceError or TypeError thrown from
+    the test, or a shell's error about a line of the test. None when the tests fail on what they assert."""
+    mine = lambda path: any(path == t or path.endswith("/" + t) for t in tests)
+    for end in _TRACE_END.finditer(printed):
+        if end.group(1).split(".")[-1] in ("AssertionError", "AssertError"):
+            continue
+        frames = _TRACE_FILE.findall(printed[:end.start()])
+        if frames and mine(frames[-1]):
+            return end.group(0).strip()
+    for own in _JS_OWN.finditer(printed):
+        if mine(own.group(2)):
+            return own.group(0).splitlines()[0].strip()
+    for t in tests:
+        found = re.search(rf"^\S*{re.escape(t)}: (?:line )?\d+: [^\n]*$", printed, re.M)
+        if found:
+            return found.group(0).strip()
+    return None
+
+
 def tests_fail_for_the_bug(call: Call, params: Params) -> Any:
     """The tests the output names in ``tests`` are files the step may write, exist, and fail when run, printing the
-    line the output quotes in ``failure``. An output that says ``reproduced`` is false passes: no test shows the bug,
-    and a later step stops the run for the person."""
+    line the output quotes in ``failure``, and not on their own code (an exception the test throws, a parse error of
+    the test). What the output says the test got, in ``saw``, is in what it printed. An output that says
+    ``reproduced`` is false passes: no test shows the bug, and a later step stops the run for the person."""
     out = call.get("output") if isinstance(call.get("output"), dict) else {}
     if out.get("reproduced") is False:
         return Pass()
@@ -646,6 +673,17 @@ def tests_fail_for_the_bug(call: Call, params: Params) -> Any:
         return ran
     if ran.code == 0:
         return Fail(f"the tests pass before any fix; they must fail because of the bug. {command} printed:\n{ran.output}")
+    own = _own_error(ran.printed, tests)
+    if own:
+        return Fail(f"the tests fail on their own code, not on the bug: {own}. A test shows the bug when what it "
+                    f"asserts is false; fix the test. The end of what {command} printed (exit {ran.code}):\n{ran.output}")
+    saw = " ".join(str(out.get("saw") or "").split())
+    if params.get("saw") and not saw:
+        return Fail("saw is empty; give what the test got where it asserts, copied from what it printed, for the "
+                    "person to read beside what they see now")
+    if saw and saw not in " ".join(ran.printed.split()):
+        return Fail(f"saw, \"{saw}\", is not in what the tests printed; quote what the test got, as it printed it. "
+                    f"The end of what {command} printed (exit {ran.code}):\n{ran.output}")
     return _quoted(str(out.get("failure") or ""), ran, "because of the bug") or Pass()
 
 

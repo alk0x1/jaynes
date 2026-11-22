@@ -501,12 +501,12 @@ const MENU_CHECKS: &[MenuCheck] = &[
     MenuCheck {
         name: "tests-fail-for-the-bug",
         kind: CheckKind::Open,
-        params: &[],
+        params: &[("saw", Param::YesNo, false)],
         auto: &[Auto::Suite, Auto::Write],
-        about: |_| {
-            "the tests named in tests are test files the step may write, and fail because of the bug, printing the \
-             line quoted in failure"
-                .into()
+        about: |t| {
+            let saw = if t.get("saw").and_then(toml::Value::as_bool) == Some(true) { ", and saw is what the test got, as it printed it" } else { "" };
+            format!("the tests named in tests are test files the step may write, and fail because of the bug on what they assert, not on \
+                     their own code, printing the line quoted in failure{saw}")
         },
         runs: true,
     },
@@ -2762,7 +2762,7 @@ with = {{ pages = "read.sources" }}
         ("small-change", "0ef3e36cfe674de226a18953af676fac66bb992d53353b66c2cac2c1208108a0"),
         // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own; since
         // 21/11 it is 4.0.0, asking "Is this the bug?" with answers and checking for plain words: another one again
-        ("fix-bug", "2c5089ff749f96e721436a3c1556934fc3e17e2a2cbc589c23d1733f92392c9c"),
+        ("fix-bug", "c2eb2f0ecd5403afe174b1f898fdb80aeb5b28e51c508aaec402dad818db3aeb"),
         ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
     ];
 
@@ -3601,7 +3601,7 @@ script = "requires/changelog.sh"
         assert_eq!(stop.verdicts, [VerdictKind::Keep, VerdictKind::Redo]);
         assert_eq!(stop.answers, BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]));
         // one item: the bug in a sentence, one example of now and after the fix under it, and the others after that
-        let out = json!({"bug": "The total shows a dollar too much when the cart has a coupon.", "tests": ["tests/test_total.py"], "failure": "expected 9.00, got 10.00", "examples": [
+        let out = json!({"bug": "The total shows a dollar too much when the cart has a coupon.", "tests": ["tests/test_total.py"], "failure": "expected 9.00, got 10.00", "saw": "Total 10.00", "examples": [
             {"case": "A cart of 10.00 with a 1.00 coupon", "now": "Total 10.00", "after": "Total 9.00"},
             {"case": "A cart with no coupon", "now": "Total 5.00", "after": "Total 5.00, as today"},
         ]});
@@ -3610,7 +3610,7 @@ script = "requires/changelog.sh"
         assert_eq!(shown.len(), 1, "{shown:?}");
         assert_eq!((shown[0].label.as_str(), shown[0].detail.as_str()), ("The total shows a dollar too much when the cart has a coupon.", "A cart of 10.00 with a 1.00 coupon"));
         let aspects: Vec<(&str, &str)> = shown[0].aspects.iter().map(|a| (a.label.as_str(), a.text.as_str())).collect();
-        assert_eq!(aspects, [("Now", "Total 10.00"), ("After the fix", "Total 9.00"), ("Another example", "A cart with no coupon: now Total 5.00; after the fix Total 5.00, as today")]);
+        assert_eq!(aspects, [("Now", "Total 10.00"), ("After the fix", "Total 9.00"), ("What the test sees now", "Total 10.00"), ("Another example", "A cart with no coupon: now Total 5.00; after the fix Total 5.00, as today")]);
         // with no example, the bug alone, and nothing empty under it
         let bare = items("reproduce", show, &json!({"bug": "It stops when the name is empty.", "reproduced": true}));
         assert_eq!((bare.len(), bare[0].label.as_str(), bare[0].detail.as_str(), bare[0].aspects.len()), (1, "It stops when the name is empty.", "", 0));
@@ -3618,6 +3618,11 @@ script = "requires/changelog.sh"
         let plain = |field: &str| CheckImpl::Menu { uses: "plain-words".into(), with: json!({"field": field}).as_object().cloned().unwrap_or_default() };
         assert_eq!(fix.extras["reproduce"].checks.get("plain-words"), Some(&plain("examples")));
         assert_eq!(fix.extras["reproduce"].checks.get("plain-bug"), Some(&plain("bug")));
+        // the tenure-lead's finding, 21/11: a test that read the page's style failed for that, not for the bug. The
+        // tests fail on what they assert, and the person reads what the test got, beside Now, with no code in it
+        assert_eq!(fix.extras["reproduce"].checks.get("plain-saw"), Some(&plain("saw")));
+        let Some(CheckImpl::Menu { with, .. }) = fix.extras["reproduce"].checks.get("tests-fail-for-the-bug") else { panic!("tests-fail-for-the-bug") };
+        assert_eq!(with.get("saw"), Some(&json!(true)));
     }
 
     #[test]

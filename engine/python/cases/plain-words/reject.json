@@ -278,5 +278,16 @@
     }
    ]
   }
+ },
+ {
+  "id": "what-the-test-saw-is-the-page-s-style",
+  "expect": "reject",
+  "hole": "a test that read the page's style instead of its row shows what it saw: code",
+  "with": {
+   "field": "saw"
+  },
+  "output": {
+   "saw": "[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk"
+  }
  }
 ]

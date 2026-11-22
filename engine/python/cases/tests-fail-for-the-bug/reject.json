@@ -438,5 +438,141 @@
    "greeting.txt": "hello\n"
   },
   "expect": "reject"
+ },
+ {
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "id": "saw-never-printed",
+  "hole": "what the test says it saw is not in what it printed, so it is not what the test saw",
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done",
+   "saw": "Buy milk"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected Done'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "id": "test-s-own-error",
+  "hole": "a test that fails because its own code breaks, not because of the bug",
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected Done'\nfind_row page.html\nexit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ]
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "python3 tests/test_done.py",
+     "each": "python3",
+     "found": "tests/test_done.py"
+    }
+   }
+  ],
+  "id": "python-s-own-exception",
+  "hole": "a Python test whose own code throws: the traceback ends in the test, not an assertion",
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/test_done.py"
+   ],
+   "failure": "KeyError: 'row'"
+  },
+  "project": {
+   "tests/test_done.py": "rows = {}\nprint(rows['row'])\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "saw": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "script",
+     "suite": "sh tests/run.sh",
+     "each": "sh",
+     "found": "tests/run.sh"
+    }
+   }
+  ],
+  "id": "saw-left-out",
+  "hole": "a step asked for what the test saw that gives none",
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/done.sh"
+   ],
+   "failure": "expected Done"
+  },
+  "project": {
+   "tests/run.sh": "sh tests/done.sh\n",
+   "tests/done.sh": "echo 'expected Done'; exit 1\n",
+   "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n"
+  },
+  "expect": "reject"
  }
 ]

@@ -20,3 +20,8 @@ both for the person who asked, not for a programmer. In bug, what goes wrong as 
 sentences. In examples, at most three, the one they know best first: each a situation they know (case), what they
 see today (now) and what they will see once it is fixed (after). No code in any of them: no file names or paths, no
 names from the code (none with an underscore or with parentheses), no braces or JSON. Jaynes refuses them otherwise.
+
+The test fails on what it asserts, never on its own code: an exception the test throws, a name it does not find,
+a parse error of the test, are refused. Before you answer, read what the test got where it asserts and give it in
+saw, copied from what it printed; the person reads it beside Now, so a test that read the wrong thing (a style, a
+whole page) shows it there and is refused. Make the test print what it got, in the words the person sees.
