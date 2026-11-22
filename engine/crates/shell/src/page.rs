@@ -1744,7 +1744,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     format!(
         "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
-         {rides}{rows}{keeps}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
+         {rides}{rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
@@ -1777,11 +1777,6 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         stages = stage_list(run, gone),
         data = data.replace('<', "\\u003c"),
         rides = rides_html(&run.id, question),
-        keeps = match question.rides.len() {
-            0 => String::new(),
-            1 => "<p class=\"keeps\">Merging also keeps the answer above.</p>".to_string(),
-            n => format!("<p class=\"keeps\">Merging also keeps the {n} answers above.</p>"),
-        },
     )
 }
 
@@ -2913,7 +2908,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .rides { margin:14px 0 10px; } .rides .ride { display:flex; align-items:baseline; gap:12px; padding:6px 0; font-size:13.5px; border-top:1px solid var(--line); }
 .rides .st { color:var(--dim); white-space:nowrap; } .rides .ride span:nth-child(2) { flex:1; }
 .rides .ride a { border:1px solid var(--line-2); border-radius:8px; padding:3px 12px; color:var(--ink); white-space:nowrap; }
-.rides p.dim, p.keeps { color:var(--dim); font-size:12.5px; margin:8px 0 0; }
+.rides p.dim { color:var(--dim); font-size:12.5px; margin:8px 0 0; }
 .passed span { color:var(--dim); } .passed a { border:1px solid var(--line-2); border-radius:8px; padding:4px 12px; color:var(--ink); white-space:nowrap; }
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.blocked { color:var(--ink); } .notice.blocked > b { color:var(--red); } .notice .cases { margin-top:10px; color:var(--ink); } .notice .cases .ch { color:var(--dim); font-size:12px; margin-bottom:4px; } .notice .case { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:10px 12px; margin-top:6px; } .notice .case .by { display:block; color:var(--dim); font-size:12px; } .notice .case p { margin:4px 0 0; } .notice .case code { color:var(--ink); } .notice .case pre { margin:6px 0 0; font-family:var(--mono); font-size:12px; color:var(--faint); white-space:pre-wrap; } .notice .case details.all summary { list-style:none; cursor:pointer; color:var(--dim); font-size:12px; margin-top:4px; } .notice .case details.all summary::-webkit-details-marker { display:none; } .notice .case .fi { color:var(--dim); font-size:12px; } .notice .way { margin-top:8px; } .notice .way code { color:var(--ink); } .notice .then { display:block; color:var(--dim); margin-top:2px; } .notice details.still { margin-top:4px; color:var(--dim); } .notice details.still summary { cursor:pointer; } .notice details.still ul { margin:4px 0 0 18px; padding:0; } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
@@ -3590,7 +3585,8 @@ mod tests {
         assert!(asked.contains("your request answered it · the run went on</small>"), "the list beside: the request answered it");
         assert!(asked.contains("<span class=\"st\">“reproduce”</span><span>The bug, as your request says.</span><a href=\"/q/o/q-bug\">Open</a>"), "each with its step, what it holds, and Open");
         assert!(asked.contains("Merging keeps each as it is. To answer one differently, open it before you merge."), "under them");
-        assert!(asked.contains("Merging also keeps the answer above."), "what the merge keeps, for one");
+        // without a touch on the page, no second line repeating it (the design-lead, 22/11)
+        assert!(!asked.contains("also keeps the answer above"), "said once");
         let run = page.render(View::Run("o".into()), now).expect("the run");
         assert!(run.contains("◇ At “reproduce”: the bug, as your request says · the run went on"), "the story's line");
         assert!(run.contains("href=\"/q/o/q-bug\">Not this bug</a>"), "the stop's other answer opens it");
