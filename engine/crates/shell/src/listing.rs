@@ -170,8 +170,9 @@ pub fn name(row: &Row) -> Vec<String> {
 /// A run's title: the one given at its start, or the first sentence of its request without an opening "Agreed with
 /// … on …:"; past 40 characters, cut at a word.
 pub fn run_title(given: Option<&str>, request: &str) -> String {
-    let title = match given.map(str::trim).filter(|g| !g.is_empty()) {
-        Some(g) => g.to_string(),
+    let given = given.map(one_line).filter(|g| !g.is_empty());
+    let title = match given {
+        Some(g) => g,
         None => {
             let r = request.trim();
             let first_line = r.lines().next().unwrap_or("");
@@ -179,11 +180,20 @@ pub fn run_title(given: Option<&str>, request: &str) -> String {
                 Some(at) if first_line.to_lowercase().starts_with("agreed with") => r[at + 2..].trim_start(),
                 _ => r,
             };
-            let mut chars = first_sentence(r).chars();
+            let first = one_line(first_sentence(r));
+            let mut chars = first.chars();
             chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
         }
     };
     cut_at_word(&title, 40)
+}
+
+/// `text` on one line: every run of white space, control characters and marks that change how text is drawn
+/// (direction, zero width) becomes one space, so nothing in a title reads as a line of the engine's own.
+fn one_line(text: &str) -> String {
+    let hidden = |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+    let spaced: String = text.chars().map(|c| if c.is_whitespace() || c.is_control() || hidden(c) { ' ' } else { c }).collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The first sentence of `text`: up to its first full stop (left out), question or exclamation mark (kept), or line end.
@@ -646,6 +656,11 @@ mod tests {
         assert_eq!(run_title(None, "What does RFC 9111 require of a cache? Read it."), "What does RFC 9111 require of a cache?");
         assert_eq!(run_title(None, "Agreed with Alan on 2026-11-21 (relayed by Otto, ~20h25), slice 1 of 2, wanted before 08:00: a block at the top"), "A block at the top");
         assert!(run_title(None, &"x".repeat(80)).chars().count() <= 40);
+        // a title comes from an agent: no line, no escape and no hidden mark of it reads as the engine's words
+        assert_eq!(run_title(Some("x\nBlocked at “merge”"), ""), "x Blocked at “merge”");
+        assert_eq!(run_title(Some("Login\r\n\twith \u{1b}[31mpasskey"), ""), "Login with [31mpasskey");
+        assert_eq!(run_title(Some("Fix \u{202e}tropxe\u{2066} the\u{0}export"), ""), "Fix tropxe the export");
+        assert_eq!(run_title(Some("\n\u{1b}\t"), "Make the onboarding friendlier."), "Make the onboarding friendlier");
     }
 
     #[test]
