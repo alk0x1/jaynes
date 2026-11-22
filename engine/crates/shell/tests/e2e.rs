@@ -1363,6 +1363,69 @@ fn the_person_starts_a_run_from_the_page() {
     assert!(view.contains("say hi instead of hello") && view.contains("Finished: delivered"), "{view}");
 }
 
+/// A made-up toolchain in a folder of its own, as mise, asdf or Homebrew put one: on the PATH of the person's terminal,
+/// not on the one of a page or an app opened from the Dock.
+fn made_up_tool(s: &Scratch) -> PathBuf {
+    let tools = s.base.join("tools/bin");
+    std::fs::create_dir_all(&tools).expect("dir");
+    std::fs::write(tools.join("quitanda-cc"), "#!/bin/sh\nexit 0\n").expect("write");
+    let mut mode = std::fs::metadata(tools.join("quitanda-cc")).expect("meta").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(tools.join("quitanda-cc"), mode).expect("chmod");
+    tools
+}
+
+/// The engine lead's direction of 21/11 for the run the page or the app starts: every `jaynes` the person runs at a
+/// terminal keeps that terminal's environment, and a run started without one uses it, so the agent finds the
+/// toolchains the person has. Until the person ran `jaynes` in a terminal, the start form says so.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_run_started_from_a_page_with_a_short_path_finds_the_toolchain_of_the_person_s_terminal() {
+    let s = scratch("page-env");
+    let tools = made_up_tool(&s);
+    let agent = format!("quitanda-cc && perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    let short = "/usr/bin:/bin:/usr/sbin:/sbin";
+    let page = |s: &Scratch| page_on_any_port(
+        jaynes()
+        .arg("page")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("JAYNES_PAGE_KEY", "k3y")
+        .env("PATH", short)
+        .env("JAYNES_AGENT", format!("command:{agent}")),
+    );
+    let me = "jaynes_key=k3y";
+    {
+        let (_page, port) = page(&s);
+        let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+        assert!(form.contains("run <code>jaynes</code> once in a terminal"), "the form does not say where the tools come from: {form}");
+    }
+    // the person runs jaynes in their terminal, whose PATH has their tools
+    let long = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap_or_default());
+    let out = tty().arg(BIN).arg("--version").env("JAYNES_ENGINE_HOME", &s.home).env("PATH", &long).output().expect("terminal");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (_page, port) = page(&s);
+    let form = http(port, &format!("GET /new HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+    assert!(!form.contains("once in a terminal"), "{form}");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let body = serde_json::json!({"role": role, "project": s.project, "request": "say hi instead of hello", "risk": "low"}).to_string();
+    let r = post(port, "/api/start", &body, me);
+    assert_eq!(r["ok"], true, "{r}");
+    let run = r["run"].as_str().expect("run").to_string();
+    let mut finished = false;
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if s.home.join("record.sqlite3").exists() && events(&s, &run).iter().any(|e| e["type"] == "RunFinished") {
+            finished = true;
+            break;
+        }
+    }
+    let log = std::fs::read_to_string(s.home.join(format!("start-{run}.log"))).unwrap_or_default();
+    assert!(finished, "{log}");
+    assert!(types(&events(&s, &run)).iter().any(|t| t == "Delivered"), "the agent did not find the toolchain: {log}");
+}
+
 #[test]
 fn the_page_sets_the_guard_and_says_when_jaynes_was_updated() {
     let s = scratch("setup");

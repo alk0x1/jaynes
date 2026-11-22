@@ -100,6 +100,8 @@ mkdir -p "$bin" "$apps"
 # moved in whole, so a run or the app that uses the old program never sees half of the new one
 mv -f "$tmp/jaynes" "$bin/jaynes.new"
 mv -f "$bin/jaynes.new" "$bin/jaynes"
+# where your programs are, as this terminal has them, for the runs you start from the app or the page
+"$bin/jaynes" keep-env >/dev/null 2>&1 || true
 xattr -dr com.apple.quarantine "$tmp/Jaynes.app" 2>/dev/null || true
 rm -rf "$apps/Jaynes.app"
 mv "$tmp/Jaynes.app" "$apps/Jaynes.app"

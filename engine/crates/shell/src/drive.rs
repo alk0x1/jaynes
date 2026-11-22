@@ -76,6 +76,28 @@ pub fn run_env(setup: &serde_json::Value) -> Option<std::collections::BTreeMap<S
     Some(kept.iter().filter(|(k, _)| RUN_ENV.contains(&k.as_str())).filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
 }
 
+/// The file in the engine's home that keeps the environment of the person's terminal: what the last `jaynes` they ran
+/// at a terminal, or the install, had of [`RUN_ENV`]. A run started without a terminal (from the page or the app,
+/// which may be opened with a short PATH) starts with it.
+pub const TERMINAL_ENV: &str = "terminal-env.json";
+
+/// Keep this process's [`RUN_ENV`] as the person's terminal's, when it is not already what the file says. What
+/// cannot be written is left as it was: no command fails for it.
+pub fn keep_terminal_env(home: &Path) {
+    let now = started_env();
+    if now.is_empty() || terminal_env(home).is_some_and(|kept| env_is(&kept)) {
+        return;
+    }
+    let _kept = std::fs::create_dir_all(home).and_then(|()| std::fs::write(home.join(TERMINAL_ENV), serde_json::Value::Object(now).to_string()));
+}
+
+/// The environment of the person's terminal, as [`keep_terminal_env`] kept it, by variable of [`RUN_ENV`].
+pub fn terminal_env(home: &Path) -> Option<std::collections::BTreeMap<String, String>> {
+    let text = std::fs::read_to_string(home.join(TERMINAL_ENV)).ok()?;
+    let kept: serde_json::Value = serde_json::from_str(&text).ok()?;
+    run_env(&serde_json::json!({ "env": kept }))
+}
+
 /// Whether this process's environment is the one `kept` says, for every variable of [`RUN_ENV`]: those it holds set
 /// as it holds them, the others unset.
 pub fn env_is(kept: &std::collections::BTreeMap<String, String>) -> bool {

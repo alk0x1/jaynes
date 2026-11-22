@@ -859,7 +859,7 @@ impl Page {
             },
             (View::New, _) => {
                 let last = runs.iter().rev().find_map(|r| store.setup(&r.id).ok().and_then(|s| s["project"].as_str().map(|p| (r.manifest.role.clone(), p.to_string()))));
-                new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last)
+                new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last, drive::terminal_env(&self.home).is_some())
             }
             (View::Setup, _) => setup_html(&self.home),
             (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home, &remind),
@@ -1530,15 +1530,17 @@ fn setup_html(home: &std::path::Path) -> String {
     )
 }
 
-/// The form that starts a run: a role, a project, the request, and how risky the change is.
-fn new_html(roles: &[(String, String)], last: Option<(String, String)>) -> String {
+/// The form that starts a run: a role, a project, the request, and how risky the change is. Until the person ran
+/// `jaynes` at a terminal (`terminal`), it says that a run started here finds their tools once they do.
+fn new_html(roles: &[(String, String)], last: Option<(String, String)>, terminal: bool) -> String {
     let (role, project) = last.unwrap_or_default();
     let role = if roles.iter().any(|(n, _)| *n == role) { role } else { roles.first().map(|r| r.0.clone()).unwrap_or_default() };
     let options: String = roles.iter().map(|(n, a)| format!("<option value=\"{}\">{}</option>", esc(n), esc(a))).collect();
     let about: String = roles.iter().map(|(n, a)| format!("<li><b>{}</b> {}</li>", esc(n), esc(a))).collect();
     let none = if roles.is_empty() { "<p class=\"sub\">No role is installed: <code>jaynes add</code> installs one, or give a role's folder.</p>" } else { "" };
+    let tools = if terminal { "" } else { "<p class=\"sub\">For a run started here to find your tools (compilers, package managers) as your terminal does, run <code>jaynes</code> once in a terminal.</p>" };
     format!(
-        "<h1>New run</h1><p class=\"sub\">The run goes on by itself in a copy of the project; what needs you comes to this page.</p>{none}\
+        "<h1>New run</h1><p class=\"sub\">The run goes on by itself in a copy of the project; what needs you comes to this page.</p>{none}{tools}\
          <form id=\"start\" class=\"form\">\
          <label><span class=\"label\">Role</span><input name=\"role\" list=\"roles\" value=\"{role}\" placeholder=\"a role's name, or its folder\" required><datalist id=\"roles\">{options}</datalist></label>\
          <ul class=\"roles\">{about}</ul>\

@@ -133,6 +133,25 @@ fn who() -> By {
     if std::io::stdin().is_terminal() { By::Person } else { By::Agent { who: "a program without a terminal".into() } }
 }
 
+/// This program again, with `args` and the variables of [`drive::RUN_ENV`] as `kept` says (those it holds set, the
+/// others unset), in this process's place: what comes back is why it could not.
+fn with_env(args: &[String], kept: &std::collections::BTreeMap<String, String>) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => return e,
+    };
+    let mut again = std::process::Command::new(exe);
+    again.args(args);
+    for k in drive::RUN_ENV {
+        match kept.get(*k) {
+            Some(v) => again.env(k, v),
+            None => again.env_remove(k),
+        };
+    }
+    again.exec()
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let Some(cmd) = args.first().map(String::as_str) else {
         println!("{USAGE}");
@@ -150,6 +169,15 @@ fn run(args: &[String]) -> Result<(), String> {
             .ok_or_else(|| format!("run {id} started on engine {}, which is no longer on this machine: this one ({}) cannot carry it on", state.engine, jaynes_core::ENGINE))?;
         return Err(format!("the engine of run {id} did not start: {}", std::process::Command::new(exe).args(args).exec()));
     }
+    // Every `jaynes` the person runs at a terminal keeps that terminal's environment, for the runs that start without
+    // one; the install keeps it too, with `keep-env`.
+    let terminal = std::io::stdin().is_terminal();
+    if terminal || cmd == "keep-env" {
+        drive::keep_terminal_env(&home());
+    }
+    if cmd == "keep-env" {
+        return Ok(());
+    }
     // A command that carries a run on runs with the environment the run started with (where the person's toolchains
     // are), whatever process gave it: the page and the app may have been opened with a short PATH. This process
     // becomes itself with it.
@@ -158,17 +186,16 @@ fn run(args: &[String]) -> Result<(), String> {
         && let Some(kept) = store().and_then(|s| s.setup(id)).ok().as_ref().and_then(drive::run_env)
         && !drive::env_is(&kept)
     {
-        use std::os::unix::process::CommandExt;
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut again = std::process::Command::new(exe);
-        again.args(args);
-        for k in drive::RUN_ENV {
-            match kept.get(*k) {
-                Some(v) => again.env(k, v),
-                None => again.env_remove(k),
-            };
-        }
-        return Err(format!("Jaynes could not carry run {id} on with the environment it started with: {}", again.exec()));
+        return Err(format!("Jaynes could not carry run {id} on with the environment it started with: {}", with_env(args, &kept)));
+    }
+    // A run started without a terminal (the page's, the app's) starts with the environment of the person's terminal,
+    // and keeps it from there as any run.
+    if cmd == "start"
+        && !terminal
+        && let Some(kept) = drive::terminal_env(&home())
+        && !drive::env_is(&kept)
+    {
+        return Err(format!("Jaynes could not start the run with the environment of your terminal: {}", with_env(args, &kept)));
     }
     match cmd {
         "--version" | "version" => {
