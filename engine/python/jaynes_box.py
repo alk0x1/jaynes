@@ -86,17 +86,21 @@ SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc",
            ".git-credentials", ".config/gh", ".config/gcloud", ".config/op", ".zsh_history", ".bash_history",
            ".claude", ".codex", "Library/Keychains", "Library/Cookies", "Library/Safari", "Library/Mail",
-           "Library/Messages", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
+           "Library/Messages", "Library/Application Support/Google", "Library/Application Support/Firefox",
            "Library/Application Support/Chromium", "Library/Containers/com.apple.Safari",
            "Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge",
-           "Library/Application Support/Arc")
+           "Library/Application Support/Arc", "Library/Application Support/com.operasoftware.Opera",
+           "Library/Application Support/Vivaldi", "Library/Application Support/zen", "Library/Application Support/librewolf",
+           "Library/Application Support/Waterfox", "Library/Application Support/Floorp", "Library/Application Support/Orion",
+           "Library/Application Support/Thorium")
 # The person's browsers: no command in a box starts one (the tech-lead's rule, 22/11), only Jaynes's own headless
 # Chrome (JAYNES_CHROME) and the one a photograph's box is made for. The agent's settings in agent.rs hide the same
 # (BROWSER_APPS, BROWSER_PLACES there; a test checks both say the same).
 BROWSER_APPS = ("Google Chrome.app", "Google Chrome Beta.app", "Google Chrome Dev.app", "Google Chrome Canary.app",
                 "Chromium.app", "Safari.app", "Safari Technology Preview.app", "Firefox.app",
                 "Firefox Developer Edition.app", "Firefox Nightly.app", "Microsoft Edge.app", "Brave Browser.app",
-                "Arc.app", "Opera.app", "Vivaldi.app")
+                "Arc.app", "Opera.app", "Vivaldi.app", "Zen.app", "Zen Browser.app", "Orion.app", "LibreWolf.app",
+                "Waterfox.app", "Floorp.app", "Thorium.app")
 # where macOS keeps apps for everyone, Safari's own place among them (/Applications/Safari.app links there)
 BROWSER_PLACES = ("/Applications", "/System/Cryptexes/App/System/Applications",
                   "/System/Volumes/Preboot/Cryptexes/App/System/Applications")

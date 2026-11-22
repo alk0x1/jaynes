@@ -417,7 +417,8 @@ const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 /// under the hidden home.
 pub const BROWSER_APPS: &[&str] = &["Google Chrome.app", "Google Chrome Beta.app", "Google Chrome Dev.app", "Google Chrome Canary.app",
     "Chromium.app", "Safari.app", "Safari Technology Preview.app", "Firefox.app", "Firefox Developer Edition.app", "Firefox Nightly.app",
-    "Microsoft Edge.app", "Brave Browser.app", "Arc.app", "Opera.app", "Vivaldi.app"];
+    "Microsoft Edge.app", "Brave Browser.app", "Arc.app", "Opera.app", "Vivaldi.app", "Zen.app", "Zen Browser.app", "Orion.app",
+    "LibreWolf.app", "Waterfox.app", "Floorp.app", "Thorium.app"];
 /// Where macOS keeps apps for everyone, Safari's own place among them (/Applications/Safari.app links there).
 pub const BROWSER_PLACES: &[&str] = &["/Applications", "/System/Cryptexes/App/System/Applications",
     "/System/Volumes/Preboot/Cryptexes/App/System/Applications"];

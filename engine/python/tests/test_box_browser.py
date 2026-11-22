@@ -104,7 +104,12 @@ class TheBoxStartsNoBrowserOfThePerson(unittest.TestCase):
         profiles = ["Library/Application Support/Google/Chrome", "Library/Application Support/Chromium",
                     "Library/Application Support/Firefox", "Library/Safari", "Library/Containers/com.apple.Safari",
                     "Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge",
-                    "Library/Application Support/Arc"]
+                    "Library/Application Support/Arc", "Library/Application Support/Google/Chrome Beta",
+                    "Library/Application Support/Google/Chrome Canary", "Library/Application Support/com.operasoftware.Opera",
+                    "Library/Application Support/Vivaldi", "Library/Application Support/zen",
+                    "Library/Application Support/librewolf", "Library/Application Support/Waterfox",
+                    "Library/Application Support/Floorp", "Library/Application Support/Orion",
+                    "Library/Application Support/Thorium"]
         for p in profiles:
             (home / p).mkdir(parents=True)
             (home / p / "Cookies").write_text("STAND-IN")
@@ -141,7 +146,10 @@ class TheBrowsersListed(unittest.TestCase):
         for p in ("/Applications/Google Chrome.app", "/Applications/Chromium.app", "/Applications/Firefox.app",
                   "/Applications/Safari.app", "/System/Cryptexes/App/System/Applications/Safari.app",
                   "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
-                  "/Users/someone/Applications/Google Chrome.app", "/Applications/Brave Browser.app"):
+                  "/Users/someone/Applications/Google Chrome.app", "/Applications/Brave Browser.app",
+                  "/Applications/Zen.app", "/Applications/Zen Browser.app", "/Applications/Orion.app",
+                  "/Applications/LibreWolf.app", "/Applications/Waterfox.app", "/Applications/Floorp.app",
+                  "/Applications/Thorium.app"):
             self.assertIn(p, listed)
 
 
