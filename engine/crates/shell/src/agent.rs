@@ -406,6 +406,30 @@ impl Default for Claude {
 
 const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 
+/// The tools Claude Code makes available to a step's agent, named one by one (`--tools`), never the ones it takes
+/// away: Claude Code's default set grows with each version, and holds tools that leave the step's reach whatever its
+/// settings say, such as SendMessage and ListAgents, which reach the person's other Claude sessions, and CronCreate,
+/// RemoteTrigger and Workflow, which start work elsewhere (measured on 2.1.330, 22/11). Reading, searching and editing
+/// files, which the settings confine to the step's folder; the shell when the step runs commands; the web tools when
+/// it reaches the web. The tools of Jaynes's own server come beside them, from the MCP configuration.
+pub fn tools(reach: &Reach) -> Vec<&'static str> {
+    let mut tools = vec!["Edit", "Glob", "Grep", "Read", "Write"];
+    if reach.commands {
+        tools.push("Bash");
+    }
+    if reach.network == Network::Web {
+        tools.extend(WEB_TOOLS);
+    }
+    tools.sort_unstable();
+    tools
+}
+
+/// The tools a turn's Claude Code said it runs with (its first `system` line) beyond `given` and Jaynes's own server.
+fn beyond(out: &str, given: &[&str]) -> Vec<String> {
+    let said = out.lines().find_map(|l| session_of(l).map(|(_, c)| c.tools)).unwrap_or_default();
+    said.into_iter().filter(|t| !given.contains(&t.as_str()) && !t.starts_with("mcp__jaynes__")).collect()
+}
+
 /// Everything in `runs` but the way down to `cwd`: the other runs, and in the step's own run every folder and file
 /// that does not hold `cwd`. Claude Code's box lets a hidden folder win over a readable one inside it, so the runs
 /// cannot be hidden whole; they are hidden one by one as they are when the step starts. A run that begins later is
@@ -594,6 +618,7 @@ impl Agent for Claude {
             }
             None => (json!({"mcpServers": {}}), "dontAsk"),
         };
+        let tools = tools(spec.reach);
         // the model's text comes as it is written, so a silent connection shows
         let command = |session: Option<&str>| {
             let mut cmd = Command::new(&claude);
@@ -601,6 +626,7 @@ impl Agent for Claude {
                 .arg("--settings")
                 .arg(settings.to_string())
                 .args(["--strict-mcp-config", "--mcp-config", &servers.to_string(), "--permission-mode", mode])
+                .args(["--tools", &tools.join(",")])
                 .args(["--max-turns", &self.max_messages.to_string(), "--model", &self.model, "--effort", &self.effort]);
             if let Some(s) = session {
                 cmd.args(["--resume", s]);
@@ -616,7 +642,7 @@ impl Agent for Claude {
             cmd
         };
         let applied = json!({"program": "claude", "model": self.model, "effort": self.effort, "settings": settings,
-                             "resume": spec.session});
+                             "tools": tools, "resume": spec.session});
         // A connection that went silent is taken up again in the same session, a few times, with nothing lost.
         let mut on_session = spec.on_session;
         let transcript = live(spec.transcript.as_deref());
@@ -654,7 +680,12 @@ impl Agent for Claude {
                 if let Some(t) = &spec.transcript {
                     let _kept = std::fs::write(t, format!("{out}\n--- stderr ---\n{err}"));
                 }
+                let extra = beyond(&out, &tools);
                 match refused_writes(&out, spec.cwd, spec.reach) {
+                    // a Claude Code that ignores --tools, or adds tools of its own: what the agent did is not the step's
+                    _ if !extra.is_empty() => Ended::Fault {
+                        reason: format!("Claude Code gave the agent tools Jaynes did not: {}; this turn does not count", extra.join(", ")),
+                    },
                     Some(paths) => Ended::Fault {
                         reason: format!(
                             "Claude Code's guards, as Jaynes set them, refused writes the step may make: {}",

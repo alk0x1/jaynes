@@ -76,7 +76,10 @@ the app, Jaynes asks the run's model to read them, through the same program, wit
 words and the stop go to the provider. A run driven by a command of yours sends what that command sends.
 
 Inside a run, the agent program does not read your instruction files (`CLAUDE.md` and its settings): Jaynes starts it
-with them turned off and writes the settings of each step itself.
+with them turned off and writes the settings of each step itself. It also names the only tools the agent gets:
+reading, searching and editing files, the shell when the step runs commands, and the web tools when the step reaches
+the web. None of Claude Code's other tools come with them, such as those that send a message to your other Claude
+sessions or start work elsewhere, and a turn whose agent program says it runs with a tool beyond these does not count.
 
 ## What a step with network reaches
 
