@@ -781,6 +781,14 @@ pub fn settled_line(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<St
     if s.kind != jaynes_core::question::QuestionKind::Decision || s.holds {
         return None;
     }
+    // only where the role says what was settled there, the request named the option, or a merge carries it: any
+    // other stop the run went past keeps its own line, "The run went on without your answer."
+    let says = run.manifest.index(&s.step).and_then(|i| run.manifest.steps[i].stop.as_ref()).is_some_and(|d| d.settled.is_some());
+    let named = s.items.iter().any(|x| x.named.is_some());
+    let carried = run.questions.values().any(|m| m.question.kind == jaynes_core::question::QuestionKind::Merge && m.question.rides.iter().any(|r| r.question == s.id));
+    if !(says || named || carried) {
+        return None;
+    }
     let how = if q.open() && (run.finished() || crate::stop::went_on(run, q).is_some()) {
         "the run went on"
     } else if run.kept_at_merge(&s.id) {
@@ -2387,6 +2395,22 @@ mod tests {
         // a stop that holds is the person's to answer: never a line of these
         r.questions.get_mut("q-bug").expect("asked").question.holds = true;
         assert_eq!(line(&r), None);
+        // the fullstack-engineer, 22/11: a stop whose role says nothing of what was settled there, and that no merge
+        // carries, keeps the line a stop the run went past always had ("The run went on without your answer.")
+        r.questions.get_mut("q-bug").expect("asked").question.holds = false;
+        r.starter = None;
+        r.questions.remove("q-merge");
+        if let Some(s) = r.manifest.steps[0].stop.as_mut() {
+            s.settled = None;
+        }
+        assert_eq!(line(&r), None);
+        // the merge carries it: what its touch keeps, as it was made
+        let asks = Question { rides: vec![Ride { question: bug.id.clone(), step: "plan".into(), said: String::new() }],
+            id: "q-merge".into(), step: "change".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![], holds: true,
+            about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        r.questions.insert(asks.id.clone(), QuestionState { question: asks, answer: None, effects: None, superseded: false });
+        assert_eq!(line(&r).as_deref(), Some("◇ At “plan”: “A note with a comma breaks the CSV”, as it was made · the run went on"));
     }
 
     // Alan, 22/11, at a stop where he asked the agent: "ele regerou tudo?". He wanted to see his question stay: the run's
