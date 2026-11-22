@@ -398,6 +398,23 @@
       ],
       "type": "object"
     },
+    "Named": {
+      "description": "Where an option was named before it was made: the words, copied from the request or the brief.",
+      "properties": {
+        "from": {
+          "description": "\"request\" or \"brief\".",
+          "type": "string"
+        },
+        "words": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "words",
+        "from"
+      ],
+      "type": "object"
+    },
     "Network": {
       "oneOf": [
         {
@@ -1106,6 +1123,17 @@
         "label": {
           "type": "string"
         },
+        "named": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Named"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The words that named this option before it was made, copied from the request or the brief, and where they\nwere: a stop with `holds_unless` does not hold the run for the one option that has them."
+        },
         "photo": {
           "anyOf": [
             {
@@ -1316,6 +1344,13 @@
           "description": "Whether the steps after it wait for the answer. Otherwise the run goes on and the answer corrects it later.",
           "type": "boolean"
         },
+        "holds_unless": {
+          "description": "A stop that holds does not when the role's output names the one option it offers in this field of it (the\nwords, copied from the request or the brief) and the step's check `vouched_by` vouched for them; the run then\ngoes on with it, and the person's touch at the merge keeps it. A braked stop holds still (G17).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "note": {
           "description": "A line of the role's under the question, said before the person looks, such as \"The layout of your screens\ncomes later.\" at a stop that keeps only colours and fonts. Empty: nothing is said.",
           "type": "string"
@@ -1358,6 +1393,13 @@
             "$ref": "#/$defs/VerdictKind"
           },
           "type": "array"
+        },
+        "vouched_by": {
+          "description": "The step's check that vouches for the words: `named-in-request` when none is named.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

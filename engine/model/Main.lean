@@ -26,6 +26,9 @@ def main : IO UInt32 := do
           | "rides" => do
               let opens ← j.getObjValAs? (List Open) "opens"
               pure (",".intercalate ((ridesOf opens).map toString))
+          | "holding" => do
+              let h ← j.getObjValAs? Hold "hold"
+              pure (toString h.holdsNow)
           | "touch" => do
               let t ← j.getObjValAs? TouchCase "case"
               pure (",".intercalate (t.kept.map toString))

@@ -2826,7 +2826,7 @@ mod tests {
         first.name = "make".into();
         first.executor = Executor::Role;
         look.needs = vec!["make".into()];
-        look.stop = Some(jaynes_core::manifest::StopDecl { settled: None,
+        look.stop = Some(jaynes_core::manifest::StopDecl { settled: None, holds_unless: None, vouched_by: None,
             verdicts: vec![jaynes_core::question::VerdictKind::Keep], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Look?".into(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new(),
             offers: Default::default(),
@@ -3065,7 +3065,7 @@ mod tests {
             model: Default::default(),
             turns: None, delivered: true,
         };
-        stack.stop = Some(jaynes_core::manifest::StopDecl { settled: None,
+        stack.stop = Some(jaynes_core::manifest::StopDecl { settled: None, holds_unless: None, vouched_by: None,
             verdicts: vec![jaynes_core::question::VerdictKind::Keep, jaynes_core::question::VerdictKind::Change, jaynes_core::question::VerdictKind::Drop],
             holds: true,
             from_risk: jaynes_core::risk::Risk::Low,
