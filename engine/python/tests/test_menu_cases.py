@@ -129,6 +129,32 @@ class ACase(unittest.TestCase):
         self.assertEqual((said["reply"], said["verdict"]["verdict"]), ("verdict", "fail"))
 
 
+@unittest.skipUnless(box.available(), "needs the box")
+class AHiddenCaseThatFails(unittest.TestCase):
+    # the real-user, 22/11: "A pessoa não vê o caso, não sabe o que está errado"
+    def test_asked_is_shown_to_the_person_in_full_and_told_to_the_agent_by_its_sentence_alone(self):
+        cases = [{"says": "there is a greeting", "run": "test -f greeting.txt"},
+                 {"says": "the greeting says hi", "run": "echo looking; grep -q hi greeting.txt"}]
+        got = menu.judge_case("hidden-cases-pass", {}, {"with": {"cases_step": "cases"}, "given": [{"step": "cases", "output": {"cases": cases}}],
+                                                         "output": {}, "project": {"greeting.txt": "hello\n"}})
+        self.assertIsInstance(got, Fail)
+        # the agent: the sentence, never the command
+        self.assertEqual(got.reasons, ["A check you cannot see found that this does not hold: the greeting says hi"])
+        self.assertNotIn("grep", " ".join(got.reasons))
+        # the person: the case that failed, what it ran, the code it exited with, what it printed; none that passed
+        self.assertEqual([(c["says"], c["run"], c["code"]) for c in got.cases], [("the greeting says hi", "echo looking; grep -q hi greeting.txt", 1)])
+        self.assertIn("looking", got.cases[0]["printed"])
+        # and so it goes to the engine, beside the reasons
+        said = menu.answer({"kind": "case", "use": "hidden-cases-pass", "with": {"cases_step": "cases"},
+                            "case": {"given": [{"step": "cases", "output": {"cases": cases}}], "output": {}, "project": {"greeting.txt": "hello\n"}}})
+        self.assertEqual(said["verdict"]["cases"][0]["run"], "echo looking; grep -q hi greeting.txt")
+
+    def test_a_check_that_passes_shows_no_case(self):
+        got = menu.judge_case("hidden-cases-pass", {}, {"with": {"cases_step": "cases"}, "given": [{"step": "cases", "output": {"cases": [{"says": "x", "run": "true"}]}}],
+                                                         "output": {}, "project": {"a.txt": ""}})
+        self.assertIsInstance(got, Pass)
+
+
 def a_start(folder: str, files: dict[str, str]) -> dict[str, str]:
     """The start of a run as the engine keeps it, beside the copy: a repository and its base commit."""
     repo = Path(folder) / "start"

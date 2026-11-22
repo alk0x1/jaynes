@@ -165,8 +165,15 @@
           "type": "object"
         },
         {
-          "description": "Failed. `reasons` is what the agent is told; `detail` only the person sees.",
+          "description": "Failed. `reasons` is what the agent is told; `detail` and `cases` only the person sees.",
           "properties": {
+            "cases": {
+              "description": "The hidden cases that failed, each in full: never told to the agent (G3).",
+              "items": {
+                "$ref": "#/$defs/FailedCase"
+              },
+              "type": "array"
+            },
             "detail": {
               "default": "",
               "type": "string"
@@ -309,6 +316,31 @@
           "type": "string"
         }
       ]
+    },
+    "FailedCase": {
+      "description": "A hidden case that failed, as the check ran it, for the person: what it says, the command it ran, the code it\nexited with (0 is what it expects) and the end of what it printed.",
+      "properties": {
+        "code": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "printed": {
+          "default": "",
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        },
+        "says": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "says",
+        "run",
+        "code"
+      ],
+      "type": "object"
     },
     "Given": {
       "description": "An earlier step's output given to a call.",

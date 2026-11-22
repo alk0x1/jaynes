@@ -40,14 +40,17 @@ class Pass:
 
 @dataclass
 class Fail:
-    """A failed check. ``reasons`` is what the agent is told; ``detail`` only the person sees."""
+    """A failed check. ``reasons`` is what the agent is told; ``detail`` and ``cases`` only the person sees.
+    ``cases``: the hidden cases that failed, each ``{"says", "run", "code", "printed"}``, never told to the agent."""
 
     reasons: list[str]
     detail: str = ""
+    cases: list[dict[str, Any]] = field(default_factory=list)
 
-    def __init__(self, *reasons: str, detail: str = "") -> None:
+    def __init__(self, *reasons: str, detail: str = "", cases: list[dict[str, Any]] | None = None) -> None:
         self.reasons = list(reasons)
         self.detail = detail
+        self.cases = list(cases or [])
 
 
 @dataclass
@@ -210,7 +213,10 @@ def _verdict(v: Any) -> dict[str, Any]:
     if isinstance(v, Pass):
         return {"verdict": "pass"}
     if isinstance(v, Fail):
-        return {"verdict": "fail", "reasons": v.reasons, "detail": v.detail}
+        out = {"verdict": "fail", "reasons": v.reasons, "detail": v.detail}
+        if v.cases:
+            out["cases"] = v.cases
+        return out
     if isinstance(v, Blocked):
         return {"verdict": "blocked", "reason": v.reason}
     return {"verdict": "blocked", "reason": f"the check returned {type(v).__name__}, not Pass, Fail or Blocked"}

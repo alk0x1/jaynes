@@ -737,6 +737,17 @@ impl BlockedSaid {
     pub fn text(&self) -> String {
         let mut out = vec![self.title.clone(), self.what.clone(), self.why.clone()];
         out.extend(self.holds.clone());
+        if !self.cases.is_empty() {
+            out.push(if self.cases.len() == 1 { CASE_HEADING } else { CASES_HEADING }.into());
+            for c in &self.cases {
+                out.extend([c.says.clone(), c.written.clone(), c.ran.clone(), c.expected.clone(), c.got.clone()]);
+                out.extend(c.printed.iter().take(PRINTED_SHOWN).cloned());
+                if c.printed.len() > PRINTED_SHOWN {
+                    out.push(ALL_OF_IT.into());
+                }
+                out.push(c.failed_in.clone());
+            }
+        }
         if !self.agent_said.is_empty() {
             out.push(AGENT_SAID_HEADING.into());
             out.extend(self.agent_said.iter().cloned());
@@ -787,11 +798,64 @@ pub fn blocked(home: &Path, r: &Run) -> Option<BlockedSaid> {
     if let Some(s) = step {
         said.agent_said = agent_said(home, &r.id, s);
     }
+    // a hidden case failed at the last attempt: the person sees it, as the agent never does
+    if let (Some(s), jaynes_core::event::Fault::Agent) = (step, fault)
+        && reason.contains(HIDDEN_FAILED)
+        && let Some(i) = r.manifest.index(s)
+    {
+        let (attempt, spent) = (r.steps[i].attempt, r.steps[i].spent);
+        let (cases, each) = cases_said(&home.join("runs").join(&r.id), s, attempt, spent);
+        if !cases.is_empty() {
+            let failed = if each { "Each time, a case the agent does not see failed." } else { "A case the agent does not see failed." };
+            said.why = format!("“{s}” used its {spent} attempts. {failed}");
+            said.cases = cases;
+        }
+    }
     // the engine keeps the change a check could not judge: Continue judges it again, the agent working no more
     if r.checks_again().is_some() {
         said = said.checks_again();
     }
     Some(said)
+}
+
+/// The words a hidden case that failed is told to the agent in, by the menu's check (jaynes_menu.py): the card
+/// finds such a block by them.
+const HIDDEN_FAILED: &str = "A check you cannot see found that this does not hold: ";
+
+/// The hidden cases that failed at `attempt` of `step`, the last of the `spent` attempts of the block, each with the
+/// number of those attempts it failed in; and whether every one of them failed at a hidden case. None at all when
+/// the engine kept none for `attempt`.
+fn cases_said(run_dir: &Path, step: &str, attempt: u32, spent: u32) -> (Vec<CaseSaid>, bool) {
+    let read = |n: u32| -> Option<(String, Vec<jaynes_core::FailedCase>)> {
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(failed_cases_file(run_dir, step, n)).ok()?).ok()?;
+        Some((v["at"].as_str().unwrap_or_default().to_string(), serde_json::from_value(v["cases"].clone()).ok()?))
+    };
+    let Some((at, last)) = read(attempt) else { return (Vec::new(), false) };
+    let window: Vec<Vec<jaynes_core::FailedCase>> = (attempt.saturating_sub(spent.max(1)) + 1..=attempt).filter_map(read).map(|(_, c)| c).collect();
+    let each = window.len() as u32 == spent.max(1);
+    let line = |l: &str| {
+        let l = one_line(l);
+        if l.chars().count() > 400 { format!("{}…", l.chars().take(399).collect::<String>()) } else { l }
+    };
+    let mut out: Vec<CaseSaid> = Vec::new();
+    let mut seen = Vec::new();
+    for c in &last {
+        if seen.contains(&(&c.says, &c.run)) {
+            continue;
+        }
+        seen.push((&c.says, &c.run));
+        let failed = window.iter().filter(|w| w.iter().any(|x| x.says == c.says && x.run == c.run)).count();
+        out.push(CaseSaid {
+            says: format!("“{}”", one_line(&c.says)),
+            written: if at.is_empty() { "Written by an agent.".into() } else { format!("Written at “{at}”, by the agent there.") },
+            ran: format!("Ran: `{}`", one_line(&c.run)),
+            expected: "Expected: exit 0.".into(),
+            got: format!("Got: exit {}.", c.code),
+            printed: c.printed.lines().map(line).filter(|l| !l.is_empty()).collect(),
+            failed_in: format!("Failed in {failed} of {} attempts.", spent.max(1)),
+        });
+    }
+    (out, each)
 }
 
 /// What the agent said last at a step of a run, from its transcripts: its last message, never a tool's line, in at
@@ -1601,13 +1665,16 @@ mod blocked_tests {
     fn the_words_the_card_reads_are_the_ones_the_box_check_writes() {
         // jaynes_menu.py says why the box kept a check from judging; the card finds its parts by these words
         let menu = include_str!("../../../python/jaynes_menu.py");
-        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS] {
+        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED] {
             assert!(menu.contains(words.trim_start()), "jaynes_menu.py no longer says {words:?}");
         }
     }
 
+    /// A hidden case as a test writes it: what it says, what it runs, the code it exited with, what it printed.
+    type Case<'a> = (&'a str, &'a str, i32, &'a str);
+
     /// A home whose run `r1` kept, for step `change`, the hidden cases that failed at each of `attempts`.
-    fn failed_cases(name: &str, attempts: &[(u32, &[(&str, &str, i32, &str)])]) -> std::path::PathBuf {
+    fn failed_cases(name: &str, attempts: &[(u32, &[Case])]) -> std::path::PathBuf {
         let home = std::env::temp_dir().join(format!("jaynes-cases-{name}-{}", std::process::id()));
         let _gone = std::fs::remove_dir_all(&home);
         for (attempt, cases) in attempts {

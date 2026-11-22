@@ -1230,6 +1230,7 @@ impl<'a> Driver<'a> {
             }
             Command::RunChecks { step, attempt, fix, output, given, checks } => {
                 let results = self.checks(run, &step, &output, &given, &checks);
+                let results = self.keep_failed_cases(run, &step, attempt, results);
                 Some(Input::ChecksEnded { step, attempt, fix, results })
             }
             Command::Ask { question } => {
@@ -1809,6 +1810,45 @@ impl<'a> Driver<'a> {
             Ok(other) => AttemptOutcome::Fault { reason: format!("the role answered execute with {other:?}") },
         };
         end(outcome)
+    }
+
+    /// The hidden cases that failed, kept for the person's card in the run's folder, which no agent reads, and taken
+    /// out of what goes on to the core: the agent is told only each case's sentence (G3).
+    fn keep_failed_cases(&self, run: &Run, step: &str, attempt: u32, results: Vec<CheckResult>) -> Vec<CheckResult> {
+        let decl = run.manifest.index(step).map(|i| &run.manifest.steps[i]);
+        let mut failed = Vec::new();
+        let mut at = String::new();
+        let results = results
+            .into_iter()
+            .map(|mut r| {
+                if let CheckVerdict::Fail { cases, .. } = &mut r.verdict
+                    && !cases.is_empty()
+                {
+                    let check = decl.and_then(|d| d.checks.iter().find(|c| c.name == r.check));
+                    if check.is_some_and(|c| c.kind == jaynes_core::manifest::CheckKind::Hidden) {
+                        // the hidden step that wrote the cases, among those the check reads
+                        if at.is_empty() {
+                            at = check
+                                .into_iter()
+                                .flat_map(|c| c.reads.iter())
+                                .find(|n| run.manifest.index(n).is_some_and(|j| run.manifest.steps[j].hidden))
+                                .cloned()
+                                .unwrap_or_default();
+                        }
+                        failed.append(cases);
+                    } else {
+                        cases.clear();
+                    }
+                }
+                r
+            })
+            .collect();
+        if !failed.is_empty()
+            && let Err(e) = crate::listing::keep_failed_cases(&self.setup.dir, step, attempt, &at, &failed)
+        {
+            say(&format!("  could not keep the hidden cases that failed for the person: {e}"));
+        }
+        results
     }
 
     fn checks(&self, run: &Run, step: &str, output: &Digest, given: &[Read], checks: &[String]) -> Vec<CheckResult> {

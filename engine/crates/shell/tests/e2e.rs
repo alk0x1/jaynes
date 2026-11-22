@@ -1006,6 +1006,55 @@ fn fix_bug_proves_the_fix_with_cases_the_maker_never_sees() {
     assert_eq!(String::from_utf8_lossy(&shown.stdout), "echo \"hi $1\"\n");
 }
 
+// The real-user, 22/11 (r1795330821-771): "O cartão do bloqueio diz só "A check you cannot see found that this does
+// not hold". A pessoa não vê o caso". A fix that never passes its hidden case blocks the run, and the card shows the
+// person that case, as the check ran it, while no prompt of the agent that fixes ever held its command (G3).
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_a_run_blocked_by_a_hidden_case_shows_the_person_the_case_and_never_the_agent() {
+    let s = bug_project("neverright");
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let role = root().join("crates/shell/tests/roles/fix-bug");
+    let out = jaynes()
+        .args(["start", "--run", "neverright", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+               "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("PROMPTS", &prompts)
+        .env("NEVER_RIGHT", "1")
+        .output()
+        .expect("start");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    // the run as the app reads it, and its card as the app lays it out
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("neverright").expect("state").unwrap_or_else(|| panic!("no run:\n{said}"));
+    let b = jaynes_shell::listing::blocked(&s.home, &run).unwrap_or_else(|| panic!("not blocked: {:?}\n{said}", run.phase));
+    assert_eq!(b.why, "“fix” used its 3 attempts. Each time, a case the agent does not see failed.", "{said}");
+    assert_eq!(b.cases.len(), 1, "{:?}", b.cases);
+    let c = &b.cases[0];
+    assert_eq!(c.says, "“greet says hi with the name”");
+    assert_eq!(c.written, "Written at “cases”, by the agent there.");
+    assert_eq!(c.ran, "Ran: `sh greet.sh ana | grep -q \"hi ana\"`");
+    assert_eq!((c.expected.as_str(), c.got.as_str(), c.failed_in.as_str()), ("Expected: exit 0.", "Got: exit 1.", "Failed in 3 of 3 attempts."));
+    assert!(b.text().contains("Ran: `sh greet.sh ana | grep -q \"hi ana\"`"), "{}", b.text());
+    // kept in the run's folder, beside the folders an agent's step works in
+    assert!(s.home.join("runs/neverright/cases/fix/attempt-3.json").is_file());
+    // G3: the agent that fixes was told the case's sentence and never its command
+    let mut told = 0;
+    for f in std::fs::read_dir(&prompts).expect("prompts").flatten() {
+        let p = std::fs::read_to_string(f.path()).expect("read");
+        if p.contains("# Your step: cases") {
+            continue;
+        }
+        assert!(!p.contains("grep -q") && !p.contains("Ran: `"), "a prompt leaked the hidden case:\n{p}");
+        told += usize::from(p.contains("# Your step: fix") && p.contains("greet says hi with the name"));
+    }
+    assert!(told >= 2, "the fixes after the first were told the case's sentence");
+}
+
 fn http(port: u16, raw: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");

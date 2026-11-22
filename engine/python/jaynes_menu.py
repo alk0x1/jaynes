@@ -749,10 +749,12 @@ CASE_SECONDS = 120.0
 
 def hidden_cases_pass(call: Call, params: Params) -> Any:
     """The cases a hidden step wrote (``cases``: ``says`` and ``run``) hold on the changed project. A failure tells
-    the maker only the case's sentence; the person sees each case's result."""
+    the maker only the case's sentence; the person sees each case's result, and each case that failed in full: what
+    it says, what it ran, the code it exited with and the end of what it printed."""
     cases = (_given(call).get(str(params.get("cases_step") or "")) or {}).get("cases") or []
     failed: list[str] = []
     detail: list[str] = []
+    shown: list[dict[str, Any]] = []
     for case in cases:
         says, command = str(case.get("says", "")), str(case.get("run", ""))
         if expands(command, URL):
@@ -764,8 +766,9 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
         detail.append(f"{'Passes' if ran.code == 0 else 'Fails'}: {says}")
         if ran.code != 0:
             failed.append(f"A check you cannot see found that this does not hold: {says}")
+            shown.append({"says": says, "run": command, "code": ran.code, "printed": ran.output})
     if failed:
-        return Fail(*failed, detail="\n".join(detail))
+        return Fail(*failed, detail="\n".join(detail), cases=shown)
     if cases and not any(d.startswith(("Passes", "Fails")) for d in detail):
         # cases written and none run: nothing was checked, and nothing checked is not passing
         return Fail(f"A check you cannot see could run none of its cases: each needs the app at {URL}, and this run "
