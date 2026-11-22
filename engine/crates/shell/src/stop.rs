@@ -151,7 +151,10 @@ pub fn still_redoes(run: &Run, q: &jaynes_core::question::Question) -> String {
             back: BTreeMap::new(),
         }
     };
-    let said: Vec<(String, Vec<String>)> = q.offered.iter().map(|&v| (label_for(v, q.kind).to_string(), jaynes_core::effects(run, q, &every(v)).reruns)).collect();
+    // each answer by the word its button says: the role's at a stop of its own, Jaynes's otherwise (Stop::label)
+    let words = role_words(run, q);
+    let label = |v: VerdictKind| words.get(&v).cloned().unwrap_or_else(|| label_for(v, q.kind).to_string());
+    let said: Vec<(String, Vec<String>)> = q.offered.iter().map(|&v| (label(v), jaynes_core::effects(run, q, &every(v)).reruns)).collect();
     still_sentence(&said)
 }
 
@@ -441,6 +444,21 @@ mod tests {
         let held = went_on_from_reproduce(true);
         assert_eq!(waiting(&home, &held).map(|s| (s.step, s.passed)), Some(("reproduce".to_string(), None)));
         assert!(super::passed(&home, &held).is_empty());
+    }
+
+    // A passed stop says what an answer still does with the words its buttons say: the role's, where it names them
+    // (fix-bug's "Yes" and "No, it's something else"), never Jaynes's "Redo" beside a button that says otherwise
+    #[test]
+    fn a_passed_stop_says_what_an_answer_still_does_in_the_role_s_words() {
+        let home = std::env::temp_dir().join(format!("jaynes-stop-passed-words-{}", std::process::id()));
+        let mut r = went_on_from_reproduce(false);
+        let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
+            verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Default::default(), release: false, budget: None,
+            audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers,
+        });
+        let p = passed(&home, &r)[0].passed.clone().expect("it says the run went on");
+        assert_eq!(p.still, "“No, it's something else” would do “reproduce” again. “Yes” changes nothing.");
     }
 
     #[test]
