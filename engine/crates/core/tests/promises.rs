@@ -237,3 +237,60 @@ fn a_named_option_is_still_kept_by_the_person_s_touch_before_the_merge() {
     let proofs = prove(&m, &[p]);
     assert!(matches!(proofs[0], Proof::Proved { .. }), "{proofs:?}");
 }
+
+/// screen-layouts with a device first: the device holds unless the request named it, then layouts, a review that
+/// chooses and sends layouts back, and the screen built from the choice.
+fn layouts_after_a_device(unless_named: bool) -> Manifest {
+    let mut device = step("device", Executor::Agent, &[]);
+    device.attempts = 1;
+    device.checks = vec![open("device-said")];
+    device.stop = Some(StopDecl {
+        verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
+        choose: true,
+        holds_unless: unless_named.then(|| "named".into()),
+        vouched_by: unless_named.then(|| "device-said".into()),
+        ..stop(Risk::Low, true)
+    });
+    let mut layouts = step("layouts", Executor::Agent, &["device"]);
+    layouts.reach = Reach { project: ProjectAccess::Write, write: vec!["design/**".into()], ..Reach::default() };
+    layouts.checks = vec![open("pages")];
+    let mut review = step("review", Executor::Agent, &["layouts"]);
+    review.stop = Some(StopDecl {
+        verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
+        choose: true,
+        redo: Some("layouts".into()),
+        ..stop(Risk::Low, true)
+    });
+    let mut implement = step("implement", Executor::Agent, &["review"]);
+    implement.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], commands: true, ..Reach::default() };
+    implement.checks = vec![open("tests")];
+    Manifest { role: "screen-layouts".into(), version: "1.0.0".into(), protocol: 1, steps: vec![device, layouts, review, implement], target: Default::default(), delivery: DeliveryKind::Merge }
+}
+
+#[test]
+fn a_stop_the_run_may_go_on_past_does_not_multiply_the_search_of_the_steps_after_it() {
+    let says = |m: &Manifest| {
+        vec![
+            promise("Only the layout you chose is built", Form::OnlyAfter {
+                on: On::parse("step implement starts", m).expect("event"),
+                after: Condition::parse("person answered at review", m).expect("condition"),
+            }),
+            promise("Nothing is merged before you chose a layout", Form::Never {
+                on: On::parse("merge", m).expect("event"),
+                unless: Condition::parse("person answered at review", m).expect("condition"),
+            }),
+        ]
+    };
+    let states = |m: &Manifest| match prove(m, &says(m)).as_slice() {
+        [Proof::Proved { states }, Proof::Proved { .. }] => *states,
+        other => panic!("{other:?}"),
+    };
+    let held = layouts_after_a_device(false);
+    let named = layouts_after_a_device(true);
+    named.validate().expect("the role is valid");
+    let (a, b) = (states(&held), states(&named));
+    // a person who sends back a stop the run went past does it at the first pause or at the merge, as the run's one
+    // mishap: without those bounds the named device made the search more than 40 times as large (1,199,443 states
+    // against 27,120); with them, 397,708
+    assert!(b < a * 16, "the device that lets the run go on took {b} states, the one that holds {a}");
+}
