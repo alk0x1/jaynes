@@ -956,6 +956,155 @@ fn a_halt_stops_the_agent_at_once_and_its_attempt_is_not_spent() {
     assert!(t.contains(&"Resumed".to_string()) && !t.contains(&"AttemptFailed".to_string()), "{t:?}");
 }
 
+/// The real-user's identity run, 22/11: a command outside Jaynes sent its `jaynes start` a SIGTERM, the start died
+/// without a word and its agent went on working (and spending) for minutes, while the run said "running" with
+/// nobody driving it. A start stopped by a signal does what a halt does: it stops its agent, records the halt as
+/// Jaynes's own ("Jaynes stopped while it ran"), and the person resumes it.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_a_start_stopped_by_a_signal_stops_its_agent_and_says_jaynes_stopped_while_it_ran() {
+    use std::io::Read;
+    for sig in ["TERM", "INT"] {
+        let s = scratch(&format!("signal-{sig}"));
+        let role = root().join("crates/shell/tests/roles/small-change");
+        let mark = s.base.join("agent-at-work");
+        // the first turn works on as the real agent did, deaf to the pipe that broke; the one after the resume is quick
+        let agent = format!(
+            "if [ -s {m} ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else trap '' PIPE; echo $$ > {m}; exec sleep 60; fi",
+            m = mark.display()
+        );
+        // the start this test made, and its stand-in agent, end with the test however it ends: only their own pids
+        struct Ends(std::process::Child, PathBuf);
+        impl Drop for Ends {
+            fn drop(&mut self) {
+                let _gone = self.0.kill();
+                let _ended = self.0.wait();
+                if let Some(pid) = std::fs::read_to_string(&self.1).ok().and_then(|p| p.trim().parse::<u32>().ok()) {
+                    let _gone = Command::new("kill").args(["-KILL", &pid.to_string()]).stderr(std::process::Stdio::null()).status();
+                }
+            }
+        }
+        let started = jaynes()
+            .args(["start", "--run", "stopped", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("start");
+        let mut started = Ends(started, mark.clone());
+        let waiting = std::time::Instant::now();
+        let agent_pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&mark).ok().and_then(|p| p.trim().parse::<u32>().ok()) {
+                break pid;
+            }
+            if let Ok(Some(_)) = started.0.try_wait() {
+                panic!("{sig}: the run ended before its agent started: {:?}", types(&events(&s, "stopped")));
+            }
+            assert!(waiting.elapsed() < std::time::Duration::from_secs(60), "{sig}: the agent never started");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        let sent = std::time::Instant::now();
+        assert!(Command::new("kill").args([&format!("-{sig}"), &started.0.id().to_string()]).status().expect("kill").success());
+        let status = started.0.wait().expect("wait");
+        let mut said = String::new();
+        for pipe in [started.0.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read>), started.0.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read>)].into_iter().flatten() {
+            let mut pipe = pipe;
+            let _read = pipe.read_to_string(&mut said);
+        }
+        assert!(sent.elapsed() < std::time::Duration::from_secs(10), "{sig}: the start went on after the signal: {:?}\n{said}", sent.elapsed());
+        // its agent does not outlive it
+        let alive = || Command::new("kill").args(["-0", &agent_pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        assert!(!alive(), "{sig}: the agent went on working after its start was stopped\n{said}");
+        assert_ne!(status.code(), Some(0), "{sig}: a start stopped by a signal says so in how it ends\n{said}");
+        // the record says Jaynes stopped it, as a halt of Jaynes's own: no attempt spent
+        let e = events(&s, "stopped");
+        let t = types(&e);
+        assert!(t.contains(&"Halted".to_string()), "{sig}: {t:?}\n{said}");
+        let halted = e.iter().find(|e| e["type"] == "Halted").expect("halted").to_string();
+        assert!(halted.contains("jaynes-was-stopped"), "{sig}: {halted}");
+        assert!(e.iter().any(|e| e["type"] == "AttemptInterrupted" && e["reason"] == "Jaynes stopped while it ran"), "{sig}: {t:?}");
+        assert!(!t.contains(&"AttemptFailed".to_string()), "{sig}: a stop spends no attempt: {t:?}");
+        // `jaynes runs` says it in those words, never "running" with nobody driving it
+        let (ok, listed) = engine(&s, &["runs"]);
+        assert!(ok, "{listed}");
+        let line = listed.lines().find(|l| l.starts_with("stopped ")).unwrap_or_else(|| panic!("no run in {listed}")).to_string();
+        assert!(line.contains("Jaynes stopped while it ran") && !line.contains("running"), "{sig}: {line}");
+        // and the person resumes it, at a terminal, where it goes on to the end
+        let out = tty()
+            .args([BIN, "resume", "stopped"])
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .output()
+            .expect("resume");
+        let out = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.contains("finished: delivered"), "{sig}: {out}");
+    }
+}
+
+/// A start killed outright (a SIGKILL, which no process can answer) leaves its run saying "running" with nobody
+/// driving it: whoever reads the run says "Jaynes stopped while it ran", and the person resumes it from there, without
+/// halting it first.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_a_run_whose_process_is_gone_says_jaynes_stopped_while_it_ran_and_resumes() {
+    let s = scratch("killed");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let mark = s.base.join("agent-at-work");
+    let agent = format!(
+        "if [ -s {m} ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else trap '' PIPE; echo $$ > {m}; exec sleep 60; fi",
+        m = mark.display()
+    );
+    struct Ends(std::process::Child, PathBuf);
+    impl Drop for Ends {
+        fn drop(&mut self) {
+            let _gone = self.0.kill();
+            let _ended = self.0.wait();
+            if let Some(pid) = std::fs::read_to_string(&self.1).ok().and_then(|p| p.trim().parse::<u32>().ok()) {
+                let _gone = Command::new("kill").args(["-KILL", &pid.to_string()]).stderr(std::process::Stdio::null()).status();
+            }
+        }
+    }
+    let started = jaynes()
+        .args(["start", "--run", "killed", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start");
+    let mut started = Ends(started, mark.clone());
+    let waiting = std::time::Instant::now();
+    while !std::fs::read_to_string(&mark).is_ok_and(|p| !p.trim().is_empty()) {
+        assert!(waiting.elapsed() < std::time::Duration::from_secs(60), "the agent never started: {:?}", types(&events(&s, "killed")));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let line = |s: &Scratch| -> String {
+        let (ok, listed) = engine(s, &["runs"]);
+        assert!(ok, "{listed}");
+        listed.lines().find(|l| l.starts_with("killed ")).unwrap_or_else(|| panic!("no run in {listed}")).to_string()
+    };
+    // while its process lives, it works
+    let working = line(&s);
+    assert!(working.contains("  working · step ") && working.contains("running"), "{working}");
+    let _killed = started.0.kill();
+    let _ended = started.0.wait();
+    let gone = line(&s);
+    assert!(gone.contains("Jaynes stopped while it ran") && !gone.contains("running"), "{gone}");
+    let rows = jaynes_shell::listing::read(&s.home).expect("listing");
+    let row = rows.needs.iter().chain(rows.projects.iter().flat_map(|(_, r)| r)).find(|r| r.id == "killed").expect("row");
+    assert_eq!(row.mark, jaynes_shell::listing::Mark::Halted, "{row:?}");
+    // the person resumes it as it stands: the record says Jaynes stopped it, then that they resumed it
+    let out = tty()
+        .args([BIN, "resume", "killed"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .output()
+        .expect("resume");
+    let out = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.contains("finished: delivered"), "{out}");
+    let e = events(&s, "killed");
+    let halted = e.iter().find(|e| e["type"] == "Halted").map(|h| h.to_string()).unwrap_or_default();
+    assert!(halted.contains("jaynes-was-stopped"), "{:?}", types(&e));
+    assert!(types(&e).contains(&"Resumed".to_string()) && !types(&e).contains(&"AttemptFailed".to_string()), "{:?}", types(&e));
+}
+
 fn bug_project(name: &str) -> Scratch {
     let s = scratch(name);
     std::fs::write(s.project.join("greet.sh"), "echo \"hello $1\"\n").expect("write");
