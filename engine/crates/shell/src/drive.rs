@@ -2552,6 +2552,7 @@ mod tests {
             choose: true,
             redo: None,
             rounds: None,
+            answers: Default::default(),
         });
         let manifest = Manifest { role: "greenfield".into(), version: "1".into(), protocol: 1, steps: vec![stack], target: Default::default(), delivery: Default::default() };
         let start = jaynes_core::decide(None, &Input::Start {
