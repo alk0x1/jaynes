@@ -11,6 +11,8 @@ use gpui::*;
 pub enum Span {
     Plain(String),
     Bold(String),
+    /// "*a word*": leaning, as the agent meant it.
+    Leaning(String),
     Code(String),
 }
 
@@ -36,7 +38,7 @@ pub fn blocks(md: &str) -> Vec<Block> {
             Block::Title(spans(r))
         } else if let Some(r) = t.strip_prefix("### ") {
             Block::Heading(spans(r))
-        } else if let Some(r) = t.strip_prefix("- ") {
+        } else if let Some(r) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
             Block::Item("•".into(), spans(r))
         } else if let Some((n, r)) = numbered(t) {
             Block::Item(format!("{n}."), spans(r))
@@ -89,11 +91,36 @@ pub fn spans(line: &str) -> Vec<Span> {
             rest = &after[end + 2..];
             continue;
         }
+        // "*leaning*": a star with a word right after it, closed by a star right after a word; a lone star is text
+        if let Some(after) = rest.strip_prefix('*')
+            && after.starts_with(|c: char| !c.is_whitespace() && c != '*')
+            && let Some(end) = after.find('*').filter(|&e| !after[..e].ends_with(char::is_whitespace))
+        {
+            flush(&mut plain, &mut out);
+            out.push(Span::Leaning(after[..end].to_owned()));
+            rest = &after[end + 1..];
+            continue;
+        }
         plain.push(c);
         rest = &rest[c.len_utf8()..];
     }
     flush(&mut plain, &mut out);
     out
+}
+
+/// The words alone, without their marks: a line each, an item after its mark ("• "), one empty line between parts.
+/// For a line cut to one, where drawing the parts would not fit.
+pub fn plain(md: &str) -> String {
+    let words = |s: &[Span]| s.iter().map(|p| match p { Span::Plain(t) | Span::Bold(t) | Span::Leaning(t) | Span::Code(t) => t.as_str() }).collect::<String>();
+    blocks(md)
+        .iter()
+        .map(|b| match b {
+            Block::Title(s) | Block::Heading(s) | Block::Line(s) => words(s),
+            Block::Item(mark, s) => format!("{mark} {}", words(s)),
+            Block::Gap => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A line's pieces as text in the app's fonts: bold in the interface's, code in the mono one on a faint ground.
@@ -104,6 +131,7 @@ fn styled(spans: &[Span], colour: u32, weight: FontWeight) -> StyledText {
         let (s, font) = match span {
             Span::Plain(s) => (s, Font { weight, ..font(look::UI_FONT) }),
             Span::Bold(s) => (s, Font { weight: FontWeight::SEMIBOLD, ..font(look::UI_FONT) }),
+            Span::Leaning(s) => (s, Font { weight, style: FontStyle::Italic, ..font(look::UI_FONT) }),
             Span::Code(s) => (s, font(look::MONO_FONT)),
         };
         text.push_str(s);
@@ -115,7 +143,18 @@ fn styled(spans: &[Span], colour: u32, weight: FontWeight) -> StyledText {
 
 /// The summary as the app draws it.
 pub fn draw(md: &str) -> Div {
-    let mut out = div().flex().flex_col().text_size(px(13.)).line_height(px(20.));
+    drawn(md, look::dim(), 8.).text_size(px(13.)).line_height(px(20.))
+}
+
+/// An agent's words to the person (its reply.md, an answer) as what they mean, at the size around them: Markdown's
+/// marks drawn, never shown.
+pub fn said(md: &str) -> Div {
+    drawn(md, look::text(), 6.)
+}
+
+/// The parts, one under the other: lines in `words`, `gap` between parts.
+fn drawn(md: &str, words: u32, gap: f32) -> Div {
+    let mut out = div().flex().flex_col();
     for block in blocks(md) {
         out = out.child(match block {
             Block::Title(s) => div().text_size(px(15.)).line_height(px(22.)).child(styled(&s, look::text(), FontWeight::SEMIBOLD)),
@@ -124,9 +163,9 @@ pub fn draw(md: &str) -> Div {
                 .flex()
                 .gap(px(6.))
                 .child(div().flex_none().min_w(px(16.)).text_color(rgb(look::faint())).child(mark))
-                .child(div().flex_1().min_w_0().child(styled(&s, look::dim(), FontWeight::NORMAL))),
-            Block::Line(s) => div().child(styled(&s, look::dim(), FontWeight::NORMAL)),
-            Block::Gap => div().h(px(8.)),
+                .child(div().flex_1().min_w_0().child(styled(&s, words, FontWeight::NORMAL))),
+            Block::Line(s) => div().child(styled(&s, words, FontWeight::NORMAL)),
+            Block::Gap => div().h(px(gap)),
         });
     }
     out
@@ -174,5 +213,33 @@ mod tests {
         assert_eq!(blocks("2026. A year")[0], Block::Line(vec![plain("2026. A year")]));
         // nothing but empty lines draws nothing
         assert!(blocks("\n\n  \n").is_empty());
+    }
+
+    /// Alan's tester at identity (22/11): the Design Director's words came with Markdown's marks in them,
+    /// "**Cortiça** é bilhete preso na geladeira". An agent's words are drawn as what they mean: bold as bold, a
+    /// leaning word as leaning, a list as a list, never their asterisks; a line cut to one shows the words alone.
+    #[test]
+    fn asked_an_agent_s_words_show_no_markdown_marks() {
+        let reply = "Avaliei as três propostas.\n\n**Cortiça** é bilhete preso na geladeira. O risco é *o azul*.\n\n- **Lousa:** a lousinha de giz\n- **Barro**: o filtro";
+        assert_eq!(
+            blocks(reply),
+            [
+                Block::Line(vec![plain_("Avaliei as três propostas.")]),
+                Block::Gap,
+                Block::Line(vec![Span::Bold("Cortiça".into()), plain_(" é bilhete preso na geladeira. O risco é "), Span::Leaning("o azul".into()), plain_(".")]),
+                Block::Gap,
+                Block::Item("•".into(), vec![Span::Bold("Lousa:".into()), plain_(" a lousinha de giz")]),
+                Block::Item("•".into(), vec![Span::Bold("Barro".into()), plain_(": o filtro")]),
+            ]
+        );
+        assert_eq!(super::plain(reply), "Avaliei as três propostas.\n\nCortiça é bilhete preso na geladeira. O risco é o azul.\n\n• Lousa: a lousinha de giz\n• Barro: o filtro");
+        // a lone star is text: arithmetic, a footnote, a list mark the agent wrote with "* "
+        assert_eq!(spans("2 * 3 * 4"), [plain_("2 * 3 * 4")]);
+        assert_eq!(spans("nota*"), [plain_("nota*")]);
+        assert_eq!(blocks("* um item")[0], Block::Item("•".into(), vec![plain_("um item")]));
+    }
+
+    fn plain_(s: &str) -> Span {
+        Span::Plain(s.into())
     }
 }
