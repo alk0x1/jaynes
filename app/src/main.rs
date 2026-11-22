@@ -759,9 +759,10 @@ impl Root {
             let controls = self.controls_row(cx);
             return Some(tabs::halted_block(&title, controls));
         }
-        let (said, last) = self.tabs.read(cx).blocked()?;
+        let (said, details_open) = self.tabs.read(cx).blocked()?;
         let controls = self.controls_row(cx);
-        Some(tabs::blocked_block(&said, &last, controls))
+        let tabs = self.tabs.clone();
+        Some(tabs::blocked_block(&said, details_open, controls, move |_, cx| tabs.update(cx, |t, cx| t.flip_details(cx))))
     }
 
     /// The open run's controls in a row.

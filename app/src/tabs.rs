@@ -13,14 +13,8 @@ use jaynes_shell::listing::{Listing, Mark, Row};
 use std::collections::HashMap;
 use std::time::Duration;
 
-pub use jaynes_shell::listing::{BlockedSaid, blocked_said, halted_said};
-
-/// The last lines the agent said at `step`, where it was blocked: at most six, from the story's latest time there.
-pub fn last_said(story: &[(String, Vec<String>)], step: Option<&str>) -> Vec<String> {
-    let Some(step) = step else { return Vec::new() };
-    let said = story.iter().rev().find(|(s, _)| s == step).map(|(_, said)| said.as_slice()).unwrap_or_default();
-    said[said.len().saturating_sub(6)..].to_vec()
-}
+pub use jaynes_shell::listing::{BlockedSaid, halted_said};
+use jaynes_shell::listing::{AGENT_SAID_HEADING, DETAILS_CLOSED, DETAILS_OPEN, STILL_OPEN_HEADING, WAYS_HEADING};
 
 /// The note on a run's tab, only while its agent works or the run waits for the person: none once it is finished,
 /// halted (nothing works on it until resumed) or blocked (Jaynes stopped it).
@@ -56,8 +50,77 @@ pub fn halted_block(title: &str, controls: Option<Div>) -> Div {
         .when_some(controls, |d, c| d.child(div().pt(px(4.)).child(c)))
 }
 
-/// The red block at the top of a blocked run's tab: where and why, the agent's last lines, and the run's controls.
-pub fn blocked_block(said: &BlockedSaid, last: &[String], controls: Option<Div>) -> Div {
+/// A line of a blocked run's card, top to bottom as it is drawn (design 0.2.5, bloqueada.md).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Part {
+    /// "Blocked at “change”".
+    Title(String),
+    /// What happened, said first.
+    What(String),
+    /// Why, in the person's words, and what the run keeps after it.
+    Why(String),
+    /// "The agent said", "What you can do", "Still open while the tests run:".
+    Heading(&'static str),
+    /// The agent's own words at the step, never a tool's line.
+    Said(String),
+    /// A way out, the best first, and under it what follows, its command (with Copy) and what it leaves open.
+    Way(String),
+    Then(String),
+    Command(String),
+    StillOpen(String),
+    /// Continue and Abandon.
+    Controls,
+    /// What Continue does, under the buttons.
+    ContinueDoes(String),
+    /// That the run waits.
+    Waits(String),
+    /// The switch of the raw reason, closed or open, and its lines when open.
+    Details(&'static str),
+    Raw(String),
+}
+
+/// The parts of a blocked run's card, in order; the raw reason only while Details is open.
+pub fn card(said: &BlockedSaid, details_open: bool) -> Vec<Part> {
+    let mut parts = vec![Part::Title(said.title.clone()), Part::What(said.what.clone())];
+    let why = [said.why.as_str()].into_iter().chain(said.holds.as_deref()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+    if !why.is_empty() {
+        parts.push(Part::Why(why));
+    }
+    if !said.agent_said.is_empty() {
+        parts.push(Part::Heading(AGENT_SAID_HEADING));
+        parts.extend(said.agent_said.iter().cloned().map(Part::Said));
+    }
+    if !said.ways.is_empty() {
+        parts.push(Part::Heading(WAYS_HEADING));
+        for w in &said.ways {
+            parts.push(Part::Way(w.says.clone()));
+            parts.extend(w.then.clone().map(Part::Then));
+            parts.extend(w.command.clone().map(Part::Command));
+            if !w.still_open.is_empty() {
+                parts.push(Part::Heading(STILL_OPEN_HEADING));
+                parts.extend(w.still_open.iter().cloned().map(Part::StillOpen));
+            }
+        }
+    }
+    parts.push(Part::Controls);
+    parts.push(Part::ContinueDoes(said.continue_does.clone()));
+    parts.extend(said.waits.clone().map(Part::Waits));
+    if !said.details.is_empty() {
+        parts.push(Part::Details(if details_open { DETAILS_OPEN } else { DETAILS_CLOSED }));
+        if details_open {
+            parts.extend(said.details.iter().cloned().map(Part::Raw));
+        }
+    }
+    parts
+}
+
+/// The widest the ways out run, so a line never runs across the whole tab.
+const WAYS_WIDTH: f32 = 640.;
+
+/// The red block at the top of a blocked run's tab, drawn from its parts: what happened first, why, what the agent
+/// said, what the person can do, the run's controls and what Continue does, and the raw reason under Details, which
+/// `on_details` opens and closes.
+pub fn blocked_block(said: &BlockedSaid, details_open: bool, controls: Option<Div>, on_details: impl Fn(&mut Window, &mut App) + 'static) -> Div {
     let mut b = div()
         .mx(px(14.))
         .mt(px(12.))
@@ -71,27 +134,40 @@ pub fn blocked_block(said: &BlockedSaid, last: &[String], controls: Option<Div>)
         .font_family(look::UI_FONT)
         .flex()
         .flex_col()
-        .gap(px(6.))
-        .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(said.title.clone()))
-        .child(div().text_size(px(13.)).text_color(rgb(look::text())).child(said.what.clone()))
-        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child([said.why.as_str()].into_iter().chain(said.holds.as_deref()).collect::<Vec<_>>().join(" ")));
-    // the ways out, the best first, each with its command
-    for w in &said.ways {
-        b = b.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(w.says.clone()));
-        if let Some(c) = &w.command {
-            b = b.child(div().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::story())).child(c.clone()));
-        }
+        .gap(px(6.));
+    let mut controls = controls;
+    let mut on_details = Some(on_details);
+    let line = |size: f32, color: u32, text: String| div().text_size(px(size)).text_color(rgb(color)).child(text);
+    let way = |d: Div| d.max_w(px(WAYS_WIDTH));
+    for (i, part) in card(said, details_open).into_iter().enumerate() {
+        b = match part {
+            Part::Title(t) => b.child(line(13., look::text(), t).font_weight(FontWeight::SEMIBOLD)),
+            Part::What(t) => b.child(line(13., look::text(), t).font_weight(FontWeight::SEMIBOLD)),
+            Part::Why(t) => b.child(line(12.5, look::dim(), t)),
+            Part::Heading(h) => b.child(line(11.5, look::faint(), h.to_string()).pt(px(4.))),
+            Part::Said(t) => b.child(line(12.5, look::story(), t)),
+            Part::Way(t) => b.child(way(line(12.5, look::text(), t))),
+            Part::Then(t) => b.child(way(line(12.5, look::dim(), t).pl(px(12.)))),
+            Part::Command(c) => {
+                let copy = c.clone();
+                b.child(
+                    way(div().pl(px(12.)).flex().gap(px(8.)).items_center())
+                        .child(div().min_w_0().px(px(8.)).py(px(4.)).rounded(px(6.)).border_1().border_color(rgb(look::line_2())).bg(rgb(look::panel())).font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::story())).child(c))
+                        .child(crate::island::button(format!("copy-{i}"), "Copy", false, look::text()).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))),
+                )
+            }
+            Part::StillOpen(t) => b.child(way(line(12., look::faint(), format!("· {t}")).pl(px(12.)))),
+            Part::Controls => b.when_some(controls.take(), |d, c| d.child(div().pt(px(6.)).child(c))),
+            Part::ContinueDoes(t) => b.child(line(11.5, look::faint(), t)),
+            Part::Waits(t) => b.child(line(11.5, look::faint(), t)),
+            Part::Details(t) => match on_details.take() {
+                Some(f) => b.child(div().id("blocked-details").cursor_pointer().text_size(px(11.5)).text_color(rgb(look::faint())).child(t).on_click(move |_, window, cx| f(window, cx))),
+                None => b,
+            },
+            Part::Raw(t) => b.child(div().font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(18.)).text_color(rgb(look::faint())).child(t)),
+        };
     }
-    if !last.is_empty() {
-        let mut lines = div().flex().flex_col().font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(18.)).text_color(rgb(look::story()));
-        for l in last {
-            lines = lines.child(div().child(l.clone()));
-        }
-        b = b.child(div().pt(px(4.)).text_size(px(11.5)).text_color(rgb(look::faint())).child("Last thing the agent said")).child(lines);
-    }
-    // the controls, Continue first, and under them what Continue does
-    b.when_some(controls, |d, c| d.child(div().pt(px(6.)).child(c)))
-        .child(div().text_size(px(11.5)).text_color(rgb(look::faint())).child(said.continue_does.clone()))
+    b
 }
 
 /// What shows in the middle of the window, over the rest: what the keys follow, and the one place a run's own keys
@@ -157,6 +233,8 @@ pub struct Tabs {
     pub facts: Option<crate::run_actions::Facts>,
     /// Where and why the open run is blocked, read with its story; None when it is not.
     pub blocked: Option<BlockedSaid>,
+    /// The run whose blocked card shows its raw reason (Details open): only that run's.
+    details_open: Option<String>,
     /// When the summary was last copied: its button says Copied for a moment.
     copied_at: Option<std::time::Instant>,
     /// Where the story is scrolled; each step it tells is one of its children, so a step can be scrolled to.
@@ -187,7 +265,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, details_open: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -202,7 +280,7 @@ impl Tabs {
                 let run = crate::run_actions::read(&at);
                 let facts = run.as_ref().map(crate::run_actions::Facts::of);
                 let blocked = run.as_ref().and_then(|r| match &r.phase {
-                    jaynes_core::run::Phase::Blocked { step, fault, reason } => Some(blocked_said(step.as_deref(), *fault, reason)),
+                    jaynes_core::run::Phase::Blocked { .. } => jaynes_shell::listing::blocked(&home, r),
                     _ => None,
                 });
                 (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()), facts, blocked)
@@ -266,11 +344,16 @@ impl Tabs {
         Some(halted_said(&who, step.as_deref()))
     }
 
-    /// The open run's block when it is blocked: its words and the agent's last lines at that step.
-    pub fn blocked(&self) -> Option<(BlockedSaid, Vec<String>)> {
+    /// The open run's card when it is blocked, and whether its Details are open.
+    pub fn blocked(&self) -> Option<(BlockedSaid, bool)> {
         let said = self.blocked.clone()?;
-        let last = last_said(&self.story, said.step.as_deref());
-        Some((said, last))
+        Some((said, self.details_open.is_some() && self.details_open == self.open))
+    }
+
+    /// Opens or closes the raw reason of the open run's card; another run's opens closed.
+    pub fn flip_details(&mut self, cx: &mut Context<Self>) {
+        self.details_open = if self.details_open.is_some() && self.details_open == self.open { None } else { self.open.clone() };
+        cx.notify();
     }
 
     /// What shows in the middle now.
@@ -857,6 +940,55 @@ fn moved(order: &[Option<String>], key: &Option<String>, to: usize) -> Vec<Optio
 
 #[cfg(test)]
 mod tests {
+    // Alan, 21/11: "confuso pra caralho"
+    #[test]
+    fn asked_the_blocked_card_says_what_happened_first_and_the_raw_only_under_details() {
+        use super::{Part, card};
+        use jaynes_core::event::Fault;
+        // the reason his run kept: the box refused the suite's test server, on a port of its choosing
+        let panic = "panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]";
+        let reason = format!(
+            "the check suite-passes of change could not judge: the box refused what the command tried, so its failure says nothing about the project: {panic}; {panic}; {panic} It tried local port 0, a port of its own choosing. A check's commands bind and reach only the ports in JAYNES_PORTS (65520, 65521, 65522, 65523, 65524, 65525, 65526, 65527) and the ones the check names in its local_ports, never its step's. Two ways out, the first the better: (1) the suite takes its test servers' ports from JAYNES_PORTS, and the box stays closed; (2) the person opens this project with `jaynes project open-ports /Users/x/Projects/app`, and its checks then reach every service listening on this machine, the Jaynes page among them.. No attempt was spent"
+        );
+        let mut said = blocked_said(Some("change"), Fault::Jaynes, &reason);
+        said.agent_said = vec!["Done. The whole suite passes.".into()];
+        let closed = card(&said, false);
+        // what happened first, under the title, then why with what the run keeps
+        assert_eq!(closed[..3], [
+            Part::Title("Blocked at “change”".into()),
+            Part::What("The change is done. Jaynes could not check it.".into()),
+            Part::Why(format!("{} No attempt was used.", said.why)),
+        ]);
+        // the agent's words under their heading, then the ways out one a line, the best first, then the buttons, what
+        // Continue does, that the run waits, and Details closed last
+        let at = |p: &Part| closed.iter().position(|q| q == p).unwrap_or_else(|| panic!("no {p:?} in {closed:?}"));
+        let heads = [at(&Part::Heading("The agent said")), at(&Part::Said("Done. The whole suite passes.".into())), at(&Part::Heading("What you can do"))];
+        assert!(heads.windows(2).all(|w| w[0] < w[1]), "{closed:?}");
+        let ways: Vec<usize> = said.ways.iter().map(|w| at(&Part::Way(w.says.clone()))).collect();
+        assert!(ways.len() >= 2 && ways.windows(2).all(|w| w[0] < w[1]) && heads[2] < ways[0], "{closed:?}");
+        assert_eq!(said.ways.last().map(|w| w.says.as_str()), Some("Or abandon: the run ends and its change is not kept. Your project stays as it was."));
+        let tail = &closed[closed.len() - 4..];
+        assert_eq!(tail, [
+            Part::Controls,
+            Part::ContinueDoes(said.continue_does.clone()),
+            Part::Waits("The run waits here until you continue or abandon.".into()),
+            Part::Details("▸ Details"),
+        ]);
+        // nothing raw on the card while Details is closed: no panic, no box terms, never a tool's line
+        let shown = format!("{closed:?}");
+        for word in ["panic", "JAYNES_PORTS", "local_ports", "Last thing the agent said", "Bash"] {
+            assert!(!shown.contains(word), "{word} on the closed card: {shown}");
+        }
+        // Details open: the raw reason under it, the panic once
+        let open = card(&said, true);
+        let d = open.iter().position(|p| *p == Part::Details("▾ Details")).expect("Details open");
+        assert_eq!(open[d + 1..].iter().filter(|p| matches!(p, Part::Raw(r) if r.contains("panic"))).count(), 1);
+        assert!(open[d + 1..].iter().all(|p| matches!(p, Part::Raw(_))) && open.len() > d + 1);
+        // a cause with no ways out and no agent's words: no heading over nothing
+        let r = card(&blocked_said(None, Fault::Role, "nothing to deliver."), false);
+        assert!(!r.iter().any(|p| matches!(p, Part::Heading(_))), "{r:?}");
+    }
+
     #[test]
     fn a_blocked_run_says_at_which_step_why_in_words_and_what_continue_does() {
         let reason = "change spent its 3 attempts: the agent exited with code 1: boom; the agent exited with code 1: boom";
@@ -878,18 +1010,6 @@ mod tests {
         assert_eq!(blocked_said(Some("x"), Fault::Agent, "x spent its 3 attempts: Codex exited with None: ").why, "“x” used its 3 attempts. Codex was stopped by a signal, with no exit code.");
         // an attempts reason with no failure said is still a sentence
         assert_eq!(blocked_said(Some("fix"), Fault::Agent, "fix spent its 2 attempts: ").why, "“fix” used its 2 attempts.");
-    }
-
-    #[test]
-    fn the_last_lines_the_agent_said_at_the_blocked_step_are_at_most_six() {
-        let story = vec![
-            ("copy".to_string(), vec!["a".to_string()]),
-            ("change".to_string(), (1..=9).map(|i| format!("line {i}")).collect()),
-            ("other".to_string(), vec!["z".to_string()]),
-        ];
-        assert_eq!(last_said(&story, Some("change")), ["line 4", "line 5", "line 6", "line 7", "line 8", "line 9"]);
-        assert_eq!(last_said(&story, Some("copy")), ["a"]);
-        assert!(last_said(&story, Some("never")).is_empty() && last_said(&story, None).is_empty());
     }
 
     #[test]
@@ -935,7 +1055,8 @@ mod tests {
         }
     }
 
-    use super::{Middle, arrange, at, blocked_said, halted_said, in_role_order, last_said, middle_of, moved, note_for, space_tabs, tabbed};
+    use jaynes_shell::listing::blocked_said;
+    use super::{Middle, arrange, at, halted_said, in_role_order, middle_of, moved, note_for, space_tabs, tabbed};
     use jaynes_core::event::Fault;
     use crate::agents::{Agent, Space, State};
     use jaynes_shell::listing::{Listing, Mark, Row};
