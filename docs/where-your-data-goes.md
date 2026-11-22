@@ -103,7 +103,7 @@ names, from what the engine keeps and the other runs, and from the temporary fol
 when it ends. They reach none of this Mac's local ports but the ones the run reserved for them and the ones the step
 names and, where you let the project's
 tests start their own servers, the ports those servers get; only where you opened the project's ports do they reach
-every one, the Jaynes page's among them. Neither Safari nor any of the browsers named below starts there. Elsewhere Jaynes
+every one, the Jaynes page's among them. Neither Safari nor any of the browsers named below starts there. In this box and in the checks' box (below), Jaynes adds one small file of its own to node's start, after the project's own NODE_OPTIONS. It does one thing: when the box refuses a server's listen, it prints "Jaynes's box refused listen on" with the address, writes the same line to a file of the box that Jaynes reads, and ends that process, and Jaynes then ends the command. A refused server is reported at once, instead of leaving the tests waiting until their time runs out. Nothing else in the project's code changes. Elsewhere Jaynes
 sets these as the agent program's own guards, for each step, and these browsers' apps are hidden from the agent's
 commands, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp and Thorium do not start there. The agent's file tools are held by Claude Code's own rules:
 [what the engine guarantees](guarantees.md#what-this-page-does-not-promise) says how far they go.
