@@ -24,7 +24,7 @@ const LEFT_OUT_NAMED: usize = 20;
 
 /// git with nothing of its environment from outside: no GIT_DIR, GIT_CONFIG*, GIT_EXEC_PATH, GIT_ASKPASS or any other
 /// variable that would point it at another repository, configuration or program.
-fn git_command() -> Command {
+pub(crate) fn git_command() -> Command {
     let mut c = Command::new("git");
     for (k, _) in std::env::vars_os() {
         if k.to_string_lossy().starts_with("GIT_") {
@@ -83,6 +83,13 @@ pub fn left_by_runs(source: &Path) -> Vec<String> {
 /// What a step changed between two of the copy's states, as git shows it, through the engine's repository.
 pub fn diff(copy: &Path, from: &str, to: &str) -> Option<String> {
     git_on(&git_dir(copy), copy, &["diff", "--no-color", "--no-ext-diff", "--no-textconv", from, to]).ok().map(|d| d + "\n")
+}
+
+/// [`diff`] of only the files `paths`.
+pub fn diff_paths(copy: &Path, from: &str, to: &str, paths: &[&str]) -> Option<String> {
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", from, to, "--"];
+    args.extend_from_slice(paths);
+    git_on(&git_dir(copy), copy, &args).ok().map(|d| d + "\n")
 }
 
 /// Every .git, folder or file, below the copy's top that an agent left: a repository nested in the copy would have the

@@ -126,7 +126,7 @@ pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
         run: run.id.clone(),
         question: q.question.id.clone(),
         shown: q.question.shown().0,
-        title: if merge { format!("Merge into “{}”?", if into.is_empty() { "your branch" } else { &into }) } else { crate::listing::title(q) },
+        title: crate::listing::title_into(q, &into),
         asks: if merge { format!("“{name}” is done and checked. This is what lands on your branch.") } else { q.question.about.clone() },
         step: q.question.step.clone(),
         permission: q.question.kind == QuestionKind::Permission,

@@ -621,6 +621,33 @@ pub fn step_diff(home: &Path, run: &str, step: &str) -> Option<String> {
     crate::project::diff(&copy, &parent, &commit)
 }
 
+/// Everything a run's delivery brings, as one diff against where the run started (its branch as it was then): each
+/// file the merge lands, as the last step of the path that changed it left it (Run::delivered_files). What "See the
+/// changes" shows at the merge; [`step_diff`] is one step's. None when the run's copy is gone or nothing lands.
+pub fn delivery_diff(home: &Path, run: &Run) -> Option<String> {
+    let lands: Vec<(String, String)> = run.delivered_files().into_iter().map(|(c, step)| (c.what, step)).collect();
+    delivery_diff_of(home, &run.id, &lands)
+}
+
+/// [`delivery_diff`] for the files `lands`, each with the step that last changed it.
+pub fn delivery_diff_of(home: &Path, run: &str, lands: &[(String, String)]) -> Option<String> {
+    let dir = home.join("runs").join(run);
+    let copy = dir.join("project");
+    let (_, base) = crate::project::start_of(&copy)?;
+    let steps: std::collections::BTreeMap<String, String> =
+        std::fs::read_to_string(dir.join("project-steps.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    // each file from the commit of the step that last changed it, in the order of the paths
+    let mut lands: Vec<&(String, String)> = lands.iter().collect();
+    lands.sort();
+    let mut out = String::new();
+    for (path, step) in lands {
+        let commit = steps.get(step)?;
+        out.push_str(crate::project::diff_paths(&copy, &base, commit, &[path.as_str()])?.trim_end_matches('\n'));
+        out.push('\n');
+    }
+    out.lines().any(|l| l.starts_with("diff --git ")).then_some(out)
+}
+
 /// How long a finished run keeps its copy of the project: a week, or `$JAYNES_KEEP_COPIES_SECONDS`.
 fn keep_copies() -> u64 {
     std::env::var("JAYNES_KEEP_COPIES_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(jaynes_core::attention::SETTLE)
@@ -1846,6 +1873,49 @@ mod tests {
     use jaynes_core::manifest::{Executor, Manifest, Reach, SessionKind, StepDecl};
     use jaynes_core::question::By;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_merge_shows_everything_the_delivery_brings_not_the_last_step_s_change_alone() {
+        let home = std::env::temp_dir().join(format!("jaynes-delivery-diff-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let dir = home.join("runs").join("r");
+        let copy = dir.join("project");
+        std::fs::create_dir_all(&copy).expect("copy");
+        let git = |args: &[&str]| -> String {
+            let out = crate::project::git_command().arg("-C").arg(&copy).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]).args(args).output().expect("git");
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let commit = |files: &[(&str, &str)], message: &str| -> String {
+            for (path, text) in files {
+                std::fs::write(copy.join(path), text).expect("write");
+            }
+            git(&["add", "-A"]);
+            git(&["commit", "-q", "-m", message]);
+            git(&["rev-parse", "HEAD"])
+        };
+        git(&["init", "-q"]);
+        let base = commit(&[("hero.txt", "one\n"), ("keep.txt", "same\n")], "base");
+        std::fs::write(copy.join(".git/jaynes-base"), &base).expect("base");
+        // "write" changes hero.txt and adds notes.txt; "fix", working on top of it, changes hero.txt again
+        let write = commit(&[("hero.txt", "two\n"), ("notes.txt", "new\n")], "write");
+        let fix = commit(&[("hero.txt", "three\n")], "fix");
+        std::fs::write(dir.join("project-steps.json"), json!({"write": write, "fix": fix}).to_string()).expect("steps");
+        std::fs::write(dir.join("project-parents.json"), json!({"write": base, "fix": write}).to_string()).expect("parents");
+        let lands = [("notes.txt".to_string(), "write".to_string()), ("hero.txt".to_string(), "fix".to_string())];
+        let all = delivery_diff_of(&home, "r", &lands).expect("the delivery's diff");
+        let files: Vec<&str> = all.lines().filter_map(|l| l.strip_prefix("diff --git ")).collect();
+        assert_eq!(files, ["a/hero.txt b/hero.txt", "a/notes.txt b/notes.txt"], "{all}");
+        // hero.txt from the run's start to how "fix" left it, never "write"'s middle state
+        assert!(all.contains("-one") && all.contains("+three") && !all.contains("+two") && !all.contains("-two"), "{all}");
+        assert!(all.contains("+new"), "{all}");
+        // the last step's change alone, as before, lacks notes.txt
+        assert!(!step_diff(&home, "r", "fix").expect("fix's diff").contains("notes.txt"));
+        // nothing lands, or no copy: nothing to show
+        assert_eq!(delivery_diff_of(&home, "r", &[]), None);
+        assert_eq!(delivery_diff_of(&home, "gone", &lands), None);
+        let _gone = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn a_halt_stops_only_the_groups_that_descend_from_the_role_program() {

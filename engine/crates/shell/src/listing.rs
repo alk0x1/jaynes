@@ -59,6 +59,8 @@ pub struct Entry {
     pub at: u64,
     /// Whether what it delivered was merged into the person's branch.
     pub merged: bool,
+    /// The branch the run merges into, the one checked out when it started; empty when unknown.
+    pub into: String,
 }
 
 /// Every run of the record, as `jaynes runs` lists them, in the list.
@@ -78,7 +80,8 @@ pub fn entries(home: &Path) -> Result<Vec<Entry>, String> {
         let title = setup["title"].as_str().map(str::to_owned);
         let (started, at) = times.get(&id).copied().unwrap_or((0, 0));
         let merged = !crate::drive::merges(&home.join("runs").join(&id)).is_empty();
-        entries.push(Entry { run, project, title, started, at, merged });
+        let into = into_of(home, &id);
+        entries.push(Entry { run, project, title, started, at, merged, into });
     }
     Ok(entries)
 }
@@ -95,7 +98,7 @@ pub fn arrange(entries: &[Entry]) -> Listing {
         let title = run_title(e.title.as_deref(), &r.request);
         let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open()) };
         let (mark, line, needs) = match waiting {
-            Some(q) => (Mark::Needs, self::title(q), true),
+            Some(q) => (Mark::Needs, title_into(q, &e.into), true),
             None => {
                 let (mark, line) = standing(e);
                 (mark, line, false)
@@ -262,6 +265,21 @@ pub fn where_in(r: &Run) -> String {
     format!("step {at} of {}", path.len())
 }
 
+/// The branch run `run` merges into, the one checked out when it started; empty when its copy does not say.
+pub fn into_of(home: &Path, run: &str) -> String {
+    crate::project::start_branch_of(&home.join("runs").join(run).join("project"))
+}
+
+/// What a merge asks, naming the branch it merges into, as the app's card and the page say it.
+pub fn merge_title(into: &str) -> String {
+    if into.is_empty() { "Merge into your branch?".to_string() } else { format!("Merge into “{into}”?") }
+}
+
+/// What a question asks, in a line, a merge naming the branch `into` it merges into.
+pub fn title_into(q: &QuestionState, into: &str) -> String {
+    if q.question.kind == QuestionKind::Merge && !q.question.one_option() { merge_title(into) } else { title(q) }
+}
+
 /// What a question asks, in a line. A choice with one option asks whether to go with it, by its name (its label
 /// before the colon, as the app names a direction): the role's question goes on the line under it.
 pub fn title(q: &QuestionState) -> String {
@@ -270,7 +288,7 @@ pub fn title(q: &QuestionState) -> String {
         let name = label.split_once(':').map_or(label.as_str(), |(n, _)| n).trim();
         format!("Go with “{name}”?")
     } else if q.question.kind == QuestionKind::Merge {
-        "Merge into your branch?".to_string()
+        merge_title("")
     } else if !q.question.about.trim().is_empty() {
         q.question.about.clone()
     } else if q.question.kind == QuestionKind::Permission {
@@ -1300,7 +1318,7 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), title: None, started: 0, at, merged: false }
+        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new() }
     }
 
     #[test]
@@ -1391,6 +1409,22 @@ mod tests {
         assert_eq!(run_title(Some("Login\r\n\twith \u{1b}[31mpasskey"), ""), "Login with [31mpasskey");
         assert_eq!(run_title(Some("Fix \u{202e}tropxe\u{2066} the\u{0}export"), ""), "Fix tropxe the export");
         assert_eq!(run_title(Some("\n\u{1b}\t"), "Make the onboarding friendlier."), "Make the onboarding friendlier");
+    }
+
+    #[test]
+    fn a_merge_names_the_branch_it_merges_into_in_the_list_as_on_the_card() {
+        let merge = QuestionState {
+            question: Question {
+                id: "merge-1".into(), step: "fix".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![], holds: true,
+                about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            },
+            answer: None, effects: None, superseded: false,
+        };
+        assert_eq!(title_into(&merge, "main"), "Merge into “main”?");
+        assert_eq!(title_into(&merge, "release/0.3"), "Merge into “release/0.3”?");
+        // a copy that does not say which branch
+        assert_eq!(title_into(&merge, ""), "Merge into your branch?");
+        assert_eq!(merge_title("main"), "Merge into “main”?");
     }
 
     #[test]

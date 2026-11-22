@@ -8,7 +8,7 @@
 //! same browser cannot answer.
 
 use crate::drive::{self, say};
-use crate::listing::{short, title, where_in};
+use crate::listing::{short, where_in};
 use crate::stop::label_for;
 use crate::store::Store;
 use jaynes_core::question::{Answer, By, Verdict};
@@ -813,7 +813,7 @@ impl Page {
                         if on { " on" } else { "" },
                         esc(&run.id),
                         esc(&q.question.id),
-                        esc(&title(q)),
+                        esc(&crate::listing::title_into(q, &crate::listing::into_of(&self.home, &run.id))),
                         esc(&run.manifest.role),
                         where_in(run),
                         status,
@@ -896,7 +896,9 @@ impl Page {
                     html
                 };
                 let i = run.manifest.index(&q.question.step);
-                remind.clone() + &question_html(run, q, &shown, &changes_html(&self.home, run, i))
+                // at the merge, everything that lands, not the last step's change alone
+                let changes = if q.question.kind == jaynes_core::question::QuestionKind::Merge { delivery_html(&self.home, run) } else { changes_html(&self.home, run, i) };
+                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id))
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
@@ -1227,7 +1229,7 @@ fn shortlist_button(id: &str) -> String {
 /// The row that sends the shortlist, shown once two are shortlisted.
 const FINALS_ROW: &str = "<div class=\"row choose\" id=\"finals\" hidden><div class=\"pick\"><span class=\"finsay\"></span><button class=\"choose\" id=\"develop\">Develop the shortlisted</button></div><ul class=\"fx-row\" id=\"fx-finals\"></ul></div>";
 
-fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str) -> String {
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
     let path = run.path();
@@ -1323,7 +1325,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         run_id = esc(&run.id),
         step = esc(&question.step),
         n = path.len(),
-        title = esc(&title(q)),
+        title = esc(&crate::listing::title_into(q, into)),
         strip = strip(run),
         stages = stage_list(run),
         data = data.replace('<', "\\u003c"),
@@ -1358,6 +1360,27 @@ fn changes_html(home: &std::path::Path, run: &Run, only: Option<usize>) -> Strin
             ))
         })
         .collect()
+}
+
+/// What a merge lands on the person's branch, as one diff against where the run started: every file as the last step
+/// that changed it left it (drive::delivery_diff). Nothing when the run's copy is gone or nothing lands.
+fn delivery_html(home: &std::path::Path, run: &Run) -> String {
+    let Some(mut text) = drive::delivery_diff(home, run) else { return String::new() };
+    let n = text.lines().filter(|l| l.starts_with("diff --git ")).count();
+    if text.len() > 40_000 {
+        let cut = (0..=40_000).rev().find(|&n| text.is_char_boundary(n)).unwrap_or(0);
+        let more = text.len() - cut;
+        text.truncate(cut);
+        text.push_str(&format!("\n[{more} more bytes not shown: read the branch before it lands]"));
+    }
+    let into = crate::listing::into_of(home, &run.id);
+    format!("<div class=\"changes\"><div class=\"qh\">{}</div><pre class=\"diff\">{}</pre></div>", esc(&delivery_title(&into, n)), diff_html(&text))
+}
+
+/// The heading over what a merge lands: "What lands on “main” · 3 files".
+fn delivery_title(into: &str, files: usize) -> String {
+    let on = if into.is_empty() { "your branch".to_string() } else { format!("“{into}”") };
+    format!("What lands on {on} · {files} file{}", if files == 1 { "" } else { "s" })
 }
 
 /// A unified diff, escaped: each file's header set apart, added lines green, removed lines red.
@@ -2392,6 +2415,41 @@ mod tests {
             store.put_setup(run, &json!({})).expect("setup");
         }
         home
+    }
+
+    #[test]
+    fn the_merge_names_the_branch_on_the_page_as_on_the_app_s_card() {
+        use jaynes_core::question::{Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-merge-title-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs/m/project/.git")).expect("copy");
+        // the branch the person had checked out when the run started, as the engine keeps it beside the copy
+        std::fs::write(home.join("runs/m/project/.git/jaynes-start"), "main\n").expect("start");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "r", "version": "1", "protocol": 1,
+            "steps": [{"name": "fix", "executor": "agent"}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "m".into(), request: "Fix the export".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+        let mut events = decide(None, &start).expect("start").events;
+        events.push(Event::QuestionOpened {
+            question: Question {
+                id: "merge-1".into(), step: "fix".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![VerdictKind::Keep, VerdictKind::Drop],
+                holds: true, about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            },
+        });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("m", &events).expect("append");
+        store.put_setup("m", &json!({})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let asked = page.render(View::Question("m".into(), "merge-1".into()), now).expect("the question");
+        assert!(asked.contains("<h1>Merge into “main”?</h1>") || asked.contains(">Merge into “main”?<"), "the question's title");
+        assert!(!asked.contains("Merge into your branch?"), "the question's title");
+        let listed = page.render(View::Overview, now).expect("home");
+        assert!(listed.contains("Merge into “main”?<small>"), "the list beside");
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     /// The section of reminders a page shows, or "" when it shows none.
