@@ -485,6 +485,24 @@ pub fn diff_title(step: &str) -> String {
     format!("Changes made at “{step}”")
 }
 
+/// The heading over what a merge lands, as the page says it: "What lands on “main” · 3 files".
+pub fn lands_title(into: &str, files: usize) -> String {
+    let on = if into.is_empty() { "your branch".to_string() } else { format!("“{into}”") };
+    format!("What lands on {on} · {files} file{}", if files == 1 { "" } else { "s" })
+}
+
+/// What See the changes shows, with its heading: at the merge, everything that lands (`lands`, the delivery's diff,
+/// every file as the last step that changed it left it); at any other stop, the step's own change (`step`).
+pub fn diff_shown(stop: &Stop, step: Option<String>, lands: Option<String>) -> (String, String) {
+    if stop.kind == QuestionKind::Merge {
+        let text = lands.filter(|t| !t.trim().is_empty());
+        let files = text.as_deref().map_or(0, |t| t.lines().filter(|l| l.starts_with("diff --git ")).count());
+        return (lands_title(&stop.into, files), text.unwrap_or_else(|| "Nothing lands: the run's copy is gone or changed nothing.".to_string()));
+    }
+    let text = step.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "This step changed nothing in the project.".to_string());
+    (diff_title(&stop.step), text)
+}
+
 /// What the foot of the card says once the answer went.
 pub const SENT: &str = "Sent as yours. The run goes on.";
 /// How long the foot of the run's tab says it after the stop closed.
@@ -977,9 +995,13 @@ impl Island {
             self.lightbox.update(cx, |l, cx| l.show(Shown::Diff { title, text }, window, cx));
             return;
         }
-        let text = jaynes_shell::drive::step_diff(&jaynes_shell::home(), &stop.run, &stop.step).unwrap_or_default();
-        let text = if text.trim().is_empty() { "This step changed nothing in the project.".to_string() } else { text };
-        let title = diff_title(&stop.step);
+        let home = jaynes_shell::home();
+        let (title, text) = if stop.kind == QuestionKind::Merge {
+            let lands = crate::run_actions::read(&stop.run).and_then(|run| jaynes_shell::drive::delivery_diff(&home, &run));
+            diff_shown(stop, None, lands)
+        } else {
+            diff_shown(stop, jaynes_shell::drive::step_diff(&home, &stop.run, &stop.step), None)
+        };
         self.lightbox.update(cx, |l, cx| l.show(Shown::Diff { title, text }, window, cx));
     }
 
@@ -1694,7 +1716,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said};
+    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said, diff_shown};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -2138,5 +2160,27 @@ mod tests {
     fn enter_in_your_words_reads_them() {
         assert!(reads_on(&InputEvent::PressEnter { secondary: false, shift: false }));
         assert!(!reads_on(&InputEvent::Change));
+    }
+
+    /// The engineer lead (22/11): the merge card's See the changes showed the last step's diff alone, so a file an
+    /// earlier step changed went in unseen. At the merge it shows what lands, the whole delivery, under the page's
+    /// words ("What lands on “main” · 2 files"); at any other stop, the step's own change.
+    #[test]
+    fn asked_the_merge_shows_everything_that_lands() {
+        let one = "diff --git a/b.py b/b.py\n+b\n".to_string();
+        let step = Some(one.clone());
+        let both = "diff --git a/a.py b/a.py\n+a\ndiff --git a/b.py b/b.py\n+b\n".to_string();
+        let lands = Some(both.clone());
+        let mut merge = judging(&["a.py", "b.py"]);
+        (merge.kind, merge.step, merge.into) = (QuestionKind::Merge, "merge".into(), "main".into());
+        assert_eq!(diff_shown(&merge, step.clone(), lands.clone()), ("What lands on “main” · 2 files".to_string(), both));
+        merge.into = String::new();
+        assert_eq!(diff_shown(&merge, step.clone(), Some("diff --git a/a.py b/a.py\n+a\n".into())).0, "What lands on your branch · 1 file");
+        assert_eq!(diff_shown(&merge, step.clone(), None).1, "Nothing lands: the run's copy is gone or changed nothing.");
+        // any other stop: the step's own change, as before
+        let mut other = judging(&["a.py"]);
+        other.step = "change".into();
+        assert_eq!(diff_shown(&other, step.clone(), lands), ("Changes made at “change”".to_string(), one));
+        assert_eq!(diff_shown(&other, None, None).1, "This step changed nothing in the project.");
     }
 }
