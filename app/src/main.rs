@@ -429,6 +429,11 @@ impl Render for Root {
                 let over = this.help || this.palette.is_some() || this.lightbox.read(cx).shown.is_some();
                 let m = e.keystroke.modifiers;
                 match e.keystroke.key.as_str() {
+                    // "Move all to Finished" open in the column: Esc cancels it first
+                    "escape" if !m.modified() && !over && this.side.read(cx).moving_all() => {
+                        this.side.update(cx, |s, cx| s.cancel_move_all(cx));
+                        cx.stop_propagation();
+                    }
                     "escape" if !m.modified() && this.island.read(cx).takes_esc_now(over, cx) => {
                         // the words field in focus: Esc leaves the field, and a second Esc folds the card
                         if this.island.read(cx).words_focused(window, cx) {
@@ -754,6 +759,17 @@ impl Root {
 
     /// The block at the top of a blocked run's tab, with its controls in it and, under Continue, what it does.
     fn blocked_head(&self, cx: &mut Context<Self>) -> Option<Div> {
+        // a run whose engine left, with no card of it open (it works, is blocked, or its question was passed): what
+        // the card would say, at the top of its tab, with Move to Finished (motor-velho.md)
+        if let Some(run) = self.tabs.read(cx).open.clone() {
+            let runs = self.runs.read(cx);
+            if let Some(gone) = runs.snap.details.get(&run).and_then(|d| d.gone.clone()).filter(|_| !runs.snap.stops.contains_key(&run)) {
+                let (said, open) = self.island.read(cx).gone_said();
+                let (flip, mover) = (self.island.clone(), self.island.clone());
+                let block = island::gone_block(&gone, open, move |_, _, cx| flip.update(cx, |i, cx| i.flip_gone(cx)), move |_, _, cx| mover.update(cx, |i, cx| i.move_to_finished(run.clone(), cx)), said.as_deref());
+                return Some(div().mx(px(14.)).mt(px(10.)).mb(px(10.)).px(px(16.)).py(px(14.)).rounded(px(10.)).border_1().border_color(rgb(look::line())).bg(rgb(look::panel_2())).child(block));
+            }
+        }
         // halted: who halted it and where, with Resume and Abandon
         if let Some(title) = self.tabs.read(cx).halted(cx) {
             let controls = self.controls_row(cx);
@@ -851,7 +867,7 @@ impl Root {
         }
         let Some(state) = self.restore.take() else { return };
         let listing = &runs.snap.listing;
-        let run_there = |id: &str| listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).any(|r| r.id == id);
+        let run_there = |id: &str| listing.rows().any(|r| r.id == id);
         let spaces = &self.agents.read(cx).spaces;
         let agent_title = |address: &str| spaces.iter().flat_map(|s| &s.agents).find(|a| a.address == address).map(|a| a.title.clone());
         let (open, why) = app_state::open_on(&state.open, |a| agent_title(a).is_some(), run_there);
@@ -1546,7 +1562,7 @@ impl Root {
     /// The runs as the column lists them, top to bottom.
     fn run_ids(&self, cx: &App) -> Vec<String> {
         let listing = &self.runs.read(cx).snap.listing;
-        listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).map(|r| r.id.clone()).collect()
+        listing.rows().map(|r| r.id.clone()).collect()
     }
 
     /// The next run in the column (1) or the one before (-1), opened as a click on it opens it.
@@ -2277,8 +2293,8 @@ fn open(core: Arc<hc::Core>, cx: &mut App) {
         let runs = cx.new(model::Runs::new);
         let agents = cx.new(|cx| agents::Agents::new(core.clone(), cx));
         let tabs = cx.new(|cx| tabs::Tabs::new(runs.clone(), agents.clone(), cx));
-        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), state.cleared.clone(), state.seen.clone(), cx));
         let key = the_key();
+        let side = cx.new(|cx| side::Side::new(runs.clone(), agents.clone(), tabs.clone(), state.cleared.clone(), state.seen.clone(), key.clone(), cx));
         let lightbox = cx.new(lightbox::Lightbox::new);
         let compare = cx.new(|cx| compare::Compare::new(key.clone(), runs.clone(), cx));
         let island = cx.new(|cx| island::Island::new(runs.clone(), key, lightbox.clone(), compare.clone(), cx));

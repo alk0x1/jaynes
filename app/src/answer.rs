@@ -116,6 +116,15 @@ pub async fn ask(key: Option<Arc<Key>>, run: String, question: String, item: Opt
     jaynes_shell::person::submit_ask(&home, &engine_program(), &state, &question, item.as_deref(), &text, &key.public(), &signature).map(|_| ())
 }
 
+/// Moves runs whose engine left the Mac to Finished, as the person's: signed with the app's key over the engine's move
+/// (`person::move_message`), never an answer's. All or none; says how many were moved now.
+pub async fn move_to_finished(key: Option<Arc<Key>>, runs: Vec<String>) -> Result<usize, String> {
+    let key = key.ok_or("the app has no key of yours, so it cannot move runs as you")?;
+    let home = jaynes_shell::home();
+    let signature = key.sign(&jaynes_shell::person::move_message(&runs));
+    jaynes_shell::person::submit_move(&home, &runs, &key.public(), &signature)
+}
+
 /// Sends the answer as the person's: their touch first when the stop asks it (`touch_of`), with its reason, then
 /// signed with their key. Resolves to what to tell them.
 pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, body: Value) -> Result<(), String> {

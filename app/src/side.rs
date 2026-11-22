@@ -32,6 +32,11 @@ pub struct Side {
     show_cleared: bool,
     /// Whether the column is the rail (bars.rs): the window says so, as the person drags its edge.
     pub rail: bool,
+    /// The person's key, that signs a move to Finished; whether "Move all to Finished" stands open, asking; and what
+    /// came of the last move, when it did not go.
+    key: Option<std::sync::Arc<crate::key::Key>>,
+    moving_all: bool,
+    move_said: Option<String>,
 }
 
 /// The rail's » pressed: the column takes its names back (its own width).
@@ -54,6 +59,9 @@ struct Order {
     /// space's name.
     needs: Vec<Row>,
     asking: Vec<(String, Agent)>,
+    /// The runs started on an older Jaynes no longer on this Mac, which cannot go on: apart, out of "Needs you" and
+    /// the Inbox's number, until the person moves them to Finished.
+    older: Vec<Row>,
     /// The runs not finished that wait on nothing: working.
     at_work: Vec<Row>,
     /// The finished runs (delivered, merged, undone, abandoned), by project as the record lists them, but the
@@ -81,7 +89,17 @@ fn asks(a: &Agent) -> bool {
 }
 
 fn finished(m: Mark) -> bool {
-    matches!(m, Mark::Delivered | Mark::Merged | Mark::Undone | Mark::Abandoned)
+    matches!(m, Mark::Delivered | Mark::Merged | Mark::Undone | Mark::Abandoned | Mark::Moved)
+}
+
+/// The line under a run from an older Jaynes, grey, in its group ("can't go on · started on Jaynes 0.2.3") or in
+/// Finished once the person moved it ("moved by you · started on Jaynes 0.2.3, no longer on this Mac"); the others
+/// keep theirs.
+fn older_line(row: &Row) -> String {
+    match row.mark {
+        Mark::Older | Mark::Moved => format!("{} · {}", look::word(row.mark), row.line),
+        _ => row.line.clone(),
+    }
 }
 
 /// The finished runs the person has seen: those the window kept that are still in the record; the first time, with
@@ -95,7 +113,7 @@ fn seen_from(kept: Option<Vec<String>>, listing: &jaynes_shell::listing::Listing
 }
 
 fn order(listing: &jaynes_shell::listing::Listing, spaces: &[agents::Space], cleared: &HashSet<String>) -> Order {
-    let mut o = Order { needs: listing.needs.clone(), ..Order::default() };
+    let mut o = Order { needs: listing.needs.clone(), older: listing.older.clone(), ..Order::default() };
     for (project, rows) in &listing.projects {
         let (done, open): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|r| finished(r.mark));
         // blocked or halted: the person decides what comes next
@@ -250,8 +268,12 @@ fn dot(color: u32) -> Div {
 }
 
 impl Side {
-    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cleared: Vec<String>, seen: Option<Vec<String>>, cx: &mut Context<Self>) -> Self {
+    pub fn new(runs: Entity<Runs>, agents: Entity<Agents>, tabs: Entity<crate::tabs::Tabs>, cleared: Vec<String>, seen: Option<Vec<String>>, key: Option<std::sync::Arc<crate::key::Key>>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |this: &mut Self, runs, cx| {
+            // the line that asks to move them all goes with the group when fewer than two are left
+            if runs.read(cx).snap.listing.older.len() < 2 {
+                this.moving_all = false;
+            }
             // what was seen is known once the record is read: kept, or every run finished then
             if this.seen.is_none() && runs.read(cx).read_once && runs.read(cx).trouble.is_none() {
                 this.seen = Some(seen_from(this.seen_kept.take(), &runs.read(cx).snap.listing));
@@ -262,7 +284,80 @@ impl Side {
         .detach();
         cx.observe(&agents, |_, _, cx| cx.notify()).detach();
         cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
-        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), seen: None, seen_kept: seen, show_cleared: false, rail: false }
+        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), seen: None, seen_kept: seen, show_cleared: false, rail: false, key, moving_all: false, move_said: None }
+    }
+
+    /// Whether "Move all to Finished" stands open, asking: Esc cancels it (main.rs).
+    pub fn moving_all(&self) -> bool {
+        self.moving_all
+    }
+
+    pub fn cancel_move_all(&mut self, cx: &mut Context<Self>) {
+        self.moving_all = false;
+        cx.notify();
+    }
+
+    fn older_ids(&self, cx: &App) -> Vec<String> {
+        self.runs.read(cx).snap.listing.older.iter().map(|r| r.id.clone()).collect()
+    }
+
+    /// Every run of "From an older Jaynes" to Finished, signed with the person's key (answer::move_to_finished).
+    fn move_all(&mut self, cx: &mut Context<Self>) {
+        let moved = crate::answer::move_to_finished(self.key.clone(), self.older_ids(cx));
+        cx.spawn(async move |this, cx| {
+            let moved = moved.await;
+            let _ = this.update(cx, |this, cx| {
+                this.moving_all = moved.is_err() && this.moving_all;
+                this.move_said = moved.err().map(|e| format!("Not moved: {e}"));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The group's head: its name and count, grey, as the other sections; under it, for two or more, the quiet link
+    /// that asks to move them all, on a line of its own as "Clear finished", since the column has no room for both.
+    fn older_head(&self, n: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let link = (n > 1 && !self.moving_all).then(|| {
+            div().mx(px(8.)).px(px(10.)).py(px(3.)).flex().child(div().flex_1()).child(
+                div()
+                    .id("move-all")
+                    .px(px(4.))
+                    .rounded(px(4.))
+                    .text_size(px(11.5))
+                    .text_color(rgb(look::faint()))
+                    .hover(|d| d.bg(rgb(look::line())).text_color(rgb(look::text())))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.moving_all = true;
+                        this.move_said = None;
+                        cx.notify();
+                    }))
+                    .child(jaynes_shell::listing::MOVE_ALL),
+            )
+        });
+        div().flex().flex_col().child(self.section("§older", jaynes_shell::listing::OLDER_GROUP, Some(n), look::faint(), cx)).children(link)
+    }
+
+    /// The line "Move all to Finished" opens under the group's head, no window over the column: what it does, then
+    /// Move N (neutral) and Cancel; Esc cancels too.
+    fn move_all_line(&self, n: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .mx(px(8.))
+            .px(px(10.))
+            .py(px(6.))
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(div().text_size(px(12.)).text_color(rgb(look::dim())).child(jaynes_shell::listing::move_all_asks(n)))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .child(crate::island::button("move-all-yes".into(), &jaynes_shell::listing::move_all_button(n), false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.move_all(cx))))
+                    .child(crate::island::button("move-all-no".into(), "Cancel", false, look::grey()).on_click(cx.listener(|this, _, _, cx| this.cancel_move_all(cx)))),
+            )
+            .when_some(self.move_said.clone(), |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(s)))
     }
 
     /// The finished runs the person has seen, once the record is read.
@@ -586,6 +681,12 @@ impl Side {
                 self.clear(ids, cx);
             }
             "back" => self.bring_back(rest, cx),
+            "move-all" => {
+                self.moving_all = true;
+                cx.notify();
+            }
+            "move-all-yes" => self.move_all(cx),
+            "move-all-no" => self.cancel_move_all(cx),
             _ => return tracing::warn!("column: no verb {verb}"),
         }
         tracing::info!("column: {what}: {} cleared", self.cleared.len());
@@ -754,11 +855,26 @@ impl Render for Side {
             }
         }
 
+        // the runs from an older Jaynes, which cannot go on: apart and grey, open until the person folds it, gone when
+        // none is left
+        if !o.older.is_empty() {
+            list = list.child(self.older_head(o.older.len(), cx));
+            if self.moving_all {
+                list = list.child(self.move_all_line(o.older.len(), cx));
+            }
+            if !self.folded.contains("§older") {
+                for row in &o.older {
+                    let shown = Row { line: older_line(row), ..row.clone() };
+                    list = list.child(self.row(&shown, selected.as_deref() == Some(row.id.as_str()), None, true, None, cx));
+                }
+            }
+        }
+
         // the runs: at work, then the finished folded to their count
         if let Some(trouble) = trouble {
             list = list.child(heading("Runs", look::faint()));
             list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::red())).child(format!("The record cannot be read: {trouble}")));
-        } else if listing.needs.is_empty() && listing.projects.is_empty() {
+        } else if listing.needs.is_empty() && listing.projects.is_empty() && listing.older.is_empty() {
             list = list.child(heading("Runs", look::faint()));
             list = list.child(div().px(px(18.)).py(px(6.)).text_size(px(12.)).text_color(rgb(look::faint())).child("No runs yet."));
         } else {
@@ -786,6 +902,7 @@ impl Render for Side {
                                 let tag = finished_tag(row, files.get(&row.id).copied()).map(|t| (t, look::faint()));
                                 // a tag says what the line under would: one of the two
                                 let line = tag.is_none();
+                                let row = &Row { line: older_line(row), ..row.clone() };
                                 list = list.child(self.row(row, selected.as_deref() == Some(row.id.as_str()), tag, line, Some(x), cx));
                             }
                         }
@@ -831,7 +948,7 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agent_word, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, rail_tip, seen_from};
+    use super::{Agent, Mark, Order, Row, State, agent_word, older_line, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, needs_line, needs_tag, order, rail_tip, seen_from};
 
     #[test]
     fn an_agent_that_waits_says_in_the_column_what_it_asks_in_the_inbox_s_words() {
@@ -866,7 +983,7 @@ mod tests {
     #[test]
     fn what_was_seen_starts_from_every_run_finished_when_the_app_first_reads_the_record() {
         let row = |id: &str, mark: Mark| Row { id: id.into(), project: String::new(), apart: None, title: id.into(), line: String::new(), mark };
-        let listing = Listing { needs: vec![], projects: vec![("p".into(), vec![row("d1", Mark::Delivered), row("w1", Mark::Working), row("a1", Mark::Abandoned)])] };
+        let listing = Listing { older: vec![], needs: vec![], projects: vec![("p".into(), vec![row("d1", Mark::Delivered), row("w1", Mark::Working), row("a1", Mark::Abandoned)])] };
         // first time: everything finished is taken as seen, so no old run floods the Inbox
         let first = seen_from(None, &listing);
         assert_eq!(first, HashSet::from(["d1".to_string(), "a1".to_string()]));
@@ -893,7 +1010,7 @@ mod tests {
     // Alan, 18/11, picking sketch 1 of the column (the board's words): "Needs you first"
     #[test]
     fn asked_needs_you_first_runs_and_agents_together_leaving_their_space() {
-        let listing = Listing { needs: vec![row("q", Mark::Needs, "Keep this fix?")], projects: vec![] };
+        let listing = Listing { older: vec![], needs: vec![row("q", Mark::Needs, "Keep this fix?")], projects: vec![] };
         let spaces = vec![agents::Space {
             id: "w1".into(),
             name: "jaynes".into(),
@@ -910,7 +1027,7 @@ mod tests {
 
     #[test]
     fn the_runs_at_work_come_before_the_finished_ones_which_keep_their_projects() {
-        let listing = Listing {
+        let listing = Listing { older: vec![],
             needs: vec![],
             projects: vec![
                 ("my-app".into(), vec![row("a", Mark::Working, "step 2 of 4, running"), row("b", Mark::Merged, "merged"), row("c", Mark::Halted, "step 1 of 3, halted")]),
@@ -938,7 +1055,7 @@ mod tests {
 
     #[test]
     fn a_blocked_run_needs_the_person_after_the_open_questions_and_says_what_they_can_do() {
-        let listing = Listing {
+        let listing = Listing { older: vec![],
             needs: vec![row("q", Mark::Needs, "Keep this fix?")],
             projects: vec![("api".into(), vec![row("e", Mark::Blocked, "step 3 of 3, blocked: no room"), row("a", Mark::Working, "step 1 of 2, running")])],
         };
@@ -993,7 +1110,7 @@ mod tests {
     // do registro; o que espera a pessoa nunca some)"
     #[test]
     fn asked_clear_finished_runs_from_the_column_never_one_that_waits_or_works() {
-        let listing = Listing {
+        let listing = Listing { older: vec![],
             needs: vec![row("q", Mark::Needs, "Keep this fix?")],
             projects: vec![("my-app".into(), vec![row("a", Mark::Working, "step 2 of 4, running"), row("b", Mark::Merged, "merged"), row("c", Mark::Abandoned, "abandoned"), row("d", Mark::Undone, "reverted by you")])],
         };
@@ -1008,11 +1125,41 @@ mod tests {
 
     #[test]
     fn the_cleared_runs_are_kept_while_finished_in_the_record_and_all_kept_before_it_is_read() {
-        let listing = Listing { needs: vec![row("q", Mark::Needs, "?")], projects: vec![("p".into(), vec![row("b", Mark::Merged, "merged"), row("a", Mark::Working, "step 1 of 2, running")])] };
+        let listing = Listing { older: vec![], needs: vec![row("q", Mark::Needs, "?")], projects: vec![("p".into(), vec![row("b", Mark::Merged, "merged"), row("a", Mark::Working, "step 1 of 2, running")])] };
         let cleared: HashSet<String> = ["b", "a", "q", "gone"].map(String::from).into();
         assert_eq!(kept_cleared(&cleared, Some(&listing)), ["b"]);
         // the record not read yet, or not readable: nothing is dropped
         assert_eq!(kept_cleared(&cleared, None), ["a", "b", "gone", "q"]);
+    }
+
+    #[test]
+    fn asked_runs_from_an_older_jaynes_wait_apart_in_grey_until_i_move_them_to_finished_22_11() {
+        let listing = Listing {
+            older: vec![row("o1", Mark::Older, "started on Jaynes 0.2.3"), row("o2", Mark::Older, "started on Jaynes 0.2.3")],
+            needs: vec![row("q", Mark::Needs, "Keep this fix?")],
+            projects: vec![("p".into(), vec![row("m", Mark::Moved, "started on Jaynes 0.2.3, no longer on this Mac"), row("d", Mark::Delivered, "delivered")])],
+        };
+        let o = order(&listing, &[], &Default::default());
+        // apart: not in "Needs you", nor in the Inbox's number
+        assert_eq!(o.older.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["o1", "o2"]);
+        assert_eq!(o.needs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["q"]);
+        assert_eq!(inbox_count(&o), 1);
+        // grey, never amber, in the design-lead's words
+        assert_eq!(older_line(&listing.older[0]), "can't go on · started on Jaynes 0.2.3");
+        assert_eq!(crate::look::colour(Mark::Older), crate::look::grey());
+        assert_ne!(crate::look::colour(Mark::Older), crate::look::amber());
+        // moved: in Finished with its project, the neutral grey dot, the line that says who moved it
+        assert_eq!(o.finished, vec![("p".to_string(), vec![listing.projects[0].1[0].clone(), listing.projects[0].1[1].clone()])]);
+        assert_eq!(older_line(&listing.projects[0].1[0]), "moved by you · started on Jaynes 0.2.3, no longer on this Mac");
+        assert_eq!(crate::look::colour(Mark::Moved), crate::look::grey());
+        assert_eq!(older_line(&listing.projects[0].1[1]), "delivered");
+        // the window keeps the marks by their word
+        for m in [Mark::Older, Mark::Moved] {
+            assert_eq!(crate::app_state::mark_of(crate::app_state::mark_word(m)), Some(m));
+        }
+        // the group's words: Move all only for two or more, and the line it opens
+        assert_eq!(jaynes_shell::listing::move_all_asks(2), "Move these 2 runs to Finished for good? What they delivered stays as it is.");
+        assert_eq!(jaynes_shell::listing::move_all_button(2), "Move 2");
     }
 
     #[test]

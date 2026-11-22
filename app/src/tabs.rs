@@ -423,9 +423,7 @@ impl Tabs {
     pub fn closed_kept(&self, cx: &App) -> Vec<crate::app_state::Closed> {
         let listing = &self.runs.read(cx).snap.listing;
         let mut kept: Vec<crate::app_state::Closed> = listing
-            .needs
-            .iter()
-            .chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter()))
+            .rows()
             .filter(|r| self.closed.get(&r.id).is_some_and(|(mark, line)| *mark == r.mark && *line == crate::app_state::fingerprint(&r.line)))
             .map(|r| crate::app_state::Closed { run: r.id.clone(), mark: crate::app_state::mark_word(r.mark).into(), line: crate::app_state::fingerprint(&r.line) })
             .collect();
@@ -462,7 +460,7 @@ impl Tabs {
         let at = keys.iter().position(|k| k.as_deref() == Some(id.as_str())).unwrap_or(0);
         let next = if at > 0 { keys.get(at - 1) } else { keys.get(at + 1) }.cloned().flatten();
         let listing = &self.runs.read(cx).snap.listing;
-        if let Some(r) = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).find(|r| r.id == id) {
+        if let Some(r) = listing.rows().find(|r| r.id == id) {
             self.closed.insert(id, (r.mark, crate::app_state::fingerprint(&r.line)));
         }
         self.show(next, cx);
@@ -915,7 +913,7 @@ fn tabbed(listing: &Listing, closed: &HashMap<String, (Mark, u64)>, open: Option
         .collect();
     if let Some(open) = open
         && !out.iter().any(|(id, _, _)| id == open)
-        && let Some(r) = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows.iter())).find(|r| r.id == open)
+        && let Some(r) = listing.rows().find(|r| r.id == open)
     {
         out.push((r.id.clone(), r.title.clone(), r.mark));
     }
@@ -1068,7 +1066,7 @@ mod tests {
 
     #[test]
     fn a_closed_tab_stays_closed_until_its_run_moves_on() {
-        let listing = |line: &str| Listing {
+        let listing = |line: &str| Listing { older: vec![],
             needs: vec![row("w", Mark::Needs, line)],
             projects: vec![("p".into(), vec![row("k", Mark::Working, "step 1 of 2"), row("d", Mark::Delivered, "delivered")])],
         };

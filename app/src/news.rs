@@ -43,7 +43,7 @@ mod tests {
     use jaynes_shell::stop::Stop;
 
     fn detail(id: &str, mark: Mark, line: &str) -> Detail {
-        Detail { id: id.into(), title: format!("run {id}"), role: "r".into(), project: "app".into(), mark, line: line.into(), minutes: 0, stages: vec![], now: None, delivered: false }
+        Detail { id: id.into(), title: format!("run {id}"), role: "r".into(), project: "app".into(), mark, line: line.into(), minutes: 0, stages: vec![], now: None, delivered: false, gone: None }
     }
 
     fn stop(run: &str, question: &str, title: &str) -> Stop {

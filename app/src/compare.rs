@@ -262,6 +262,12 @@ pub fn invite(n: usize, title: &str) -> (String, &'static str) {
     if n == 1 { (format!("◆ {title}"), "Open") } else { (format!("◆ {n} options · {title}"), "Compare") }
 }
 
+/// The round at the mode's head beside Esc ("round 2"): none on the first, and none for a run whose engine left, to
+/// which no other round comes (the design-lead, 22/11).
+pub fn round_word(stop: &jaynes_shell::stop::Stop) -> Option<String> {
+    (stop.round > 0 && stop.gone.is_none()).then(|| format!("round {}", stop.round))
+}
+
 /// Whether the mode shows the strip of directions to flip among: not for a stop with one option.
 pub fn strip(n: usize) -> bool {
     n > 1
@@ -491,6 +497,8 @@ pub struct Compare {
     reckoned: Reckoned,
     /// Whether the engine's words on a run whose engine left show, under Details.
     gone_open: bool,
+    /// What came of the last Move to Finished, when it did not go.
+    move_said: Option<String>,
     reading: bool,
     understood: Option<Result<Understood, String>>,
     sending: bool,
@@ -547,6 +555,7 @@ impl Compare {
             words: None,
             reckoned: Reckoned::default(),
             gone_open: false,
+            move_said: None,
             reading: false,
             understood: None,
             sending: false,
@@ -697,6 +706,19 @@ impl Compare {
             self.all_said = false;
         }
         cx.notify();
+    }
+
+    /// Move to Finished on a choice whose run's engine left: signed with the person's key, as on the card.
+    fn move_to_finished(&mut self, run: String, cx: &mut Context<Self>) {
+        let moved = answer::move_to_finished(self.key.clone(), vec![run]);
+        cx.spawn(async move |this, cx| {
+            let moved = moved.await;
+            let _ = this.update(cx, |this, cx| {
+                this.move_said = moved.err().map(|e| format!("Not moved: {e}"));
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn send_body(&mut self, body: Value, cx: &mut Context<Self>) {
@@ -1748,10 +1770,13 @@ impl Render for Compare {
             .border_color(rgb(look::line()))
             .bg(rgb(look::panel()))
             .pl(px(84.))
-            .child(div().size(px(8.)).rounded_full().bg(rgb(look::amber())))
-            .when_some(stop.gone.as_ref(), |d, gone| d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); })).flex_1().min_w_0()))
+            .child(div().size(px(8.)).rounded_full().bg(rgb(if stop.gone.is_some() { look::grey() } else { look::amber() })))
+            .when_some(stop.gone.as_ref(), |d, gone| {
+                let run = stop.run.clone();
+                d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }), cx.listener(move |this, _, _, cx| this.move_to_finished(run.clone(), cx)), self.move_said.as_deref()).flex_1().min_w_0())
+            })
             .when(stop.gone.is_none(), |d| d.child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_size(px(16.)).text_color(rgb(look::text())).child(stop.title.clone())).when_some(under_title(&self.name, &stop.step, under_about(&stop)), |d, under| d.child(div().truncate().text_size(px(12.5)).text_color(rgb(look::dim())).child(under)))))
-            .when(stop.round > 0, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("round {}", stop.round))))
+            .when_some(round_word(&stop), |d, r| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(r)))
             // as wide as its longer words, so "round" does not move when they change; a press on it keeps the keys
             // where they are, so it does what it says
             .child(

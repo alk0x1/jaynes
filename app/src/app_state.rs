@@ -171,12 +171,14 @@ pub fn mark_word(m: jaynes_shell::listing::Mark) -> &'static str {
         Merged => "merged",
         Undone => "undone",
         Abandoned => "abandoned",
+        Older => "older",
+        Moved => "moved",
     }
 }
 
 pub fn mark_of(word: &str) -> Option<jaynes_shell::listing::Mark> {
     use jaynes_shell::listing::Mark::*;
-    [Needs, Working, Halted, Blocked, Delivered, Merged, Undone, Abandoned].into_iter().find(|m| mark_word(*m) == word)
+    [Needs, Working, Halted, Blocked, Delivered, Merged, Undone, Abandoned, Older, Moved].into_iter().find(|m| mark_word(*m) == word)
 }
 
 #[cfg(test)]
@@ -278,7 +280,7 @@ mod tests {
     #[test]
     fn every_mark_has_a_word_and_back() {
         use jaynes_shell::listing::Mark::*;
-        for m in [Needs, Working, Halted, Blocked, Delivered, Merged, Undone, Abandoned] {
+        for m in [Needs, Working, Halted, Blocked, Delivered, Merged, Undone, Abandoned, Older, Moved] {
             assert_eq!(mark_of(mark_word(m)), Some(m));
         }
         assert_eq!(mark_of("spaceship"), None);

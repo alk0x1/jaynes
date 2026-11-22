@@ -38,6 +38,8 @@ pub struct Island {
     reckoned: Reckoned,
     /// Whether the engine's words on a run whose engine left show, under Details.
     gone_open: bool,
+    /// What came of the last Move to Finished, when it did not go.
+    move_said: Option<String>,
     reading: bool,
     understood: Option<Result<Understood, String>>,
     /// At the stop before the merge, what its two ways out do, in the engine's words: the question, then Merge's and
@@ -340,17 +342,49 @@ pub fn gone_head(gone: &stop::Gone) -> String {
 /// What the person does about a run whose engine left: no other way out exists without that engine.
 pub const GONE_HOW: &str = "No answer reaches it, Halt included. To do this work, start it again: a new run starts on this Jaynes.";
 
-/// The question's place on a card of a run whose engine left: what can't go on, what to do, and the engine's words
-/// folded in Details, which `toggle` opens.
-pub fn gone_block(gone: &stop::Gone, open: bool, toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
+/// The question's place on a card of a run whose engine left: what can't go on, what to do, the engine's words folded
+/// in Details, which `toggle` opens; where what it made is, the place in mono with a Copy beside it; then, not moved
+/// yet, Move to Finished (neutral, `mover`) with what it does under it, and once moved, when (motor-velho.md, 22/11).
+/// `said` is what came of the last press, when it did not go.
+pub fn gone_block(gone: &stop::Gone, open: bool, toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, mover: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, said: Option<&str>) -> Div {
+    let dim = |t: String| div().text_size(px(12.5)).text_color(rgb(look::dim())).child(t);
     div()
         .flex()
         .flex_col()
         .gap(px(4.))
         .child(div().text_size(px(16.)).text_color(rgb(look::text())).child(gone_head(gone)))
-        .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(GONE_HOW))
+        .child(dim(GONE_HOW.into()))
+        .when_some(gone.place.as_ref(), |d, place| {
+            let (before, at, after) = place.parts();
+            let copied = at.clone();
+            d.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .text_size(px(12.5))
+                    .text_color(rgb(look::dim()))
+                    // the sentence's parts touch, as one line: only the Copy stands apart
+                    .child(before)
+                    .child(div().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::text())).child(at))
+                    .when(!after.is_empty(), |d| d.child(after))
+                    .child(div().w(px(8.)))
+                    .child(button("gone-copy".into(), "Copy", false, look::grey()).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone())))),
+            )
+        })
+        .when(gone.moved.is_none(), |d| {
+            d.child(div().pt(px(6.)).flex().child(button("move-to-finished".into(), jaynes_shell::listing::MOVE_TO_FINISHED, false, look::grey()).on_click(mover)))
+                .child(div().text_size(px(12.)).text_color(rgb(look::dim())).child(jaynes_shell::listing::MOVE_SAYS))
+                .when_some(said, |d, s| d.child(div().text_size(px(12.)).text_color(rgb(look::red())).child(s.to_string())))
+        })
+        .when_some(gone.moved, |d, at| d.child(dim(jaynes_shell::moved::moved_on(at))))
         .child(div().id("gone-details").cursor_pointer().text_size(px(12.)).text_color(rgb(look::faint())).child(if open { "▾ Details" } else { "▸ Details" }).on_click(toggle))
         .when(open, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(gone.said.clone())))
+}
+
+/// The line of a choice's invite when its run's engine left: no amber, what can't go on (the design-lead, 22/11).
+pub fn gone_invite(gone: &stop::Gone) -> String {
+    format!("◆ This run can't go on: it started on Jaynes {}.", gone.version)
 }
 
 /// Whether the card takes answers: not on a run whose engine left the Mac, where it keeps its head, the two lines,
@@ -540,6 +574,7 @@ impl Island {
             show_back: false,
             reckoned: Reckoned::default(),
             gone_open: false,
+            move_said: None,
             reading: false,
             understood: None,
             merge_said: None,
@@ -741,6 +776,29 @@ impl Island {
                 this.reading = false;
                 this.understood = Some(read);
                 this.scroll.scroll_to_item(READ_ROW);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// What came of the last Move to Finished, when it did not go; and whether the engine's words show under Details.
+    pub fn gone_said(&self) -> (Option<String>, bool) {
+        (self.move_said.clone(), self.gone_open)
+    }
+
+    pub fn flip_gone(&mut self, cx: &mut Context<Self>) {
+        self.gone_open = !self.gone_open;
+        cx.notify();
+    }
+
+    /// Move to Finished on the card of a run whose engine left: signed with the person's key, as the column's Move all.
+    pub fn move_to_finished(&mut self, run: String, cx: &mut Context<Self>) {
+        let moved = answer::move_to_finished(self.key.clone(), vec![run]);
+        cx.spawn(async move |this, cx| {
+            let moved = moved.await;
+            let _ = this.update(cx, |this, cx| {
+                this.move_said = moved.err().map(|e| format!("Not moved: {e}"));
                 cx.notify();
             });
         })
@@ -972,6 +1030,10 @@ impl Island {
         let name = self.run_name(&stop.run, cx);
         // one option is opened, not compared
         let (line, open_word) = crate::compare::invite(stop.items.len(), &stop.title);
+        // a run whose engine left: grey, what can't go on, and Open secondary (it still opens the choice, to look)
+        let gone = stop.gone.as_ref();
+        let line = gone.map(gone_invite).unwrap_or(line);
+        let mark = if gone.is_some() { look::grey() } else { look::amber() };
         div()
             .flex()
             .gap(px(12.))
@@ -981,8 +1043,8 @@ impl Island {
             .rounded(px(12.))
             .bg(rgb(look::panel_2()))
             .border_1()
-            .border_color(rgba((look::amber() << 8) | 0x73))
-            .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(look::amber())))
+            .border_color(rgba((mark << 8) | 0x73))
+            .child(div().size(px(8.)).flex_none().rounded_full().bg(rgb(mark)))
             .child(
                 div()
                     .flex_1()
@@ -991,9 +1053,9 @@ impl Island {
                     .flex_col()
                     .gap(px(2.))
                     .child(div().truncate().text_size(px(13.)).text_color(rgb(look::text())).child(line))
-                    .when(!name.is_empty(), |d| d.child(div().truncate().text_size(px(12.)).text_color(rgb(look::faint())).child(name))),
+                    .when(!name.is_empty(), |d| d.child(div().truncate().text_size(px(12.)).text_color(rgb(if gone.is_some() { look::dim() } else { look::faint() })).child(name))),
             )
-            .child(primary("compare", open_word.into(), true).on_click(open))
+            .child(if gone.is_none() { primary("compare", open_word.into(), true) } else { button("compare".into(), open_word, false, look::grey()) }.on_click(open))
             .child(button("later".into(), "Esc · later", false, look::grey()).on_click(cx.listener(move |this, _, _, cx| {
                 this.shrunk.insert(q.clone());
                 cx.notify();
@@ -1003,7 +1065,7 @@ impl Island {
 
 #[cfg(feature = "test-driver")]
 /// With JAYNES_APP_TEST_DO=<file>, a test says what the person does, a line at a time: `mark <item> <verdict>`,
-/// `words <text>`, `focus-words`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `signals?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `send-read`, `compare`, and in the compare mode the lines it reads.
+/// `words <text>`, `focus-words`, `read`, `bring <item>`, `tab <run>`, `agent <address>`, `notice <agent|run>`, `pref <name> <value>`, `system light|dark`, `settings`, `settings-section <name>`, `settings-fonts`, `settings-close`, `copy-summary`, `presence?`, `act <control>`, `palette <type|down|up|go>`, `bar <bar> <x>|own`, `column <click>`, `close-window`, `reopen`, `shown?`, `signals?`, `panic`, `settings-pick <name> <value>`, `at <run> top|end|<step>`, `waits`, `do <action>`, `key <keystroke>`, `front`, `zoom`, `move-tab <run|main> <place>`, `diff`, `picture`, `send`, `move-to-finished`, `send-read`, `compare`, and in the compare mode the lines it reads.
 /// Each goes through what a click does, so a test answers without the person's mouse.
 fn drive_from(file: PathBuf, cx: &mut Context<Island>) {
     cx.spawn(async move |this, cx| loop {
@@ -1274,6 +1336,14 @@ impl Island {
                 }
             }
             "send" => self.send(cx),
+            // the card's Move to Finished, on a run whose engine left
+            "move-to-finished" => {
+                // the card's, or the block at the top of the run's tab when no card of it is open
+                let run = self.stop(cx).map(|s| s.run).or_else(|| self.tabs.as_ref().and_then(|t| t.read(cx).open.clone()));
+                if let Some(run) = run {
+                    self.move_to_finished(run, cx);
+                }
+            }
             "send-read" => self.send_understood(cx),
             "compare" => {
                 if let Some(stop) = self.stop(cx) {
@@ -1497,7 +1567,10 @@ impl Render for Island {
             .pt(px(16.))
             .pb(px(10.))
             .child(head)
-            .when_some(stop.gone.as_ref(), |d, gone| d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }))))
+            .when_some(stop.gone.as_ref(), |d, gone| {
+                let run = stop.run.clone();
+                d.child(gone_block(gone, self.gone_open, cx.listener(|this, _, _, cx| { this.gone_open = !this.gone_open; cx.notify(); }), cx.listener(move |this, _, _, cx| this.move_to_finished(run.clone(), cx)), self.move_said.as_deref()))
+            })
             .when(stop.gone.is_none(), |d| d.child(div().flex().flex_col().gap(px(4.)).child(look::ticked(&stop.title).text_size(px(16.)).text_color(rgb(look::text()))).when_some(stop.why.clone(), |d, why| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(why))).when(merge && !stop.asks.is_empty(), |d| d.child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(stop.asks.clone()))).when(delivered, |d| d.child(div().text_size(px(12.)).text_color(rgb(look::amber())).child(DELIVERED)))));
         // the middle scrolls between the fixed head and foot; while there is more below, its bottom edge fades
         let max = self.scroll.max_offset().y;
@@ -1585,7 +1658,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{diff_button, leave_rows, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
+    use super::{diff_button, leave_rows, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -1625,7 +1698,7 @@ mod tests {
     // the app heard the refusal only after Send; the card says before it that the run can't go on, and what to do
     #[test]
     fn asked_a_stop_of_a_run_whose_engine_left_says_so_before_send() {
-        let gone = jaynes_shell::stop::Gone { version: "0.2.3".into(), said: "run r started on engine 0.2.3+abc, which is no longer on this machine: it cannot be carried on by this one (0.2.5+def)".into() };
+        let gone = jaynes_shell::stop::Gone { version: "0.2.3".into(), place: None, moved: None, said: "run r started on engine 0.2.3+abc, which is no longer on this machine: it cannot be carried on by this one (0.2.5+def)".into() };
         assert_eq!(gone_head(&gone), "This run can't go on: it started on Jaynes 0.2.3, which is no longer on this Mac.");
         assert_eq!(GONE_HOW, "No answer reaches it, Halt included. To do this work, start it again: a new run starts on this Jaynes.");
         let mut stop = judging(&["a"]);
@@ -1636,6 +1709,23 @@ mod tests {
         // Details, Esc and See the diff (which reads the run's copy), and nothing that answers
         assert!(!takes_answers(&stop), "no items, words, foot nor Send on it");
         assert!(takes_answers(&judging(&["a"])), "a run of this engine is answered");
+    }
+
+    // the design-lead, 22/11 (row 28, (a) and (b)): the invite of a choice whose run's engine left says it can't go on,
+    // grey, and the compare mode shows no round, since no other comes
+    #[test]
+    fn asked_a_choice_whose_engine_left_invites_in_grey_and_shows_no_round_22_11() {
+        let gone = jaynes_shell::stop::Gone { version: "0.2.3".into(), place: None, moved: None, said: String::new() };
+        assert_eq!(gone_invite(&gone), "◆ This run can't go on: it started on Jaynes 0.2.3.");
+        let mut stop = judging(&["a"]);
+        stop.round = 1;
+        assert_eq!(crate::compare::round_word(&stop).as_deref(), Some("round 1"));
+        stop.gone = Some(gone);
+        assert_eq!(crate::compare::round_word(&stop), None);
+        // where the work is, in three parts, the place shown in mono with its Copy
+        let place = jaynes_shell::listing::Place::Branch { branch: "jaynes/r1".into(), project: "tidepool".into() };
+        assert_eq!(place.parts(), ("What it delivered is on the branch “".into(), "jaynes/r1".into(), "” of tidepool.".into()));
+        assert_eq!(jaynes_shell::moved::moved_on(1_763_800_000).len(), "You moved it to Finished on 22/11.".len());
     }
 
     // Alan, 16/11 (direction D of the sketches, as the app's first handoff wrote what he chose): "the stop rises as a

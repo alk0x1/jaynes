@@ -162,6 +162,7 @@ pub fn colour(mark: Mark) -> u32 {
         Mark::Blocked | Mark::Undone => red(),
         Mark::Delivered | Mark::Merged => green(),
         Mark::Abandoned => faint(),
+        Mark::Older | Mark::Moved => grey(),
     }
 }
 
@@ -175,6 +176,8 @@ pub fn word(mark: Mark) -> &'static str {
         Mark::Merged => "merged",
         Mark::Undone => "undone",
         Mark::Abandoned => "abandoned",
+        Mark::Older => "can't go on",
+        Mark::Moved => "moved by you",
     }
 }
 

@@ -103,7 +103,7 @@ pub fn entries(spaces: &[Space], runs: &Listing, here: Option<&str>) -> Vec<Entr
             out.push(Entry { label: a.title.clone(), space: s.name.clone(), go: Go::Agent(a.address.clone()), key: None, agent: Some(a.clone()), run: None, detail: agent_detail(a) });
         }
     }
-    for r in runs.needs.iter().chain(runs.projects.iter().flat_map(|(_, rows)| rows.iter())) {
+    for r in runs.rows() {
         if !out.iter().any(|e| e.go == Go::Run(r.id.clone())) {
             // its title alone: its dot says it is a run, and "run X" would read as running X again
             out.push(Entry { label: r.title.clone(), space: String::new(), go: Go::Run(r.id.clone()), key: None, agent: None, run: Some(r.mark), detail: None });
@@ -326,7 +326,7 @@ mod tests {
         let spaces = [Space { id: "s".into(), name: "helm".into(), folder: String::new(), agents: vec![agent("t1"), agent("t2")], tabs: vec![] }];
         let row = |id: &str, mark| Row { id: id.into(), project: String::new(), apart: None, title: format!("Run {id}"), line: String::new(), mark };
         // a run that waits shows in the list of those that wait and in its project's: once here
-        let runs = Listing { needs: vec![row("r1", Mark::Needs)], projects: vec![("p".into(), vec![row("r1", Mark::Needs), row("r2", Mark::Merged)])] };
+        let runs = Listing { older: vec![], needs: vec![row("r1", Mark::Needs)], projects: vec![("p".into(), vec![row("r1", Mark::Needs), row("r2", Mark::Merged)])] };
         let all = super::entries(&spaces, &runs, Some("helm"));
         let labels: Vec<&str> = all.iter().map(|e| e.label.as_str()).collect();
         // a run is its title alone: its dot says it is a run, and "run X" reads as running X again

@@ -44,6 +44,14 @@ pub fn ask_message(run: &str, question: &str, item: Option<&str>, text: &str) ->
     .into_bytes()
 }
 
+/// What the signature of a move to Finished covers: the runs moved, in order. Its "jaynes" is neither an answer's
+/// nor an ask's.
+pub fn move_message(runs: &[String]) -> Vec<u8> {
+    let mut runs = runs.to_vec();
+    runs.sort();
+    jaynes_core::digest::canonical(&json!({"jaynes": "move/1", "runs": runs})).into_bytes()
+}
+
 /// The app's key paired with this engine, if one is.
 pub fn paired(home: &Path) -> Result<Option<String>, String> {
     match std::fs::read_to_string(home.join(PAIRED)) {
@@ -106,6 +114,23 @@ pub fn submit_ask(home: &Path, exe: &Path, run: &Run, question: &str, item: Opti
     let sent = crate::drive::submit(home, exe, run, input)?;
     Store::open(&home.join("record.sqlite3"))?.put_proof(&run.id, &ask, key, signature)?;
     Ok(sent)
+}
+
+/// Moves runs whose engine left the Mac to Finished from the app as the person, if the signature holds over the
+/// move; it is kept beside each in this engine's list (`moved`), never in the runs' records.
+pub fn submit_move(home: &Path, runs: &[String], key: &str, signature: &str) -> Result<usize, String> {
+    holds(home, &move_message(runs), "move", key, signature)?;
+    move_runs(home, runs, Some(signature))
+}
+
+/// Moves runs `ids` of the record to Finished, all or none, as `moved::mark` does.
+pub fn move_runs(home: &Path, ids: &[String], signature: Option<&str>) -> Result<usize, String> {
+    let store = Store::open(&home.join("record.sqlite3"))?;
+    let mut runs = Vec::new();
+    for id in ids {
+        runs.push(store.state(id)?.ok_or_else(|| format!("no such run {id}"))?);
+    }
+    crate::moved::mark(home, &runs.iter().collect::<Vec<_>>(), signature, crate::store::now())
 }
 
 fn key_of(hex: &str) -> Result<VerifyingKey, String> {

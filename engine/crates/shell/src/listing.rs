@@ -19,6 +19,10 @@ pub enum Mark {
     Merged,
     Undone,
     Abandoned,
+    /// Started on an engine no longer on this Mac: it cannot go on, and waits apart until the person moves it.
+    Older,
+    /// One of those, moved to Finished by the person.
+    Moved,
 }
 
 impl Mark {
@@ -33,6 +37,8 @@ impl Mark {
             Mark::Merged => "merged",
             Mark::Undone => "undone",
             Mark::Abandoned => "abandoned",
+            Mark::Older => "can't go on",
+            Mark::Moved => "moved by you",
         }
     }
 }
@@ -67,6 +73,16 @@ pub struct Listing {
     pub needs: Vec<Row>,
     /// A project's folder name and its runs, the project with the newest run first.
     pub projects: Vec<(String, Vec<Row>)>,
+    /// Runs started on an engine no longer on this Mac, not yet moved to Finished: "From an older Jaynes", newest
+    /// first. Never in what waits for the person, nor counted with it.
+    pub older: Vec<Row>,
+}
+
+impl Listing {
+    /// Every row once: what waits, the runs from an older Jaynes, then each project's.
+    pub fn rows(&self) -> impl Iterator<Item = &Row> {
+        self.needs.iter().chain(&self.older).chain(self.projects.iter().flat_map(|(_, rows)| rows))
+    }
 }
 
 /// A run with what the list needs from outside its events.
@@ -84,6 +100,11 @@ pub struct Entry {
     pub merged: bool,
     /// The branch the run merges into, the one checked out when it started; empty when unknown.
     pub into: String,
+    /// The version of the engine that started it, when that engine is no longer on this Mac and the run cannot go
+    /// on (`stop::left_behind`).
+    pub gone: Option<String>,
+    /// When the person moved it to Finished, if they did (`moved`).
+    pub moved: Option<u64>,
 }
 
 /// Every run of the record, as `jaynes runs` lists them, in the list.
@@ -107,18 +128,112 @@ pub fn entries(home: &Path) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
-/// Run `run` with what its mark needs from outside its events (whether it was merged, and into which branch); no
-/// project, title or times.
+/// Run `run` with what its mark needs from outside its events (whether it was merged, into which branch, and
+/// whether its engine left the Mac, and if so whether the person moved it to Finished); no project, title or times.
 pub fn entry_of(home: &Path, run: Run) -> Entry {
     let merged = !crate::drive::merges(&home.join("runs").join(&run.id)).is_empty();
     let into = into_of(home, &run.id);
-    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into }
+    let gone = crate::stop::left_behind(home, &run, jaynes_core::ENGINE).then(|| engine_version(&run.engine).to_string());
+    let moved = gone.as_ref().and_then(|_| crate::moved::when(&crate::moved::read(home).unwrap_or_default(), &run.id));
+    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into, gone, moved }
+}
+
+/// An engine's version, without the build after its "+": "0.2.3" of "0.2.3+5a1c0de".
+pub fn engine_version(engine: &str) -> &str {
+    engine.split('+').next().unwrap_or(engine)
+}
+
+/// Where what a run made is, as its card says it to a run that cannot go on. The engine names the place; no screen
+/// builds a path by hand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// Delivered on a branch of its own, not merged.
+    Branch { branch: String, project: String },
+    /// Merged into the person's branch.
+    Into { branch: String, project: String },
+    /// Not delivered: what it made so far, in its copy.
+    Copy { folder: String },
+}
+
+impl Place {
+    /// The sentence in three parts, the place in the middle, shown in mono with a Copy beside it: "What it delivered
+    /// is on the branch “" "jaynes/r1" "” of tidepool."
+    pub fn parts(&self) -> (String, String, String) {
+        match self {
+            Place::Branch { branch, project } => ("What it delivered is on the branch “".into(), branch.clone(), format!("” of {project}.")),
+            Place::Into { branch, project } => ("What it delivered is on “".into(), branch.clone(), format!("” of {project}.")),
+            Place::Copy { folder } => ("What it made so far is in its copy: ".into(), folder.clone(), String::new()),
+        }
+    }
+}
+
+/// Where what run `e` made is: on the branch it delivered (`branch`, its setup's), on the branch it merged into, or
+/// in its copy at `copy` when it made something there; None when it made nothing yet.
+pub fn place(e: &Entry, branch: &str, copy: &Path) -> Option<Place> {
+    let project = Path::new(&e.project).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "your project".into());
+    if e.merged && !e.into.is_empty() {
+        return Some(Place::Into { branch: e.into.clone(), project });
+    }
+    if e.run.delivered.is_some() && !branch.is_empty() {
+        return Some(Place::Branch { branch: branch.to_string(), project });
+    }
+    let made = e.run.steps.iter().any(|s| s.attempt > 0 || s.done.is_some());
+    (made && copy.is_dir()).then(|| Place::Copy { folder: copy.display().to_string() })
+}
+
+/// `place` of a run of the record in `home`, its branch read from its setup.
+pub fn place_of(home: &Path, e: &Entry) -> Option<Place> {
+    let setup = Store::open(&home.join("record.sqlite3")).and_then(|s| s.setup(&e.run.id)).unwrap_or_default();
+    place(e, setup["branch"].as_str().unwrap_or(""), &home.join("runs").join(&e.run.id).join("project"))
+}
+
+/// `place_of` a run alone, its project read from its setup: what the card of a run whose engine left says.
+pub fn run_place(home: &Path, run: &Run) -> Option<Place> {
+    let mut e = entry_of(home, run.clone());
+    e.project = Store::open(&home.join("record.sqlite3")).and_then(|s| s.setup(&run.id)).ok().and_then(|s| s["project"].as_str().map(str::to_string)).unwrap_or_default();
+    place_of(home, &e)
+}
+
+/// What a run whose engine left the Mac says in place of its question (the design-lead, motor-velho.md): its
+/// version alone, without the build.
+pub fn older_head(version: &str) -> String {
+    format!("This run can't go on: it started on Jaynes {version}, which is no longer on this Mac.")
+}
+
+/// Under `older_head`, dim.
+pub const OLDER_HOW: &str = "No answer reaches it, Halt included. To do this work, start it again: a new run starts on this Jaynes.";
+
+/// The group of runs whose engine left the Mac, below what waits for the person and above Finished.
+pub const OLDER_GROUP: &str = "From an older Jaynes";
+
+/// The card's button, neutral, never red, and what it says under it.
+pub const MOVE_TO_FINISHED: &str = "Move to Finished";
+pub const MOVE_SAYS: &str = "It leaves Needs you for good. What it already delivered stays as it is, and its record is kept.";
+
+/// The group's link to move them all, shown only for two or more, and the line it opens under the group's head.
+pub const MOVE_ALL: &str = "Move all to Finished";
+pub fn move_all_asks(n: usize) -> String {
+    format!("Move these {n} runs to Finished for good? What they delivered stays as it is.")
+}
+pub fn move_all_button(n: usize) -> String {
+    format!("Move {n}")
+}
+
+/// The line of a run whose engine left the Mac: "started on Jaynes 0.2.3" while it waits apart, and ", no longer on
+/// this Mac" after once moved to Finished, where nothing else says why it is there.
+pub fn older_line(version: &str, moved: bool) -> String {
+    if moved { format!("started on Jaynes {version}, no longer on this Mac") } else { format!("started on Jaynes {version}") }
 }
 
 /// How a run stands in the list: its mark, its line, and whether it waits for the person. A blocked run says so first:
 /// its open questions stay inside it, never in its line (the tech-lead's rule, for every role).
 pub fn stands(e: &Entry) -> (Mark, String, bool) {
     let r = &e.run;
+    // its engine left the Mac: no answer reaches it, so it never waits for the person
+    if let Some(version) = &e.gone {
+        let moved = e.moved.is_some();
+        return (if moved { Mark::Moved } else { Mark::Older }, older_line(version, moved), false);
+    }
     let waiting = if r.finished() || r.blocked() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
     match waiting {
         Some(q) => (Mark::Needs, title_into(q, &e.into), true),
@@ -161,6 +276,10 @@ pub fn arrange(entries: &[Entry]) -> Listing {
             listing.needs.push(row);
             continue;
         }
+        if row.mark == Mark::Older {
+            listing.older.push(row);
+            continue;
+        }
         match listing.projects.iter_mut().find(|(p, _)| *p == row.project) {
             Some((_, rows)) => rows.push(row),
             None => listing.projects.push((row.project.clone(), vec![row])),
@@ -177,6 +296,8 @@ pub fn can_still_answer(entries: &[Entry]) -> Vec<Row> {
     newest.sort_by_key(|e| std::cmp::Reverse(e.at));
     newest
         .into_iter()
+        // a run whose engine left takes no answer, late ones included
+        .filter(|e| e.gone.is_none())
         .flat_map(|e| {
             let r = &e.run;
             let (project, title) = (project_name(&e.project, &folders), run_title(e.title.as_deref(), &r.request));
@@ -1988,7 +2109,77 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new() }
+        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new(), gone: None, moved: None }
+    }
+
+    // The engineer lead and the tech-lead, 22/11 (row 28): a run whose engine left the Mac never waits for the person
+    // nor counts with what does; it waits apart, "From an older Jaynes", until the person moves it to Finished, which
+    // this engine keeps in a dated list of its own, outside the run's folder, and never in the run's record. A run
+    // this engine carries on is refused, and nothing is written.
+    #[test]
+    fn asked_a_run_whose_engine_left_waits_apart_and_the_person_moves_it_to_finished_22_11() {
+        let home = std::env::temp_dir().join(format!("jaynes-listing-older-{}", std::process::id()));
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::create_dir_all(&home).expect("home");
+        let asks = |r: &mut Run| {
+            let question = Question {
+                id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
+                about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            };
+            r.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+            r.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits".into() };
+        };
+        // a made-up engine that never was on this Mac, and a run of this one, both at a stop
+        let mut old = run("old", "Fix the export");
+        asks(&mut old);
+        old.engine = "0.0.1+nowhere".into();
+        let mut mine = run("mine", "Make the onboarding friendlier");
+        asks(&mut mine);
+        let listed = |home: &Path| {
+            let at = |e: Entry, n: u64| Entry { project: "/p/app".into(), at: n, ..e };
+            arrange(&[at(entry_of(home, old.clone()), 2), at(entry_of(home, mine.clone()), 1)])
+        };
+        let ids = |rows: &[Row]| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+        let l = listed(&home);
+        assert_eq!(ids(&l.needs), ["mine"], "only the run that can take an answer waits for the person");
+        assert_eq!(ids(&l.older), ["old"], "the other waits apart");
+        assert!(l.projects.iter().all(|(_, rows)| rows.iter().all(|r| r.id != "old")), "and once only");
+        assert_eq!(said(&l.older[0]), "can't go on · started on Jaynes 0.0.1");
+        assert!(can_still_answer(&[entry_of(&home, old.clone())]).is_empty(), "no late answer reaches it either");
+        // a run of this engine does not move, and neither do the others moved with it
+        let err = crate::moved::mark(&home, &[&old, &mine], None, 1_795_000_000).expect_err("refused");
+        assert!(err.contains("mine") && err.contains("goes on with this Jaynes"), "{err}");
+        assert!(!home.join(crate::moved::FILE).exists(), "nothing written");
+        // moved: in Finished, with its own line, never apart again
+        assert_eq!(crate::moved::mark(&home, &[&old], Some("5ig"), 1_795_000_000), Ok(1));
+        let l = listed(&home);
+        assert!(l.older.is_empty() && ids(&l.needs) == ["mine"]);
+        let row = l.projects.iter().flat_map(|(_, rows)| rows).find(|r| r.id == "old").expect("listed");
+        assert_eq!(row.mark, Mark::Moved);
+        assert_eq!(said(row), "moved by you · started on Jaynes 0.0.1, no longer on this Mac");
+        // moved again, it keeps its first date; the list is the engine's, outside every run's folder
+        assert_eq!(crate::moved::mark(&home, &[&old], None, 1_795_100_000), Ok(0));
+        let kept = crate::moved::read(&home).expect("read");
+        assert_eq!(kept.iter().map(|m| (m.run.as_str(), m.engine.as_str(), m.at, m.signature.as_deref())).collect::<Vec<_>>(), [("old", "0.0.1+nowhere", 1_795_000_000, Some("5ig"))]);
+        assert!(crate::moved::moved_on(1_795_000_000).starts_with("You moved it to Finished on ") && crate::moved::moved_on(1_795_000_000).ends_with('.'));
+        assert!(!home.join("runs").exists(), "no run's folder touched");
+        // where its work is, from the engine: nothing made yet says nothing; made, its copy; delivered, its branch;
+        // merged, the branch it went into
+        let e = Entry { project: "/p/tidepool".into(), ..entry_of(&home, old.clone()) };
+        let copy = home.join("runs/old/project");
+        assert_eq!(place(&e, "jaynes/old", &copy), None, "nothing made yet");
+        std::fs::create_dir_all(&copy).expect("copy");
+        let mut made = e.clone();
+        made.run.steps[0].attempt = 1;
+        let at = place(&made, "jaynes/old", &copy).expect("made something").parts();
+        assert_eq!(format!("{}{}{}", at.0, at.1, at.2), format!("What it made so far is in its copy: {}", copy.display()));
+        made.run.delivered = Some(jaynes_core::Digest("d".into()));
+        let at = place(&made, "jaynes/old", &copy).expect("delivered").parts();
+        assert_eq!((at.0.as_str(), at.1.as_str(), at.2.as_str()), ("What it delivered is on the branch “", "jaynes/old", "” of tidepool."));
+        let merged = Entry { merged: true, into: "main".into(), ..made };
+        let at = place(&merged, "jaynes/old", &copy).expect("merged").parts();
+        assert_eq!(format!("{}{}{}", at.0, at.1, at.2), "What it delivered is on “main” of tidepool.");
+        std::fs::remove_dir_all(&home).ok();
     }
 
     // Alan, 22/11, at a stop where he asked the agent: "ele regerou tudo?". He wanted to see his question stay: the run's

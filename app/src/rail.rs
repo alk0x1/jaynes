@@ -229,7 +229,7 @@ mod tests {
     }
 
     fn run(mark: Mark, stages: Vec<Stage>) -> Detail {
-        Detail { id: "r1".into(), title: "Tighten the copy".into(), role: "review".into(), project: "app".into(), mark, line: "Which goes in?".into(), minutes: 3, stages, now: Some("editing".into()), delivered: false }
+        Detail { id: "r1".into(), title: "Tighten the copy".into(), role: "review".into(), project: "app".into(), mark, line: "Which goes in?".into(), minutes: 3, stages, now: Some("editing".into()), delivered: false, gone: None }
     }
 
     // Alan, 17/11 (option 1 of the steps panel, as the session that built it in ab48af1 wrote what he chose): every

@@ -597,7 +597,8 @@ pub fn reminders_due(home: &Path, store: &Store, now: u64) -> Result<Vec<Reminde
     let runs: std::collections::BTreeSet<String> = told_at.keys().map(|(r, _)| r.clone()).collect();
     for id in runs {
         let Some(run) = store.state(&id)? else { continue };
-        if run.finished() {
+        // a run whose engine left the Mac takes no answer: nothing to remind of
+        if run.finished() || crate::stop::left_behind(home, &run, jaynes_core::ENGINE) {
             continue;
         }
         let reminded = reminded(home, &id);

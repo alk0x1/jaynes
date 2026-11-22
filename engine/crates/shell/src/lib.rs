@@ -11,6 +11,7 @@ pub mod install;
 pub mod listing;
 pub mod manifests;
 pub mod mcp;
+pub mod moved;
 pub mod page;
 pub mod permit;
 pub mod person;

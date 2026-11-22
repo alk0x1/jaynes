@@ -80,6 +80,10 @@ pub struct Gone {
     pub version: String,
     /// What the engine says when an answer goes to the run.
     pub said: String,
+    /// Where what it made is, when it made something.
+    pub place: Option<crate::listing::Place>,
+    /// When the person moved it to Finished, if they did.
+    pub moved: Option<u64>,
 }
 
 /// Whether an open run can no longer go on with `engine` here: another engine started it, and that engine's program is
@@ -97,6 +101,8 @@ pub fn gone(home: &Path, run: &Run) -> Option<Gone> {
     left_behind(home, run, jaynes_core::ENGINE).then(|| Gone {
         version: run.engine.split('+').next().unwrap_or(&run.engine).to_string(),
         said: crate::drive::gone_said(run),
+        place: crate::listing::run_place(home, run),
+        moved: crate::moved::when(&crate::moved::read(home).unwrap_or_default(), &run.id),
     })
 }
 

@@ -464,7 +464,7 @@ impl Page {
             let asked_by = by.clone();
             let out = match req.path.as_str() {
                 // the page's poll, which with the key also says its tab is open
-                "/api/version" => Ok(json!({"ok": true, "seq": self.store().and_then(|s| s.last_seq()).unwrap_or(0)})),
+                "/api/version" => Ok(json!({"ok": true, "seq": self.store().and_then(|s| s.last_seq()).unwrap_or(0), "moved": crate::moved::read(&self.home).map(|m| m.len()).unwrap_or(0)})),
                 "/api/effects" => self.effects(&body, by),
                 "/api/answer" => self.answer(&body, by),
                 "/api/act" => self.act(&body, by),
@@ -735,6 +735,19 @@ fn submit_in(home: &std::path::Path, exe: &std::path::Path, run: &Run, input: In
 /// same): halt, resume, continue, raise the risk or the ceiling, abandon, undo, correct. `exe` is the program that
 /// carries the run on; what `by` may do the engine decides, as for the page.
 pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: By) -> Result<Value, String> {
+        // runs whose engine left the Mac, moved to Finished: only the person, and never through the run's engine
+        if body["action"].as_str() == Some("move-to-finished") {
+            if by != By::Person {
+                return Err("only you move a run to Finished: open the page from the Jaynes app, or run jaynes open".into());
+            }
+            let ids: Vec<String> = match (body["runs"].as_array(), body["run"].as_str()) {
+                (Some(all), _) => all.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+                (None, Some(one)) => vec![one.to_string()],
+                (None, None) => return Err("which runs?".into()),
+            };
+            let moved = crate::person::move_runs(home, &ids, None)?;
+            return Ok(json!({"ok": true, "moved": moved}));
+        }
         let run_id = body["run"].as_str().ok_or("which run?")?;
         let run = Store::open(&home.join("record.sqlite3"))?.state(run_id)?.ok_or("no such run")?;
         let input = match body["action"].as_str().unwrap_or("") {
@@ -779,15 +792,28 @@ impl Page {
         let mut runs: Vec<Run> = Vec::new();
         // each run's name, as the app shows it (listing::name): the project first
         let names: std::collections::BTreeMap<String, crate::listing::Row> = crate::listing::read(&self.home)
-            .map(|l| l.needs.into_iter().chain(l.projects.into_iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.clone(), r)).collect())
+            .map(|l| l.needs.into_iter().chain(l.older).chain(l.projects.into_iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.clone(), r)).collect())
             .unwrap_or_default();
         let name_of = |r: &Run| names.get(&r.id).map(name_html).unwrap_or_else(|| esc(&short(&r.request)));
         // a stop says whose it is, its project first in dim, as a run's name does
         let whose = |r: &Run| names.get(&r.id).map(|n| format!("<span class=\"proj\">{}</span><span class=\"sep\"> · </span>", esc(&n.project))).unwrap_or_default();
+        // runs whose engine left the Mac (row 28): never waiting for the person nor counted with what does; apart
+        // until the person moves them to Finished
+        let moved_list = crate::moved::read(&self.home).unwrap_or_default();
+        let mut older: Vec<Run> = Vec::new();
+        let mut moved: std::collections::BTreeSet<String> = Default::default();
         for id in store.runs()? {
             let Some(run) = store.state(&id)? else { continue };
             runs.push(run.clone());
             if run.finished() {
+                continue;
+            }
+            if crate::stop::left_behind(&self.home, &run, jaynes_core::ENGINE) {
+                if crate::moved::when(&moved_list, &run.id).is_some() {
+                    moved.insert(run.id.clone());
+                } else {
+                    older.push(run);
+                }
                 continue;
             }
             for q in run.questions.values() {
@@ -845,8 +871,10 @@ impl Page {
                 })
                 .collect()
         };
+        let gone = |r: &Run| moved.contains(&r.id) || older.iter().any(|o| o.id == r.id);
+        let live: Vec<Run> = runs.iter().filter(|r| !gone(r)).cloned().collect();
         // a blocked or halted run waits for the person too: only they continue or abandon it
-        let blocked = runs_waiting(&runs);
+        let blocked = runs_waiting(&live);
         let shown_run = if let View::Run(id) = &view { Some(id.clone()) } else { None };
         let blocked_links: String = blocked
             .iter()
@@ -862,10 +890,41 @@ impl Page {
         if !still.is_empty() {
             aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Can still answer · {}</div>{}", still.len(), side(&still, false)));
         }
-        let open: Vec<&Run> = runs.iter().rev().filter(|r| !r.finished()).collect();
-        let done: Vec<&Run> = runs.iter().rev().filter(|r| r.finished()).take(8).collect();
+        // a run whose engine left: its name, and how it stands in grey, as the app's column says it
+        let older_link = |r: &Run| {
+            let on = shown_run.as_deref() == Some(r.id.as_str());
+            let said = names.get(&r.id).map(crate::listing::said).unwrap_or_default();
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small class=\"older\">{}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&said), strip(r))
+        };
+        if !older.is_empty() {
+            let n = older.len();
+            let ids = json!(older.iter().map(|r| r.id.as_str()).collect::<Vec<_>>()).to_string();
+            let (all, ask) = if n > 1 {
+                (
+                    format!(" <button class=\"linkish\" id=\"moveall\">{}</button>", crate::listing::MOVE_ALL),
+                    format!(
+                        "<div class=\"moveall\" id=\"moveallask\" hidden>{}<span class=\"mvb\"><button class=\"mv\" id=\"moveallyes\" data-runs=\"{}\">{}</button><button class=\"mv\" id=\"moveallno\">Cancel</button></span><div class=\"refused\" id=\"moveallmsg\"></div></div>",
+                        esc(&crate::listing::move_all_asks(n)),
+                        esc(&ids),
+                        esc(&crate::listing::move_all_button(n))
+                    ),
+                )
+            } else {
+                (String::new(), String::new())
+            };
+            aside.push_str(&format!(
+                "<div class=\"qh og\" style=\"margin-top:18px\"><span>{} · {n}</span>{all}</div>{ask}{}",
+                crate::listing::OLDER_GROUP,
+                older.iter().rev().map(older_link).collect::<String>()
+            ));
+        }
+        let open: Vec<&Run> = live.iter().rev().filter(|r| !r.finished()).collect();
+        let done: Vec<&Run> = runs.iter().rev().filter(|r| r.finished() || moved.contains(&r.id)).take(8).collect();
         let run_link = |r: &&Run| {
             let on = shown_run.as_deref() == Some(r.id.as_str());
+            if moved.contains(&r.id) {
+                return older_link(r);
+            }
             format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r))
         };
         aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Runs · {}</div>{}", open.len(), open.iter().map(run_link).collect::<String>()));
@@ -884,7 +943,8 @@ impl Page {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
                 Some(r) => {
                     let who = if r.halted { self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e)) } else { None };
-                    run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id))
+                    let left = if gone(r) { Some(older_html(&self.home, r, crate::moved::when(&moved_list, &r.id))) } else { None };
+                    run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left)
                 }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
@@ -897,7 +957,7 @@ impl Page {
                 new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last, drive::terminal_env(&self.home).is_some())
             }
             (View::Setup, _) => setup_html(&self.home),
-            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &blocked, &self.home, &remind, &names),
+            (_, None) => home_html(&live, &store.times()?, waiting.len(), &blocked, &self.home, &remind, &names),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
                     let d = store.display(&it.digest);
@@ -1071,7 +1131,7 @@ pub(crate) fn phase_word(e: &crate::listing::Entry) -> String {
         Mark::Working => "goes",
         Mark::Blocked | Mark::Undone => "bad",
         Mark::Delivered if !e.run.finished() => return format!("<span class=\"goes\">{word} · you can still correct it</span>"),
-        Mark::Delivered | Mark::Merged | Mark::Abandoned => return word.to_string(),
+        Mark::Delivered | Mark::Merged | Mark::Abandoned | Mark::Older | Mark::Moved => return word.to_string(),
     };
     format!("<span class=\"{class}\">{word}</span>")
 }
@@ -1131,7 +1191,31 @@ fn tokens_said(n: u64) -> String {
     if n >= 1_000_000 && n.is_multiple_of(1_000_000) { format!("{} million", n / 1_000_000) } else { n.to_string() }
 }
 
+#[cfg(test)]
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
+    run_html_of(r, changes, summary, halted_by, name, None)
+}
+
+/// What a run whose engine left the Mac says in place of its controls (motor-velho.md, row 28): why it cannot go
+/// on, where its work is (the engine names the place), and Move to Finished, or the day it was moved.
+fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String {
+    let version = crate::listing::engine_version(&r.engine);
+    let place = crate::listing::run_place(home, r)
+        .map(|p| {
+            let (before, at, after) = p.parts();
+            format!("<div class=\"odim\">{}<code>{}</code>{} <button class=\"copyplace\" data-copy=\"{}\">Copy</button></div>", esc(&before), esc(&at), esc(&after), esc(&at))
+        })
+        .unwrap_or_default();
+    let tail = match moved_at {
+        Some(at) => format!("<div class=\"odim\">{}</div>", esc(&crate::moved::moved_on(at))),
+        None => format!("<button class=\"act\" data-act=\"move-to-finished\">{}</button><div class=\"odim\">{}</div>", crate::listing::MOVE_TO_FINISHED, esc(crate::listing::MOVE_SAYS)),
+    };
+    format!("<div class=\"notice older\"><div class=\"ohead\">{}</div><div class=\"odim\">{}</div>{place}{tail}</div>", esc(&crate::listing::older_head(version)), esc(crate::listing::OLDER_HOW))
+}
+
+/// `run_html`, with what a run whose engine left says (`older_html`) in place of its state, its controls and its
+/// stops when `older` is given.
+fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, older: Option<String>) -> String {
     let path = r.path();
     let steps = stage_list(r);
     let phase = match &r.phase {
@@ -1212,6 +1296,10 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
             )
         })
         .collect();
+    let (phase, answers, buttons, passed, correct) = match older {
+        Some(o) => (o, String::new(), String::new(), String::new(), String::new()),
+        None => (phase, answers, buttons, passed, correct),
+    };
     let data = json!({"run": r.id}).to_string();
     format!(
         "<div class=\"where\">{project}{role} {version} · run {id} · {risk} risk</div><h1>{title}</h1>{request}{why}{strip}{phase}{answers}\
@@ -2347,6 +2435,23 @@ document.addEventListener("click", async e => {
   const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run, action: b.dataset.act, ...extra }) })).json();
   if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
 });
+// Runs whose engine left the Mac: all moved at once after a line that asks, Esc or Cancel closing it; a place copied.
+const moveall = document.getElementById("moveall"), moveask = document.getElementById("moveallask");
+if (moveall && moveask) {
+  const close = () => { moveask.hidden = true; };
+  moveall.addEventListener("click", () => { moveask.hidden = false; document.getElementById("moveallyes").focus(); });
+  document.getElementById("moveallno").addEventListener("click", close);
+  addEventListener("keydown", e => { if (e.key === "Escape" && !moveask.hidden) close(); });
+  document.getElementById("moveallyes").addEventListener("click", async e => {
+    const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "move-to-finished", runs: JSON.parse(e.target.dataset.runs) }) })).json();
+    if (r.ok) location.reload(); else document.getElementById("moveallmsg").textContent = r.refused;
+  });
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("button.copyplace"); if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { b.textContent = "Select it and copy with Command-C"; }
+  setTimeout(() => b.textContent = "Copy", 2500);
+});
 const copysum = document.getElementById("copysum");
 if (copysum) copysum.addEventListener("click", async () => {
   const pre = document.getElementById("sumtext");
@@ -2387,7 +2492,9 @@ let seen = null;
 const busy = () => Object.keys(verdicts).length || [...document.querySelectorAll("input")].some(i => i.value) || document.activeElement.tagName === "INPUT";
 setInterval(async () => {
   try {
-    const v = (await (await fetch("/api/version", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).seq;
+    // a run moved to Finished writes no event: the engine's list counts too
+    const j = await (await fetch("/api/version", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+    const v = j.seq + "/" + (j.moved || 0);
     if (seen !== null && v !== seen && !busy()) location.reload();
     seen = v;
   } catch (_) {}
@@ -2468,6 +2575,14 @@ h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
 .badge { display:inline-flex; gap:6px; align-items:center; font-size:12px; padding:3px 10px; border-radius:999px; background:var(--green-soft); color:var(--green); }
 .badge.wait { background:var(--amber-soft); color:var(--amber); }
 .notice { background:var(--amber-soft); color:var(--amber); padding:10px 16px; font-size:13px; border-radius:8px; margin-bottom:14px; }
+.notice.older { background:var(--panel); color:var(--ink); } .notice.older .ohead { font-size:15px; }
+.odim { color:var(--dim); margin-top:6px; } .odim code { font-family:var(--mono); color:var(--ink); }
+.notice.older button.act { margin-top:12px; }
+button.copyplace, .moveall button.mv { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:3px 10px; font-size:12px; margin-left:6px; }
+button.copyplace:hover, .moveall button.mv:hover { border-color:var(--blue); } .moveall button.mv { padding:5px 12px; margin:8px 6px 0 0; }
+small.older { color:var(--dim); } button.linkish { background:none; border:0; padding:0; color:var(--dim); text-decoration:underline; text-transform:none; letter-spacing:0; font:inherit; cursor:pointer; }
+.qh.og { display:flex; justify-content:space-between; align-items:baseline; } .moveall .mvb { display:block; }
+.moveall { padding:0 18px 12px; font-size:13px; color:var(--ink); }
 .say { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; padding:6px 12px; margin-bottom:6px; }
 .say label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
 .say input { flex:1; background:transparent; border:0; color:var(--ink); font:inherit; font-size:14px; outline:none; padding:6px 0; }
@@ -3450,7 +3565,7 @@ mod tests {
         // a run delivered whose answers are still open, as the app's column says it
         let mut w = small_run(false);
         w.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
-        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, into: String::new() };
+        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, into: String::new(), gone: None, moved: None };
         assert!(phase_word(&w).contains("delivered · you can still correct it"), "{}", phase_word(&w));
     }
 
@@ -3526,6 +3641,73 @@ mod tests {
         for home in [&page.home, &app] {
             let _gone = std::fs::remove_dir_all(home);
         }
+    }
+
+    // The engineer lead, 22/11 (row 28): moving a run whose engine left the Mac to Finished is the person's alone,
+    // through the page's key or the app's signature as for answers; a run this engine carries on is refused.
+    #[test]
+    fn asked_only_the_person_moves_a_run_whose_engine_left_to_finished_22_11() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event};
+        let home = waiting("move");
+        let exe = PathBuf::from("/usr/bin/true");
+        // a run of a made-up engine that never was on this Mac, at a stop
+        let mut events = Store::open(&home.join("record.sqlite3")).expect("store").events("r1").expect("events");
+        for e in &mut events {
+            if let Event::RunStarted { run, engine, .. } = e {
+                *run = "old".into();
+                *engine = "0.0.1+nowhere".into();
+            }
+        }
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+            offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        let events: Vec<Event> = events.into_iter().filter(|e| matches!(e, Event::RunStarted { .. })).chain([Event::QuestionOpened { question }]).collect();
+        Store::open(&home.join("record.sqlite3")).expect("store").append("old", &events).expect("append");
+        let file = home.join(crate::moved::FILE);
+        // drawn apart, never with what waits: one run, so no "Move all"; its page says why and offers the move
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: exe.clone() };
+        for id in ["r1", "old"] {
+            Store::open(&home.join("record.sqlite3")).expect("store").put_setup(id, &json!({"project": "/p/tidepool"})).expect("setup");
+        }
+        let side = page.render(View::Overview, 0).expect("page");
+        assert!(side.contains("Waiting for you · 1<") && side.contains("From an older Jaynes · 1<"), "{side}");
+        assert!(side.contains("<small class=\"older\">can&#39;t go on · started on Jaynes 0.0.1</small>") || side.contains("<small class=\"older\">can't go on · started on Jaynes 0.0.1</small>"), "{side}");
+        assert!(!side.contains("Move all to Finished"), "one run: its card's button is enough");
+        let card = page.render(View::Run("old".into()), 0).expect("page");
+        for said in ["This run can", "it started on Jaynes 0.0.1, which is no longer on this Mac.", crate::listing::OLDER_HOW, ">Move to Finished</button>", "It leaves Needs you for good."] {
+            assert!(card.contains(said), "{said}: {card}");
+        }
+        assert!(!card.contains("data-act=\"abandon\"") && !card.contains("data-act=\"halt\"") && !card.contains("Answer: "), "nothing that cannot reach it");
+        assert!(!card.contains("What it made so far"), "it made nothing yet");
+        let agent = By::Agent { who: "an agent".into() };
+        let err = act_in(&home, &exe, &json!({"run": "old", "action": "move-to-finished"}), agent).expect_err("an agent");
+        assert!(err.starts_with("only you move a run to Finished"), "{err}");
+        let err = act_in(&home, &exe, &json!({"runs": ["old", "r1"], "action": "move-to-finished"}), By::Person).expect_err("r1 goes on");
+        assert!(err.contains("r1 goes on with this Jaynes"), "{err}");
+        assert!(!file.exists(), "nothing moved");
+        // the app: a signature over the move by its paired key, never over another move
+        let me = SigningKey::from_bytes(&[7; 32]);
+        let public = crate::person::hex(me.verifying_key().as_bytes());
+        crate::person::pair(&home, &public).expect("pair");
+        let runs = vec!["old".to_string()];
+        let other = crate::person::hex(&me.sign(&crate::person::move_message(&["r1".to_string()])).to_bytes());
+        assert!(crate::person::submit_move(&home, &runs, &public, &other).is_err(), "a signature over another move");
+        assert!(!file.exists());
+        let sig = crate::person::hex(&me.sign(&crate::person::move_message(&runs)).to_bytes());
+        assert_eq!(crate::person::submit_move(&home, &runs, &public, &sig), Ok(1));
+        assert_eq!(crate::moved::read(&home).expect("read")[0].signature.as_deref(), Some(sig.as_str()));
+        // moved: in Finished with its grey line, nowhere else, and its page says when
+        let side = page.render(View::Overview, 0).expect("page");
+        assert!(!side.contains("From an older Jaynes") && side.contains("moved by you · started on Jaynes 0.0.1, no longer on this Mac"), "{side}");
+        let card = page.render(View::Run("old".into()), 0).expect("page");
+        assert!(card.contains("You moved it to Finished on ") && !card.contains(">Move to Finished</button>"), "{card}");
+        // the page's way, after: already moved, nothing more; the run's record is as it was
+        assert_eq!(act_in(&home, &exe, &json!({"run": "old", "action": "move-to-finished"}), By::Person), Ok(json!({"ok": true, "moved": 0})));
+        assert_eq!(Store::open(&home.join("record.sqlite3")).expect("store").events("old").expect("events").len(), events.len());
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     #[test]

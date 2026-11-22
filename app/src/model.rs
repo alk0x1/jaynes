@@ -25,6 +25,8 @@ pub struct Detail {
     pub now: Option<String>,
     /// Already delivered while a stop of it is still open: the person's answer can still correct it.
     pub delivered: bool,
+    /// Started on an older engine no longer on this Mac: what its tab says when no card of it is open.
+    pub gone: Option<stop::Gone>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -174,7 +176,7 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
     let mut listing = listing::arrange(&entries);
     plain_lines(&mut listing);
     let rows: HashMap<&str, &Row> =
-        listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.as_str(), r)).collect();
+        listing.rows().map(|r| (r.id.as_str(), r)).collect();
     let mut details = HashMap::new();
     let mut stops = HashMap::new();
     let mut files = HashMap::new();
@@ -214,18 +216,21 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
                 stages: listing::stages(&e.run),
                 now: if row.mark == Mark::Working { listing::now(home, &e.run.id) } else { None },
                 delivered: !e.run.finished() && e.run.delivered.is_some(),
+                gone: matches!(row.mark, Mark::Older | Mark::Moved).then(|| stop::gone(home, &e.run)).flatten(),
             },
         );
     }
     Ok(Snapshot { listing, details, stops, files, halted, threads })
 }
 
-/// Sends the runs at once, then whenever they change; looks once a second.
+/// Sends the runs at once, then whenever they change; looks once a second. The record's last event says it changed,
+/// and so does the engine's list of the runs the person moved to Finished (`moved::FILE`), which is no event.
 fn watch(tx: async_channel::Sender<Result<Snapshot, String>>) {
     let home = jaynes_shell::home();
-    let mut seen: Option<(i64, Snapshot)> = None;
+    let mut seen: Option<((i64, Option<std::time::SystemTime>), Snapshot)> = None;
     loop {
-        let seq = jaynes_shell::store::Store::open(&home.join("record.sqlite3")).and_then(|s| s.last_seq());
+        let moved = std::fs::metadata(home.join(jaynes_shell::moved::FILE)).and_then(|m| m.modified()).ok();
+        let seq = jaynes_shell::store::Store::open(&home.join("record.sqlite3")).and_then(|s| s.last_seq()).map(|n| (n, moved));
         let working = seen.as_ref().is_some_and(|(_, s)| s.details.values().any(|d| d.mark == Mark::Working));
         let stale = match (&seq, &seen) {
             (Ok(n), Some((m, _))) => n != m || working,
@@ -265,7 +270,7 @@ mod tests {
     fn asked_column_rows_drop_the_backticks() {
         use jaynes_shell::listing::{Listing, Mark, Row};
         let row = |line: &str| Row { id: "r".into(), project: String::new(), apart: None, title: "T".into(), line: line.into(), mark: Mark::Needs };
-        let mut l = Listing { needs: vec![row("May the agent read `/etc/hosts`?")], projects: vec![("p".into(), vec![row("May the agent change `Makefile`?")])] };
+        let mut l = Listing { older: vec![], needs: vec![row("May the agent read `/etc/hosts`?")], projects: vec![("p".into(), vec![row("May the agent change `Makefile`?")])] };
         plain_lines(&mut l);
         assert_eq!(l.needs[0].line, "May the agent read /etc/hosts?");
         assert_eq!(l.projects[0].1[0].line, "May the agent change Makefile?");
