@@ -338,6 +338,19 @@ fn options(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     (d, vec![item("a"), item("b")])
 }
 
+/// One option, named by the request: for a stop that holds unless the request or the brief named it (`holds_unless`),
+/// the run that goes on with it without asking.
+fn named_one(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
+    let d = Digest(format!("{step}.{round}.{what}.named"));
+    let named = Some(crate::question::Named { words: "the request's words".into(), from: "request".into() });
+    (d.clone(), vec![Item { named, id: "named".into(), label: format!("the option of {step} the request named"), digest: d }])
+}
+
+/// Whether the step's stop lets the run go on when the request named its one option.
+fn unless_named(r: &Run, step: &str) -> bool {
+    r.manifest.index(step).and_then(|i| r.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.holds_unless.is_some())
+}
+
 fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> Vec<Move> {
     let step = &turn.step;
     let mut out = Vec::new();
@@ -367,6 +380,12 @@ fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> V
     } else {
         out.push(mv(ended(delivered("output", Vec::new())), format!("{step} delivers"), false));
     }
+    if unless_named(r, step) {
+        let changed = if turn.reach.project == ProjectAccess::Write { vec![Changed::file("src/a".into(), 1)] } else { Vec::new() };
+        let (d, items) = named_one(step, round, "small");
+        let outcome = AttemptOutcome::Delivered { output: d, items, changed, usage: Usage::default(), session: Some(format!("session-{step}")), tree: None, reply: None };
+        out.push(mv(ended(outcome), format!("{step} delivers the one option your request named"), false));
+    }
     out.push(mv(ended(AttemptOutcome::Failed { reasons: vec!["no output".into()], usage: Usage::default() }), format!("{step}'s attempt fails"), false));
     out.push(mv(ended(AttemptOutcome::Impossible { reason: "it cannot be done".into(), usage: Usage::default(), session: None }), format!("{step}'s agent says it cannot be done"), true));
     out.push(mv(ended(AttemptOutcome::Interrupted { usage: Default::default(), reason: "cut off".into() }), format!("{step}'s agent is cut off"), true));
@@ -395,6 +414,10 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
                 let (d, items) = output(step, *round, "role");
                 let ended = |outcome| Input::AttemptEnded { step: step.clone(), attempt: *attempt, fix: 0, outcome };
                 out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None }), format!("{step} done"), false));
+                if unless_named(r, step) {
+                    let (d, items) = named_one(step, *round, "role");
+                    out.push(mv(ended(AttemptOutcome::Delivered { output: d, items, changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None }), format!("{step} gives the one option your request named"), false));
+                }
                 out.push(mv(ended(AttemptOutcome::Refused { reason: "refused".into() }), format!("{step} refuses"), true));
                 out.push(mv(ended(AttemptOutcome::Fault { usage: Default::default(), reason: "the role crashed".into() }), format!("{step}'s role program crashes"), true));
             }
