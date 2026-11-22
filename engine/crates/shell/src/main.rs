@@ -396,10 +396,12 @@ fn run(args: &[String]) -> Result<(), String> {
             let s = store()?;
             // each run by its name, as the page and the app show it: its project, its title, and what tells it apart
             let rows = listing::read(&home())?;
-            let named: BTreeMap<String, String> = rows.needs.iter().chain(rows.projects.iter().flat_map(|(_, r)| r)).map(|r| (r.id.clone(), listing::name(r).join(" · "))).collect();
+            // and how it stands, in the words the app and the page say it (listing::said), never the phase alone
+            let named: BTreeMap<String, &listing::Row> = rows.needs.iter().chain(rows.projects.iter().flat_map(|(_, r)| r)).map(|r| (r.id.clone(), r)).collect();
             for id in s.runs()? {
                 if let Some(r) = s.state(&id)? {
-                    println!("{id}  {}  {}  {}", r.manifest.role, phase(&r.phase), named.get(&id).cloned().unwrap_or_default());
+                    let (state, name) = named.get(&id).map(|row| (listing::said(row), listing::name(row).join(" · "))).unwrap_or_else(|| (phase(&r.phase), String::new()));
+                    println!("{id}  {}  {state}  {name}", r.manifest.role);
                 }
             }
             Ok(())

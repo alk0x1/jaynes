@@ -848,7 +848,7 @@ impl Page {
             .iter()
             .map(|r| {
                 let on = shown_run.as_deref() == Some(r.id.as_str());
-                format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
+                format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r))
             })
             .collect();
         let mut aside = format!("<div class=\"qh\">Waiting for you · {}</div>{}{}", waiting.len() + blocked.len(), side(&waiting, false), blocked_links);
@@ -862,7 +862,7 @@ impl Page {
         let done: Vec<&Run> = runs.iter().rev().filter(|r| r.finished()).take(8).collect();
         let run_link = |r: &&Run| {
             let on = shown_run.as_deref() == Some(r.id.as_str());
-            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(&crate::listing::entry_of(&self.home, Run::clone(r))), strip(r))
         };
         aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Runs · {}</div>{}", open.len(), open.iter().map(run_link).collect::<String>()));
         if !done.is_empty() {
@@ -1055,17 +1055,20 @@ enum View {
     Run(String),
 }
 
-fn phase_word(r: &Run) -> String {
-    if r.halted && !r.finished() {
-        return "<span class=\"holds\">halted</span>".into();
-    }
-    match &r.phase {
-        Phase::Running => "<span class=\"goes\">running</span>".into(),
-        Phase::Waiting { step: None, .. } => "<span class=\"goes\">delivered · you can still correct it</span>".into(),
-        Phase::Waiting { .. } => "<span class=\"holds\">waits for you</span>".into(),
-        Phase::Blocked { .. } => "<span class=\"bad\">blocked</span>".into(),
-        Phase::Finished { outcome } => format!("{outcome:?}").to_lowercase(),
-    }
+/// How a run stands, in the word of the app's column and of `jaynes runs` (listing::stands); a run delivered whose
+/// answers are open says that they can still correct it, as the app's column does.
+pub(crate) fn phase_word(e: &crate::listing::Entry) -> String {
+    use crate::listing::Mark;
+    let (mark, _, _) = crate::listing::stands(e);
+    let word = mark.word();
+    let class = match mark {
+        Mark::Needs | Mark::Halted => "holds",
+        Mark::Working => "goes",
+        Mark::Blocked | Mark::Undone => "bad",
+        Mark::Delivered if !e.run.finished() => return format!("<span class=\"goes\">{word} · you can still correct it</span>"),
+        Mark::Delivered | Mark::Merged | Mark::Abandoned => return word.to_string(),
+    };
+    format!("<span class=\"{class}\">{word}</span>")
 }
 
 /// What the page refused on a run, newest last: a trace beside the record, shown so the person sees who tried.
@@ -1127,6 +1130,11 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name
     let path = r.path();
     let steps = stage_list(r);
     let phase = match &r.phase {
+        // set aside by the agent that started it: the person brings it back or ends it, whatever it was at
+        _ if r.set_aside.is_some() && !r.finished() => format!(
+            "<div class=\"notice\">{}</div>",
+            esc(&format!("Set aside by the agent that started it, at “{}”. Its work is kept: Resume brings it back, Abandon ends it.", crate::listing::halted_step(r).unwrap_or_default()))
+        ),
         // in the app's words: where, why, and what Continue does
         Phase::Blocked { step, reason, fault } => blocked_notice(step.as_deref(), *fault, reason),
         Phase::Running if r.halted => format!("<div class=\"notice\">{}</div>", esc(&crate::listing::halted_said(halted_by.unwrap_or("halted"), crate::listing::halted_step(r).as_deref()))),
@@ -1985,7 +1993,7 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
     let delivered = |list: &[&Run]| list.iter().map(|r| { let (said, chip) = landed(r); row(r, said, chip) }).collect::<String>();
     let mut moving: Vec<&Run> = runs.iter().filter(|r| !r.finished()).collect();
     moving.sort_by_key(|r| std::cmp::Reverse(at(r)));
-    let moving: String = moving.iter().map(|r| row(r, format!("{}, {}", where_in(r), phase_word(r)).replace("<span class=\"goes\">", "").replace("<span class=\"holds\">", "").replace("<span class=\"bad\">", "").replace("</span>", ""), "")).collect();
+    let moving: String = moving.iter().map(|r| row(r, format!("{}, {}", where_in(r), phase_word(&crate::listing::entry_of(home, Run::clone(r)))).replace("<span class=\"goes\">", "").replace("<span class=\"holds\">", "").replace("<span class=\"bad\">", "").replace("</span>", ""), "")).collect();
     let mut dropped: Vec<&Run> = runs.iter().filter(|r| matches!(r.phase, Phase::Finished { outcome: Outcome::Abandoned })).collect();
     dropped.sort_by_key(|r| std::cmp::Reverse(at(r)));
     let abandoned = dropped.len();
@@ -3432,9 +3440,16 @@ mod tests {
         idle.halted = true;
         idle.steps[0].status = Status::Idle;
         assert!(run_html(&idle, "", "", Some("halted by an agent"), None).contains("Halted by an agent at “plan”"));
+        // set aside by the agent that started it: said so, never as a halt
+        let mut aside = small_run(false);
+        aside.halted = true;
+        aside.set_aside = Some(By::Agent { who: "claude:1@x".into() });
+        let shown = run_html(&aside, "", "", Some("halted by an agent"), None);
+        assert!(shown.contains("Set aside by the agent that started it, at “plan”. Its work is kept: Resume brings it back, Abandon ends it.") && !shown.contains("Halted by"), "{shown}");
         // a run delivered whose answers are still open, as the app's column says it
         let mut w = small_run(false);
         w.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
+        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, into: String::new() };
         assert!(phase_word(&w).contains("delivered · you can still correct it"), "{}", phase_word(&w));
     }
 

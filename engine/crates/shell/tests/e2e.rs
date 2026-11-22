@@ -695,6 +695,65 @@ fn a_run_is_listed_by_its_project_and_the_title_its_start_gave() {
     assert!(listed.lines().any(|l| l.starts_with("titled ") && l.ends_with(&format!("{folder} · Say hi"))), "{listed}\n{out}");
 }
 
+/// Item 10 of 0.2.5: `jaynes runs` said "running" of a run the person halted, where the app said "halted". It says
+/// what the app and the page say: halted while its agent works, and "needs you" at a stop, halted or not.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_jaynes_runs_says_halted_of_a_halted_run_as_the_app_does() {
+    let s = scratch("runs-halted");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let mark = s.base.join("agent-at-work");
+    // the stand-in agent waits until the halt stops it
+    let agent = format!("echo $$ > {} && exec sleep 20", mark.display());
+    // the start this test made, and its stand-in agent, end with the test however it ends: only their own pids
+    struct Ends(std::process::Child, PathBuf);
+    impl Drop for Ends {
+        fn drop(&mut self) {
+            let _gone = self.0.kill();
+            let _ended = self.0.wait();
+            if let Some(pid) = std::fs::read_to_string(&self.1).ok().and_then(|p| p.trim().parse::<u32>().ok()) {
+                let _gone = Command::new("kill").arg(pid.to_string()).status();
+            }
+        }
+    }
+    let started = jaynes()
+        .args(["start", "--run", "slow", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "say hi instead of hello", "--agent", &format!("command:{agent}")])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start");
+    let mut started = Ends(started, mark.clone());
+    for _ in 0..300 {
+        if std::fs::read_to_string(&mark).is_ok_and(|p| !p.trim().is_empty()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(mark.exists(), "the agent never started: {:?}", types(&events(&s, "slow")));
+    let state_of = |s: &Scratch| -> String {
+        let (ok, listed) = engine(s, &["runs"]);
+        assert!(ok, "{listed}");
+        listed.lines().find(|l| l.starts_with("slow ")).unwrap_or_else(|| panic!("no slow in {listed}")).to_string()
+    };
+    let working = state_of(&s);
+    assert!(working.contains("  working · step "), "{working}");
+    let halted = tty()
+        .args([BIN, "halt", "slow"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python())
+        .output()
+        .expect("halt");
+    assert!(halted.status.success(), "{}{}", String::from_utf8_lossy(&halted.stdout), String::from_utf8_lossy(&halted.stderr));
+    let _ended = started.0.wait();
+    let line = state_of(&s);
+    assert!(line.contains("  halted · step ") && !line.contains("running"), "{line}");
+    // the same row the app and the page draw
+    let rows = jaynes_shell::listing::read(&s.home).expect("listing");
+    let row = rows.needs.iter().chain(rows.projects.iter().flat_map(|(_, r)| r)).find(|r| r.id == "slow").expect("row");
+    assert_eq!(row.mark, jaynes_shell::listing::Mark::Halted, "{row:?}");
+    assert!(line.contains(&row.line), "{line} | {row:?}");
+}
+
 /// Where Jaynes has no box for a project's commands, a run never runs them open: it stops at once, says why, and
 /// nothing of the project runs, the agent included. No variable opens it: only the person does, with their proof (G18).
 #[test]

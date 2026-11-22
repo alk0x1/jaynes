@@ -21,6 +21,29 @@ pub enum Mark {
     Abandoned,
 }
 
+impl Mark {
+    /// The mark in words, as the app's column, the page and `jaynes runs` say it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Mark::Needs => "needs you",
+            Mark::Working => "working",
+            Mark::Halted => "halted",
+            Mark::Blocked => "blocked",
+            Mark::Delivered => "delivered",
+            Mark::Merged => "merged",
+            Mark::Undone => "undone",
+            Mark::Abandoned => "abandoned",
+        }
+    }
+}
+
+/// How a run stands, as `jaynes runs` says it: the mark in words, then the row's line when it says more ("halted ·
+/// step 2 of 3, halted", "needs you · Which plan goes on?", "merged").
+pub fn said(row: &Row) -> String {
+    let word = row.mark.word();
+    if row.line.is_empty() || row.line == word { word.to_string() } else { format!("{word} · {}", row.line) }
+}
+
 /// One run in the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -79,11 +102,30 @@ pub fn entries(home: &Path) -> Result<Vec<Entry>, String> {
         let project = setup["project"].as_str().map(str::to_owned).unwrap_or_default();
         let title = setup["title"].as_str().map(str::to_owned);
         let (started, at) = times.get(&id).copied().unwrap_or((0, 0));
-        let merged = !crate::drive::merges(&home.join("runs").join(&id)).is_empty();
-        let into = into_of(home, &id);
-        entries.push(Entry { run, project, title, started, at, merged, into });
+        entries.push(Entry { project, title, started, at, ..entry_of(home, run) });
     }
     Ok(entries)
+}
+
+/// Run `run` with what its mark needs from outside its events (whether it was merged, and into which branch); no
+/// project, title or times.
+pub fn entry_of(home: &Path, run: Run) -> Entry {
+    let merged = !crate::drive::merges(&home.join("runs").join(&run.id)).is_empty();
+    let into = into_of(home, &run.id);
+    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into }
+}
+
+/// How a run stands in the list: its mark, its line, and whether it waits for the person.
+pub fn stands(e: &Entry) -> (Mark, String, bool) {
+    let r = &e.run;
+    let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
+    match waiting {
+        Some(q) => (Mark::Needs, title_into(q, &e.into), true),
+        None => {
+            let (mark, line) = standing(e);
+            (mark, line, false)
+        }
+    }
 }
 
 pub fn arrange(entries: &[Entry]) -> Listing {
@@ -96,14 +138,7 @@ pub fn arrange(entries: &[Entry]) -> Listing {
         let r = &e.run;
         let project = project_name(&e.project, &folders);
         let title = run_title(e.title.as_deref(), &r.request);
-        let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
-        let (mark, line, needs) = match waiting {
-            Some(q) => (Mark::Needs, title_into(q, &e.into), true),
-            None => {
-                let (mark, line) = standing(e);
-                (mark, line, false)
-            }
-        };
+        let (mark, line, needs) = stands(e);
         rows.push((Row { id: r.id.clone(), project, title, apart: None, line, mark }, needs, e));
     }
     // two runs of one title in one project: the step each is at, or when it started when the step is the same
@@ -273,6 +308,7 @@ fn standing(e: &Entry) -> (Mark, String) {
         Phase::Finished { outcome: Outcome::Delivered } if r.undone => (Mark::Undone, "reverted by you".into()),
         Phase::Finished { outcome: Outcome::Delivered } if e.merged => (Mark::Merged, "merged".into()),
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
+        _ if r.set_aside.is_some() => (Mark::Halted, format!("{}, set aside by the agent that started it", where_in(r))),
         _ if r.halted => (Mark::Halted, format!("{}, halted", where_in(r))),
         Phase::Blocked { reason, .. } => (Mark::Blocked, format!("{}, blocked: {}", where_in(r), in_words(reason))),
         Phase::Waiting { step: None, .. } => (Mark::Delivered, "delivered, answers open".into()),
@@ -1682,6 +1718,70 @@ mod tests {
         // two or more, and one item of a stop that does not choose: the role's question
         assert_eq!(title(&asked(vec![item("py", "Python"), item("go", "Go")], true)), "Which stack goes on?");
         assert_eq!(title(&asked(vec![item("py", "Python")], false)), "Which stack goes on?");
+    }
+
+    /// Item 10 of 0.2.5: `jaynes runs` said "running" of a halted run, where the app said "halted". Every state the
+    /// list knows reads the same in `jaynes runs` (said), on the page (phase_word) and in the app (the row's mark).
+    #[test]
+    fn asked_every_state_reads_the_same_in_jaynes_runs_on_the_page_and_in_the_app() {
+        use jaynes_core::question::By;
+        let stop = |r: &mut Run| {
+            let question = Question {
+                id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
+                about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            };
+            r.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+            r.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
+        };
+        let mut cases: Vec<(&str, Entry, &str)> = Vec::new();
+        let mut r = run("needs", "x");
+        stop(&mut r);
+        cases.push(("needs you", entry(r, "/p", 1), "Which plan goes on?"));
+        let mut r = run("works", "x");
+        r.steps[0].status = jaynes_core::run::Status::Running { attempt: 1, fix: 0 };
+        cases.push(("working", entry(r, "/p", 1), "step 1 of 2, running"));
+        // the run of the item: halted while a step was under way, its phase still Running
+        let mut r = run("halted", "x");
+        r.steps[0].status = jaynes_core::run::Status::Running { attempt: 1, fix: 0 };
+        r.halted = true;
+        cases.push(("halted", entry(r, "/p", 1), "step 1 of 2, halted"));
+        // halted at an open stop: the person can still answer it, so it waits for them
+        let mut r = run("halted-at-stop", "x");
+        stop(&mut r);
+        r.halted = true;
+        cases.push(("needs you", entry(r, "/p", 1), "Which plan goes on?"));
+        let mut r = run("aside", "x");
+        r.halted = true;
+        r.set_aside = Some(By::Agent { who: "claude:1@x".into() });
+        cases.push(("halted", entry(r, "/p", 1), "step 1 of 2, set aside by the agent that started it"));
+        let mut r = run("blocked", "x");
+        r.phase = Phase::Blocked { step: Some("plan".into()), fault: jaynes_core::event::Fault::Agent, reason: "no tests".into() };
+        cases.push(("blocked", entry(r, "/p", 1), "step 1 of 2, blocked: no tests"));
+        let mut r = run("open", "x");
+        r.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
+        cases.push(("delivered", entry(r, "/p", 1), "delivered, answers open"));
+        let mut r = run("delivered", "x");
+        r.phase = Phase::Finished { outcome: Outcome::Delivered };
+        cases.push(("delivered", entry(r.clone(), "/p", 1), "delivered"));
+        r.id = "merged".into();
+        cases.push(("merged", Entry { merged: true, ..entry(r.clone(), "/p", 1) }, "merged"));
+        r.id = "undone".into();
+        r.undone = true;
+        cases.push(("undone", Entry { merged: true, ..entry(r.clone(), "/p", 1) }, "reverted by you"));
+        let mut r = run("abandoned", "x");
+        r.phase = Phase::Finished { outcome: Outcome::Abandoned };
+        cases.push(("abandoned", entry(r, "/p", 1), "abandoned"));
+        for (word, e, line) in &cases {
+            let listing = arrange(std::slice::from_ref(e));
+            let row = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).next().expect("row");
+            let id = &e.run.id;
+            assert_eq!((row.mark.word(), row.line.as_str()), (*word, *line), "{id}: the app's mark and line");
+            let said = said(row);
+            assert!(said.starts_with(word) && said.contains(line), "{id}: jaynes runs says {said:?}");
+            assert!(!(said.contains("running") && *word != "working"), "{id}: jaynes runs says {said:?}");
+            let page = crate::page::phase_word(e);
+            assert!(page.contains(&format!(">{word}")) || page == *word, "{id}: the page says {page:?}");
+        }
     }
 
     #[test]
