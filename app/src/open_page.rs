@@ -39,6 +39,12 @@ pub fn live(page: &str) -> Result<(), String> {
     live_with(&jaynes_shell::home(), page_port()?, &crate::answer::engine_program(), page, jaynes_shell::install::ensure_page_at)
 }
 
+/// What a click on Open beside a stop the merge's touch keeps does: that stop on the page of the engine home the app
+/// reads, with its key, to answer it differently before the merge (the app has no card for a stop the run went past).
+pub fn stop(run: &str, question: &str) -> Result<(), String> {
+    jaynes_shell::install::ensure_page_at(&jaynes_shell::home(), page_port()?, &crate::answer::engine_program(), &format!("/q/{run}/{question}")).map(|_address| ()).map_err(|why| one_line(&why))
+}
+
 /// The port the page is asked on: the engine's own (install::PORT), or, in a build for tests only, the one
 /// JAYNES_APP_PAGE_PORT names, so a test never reaches the page of the person who runs it.
 fn page_port() -> Result<u16, String> {
