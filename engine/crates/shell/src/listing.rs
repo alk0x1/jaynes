@@ -2875,7 +2875,7 @@ mod tests {
     #[test]
     fn asked_the_update_says_which_open_runs_an_older_jaynes_started_before_it_installs() {
         let mut waits = of_engine(run("r1", "Choose the stack"), "0.2.4+aaa");
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: false,
             about: "Which stack?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
