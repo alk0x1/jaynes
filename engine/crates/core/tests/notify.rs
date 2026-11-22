@@ -27,7 +27,7 @@ fn step(name: &str, executor: Executor, needs: &[&str]) -> StepDecl {
 }
 
 fn holding() -> StopDecl {
-    StopDecl { unheld: None,
+    StopDecl { settled: None,
         verdicts: vec![VerdictKind::Keep, VerdictKind::Redo],
         holds: true,
         from_risk: Risk::Low,

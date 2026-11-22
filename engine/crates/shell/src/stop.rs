@@ -622,7 +622,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("jaynes-stop-passed-words-{}", std::process::id()));
         let mut r = went_on_from_reproduce(false);
         let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { unheld: None,
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers,
         });
@@ -739,7 +739,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("jaynes-stop-answers-{}", std::process::id()));
         let mut r = asking(run(&[("plan", false), ("change", false)], DeliveryKind::Branch));
         let answers = BTreeMap::from([(VerdictKind::Keep, "Yes".to_string()), (VerdictKind::Redo, "No, it's something else".to_string())]);
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { unheld: None,
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers: answers.clone(),
         });

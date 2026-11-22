@@ -190,7 +190,7 @@ fn reproduce_then_fix(starter: Option<String>, holds: bool) -> (Run, Vec<Command
         redo: None,
         rounds: None,
         answers: [(VerdictKind::Redo, "Not this bug".to_string())].into_iter().collect(),
-        unheld: Some("the bug".to_string()),
+        settled: Some("the bug".to_string()),
     };
     let reproduce = StepDecl { name: "reproduce".to_string(), stop: Some(stop), ..build() };
     let fix = StepDecl { name: "fix".to_string(), needs: vec!["reproduce".to_string()], ..build() };

@@ -774,7 +774,7 @@ pub fn talk(s: &jaynes_core::run::StepState) -> Vec<String> {
 /// The story's line of a stop that did not hold the run: what the request settled there, then that the run went on,
 /// or that the person's touch at the merge kept it ("◇ At “reproduce”: the bug, as your request says · the run went
 /// on"). None for a stop the person answers on its own.
-pub fn unheld_line(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<String> {
+pub fn settled_line(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<String> {
     let s = &q.question;
     if s.kind != jaynes_core::question::QuestionKind::Decision || s.holds {
         return None;
@@ -786,7 +786,7 @@ pub fn unheld_line(run: &Run, q: &jaynes_core::run::QuestionState) -> Option<Str
     } else {
         return None;
     };
-    Some(format!("◇ At “{}”: {} · {how}", s.step, run.unheld_said(s)))
+    Some(format!("◇ At “{}”: {} · {how}", s.step, run.settled_said(s)))
 }
 
 /// A run's story: each step its agents worked, in the order they started, with what they did there, turn after turn,
@@ -834,7 +834,7 @@ pub fn story_of(home: &Path, run: &str, state: Option<&Run>) -> Vec<(String, Vec
                 if let Some(s) = r.manifest.index(&name).map(|i| &r.steps[i]) {
                     said.extend(talk(s));
                 }
-                said.extend(r.questions.values().filter(|q| q.question.step == name && !q.superseded).filter_map(|q| unheld_line(r, q)));
+                said.extend(r.questions.values().filter(|q| q.question.step == name && !q.superseded).filter_map(|q| settled_line(r, q)));
             }
             (name, with_refusals(said, named.as_deref()))
         })
@@ -2290,7 +2290,7 @@ mod tests {
     fn asked_one_moment_at_the_merge_the_story_says_what_a_stop_that_did_not_wait_holds() {
         use jaynes_core::question::{Answer, By, Item, Ride, Verdict};
         let mut r = run("one-moment", "the CSV breaks on a comma");
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { unheld: Some("the bug".into()), verdicts: vec![], holds: false, from_risk: Default::default(), release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default() });
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: Some("the bug".into()), verdicts: vec![], holds: false, from_risk: Default::default(), release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default() });
         let bug = Question { rides: Vec::new(),
             id: "q-bug".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision,
             items: vec![Item { id: "bug".into(), label: "A note with a comma breaks the CSV".into(), digest: jaynes_core::Digest("b".into()) }],
@@ -2298,11 +2298,11 @@ mod tests {
         };
         r.questions.insert(bug.id.clone(), QuestionState { question: bug.clone(), answer: None, effects: None, superseded: false });
         r.phase = Phase::Waiting { step: Some("change".into()), on: vec![], why: String::new() };
-        let line = |r: &Run| unheld_line(r, &r.questions["q-bug"]);
+        let line = |r: &Run| settled_line(r, &r.questions["q-bug"]);
         assert_eq!(line(&r).as_deref(), Some("◇ At “plan”: the bug, as your request says · the run went on"));
         // the touch at the merge kept it
         let keep = Answer { question: bug.id.clone(), shown: bug.shown(), verdicts: [("bug".to_string(), Verdict::Keep)].into(), by: By::Person, context: String::new(), back: Default::default() };
-        r.questions.get_mut("q-bug").unwrap().answer = Some(keep.clone());
+        r.questions.get_mut("q-bug").expect("asked").answer = Some(keep.clone());
         let merge = Question { rides: vec![Ride { question: bug.id.clone(), step: "plan".into(), said: "the bug, as your request says".into() }],
             id: "q-merge".into(), step: "change".into(), round: 0, kind: QuestionKind::Merge, items: vec![], offered: vec![], holds: true,
             about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
@@ -2311,14 +2311,14 @@ mod tests {
         r.questions.insert(merge.id.clone(), QuestionState { question: merge, answer: Some(merged), effects: None, superseded: false });
         assert_eq!(line(&r).as_deref(), Some("◇ At “plan”: the bug, as your request says · kept when you merged"));
         // answered at the stop itself: the person's own answer, told by the stop's line as before
-        r.questions.get_mut("q-merge").unwrap().question.rides.clear();
+        r.questions.get_mut("q-merge").expect("asked").question.rides.clear();
         assert_eq!(line(&r), None);
         // an agent started the run: whose request it was
-        r.questions.get_mut("q-bug").unwrap().answer = None;
+        r.questions.get_mut("q-bug").expect("asked").answer = None;
         r.starter = Some("4242@1".into());
         assert_eq!(line(&r).as_deref(), Some("◇ At “plan”: the bug, as the request the agent that started the run wrote says · the run went on"));
         // a stop that holds is the person's to answer: never a line of these
-        r.questions.get_mut("q-bug").unwrap().question.holds = true;
+        r.questions.get_mut("q-bug").expect("asked").question.holds = true;
         assert_eq!(line(&r), None);
     }
 
