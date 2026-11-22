@@ -973,6 +973,28 @@ impl Run {
         }
     }
 
+    /// What a stop that did not hold the run holds now, in Jaynes's words: the role's words for what the request
+    /// settles there (its stop's `unheld`, `{{name}}` the option's name), then whose request it was; without them, the
+    /// option as it was made. The merge's question says it of each stop its touch keeps, and the run's story too.
+    pub fn unheld_said(&self, q: &Question) -> String {
+        let whose = if self.starter.is_some() { "as the request the agent that started the run wrote says" } else { "as your request says" };
+        let words = self.manifest.index(&q.step).and_then(|j| self.manifest.steps[j].stop.as_ref()).and_then(|s| s.unheld.as_ref());
+        match words {
+            Some(words) => format!("{}, {whose}", words.replace("{{name}}", q.items.first().map(Item::name).unwrap_or_default())),
+            None => match q.items.as_slice() {
+                [one] => format!("“{}”, as it was made", one.name()),
+                many => format!("its {} items, as they were made", many.len()),
+            },
+        }
+    }
+
+    /// Whether the person's touch at the merge kept this stop: the merge's question named it, and its answer is
+    /// that touch's.
+    pub fn kept_at_merge(&self, id: &str) -> bool {
+        let kept = self.questions.get(id).and_then(|q| q.answer.as_ref()).is_some_and(|a| a.by == By::Person);
+        kept && self.questions.values().any(|m| m.question.kind == QuestionKind::Merge && m.answer.is_some() && m.question.rides.iter().any(|r| r.question == id))
+    }
+
     pub fn open_questions(&self) -> Vec<&QuestionState> {
         self.questions.values().filter(|q| q.open()).collect()
     }

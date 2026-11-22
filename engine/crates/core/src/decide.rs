@@ -854,23 +854,11 @@ impl Ctx {
             .into_iter()
             .filter_map(|j| {
                 let q = &self.run.open_question(j)?.question;
+                // a stop the merge's touch keeps
                 let keeps = q.kind == QuestionKind::Decision && !q.holds && q.offered.contains(&VerdictKind::Keep) && (!q.choose || q.one_option());
-                keeps.then(|| Ride { question: q.id.clone(), step: q.step.clone(), said: self.ride_said(j, q) })
+                keeps.then(|| Ride { question: q.id.clone(), step: q.step.clone(), said: self.run.unheld_said(q) })
             })
             .collect()
-    }
-
-    /// What an open stop holds now, in Jaynes's words: the role's words for what the request settles there, then whose
-    /// request it was; without them, the option as it was made.
-    fn ride_said(&self, j: usize, q: &Question) -> String {
-        let whose = if self.run.starter.is_some() { "as the request the agent that started the run wrote says" } else { "as your request says" };
-        match self.run.manifest.steps[j].stop.as_ref().and_then(|s| s.unheld.as_ref()) {
-            Some(words) => format!("{}, {whose}", words.replace("{{name}}", q.items.first().map(Item::name).unwrap_or_default())),
-            None => match q.items.as_slice() {
-                [one] => format!("“{}”, as it was made", one.name()),
-                many => format!("its {} items, as they were made", many.len()),
-            },
-        }
     }
 
     fn deliver(&mut self) -> bool {
