@@ -585,12 +585,14 @@ pub struct Stack {
     cursor: usize,
     /// The file and line the person asked to edit (e, or a file's open icon), for the window to open.
     pub edit: Option<(String, u32)>,
+    /// The tab's width as last laid out, for [`layout`]; 0 before it is.
+    width: std::rc::Rc<std::cell::Cell<f32>>,
 }
 
 impl Stack {
     pub fn new(changes: Entity<Changes>, cx: &mut Context<Self>) -> Self {
         cx.observe(&changes, |_, _, cx| cx.notify()).detach();
-        Stack { changes, focus: cx.focus_handle(), cursor: 0, edit: None }
+        Stack { changes, focus: cx.focus_handle(), cursor: 0, edit: None, width: Default::default() }
     }
 
     /// Every piece in the stack, in order: its file and its place in it.
@@ -668,6 +670,23 @@ fn side(label: &'static str, lines: &[diff::Line], colour: u32) -> Div {
     col
 }
 
+/// How a piece's Before and After sit, by the width of the Changes tab, as the sketch (app-changes.html) has them:
+/// Before above After where the tab is narrow, side by side where it is wide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    Stacked,
+    Side,
+}
+
+/// The tab's width, in points, from which Before and After sit side by side: the sketch's wide panel (560), never its
+/// narrow one (360).
+pub const SIDE_FROM: f32 = 560.;
+
+/// [`Layout`] for a tab `width` wide; side by side before the tab is first measured (0), as the middle is wide.
+pub fn layout(width: f32) -> Layout {
+    if width > 0. && width < SIDE_FROM { Layout::Stacked } else { Layout::Side }
+}
+
 /// A file clicked in the panel goes to the bottom of the stack the Changes tab shows, once: whether it is new there.
 pub fn stack(shown: &mut Vec<String>, path: &str) -> bool {
     if shown.iter().any(|p| p == path) {
@@ -734,7 +753,42 @@ impl Render for Stack {
         self.cursor = self.cursor.min(all.len().saturating_sub(1));
         let cursor = all.get(self.cursor).cloned();
         let changes = self.changes.read(cx);
-        let mut page = div().id("changes-stack").flex_1().min_h_0().overflow_y_scroll().px(px(18.)).py(px(8.)).flex().flex_col();
+        let width = self.width.clone();
+        let me = cx.entity().downgrade();
+        let stacked = layout(width.get()) == Layout::Stacked;
+        let mut page = div()
+            .id("changes-stack")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(18.))
+            .py(px(8.))
+            .flex()
+            .flex_col()
+            // the tab's width as laid out: drawn again when it crosses SIDE_FROM
+            .child(
+                canvas(
+                    move |b, _, _| {
+                        let w: f32 = b.size.width.into();
+                        let crossed = layout(w) != layout(width.get());
+                        width.set(w);
+                        crossed
+                    },
+                    move |_, crossed, _, cx| {
+                        // drawn again once this frame is done: a view is drawn anew only when told, and never while it
+                        // paints
+                        if crossed {
+                            let me = me.clone();
+                            cx.defer(move |cx| {
+                                let _ = me.update(cx, |_, cx| cx.notify());
+                            });
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
         for (k, path) in changes.shown.iter().enumerate() {
             let (name, dir) = split(path);
             let d = changes.diffs.get(path);
@@ -795,6 +849,7 @@ impl Render for Stack {
                         .relative()
                         .mt(px(6.))
                         .flex()
+                        .when(stacked, |d| d.flex_col())
                         .rounded(px(6.))
                         .border_1()
                         .border_color(rgb(if here { look::blue() } else { look::line_2() }))
@@ -807,7 +862,7 @@ impl Render for Stack {
                             cx.notify();
                         }))
                         .child(side(if p.staged { "Before · staged" } else { "Before" }, &p.before, look::red()))
-                        .child(div().w(px(1.)).flex_none().bg(rgb(look::line_2())))
+                        .child(if stacked { div().h(px(1.)).flex_none().bg(rgb(look::line_2())) } else { div().w(px(1.)).flex_none().bg(rgb(look::line_2())) })
                         .child(side("After", &p.after, look::green()))
                         // its + or −, at the top right corner
                         .child(div().absolute().top(px(3.)).right(px(4.)).child(act_icon(SharedString::from(format!("piece-act-{path}-{i}")), if p.staged { look::Icon::Minus } else { look::Icon::Plus }).on_click(act))),
@@ -854,7 +909,7 @@ pub fn enter_commits(s: &crate::git::Status) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_label, enter_commits, key_act, read_run, split, stack, step_change, step_title, DiffLine, Key, KEYS};
+    use super::{commit_label, enter_commits, key_act, layout, read_run, split, stack, step_change, step_title, DiffLine, Key, Layout, KEYS, SIDE_FROM};
     use crate::git::{Entry, Status};
 
     #[test]
@@ -932,6 +987,18 @@ mod tests {
 
     // Alan, 17/11, the Changes as in app-changes.html: "teclas do magit" (from the app's memory of 17/11, perhaps a
     // paraphrase; the goal, "magit's power with VS Code's simplicity")
+    // Alan, 17/11, as the app's memory keeps it (row 29): "diff como o difftastic (Before em cima, After embaixo)";
+    // the sketch he picked from, app-changes.html, has Before above After in the 360 panel and side by side in the
+    // wide middle. The engineer lead, 21/11: "empilhado quando estreito, lado a lado quando largo"
+    #[test]
+    fn asked_before_above_after_when_narrow_side_by_side_when_wide() {
+        assert_eq!(layout(360.), Layout::Stacked, "the sketch's narrow panel");
+        assert_eq!(layout(SIDE_FROM - 1.), Layout::Stacked);
+        assert_eq!(layout(SIDE_FROM), Layout::Side, "where it changes");
+        assert_eq!(layout(1100.), Layout::Side, "the wide middle");
+        assert_eq!(layout(0.), Layout::Side, "before the tab is measured");
+    }
+
     #[test]
     fn asked_magit_keys_in_the_changes_tab() {
         assert_eq!(key_act("n", false), Some(Key::Next));
