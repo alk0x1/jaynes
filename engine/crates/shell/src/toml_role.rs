@@ -79,7 +79,7 @@
 //! cannot be undone unless its repeat is harmless. A step that cannot be undone and fails says it may have acted,
 //! unless its script exited 1, which is its word that nothing was done.
 
-use crate::protocol::{Body, Call, Given, Reply, Request, ShownItem, MAJOR};
+use crate::protocol::{Body, Call, Given, Photo, Reply, Request, ShownItem, MAJOR};
 use jaynes_core::manifest::{
     CheckDecl, CheckKind, DeliveryKind, Effect, Executor, Manifest, Network, ProjectAccess, Rate, Reach, SessionKind,
     StepDecl, StopDecl, Target,
@@ -367,7 +367,7 @@ pub(crate) fn engine_wrong(needs: &str) -> Option<String> {
 
 /// What the person is shown of an output: one item per element of a list field, or the whole output, with a
 /// label written from its fields.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ShowFile {
     /// A list field of the output: one item for each of its elements.
@@ -385,6 +385,13 @@ pub struct ShowFile {
     /// of the project. Jaynes photographs a page itself, offline, and shows the photograph.
     #[serde(default)]
     pub picture: Option<String>,
+    /// The window the page is photographed in: `phone` (390×844) or `computer` (1440×900, as without it), or a
+    /// field that names one, written like the label (`{{device}}`); a device Jaynes does not know is a computer's.
+    #[serde(default)]
+    pub picture_size: Option<String>,
+    /// The page photographed whole, down to its last line, when it is taller than the window.
+    #[serde(default)]
+    pub picture_full: bool,
     /// The parts of each item the person judges apart, each a label and a text written like the label, such as
     /// `{ label = "Palette", text = "{{palette}}" }`. Shown under the item, in order; an empty text is left out.
     #[serde(default)]
@@ -1427,6 +1434,17 @@ impl TomlRole {
             {
                 errs.push(format!("show.each names {each}, which the output does not have"));
             }
+            if let Some(show) = &s.show {
+                if (show.picture_size.is_some() || show.picture_full) && show.picture.is_none() {
+                    errs.push("picture_size and picture_full say how the picture is photographed, and the show has no picture".into());
+                }
+                if let Some(size) = &show.picture_size
+                    && !size.contains("{{")
+                    && !DEVICES.iter().any(|(d, _)| d == size)
+                {
+                    errs.push(format!("picture_size is phone, computer or a field such as {{{{device}}}}, not {size}"));
+                }
+            }
             if let Some(st) = &s.stop {
                 match (&st.verdicts, st.choose) {
                     (None, false) => errs.push("has a stop that names no verdicts: verdicts = [\"keep\", \"redo\"], or choose = true".into()),
@@ -2161,7 +2179,8 @@ stop = {{ ask = "Keep this change?", verdicts = ["keep", "redo"] }}
 # with show = {{ each = "options", id = "{{{{name}}}}", label = "{{{{name}}}}", detail = "{{{{why}}}}", picture = "{{{{page}}}}" }}.
 # One click keeps the chosen option alone, without the agent; a note beside it has the agent adjust it, seeing all.
 # picture is an image, or an .html page of the copy that Jaynes photographs offline (later agents find the photo at
-# .jaynes/pictures/PATH.png).
+# .jaynes/pictures/PATH.png): in a computer's window, or picture_size = "phone" (or a field, "{{{{device}}}}"), and
+# picture_full = true photographs the page whole, down to its last line.
 
 [step.output]                # what the agent writes, field by field: string, number, integer, boolean, array, object
 summary = {{ type = "string", max_length = 400, about = "what changed, in a sentence or two" }}
@@ -2465,9 +2484,12 @@ pub fn check_reach(x: &StepExtra, check: &str) -> Value {
     json!({"local_ports": x.check_ports.get(check).cloned().unwrap_or_default()})
 }
 
+/// The windows a picture is photographed in, by the device the role names; the first is the default.
+const DEVICES: [(&str, (u32, u32)); 2] = [("computer", (1440, 900)), ("phone", (390, 844))];
+
 /// What the person is shown of an output.
 pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownItem> {
-    let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new() };
+    let whole = || ShownItem { id: step.to_string(), label: format!("what {step} made"), content: output.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new(), photo: None };
     let Some(show) = show else { return vec![whole()] };
     let filled = |template: &Option<String>, from: &Value| template.as_deref().map(|t| label(t, from).trim().to_string()).unwrap_or_default();
     let dressed = |item: ShownItem, from: &Value| {
@@ -2478,7 +2500,12 @@ pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownIt
             .map(|a| crate::protocol::Aspect { label: a.label.clone(), text: label(&a.text, from).trim().to_string() })
             .filter(|a| !a.text.is_empty())
             .collect();
-        ShownItem { detail: filled(&show.detail, from), pictures: if picture.is_empty() { Vec::new() } else { vec![picture] }, aspects, ..item }
+        let photo = (show.picture_size.is_some() || show.picture_full).then(|| {
+            let device = filled(&show.picture_size, from);
+            let (width, height) = DEVICES.iter().find(|(d, _)| *d == device).unwrap_or(&DEVICES[0]).1;
+            Photo { width, height, whole: show.picture_full }
+        });
+        ShownItem { detail: filled(&show.detail, from), pictures: if picture.is_empty() { Vec::new() } else { vec![picture] }, aspects, photo, ..item }
     };
     match &show.each {
         None => {
@@ -2492,7 +2519,7 @@ pub fn items(step: &str, show: Option<&ShowFile>, output: &Value) -> Vec<ShownIt
                 .enumerate()
                 .map(|(n, e)| {
                     let id = Some(filled(&show.id, e)).filter(|i| !i.is_empty()).unwrap_or_else(|| format!("{field}-{}", n + 1));
-                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new() }, e)
+                    dressed(ShownItem { id, label: label(&show.label, e), content: e.clone(), detail: String::new(), pictures: Vec::new(), aspects: Vec::new(), photo: None }, e)
                 })
                 .collect(),
             _ => vec![whole()],
@@ -2784,10 +2811,10 @@ with = {{ pages = "read.sources" }}
     #[test]
     fn items_follow_show() {
         let out = json!({"summary": "s", "examples": [{"case": "a", "now": "b"}, {"case": "c", "now": "d"}]});
-        let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() };
+        let each = ShowFile { each: Some("examples".into()), label: "{{case}}: now {{now}}".into(), id: None, detail: None, picture: None, aspects: Vec::new(), ..Default::default() };
         let shown = items("reproduce", Some(&each), &out);
         assert_eq!(shown.iter().map(|i| (i.id.as_str(), i.label.as_str())).collect::<Vec<_>>(), [("examples-1", "a: now b"), ("examples-2", "c: now d")]);
-        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None, aspects: Vec::new() }), &out);
+        let whole = items("fix", Some(&ShowFile { each: None, label: "{{summary}}".into(), id: None, detail: None, picture: None, aspects: Vec::new(), ..Default::default() }), &out);
         assert_eq!(whole[0].label, "s");
         assert_eq!(items("fix", None, &out)[0].label, "what fix made");
     }
@@ -2795,7 +2822,7 @@ with = {{ pages = "read.sources" }}
     #[test]
     fn narrowing_keeps_only_the_chosen_elements_as_they_were() {
         let out = json!({"note": "n", "directions": [{"name": "Ink"}, {"name": "Sun"}, {"name": "Moss"}]});
-        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects: Vec::new() };
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects: Vec::new(), ..Default::default() };
         let kept = narrow("d", Some(&show), &out, &["Sun".to_string()]).expect("kept");
         assert_eq!(kept, json!({"note": "n", "directions": [{"name": "Sun"}]}));
         let whole = ShowFile { each: None, ..show };
@@ -2819,10 +2846,35 @@ with = {{ pages = "read.sources" }}
     #[test]
     fn items_take_their_id_sentence_and_picture_from_the_element() {
         let out = json!({"directions": [{"name": "Ink", "why": "dark on paper", "page": "design/ink.html"}, {"name": "Sun", "why": "", "page": ""}]});
-        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: Some("{{why}}".into()), picture: Some("{{page}}".into()), aspects: Vec::new() };
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: Some("{{why}}".into()), picture: Some("{{page}}".into()), aspects: Vec::new(), ..Default::default() };
         let shown = items("directions", Some(&show), &out);
         assert_eq!((shown[0].id.as_str(), shown[0].detail.as_str(), shown[0].pictures.clone()), ("Ink", "dark on paper", vec!["design/ink.html".to_string()]));
         assert_eq!((shown[1].id.as_str(), shown[1].pictures.len()), ("Sun", 0), "an empty path is no picture");
+    }
+
+    #[test]
+    fn asked_a_picture_is_photographed_at_its_device_s_window_and_whole() {
+        // the real-user, 22/11: a phone's layouts photographed at a computer's window; the design-lead, 22/11: the
+        // identity board is taller than the window, and the stop's photograph left its fonts out
+        let out = json!({"layouts": [{"name": "A", "page": "a.html", "device": "phone"}, {"name": "B", "page": "b.html", "device": "computer"},
+                                     {"name": "C", "page": "c.html", "device": "a fridge"}, {"name": "D", "page": "d.html"}]});
+        let show = ShowFile { each: Some("layouts".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), picture: Some("{{page}}".into()),
+                              picture_size: Some("{{device}}".into()), picture_full: true, ..Default::default() };
+        let got: Vec<Option<Photo>> = items("layouts", Some(&show), &out).iter().map(|i| i.photo).collect();
+        let phone = Photo { width: 390, height: 844, whole: true };
+        let computer = Photo { width: 1440, height: 900, whole: true };
+        assert_eq!(got, [Some(phone), Some(computer), Some(computer), Some(computer)], "a device it does not know is a computer's");
+        // without the keys, a picture is photographed as before: a computer's window, the window alone
+        let plain = ShowFile { picture_size: None, picture_full: false, ..show.clone() };
+        assert_eq!(items("layouts", Some(&plain), &out)[0].photo, None);
+        // the role names a device Jaynes knows, or a field that names one
+        let text = format!("{GOOD}\n[step.show]\neach = \"files\"\nlabel = \"{{{{name}}}}\"\npicture = \"{{{{page}}}}\"\npicture_size = \"phone\"\npicture_full = true\n");
+        let r = TomlRole::load(&role("sized", &text)).expect("reads");
+        assert_eq!(r.extras["change"].show.as_ref().and_then(|s| s.picture_size.clone()).as_deref(), Some("phone"));
+        let e = errors("sized-bad", &text.replace("picture_size = \"phone\"", "picture_size = \"watch\""));
+        assert!(e.contains("picture_size is phone, computer or a field such as {{device}}, not watch"), "{e}");
+        let e = errors("sized-alone", &text.replace("picture = \"{{page}}\"\n", ""));
+        assert!(e.contains("picture_size and picture_full say how the picture is photographed, and the show has no picture"), "{e}");
     }
 
     #[test]
@@ -2833,7 +2885,7 @@ with = {{ pages = "read.sources" }}
             AspectFile { label: "Money".into(), text: "money in {{money}}".into() },
             AspectFile { label: "Fonts".into(), text: "{{fonts}}".into() },
         ];
-        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects };
+        let show = ShowFile { each: Some("directions".into()), label: "{{name}}".into(), id: Some("{{name}}".into()), detail: None, picture: None, aspects, ..Default::default() };
         let shown = items("directions", Some(&show), &out);
         let got: Vec<(&str, &str)> = shown[0].aspects.iter().map(|a| (a.label.as_str(), a.text.as_str())).collect();
         assert_eq!(got, [("Palette", "deep green, sand"), ("Money", "money in green")], "an empty one is left out");

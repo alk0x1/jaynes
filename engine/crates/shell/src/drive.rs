@@ -1675,6 +1675,11 @@ impl<'a> Driver<'a> {
                     // the same page keeps the same photograph, so an option kept as it was stays as it was
                     let source = std::fs::read(&real).map_err(|e| e.to_string())?;
                     let page = Digest::of_bytes(&source).0;
+                    // and the same page photographed in another window is another photograph
+                    let taken = match x.photo {
+                        Some(p) => format!("{page} {}x{}{}", p.width, p.height, if p.whole { " whole" } else { "" }),
+                        None => page.clone(),
+                    };
                     let name = format!("{page}.html");
                     std::fs::create_dir_all(&shelf).map_err(|e| e.to_string())?;
                     std::fs::write(shelf.join(&name), &source).map_err(|e| e.to_string())?;
@@ -1683,13 +1688,13 @@ impl<'a> Driver<'a> {
                     // Jaynes writes these in the copy, where an agent may have left a link to anywhere: the photograph is
                     // made in the run's own folder, out of the agent's reach, and put in place without following a link
                     let made = plain_inside(&base, &photo).is_ok();
-                    if !(made && read_inside(&base, &of).is_ok_and(|d| d == page)) {
+                    if !(made && read_inside(&base, &of).is_ok_and(|d| d == taken)) {
                         let shot = self.setup.dir.join("photograph.png");
                         let _gone = std::fs::remove_file(&shot);
-                        self.photograph(&real, &shot).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
+                        self.photograph(&real, &shot, x.photo).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
                         let bytes = std::fs::read(&shot).map_err(|e| e.to_string())?;
                         write_inside(&base, &photo, &bytes).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
-                        write_inside(&base, &of, page.as_bytes()).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
+                        write_inside(&base, &of, taken.as_bytes()).map_err(|e| format!("the picture {p} of {}: {e}", x.id))?;
                     }
                     ext = "png".into();
                     photo
@@ -1718,13 +1723,21 @@ impl<'a> Driver<'a> {
     }
 
     /// Photograph a page with the library's Chrome, in Jaynes's box and offline.
-    fn photograph(&self, page: &Path, out: &Path) -> Result<(), String> {
+    fn photograph(&self, page: &Path, out: &Path, photo: Option<crate::protocol::Photo>) -> Result<(), String> {
         let python = std::env::var("JAYNES_PYTHON").unwrap_or_else(|_| "python3".to_string());
+        let mut how = Vec::new();
+        if let Some(p) = photo {
+            how.push(format!("{}x{}", p.width, p.height));
+            if p.whole {
+                how.push("whole".to_string());
+            }
+        }
         let done = std::process::Command::new(python)
             .arg(self.setup.role.library.join("jaynes_box.py"))
             .arg("photograph")
             .arg(page)
             .arg(out)
+            .args(how)
             .env("PYTHONPATH", &self.setup.role.library)
             .env("PYTHONDONTWRITEBYTECODE", "1")
             .output()

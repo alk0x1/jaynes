@@ -1687,14 +1687,25 @@ def _browser() -> Path | None:
     return Path(program) if program else None
 
 
-def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tuple[int, ...] = ()) -> str | None:
+# the tallest a whole page is photographed: past it, the page is cut
+TALLEST = 12000
+
+
+def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tuple[int, ...] = (), whole: bool = False) -> str | None:
     """Photograph ``target``, a page file or an address on a local port in ``ports``, into the PNG ``out``, with a
-    Chrome in the box: no internet, so a page shows only what it carries. None when done, else why not."""
+    Chrome in the box: no internet, so a page shows only what it carries. ``whole``: a page file taller than the
+    window is photographed down to its last line. None when done, else why not."""
     program = chrome()
     if program is None:
         return "there is no Chrome to photograph with: install Google Chrome, or name one in JAYNES_CHROME"
-    page = target if re.match(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?(/|$)", target) else Path(target).resolve().as_uri()
+    local = re.match(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?(/|$)", target)
+    page = target if local else Path(target).resolve().as_uri()
     out.parent.mkdir(parents=True, exist_ok=True)
+    if whole and not local:
+        tall = _height(program, Path(target).resolve(), size, ports)
+        if isinstance(tall, str):
+            return tall
+        size = (size[0], min(max(size[1], tall), TALLEST))
     with tempfile.TemporaryDirectory(prefix="jaynes-photo-") as tmp:
         shot = Path(tmp) / "shot.png"
         argv = [program, "--headless=new", "--no-sandbox", "--disable-gpu", "--use-mock-keychain", "--no-first-run",
@@ -1719,6 +1730,36 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
             return f"Chrome could not photograph {target} (exit {code}): " + " ".join(said[-3:])
         shutil.copyfile(shot, out)
     return None
+
+
+def _height(program: str, page: Path, size: tuple[int, int], ports: tuple[int, ...]) -> int | str:
+    """How tall ``page`` lays out in a window of ``size``, in CSS pixels: a copy of it, beside nothing of the
+    project, reads its files where it is (a base address) and writes its height where the DOM Chrome prints shows
+    it. The page itself is never changed."""
+    with tempfile.TemporaryDirectory(prefix="jaynes-height-") as tmp:
+        text = page.read_text(errors="replace")
+        base = f'<base href="{page.parent.as_uri()}/">'
+        head = re.search(r"<head[^>]*>", text, re.I)
+        text = text[:head.end()] + base + text[head.end():] if head else base + text
+        text += ("<script>setTimeout(function(){var d=document.documentElement,b=document.body;"
+                 "d.setAttribute('data-jaynes-height',Math.ceil(Math.max(d.scrollHeight,b?b.scrollHeight:0)))},0)</script>")
+        copy = Path(tmp) / "page.html"
+        copy.write_text(text)
+        argv = [program, "--headless=new", "--no-sandbox", "--disable-gpu", "--use-mock-keychain", "--no-first-run",
+                "--no-default-browser-check", "--disable-crash-reporter", "--disable-breakpad", "--hide-scrollbars",
+                "--disable-extensions", "--disable-background-networking", "--disable-component-update",
+                f"--user-data-dir={Path(tmp) / 'profile'}", f"--window-size={size[0]},{size[1]}",
+                "--virtual-time-budget=2000", "--dump-dom", copy.as_uri()]
+        try:
+            argv = command_in_box(" ".join(shlex.quote(a) for a in argv), Box((Path(tmp),), ports=ports, browser=Path(program)))
+            env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
+            code, said, _, late = _wait_in_box(argv, cwd=None, env=env, stdin=None, timeout=90, stderr_apart=True)
+        except Unavailable as e:
+            return str(e)
+        found = re.search(rb'data-jaynes-height="(\d+)"', said or b"")
+        if late or not found:
+            return f"Chrome could not measure how tall {page.name} is (exit {code})"
+        return int(found.group(1))
 
 
 # --- an agent's shell commands (the single box) ---------------------------------------------------------------
@@ -1885,7 +1926,7 @@ def agent_run(spec_path: Path | str, command: str) -> int:
 
 
 if __name__ == "__main__":
-    # jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT]: for the engine and for a role's scripts
+    # jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT [whole]]: for the engine and for a role's scripts
     # jaynes_box.py program-profile < BOX.json: the profile of a role's program's box, for the engine that starts it,
     # with what its interpreter and commands need worked out here; a refusal is its sentence and exit 3
     args = sys.argv[1:]
@@ -1930,9 +1971,9 @@ if __name__ == "__main__":
     if len(args) >= 4 and args[0] == "agent-run" and args[2] == "--":
         # jaynes_box.py agent-run SPEC -- COMMAND: one shell command of a Claude Code agent, in its box
         sys.exit(agent_run(Path(args[1]), " ".join(args[3:])))
-    if len(args) in (3, 4) and args[0] == "photograph":
-        w, _, h = (args[3] if len(args) == 4 else f"{SIZE[0]}x{SIZE[1]}").partition("x")
-        why = photograph(args[1], Path(args[2]), (int(w), int(h)))
+    if len(args) in (3, 4, 5) and args[0] == "photograph" and args[4:] in ([], ["whole"]):
+        w, _, h = (args[3] if len(args) >= 4 else f"{SIZE[0]}x{SIZE[1]}").partition("x")
+        why = photograph(args[1], Path(args[2]), (int(w), int(h)), whole=args[4:] == ["whole"])
         if why:
             print(why)
             sys.exit(1)
@@ -1949,5 +1990,5 @@ if __name__ == "__main__":
             print(e)
             sys.exit(1)
         sys.exit(0)
-    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT] | agent WORK SCRATCH -- PROGRAM ARGS...")
+    print("usage: jaynes_box.py photograph TARGET OUT [WIDTHxHEIGHT [whole]] | agent WORK SCRATCH -- PROGRAM ARGS...")
     sys.exit(2)

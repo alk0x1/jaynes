@@ -197,6 +197,17 @@ pub struct ShownItem {
     /// Shown, and read with the person's words; the engine judges the item as a whole.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aspects: Vec<Aspect>,
+    /// How a page among the pictures is photographed: its window, and whether whole. None: a computer's window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<Photo>,
+}
+
+/// The window a page is photographed in, in CSS pixels, and whether down to its last line when taller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Photo {
+    pub width: u32,
+    pub height: u32,
+    pub whole: bool,
 }
 
 /// One part of an item, shown apart: its label and what it is, in plain words.

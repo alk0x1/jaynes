@@ -2522,6 +2522,38 @@ fn a_page_shown_as_a_picture_is_photographed_by_jaynes() {
     assert!(http(port, &format!("GET /page/..%2Fpage.key HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n")).starts_with("HTTP/1.1 404"));
 }
 
+/// The width and height a PNG says in its header.
+fn png_size(bytes: &[u8]) -> (u32, u32) {
+    let at = |i: usize| u32::from_be_bytes(bytes[i..i + 4].try_into().expect("four bytes"));
+    (at(16), at(20))
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands and a Chrome in it, which Linux does not have yet (slice 2)")]
+fn asked_a_screen_drawn_for_a_phone_is_photographed_whole_at_a_phone_s_window() {
+    // the real-user, 22/11: a phone's layouts photographed at a computer's window; the design-lead, 22/11: the
+    // identity board is taller than the window, and the stop's photograph left its fonts out
+    if skipped_without_a_test_browser() {
+        return;
+    }
+    let s = scratch("phone");
+    let draw = "mkdir -p design && printf '<html><body style=\"margin:0\"><h1>Top</h1><div style=\"height:2000px\"></div><p style=\"background:#b3261e;color:#fff\">Bottom</p></body></html>' > design/tall.html \
+        && printf '<html><body><h1>Short</h1></body></html>' > design/short.html \
+        && printf '{\"device\":\"phone\",\"layouts\":[{\"name\":\"Tall\",\"page\":\"design/tall.html\",\"device\":\"phone\"},{\"name\":\"Short\",\"page\":\"design/short.html\",\"device\":\"computer\"}]}' > .jaynes/output.json";
+    let role = root().join("crates/shell/tests/roles/phone-screens");
+    let (ok, out) = engine(&s, &["start", "--run", "phone", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                                 "--request", "the home screen, on the phone", "--agent", &format!("command:{draw}")]);
+    assert!(ok && out.contains("Which layout goes on?"), "{out}");
+    let copy = copy_of(&s, "phone");
+    // at a phone's width, and the whole page down to its last line, not the window's 844
+    let (w, h) = png_size(&std::fs::read(copy.join(".jaynes/pictures/design/tall.png")).expect("photographed"));
+    assert_eq!(w, 390);
+    assert!(h > 2000, "{h}");
+    // a page shorter than the window keeps the window's height; each item's own device names its size
+    let (w, h) = png_size(&std::fs::read(copy.join(".jaynes/pictures/design/short.png")).expect("photographed"));
+    assert_eq!((w, h), (1440, 900));
+}
+
 /// Answer as the person, at a terminal.
 fn as_person(s: &Scratch, args: &[&str]) -> String {
     let mut all = vec![BIN];

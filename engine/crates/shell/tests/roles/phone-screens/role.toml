@@ -1,0 +1,21 @@
+# A test role: an agent draws screens for the device it names, each as a page, photographed whole at that device's
+# window, and the person chooses one.
+
+role = "phone-screens"
+version = "1.0.0"
+
+[[step]]
+name = "layouts"
+reach = { project = "write", write = ["design/**"] }
+instructions = """
+Draw the screen for the device the request names, each layout a page in design/:
+
+{{request}}
+"""
+checks = ["output-follows-schema"]
+stop = { ask = "Which layout goes on?", choose = true, holds = true }
+show = { each = "layouts", label = "{{name}}", id = "{{name}}", picture = "{{page}}", picture_size = "{{device}}", picture_full = true }
+
+[step.output]
+device = "string"
+layouts = { type = "array", items = { type = "object", fields = { name = "string", page = "string", device = "string" } } }
