@@ -834,7 +834,17 @@ impl Page {
                 })
                 .collect()
         };
-        let mut aside = format!("<div class=\"qh\">Waiting for you · {}</div>{}", waiting.len(), side(&waiting, false));
+        // a blocked or halted run waits for the person too: only they continue or abandon it
+        let blocked = runs_waiting(&runs);
+        let shown_run = if let View::Run(id) = &view { Some(id.clone()) } else { None };
+        let blocked_links: String = blocked
+            .iter()
+            .map(|r| {
+                let on = shown_run.as_deref() == Some(r.id.as_str());
+                format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
+            })
+            .collect();
+        let mut aside = format!("<div class=\"qh\">Waiting for you · {}</div>{}{}", waiting.len() + blocked.len(), side(&waiting, false), blocked_links);
         if !released.is_empty() {
             aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Let through by an agent · {}</div>{}", released.len(), side(&released, true)));
         }
@@ -843,7 +853,6 @@ impl Page {
         }
         let open: Vec<&Run> = runs.iter().rev().filter(|r| !r.finished()).collect();
         let done: Vec<&Run> = runs.iter().rev().filter(|r| r.finished()).take(8).collect();
-        let shown_run = if let View::Run(id) = &view { Some(id.clone()) } else { None };
         let run_link = |r: &&Run| {
             let on = shown_run.as_deref() == Some(r.id.as_str());
             format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
@@ -877,7 +886,7 @@ impl Page {
                 new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last, drive::terminal_env(&self.home).is_some())
             }
             (View::Setup, _) => setup_html(&self.home),
-            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home, &remind, &names),
+            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &blocked, &self.home, &remind, &names),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
                     let d = store.display(&it.digest);
@@ -1661,7 +1670,30 @@ fn ago(seconds: u64) -> String {
 
 /// Home: what waits, what runs, and what was delivered, newest first, the last week in front and the rest folded;
 /// the runs that delivered nothing at the end.
-fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, home: &std::path::Path, remind: &str, names: &BTreeMap<String, crate::listing::Row>) -> String {
+/// The runs not finished that wait for the person, who alone continues or abandons them: the halted and the
+/// blocked, newest first. The app counts them as waiting too ("9 waiting"), and the page says the same.
+fn runs_waiting(runs: &[Run]) -> Vec<&Run> {
+    runs.iter().rev().filter(|r| !r.finished() && (r.halted || matches!(r.phase, Phase::Blocked { .. }))).collect()
+}
+
+/// The home's line under its title: what waits for the person, the questions, the blocked runs and the halted ones.
+fn waits_sentence(questions: usize, runs: &[&Run]) -> String {
+    let halted = runs.iter().filter(|r| r.halted).count();
+    let blocked = runs.len() - halted;
+    let parts: Vec<String> = [(questions, "question", "questions"), (blocked, "blocked run", "blocked runs"), (halted, "halted run", "halted runs")]
+        .into_iter()
+        .filter(|(n, ..)| *n > 0)
+        .map(|(n, one, many)| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") })
+        .collect();
+    let what = match parts.as_slice() {
+        [] => return "Nothing waits for you.".into(),
+        [one] => one.clone(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    };
+    format!("{what} wait{} for you, in the list beside.", if questions + runs.len() == 1 { "s" } else { "" })
+}
+
+fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, blocked: &[&Run], home: &std::path::Path, remind: &str, names: &BTreeMap<String, crate::listing::Row>) -> String {
     use jaynes_core::event::Outcome;
     let now = crate::store::now();
     let at = |r: &Run| times.get(&r.id).map(|t| t.1).unwrap_or(0);
@@ -1714,7 +1746,7 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
         format!("<section class=\"part\"><h2>{title}</h2><p class=\"sub\">{sub}</p>{body}</section>")
     };
     let fold = |title: &str, n: usize, rows: &str| if n == 0 { String::new() } else { format!("<details class=\"fold\"><summary>{title} <span>{n}</span></summary><div class=\"rows\">{rows}</div></details>") };
-    let wait = if waiting == 0 { "Nothing waits for you.".to_string() } else { format!("{waiting} question{} wait{} for you, in the list beside.", if waiting == 1 { "" } else { "s" }, if waiting == 1 { "s" } else { "" }) };
+    let wait = waits_sentence(waiting, blocked);
     format!(
         "<h1>Home</h1><p class=\"sub\">{wait}</p>{remind}{}{}{}",
         part("Running", "Runs not finished: working, or waiting for you.", &moving, "Nothing runs."),
@@ -2498,6 +2530,65 @@ mod tests {
         home
     }
 
+    /// A home with three runs that wait for the person: "asks" at a question, "stuck" blocked, "paused" halted.
+    fn three_waiting(name: &str) -> PathBuf {
+        use jaynes_core::event::Fault;
+        use jaynes_core::question::{By, Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-waiting-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        let mut store = Store::open(&{
+            std::fs::create_dir_all(&home).expect("home");
+            home.join("record.sqlite3")
+        })
+        .expect("store");
+        for run in ["asks", "stuck", "paused"] {
+            std::fs::create_dir_all(home.join("runs").join(run)).expect("dir");
+            let manifest: Manifest = serde_json::from_value(json!({
+                "role": "r", "version": "1", "protocol": 1,
+                "steps": [{"name": "change", "executor": "agent", "stop": {"verdicts": ["keep", "redo"], "holds": true}}],
+            }))
+            .expect("manifest");
+            let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+            let mut events = decide(None, &start).expect("start").events;
+            events.push(match run {
+                "asks" => Event::QuestionOpened {
+                    question: Question {
+                        id: "q1".into(), step: "change".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+                        offered: vec![VerdictKind::Keep], holds: true, about: "Is the change right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+                    },
+                },
+                "stuck" => Event::Blocked { step: Some("change".into()), fault: Fault::Jaynes, reason: "the box refused a port".into() },
+                _ => Event::Halted { by: By::Person },
+            });
+            store.append(run, &events).expect("append");
+            store.put_setup(run, &json!({})).expect("setup");
+        }
+        home
+    }
+
+    #[test]
+    fn the_home_counts_a_blocked_run_and_a_halted_run_as_waiting_for_you_as_the_app_does() {
+        let page = Page { home: three_waiting("home"), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        // the page's /home, the screen of the real-user's photo
+        let html = page.render(View::Overview, crate::store::now()).expect("home");
+        let aside = html.split("<div class=\"qh\">Waiting for you").nth(1).and_then(|a| a.split("<div class=\"qh\" style").next()).expect("the waiting list");
+        // the question, the blocked run and the halted run, each with its own line in the list, never "· 0"
+        assert!(aside.starts_with(" · 3</div>"), "{aside}");
+        assert!(aside.contains("href=\"/q/asks/q1\""), "the question: {aside}");
+        assert!(aside.contains("href=\"/run/stuck\"") && aside.contains(">blocked</span>"), "the blocked run: {aside}");
+        assert!(aside.contains("href=\"/run/paused\"") && aside.contains(">halted</span>"), "the halted run: {aside}");
+        assert!(html.contains("1 question, 1 blocked run and 1 halted run wait for you, in the list beside."), "{html}");
+        assert!(!html.contains("Nothing waits for you."));
+        // the sentence for each alone, and for none
+        let runs: Vec<Run> = { let store = page.store().expect("store"); ["stuck", "paused"].iter().map(|id| store.state(id).expect("read").expect("run")).collect() };
+        assert_eq!(waits_sentence(0, &[&runs[0]]), "1 blocked run waits for you, in the list beside.");
+        assert_eq!(waits_sentence(0, &[&runs[1]]), "1 halted run waits for you, in the list beside.");
+        assert_eq!(waits_sentence(2, &[]), "2 questions wait for you, in the list beside.");
+        assert_eq!(waits_sentence(0, &[]), "Nothing waits for you.");
+        let _gone = std::fs::remove_dir_all(&page.home);
+    }
+
     #[test]
     fn the_merge_names_the_branch_on_the_page_as_on_the_app_s_card() {
         use jaynes_core::question::{Question, VerdictKind};
@@ -2571,7 +2662,7 @@ mod tests {
         assert!(!run.contains("Answer: Is this the bug?"), "no invitation on top");
         assert!(run.contains("href=\"/q/b/q-repro\">Answer</a>"), "Answer opens its question");
         let home_page = page.render(View::Overview, now).expect("home");
-        let (can, waits) = (home_page.find("Can still answer · 1").expect("the group beside"), home_page.find("Waiting for you · 0").expect("nothing waits"));
+        let (can, waits) = (home_page.find("Can still answer · 1").expect("the group beside"), home_page.find("Waiting for you · 1").expect("only the blocked run waits, its passed stop does not"));
         assert!(waits < can, "under what waits");
         let asked = page.render(View::Question("b".into(), "q-repro".into()), now).expect("its question");
         assert!(asked.contains("The run went on without your answer. It is now at “fix”, blocked."), "where the run is now");
