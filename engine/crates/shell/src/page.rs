@@ -770,6 +770,11 @@ impl Page {
         // stops the run went on without: under what waits, never over where the run is now
         let mut still: Vec<(Run, QuestionState)> = Vec::new();
         let mut runs: Vec<Run> = Vec::new();
+        // each run's name, as the app shows it (listing::name): the project first
+        let names: std::collections::BTreeMap<String, crate::listing::Row> = crate::listing::read(&self.home)
+            .map(|l| l.needs.into_iter().chain(l.projects.into_iter().flat_map(|(_, rows)| rows)).map(|r| (r.id.clone(), r)).collect())
+            .unwrap_or_default();
+        let name_of = |r: &Run| names.get(&r.id).map(name_html).unwrap_or_else(|| esc(&short(&r.request)));
         for id in store.runs()? {
             let Some(run) = store.state(&id)? else { continue };
             runs.push(run.clone());
@@ -841,7 +846,7 @@ impl Page {
         let shown_run = if let View::Run(id) = &view { Some(id.clone()) } else { None };
         let run_link = |r: &&Run| {
             let on = shown_run.as_deref() == Some(r.id.as_str());
-            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), esc(&short(&r.request)), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
+            format!("<a class=\"q{}\" href=\"/run/{}\">{}<small>{} · {} · {}</small>{}</a>", if on { " on" } else { "" }, esc(&r.id), name_of(r), esc(&r.manifest.role), where_in(r), phase_word(r), strip(r))
         };
         aside.push_str(&format!("<div class=\"qh\" style=\"margin-top:18px\">Runs · {}</div>{}", open.len(), open.iter().map(run_link).collect::<String>()));
         if !done.is_empty() {
@@ -851,7 +856,7 @@ impl Page {
         // were told of a day ago or more and that nobody answered
         let remind = if matches!(view, View::Home | View::Overview) {
             let on = current.as_ref().map(|(r, q)| (r.id.as_str(), q.question.id.as_str()));
-            reminders_html(&drive::reminders_due(&self.home, &store, now).unwrap_or_default(), &runs, on)
+            reminders_html(&drive::reminders_due(&self.home, &store, now).unwrap_or_default(), &runs, on, &names)
         } else {
             String::new()
         };
@@ -859,7 +864,7 @@ impl Page {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
                 Some(r) => {
                     let who = if r.halted { self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e)) } else { None };
-                    run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref())
+                    run_html(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id))
                 }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
                     Ok(said) if said.trim().is_empty() => "<div class=\"empty\">The run is starting: its role is read and the project copied.</div>".to_string(),
@@ -872,7 +877,7 @@ impl Page {
                 new_html(&crate::install::list(&self.home).into_iter().map(|(n, _, a, _)| (n, a)).collect::<Vec<_>>(), last, drive::terminal_env(&self.home).is_some())
             }
             (View::Setup, _) => setup_html(&self.home),
-            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home, &remind),
+            (_, None) => home_html(&runs, &store.times()?, waiting.len(), &self.home, &remind, &names),
             (_, Some((run, q))) => {
                 let shown = |it: &jaynes_core::question::Item| -> String {
                     let d = store.display(&it.digest);
@@ -912,8 +917,25 @@ impl Page {
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
-        Ok(PAGE.replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", &format!("{}<div id=\"nokey\"></div>", banner())).replace("{{version}}", env!("CARGO_PKG_VERSION")))
+        // the browser's tab names the run shown, as the list does
+        let shown = match &view {
+            View::Run(id) => Some(id.as_str()),
+            _ => current.as_ref().map(|(r, _)| r.id.as_str()),
+        };
+        let tab = shown.and_then(|id| names.get(id)).map(|row| format!("{} · Jaynes", crate::listing::name(row).join(" · "))).unwrap_or_else(|| "Jaynes".into());
+        Ok(PAGE.replacen("<title>Jaynes</title>", &format!("<title>{}</title>", esc(&tab)), 1).replace("{{aside}}", &aside).replace("{{main}}", &main).replace("{{who}}", &format!("{}<div id=\"nokey\"></div>", banner())).replace("{{version}}", env!("CARGO_PKG_VERSION")))
     }
+}
+
+/// A run's name as the page shows it, from listing::name: the project dim, the title, and what tells it apart faint.
+fn name_html(row: &crate::listing::Row) -> String {
+    // in one line: where room is short the title gives way, cut with "…"; the project and what tells it apart never
+    let mut html = format!("<span class=\"nm\"><span class=\"proj\">{}</span><span class=\"sep\"> · </span><span class=\"tt\">{}</span>", esc(&row.project), esc(&row.title));
+    if let Some(apart) = &row.apart {
+        html.push_str(&format!("<span class=\"sep\"> · </span><span class=\"apart\">{}</span>", esc(apart)));
+    }
+    html.push_str("</span>");
+    html
 }
 
 /// The run's steps as a strip, one mark per step of its path, coloured by where each is, as the earlier page drew
@@ -1080,7 +1102,7 @@ fn tokens_said(n: u64) -> String {
     if n >= 1_000_000 && n.is_multiple_of(1_000_000) { format!("{} million", n / 1_000_000) } else { n.to_string() }
 }
 
-fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> String {
+fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
     let path = r.path();
     let steps = stage_list(r);
     let phase = match &r.phase {
@@ -1154,7 +1176,7 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
         .collect();
     let data = json!({"run": r.id}).to_string();
     format!(
-        "<div class=\"where\">{role} {version} · run {id} · {risk} risk</div><h1>{request}</h1>{why}{strip}{phase}{answers}\
+        "<div class=\"where\">{project}{role} {version} · run {id} · {risk} risk</div><h1>{title}</h1>{request}{why}{strip}{phase}{answers}\
          <p class=\"sub\">Spent {sm} of {cm} min, {st} of {ct} tokens ({cached} read from the cache) · {work}, {back} sent back{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{passed}{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
@@ -1163,7 +1185,24 @@ fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>) -> S
         id = esc(&r.id),
         risk = r.risk.word(),
         why = risk_why(r),
-        request = esc(&short(&r.request)),
+        project = name.map(|n| format!("{} · ", esc(&n.project))).unwrap_or_default(),
+        title = match name {
+            Some(n) => match &n.apart {
+                Some(apart) => format!("{}<span class=\"apart\"> · {}</span>", esc(&n.title), esc(apart)),
+                None => esc(&n.title),
+            },
+            None => esc(&short(&r.request)),
+        },
+        // the whole request, under the title: two lines, and the rest behind "more"
+        request = {
+            let whole = r.request.trim();
+            let long = whole.chars().count() > 160 || whole.lines().count() > 2;
+            if long {
+                format!("<details class=\"req\"><summary><span class=\"clamp\">{}</span><span class=\"more\">more</span></summary></details>", esc(whole))
+            } else {
+                format!("<p class=\"req\">{}</p>", esc(whole))
+            }
+        },
         strip = strip(r),
         sm = r.spent.seconds / 60,
         cm = r.ceiling.seconds / 60,
@@ -1622,7 +1661,7 @@ fn ago(seconds: u64) -> String {
 
 /// Home: what waits, what runs, and what was delivered, newest first, the last week in front and the rest folded;
 /// the runs that delivered nothing at the end.
-fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, home: &std::path::Path, remind: &str) -> String {
+fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize, home: &std::path::Path, remind: &str, names: &BTreeMap<String, crate::listing::Row>) -> String {
     use jaynes_core::event::Outcome;
     let now = crate::store::now();
     let at = |r: &Run| times.get(&r.id).map(|t| t.1).unwrap_or(0);
@@ -1640,7 +1679,7 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
         format!(
             "<a class=\"hrow\" href=\"/run/{}\"><div class=\"t\">{}</div><div class=\"hq\">{}</div><div class=\"hm\">{chip}{}</div>{}</a>",
             esc(&r.id),
-            esc(&short(&r.request)),
+            names.get(&r.id).map(name_html).unwrap_or_else(|| esc(&short(&r.request))),
             esc(&said),
             facts.iter().map(|f| format!("<span>{f}</span>")).collect::<String>(),
             strip(r)
@@ -1687,7 +1726,7 @@ fn home_html(runs: &[Run], times: &BTreeMap<String, (u64, u64)>, waiting: usize,
 /// The reminders due, in a section at the top of what the page shows at a pause, each a link to its question. The
 /// question on the screen is not listed again. Every one shown is named in `data-due`, which the page's script sends
 /// back (`/api/reminded`) once it knows the person holds the key: only then were they reminded.
-fn reminders_html(due: &[drive::Reminder], runs: &[Run], on: Option<(&str, &str)>) -> String {
+fn reminders_html(due: &[drive::Reminder], runs: &[Run], on: Option<(&str, &str)>, names: &BTreeMap<String, crate::listing::Row>) -> String {
     if due.is_empty() {
         return String::new();
     }
@@ -1696,12 +1735,12 @@ fn reminders_html(due: &[drive::Reminder], runs: &[Run], on: Option<(&str, &str)
         .filter(|d| on != Some((d.run.as_str(), d.question.as_str())))
         .map(|d| {
             let run = runs.iter().find(|r| r.id == d.run);
-            let request = run.map(|r| short(&r.request)).unwrap_or_default();
+            let request = names.get(&d.run).map(name_html).or_else(|| run.map(|r| esc(&short(&r.request)))).unwrap_or_default();
             let role = run.map(|r| r.manifest.role.clone()).unwrap_or_default();
             let about = if d.about.trim().is_empty() { String::new() } else { format!(": {}", d.about.trim()) };
             format!(
                 "<a class=\"hrow\" href=\"/q/{}/{}\"><div class=\"t\">{}</div><div class=\"hq\">at {}{}</div><div class=\"hm\"><span>{}</span></div></a>",
-                esc(&d.run), esc(&d.question), esc(&request), esc(&d.step), esc(&about), esc(&role)
+                esc(&d.run), esc(&d.question), request, esc(&d.step), esc(&about), esc(&role)
             )
         })
         .collect();
@@ -2238,6 +2277,11 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .owner { display:inline-flex; align-items:center; gap:8px; margin:0 12px 6px 0; } .owner input { background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px 9px; font:inherit; font-size:13px; }
 .notice.new { display:flex; align-items:center; justify-content:space-between; gap:12px; background:var(--blue-soft); color:var(--ink); }
 .hide { display:none; } .empty { color:var(--dim); padding:40px 0; } .bad { color:var(--red); }
+.proj { color:var(--dim); } .sep, .apart { color:var(--faint); }
+.nm { display:flex; min-width:0; white-space:pre; } .nm .proj, .nm .sep, .nm .apart { flex:none; } .nm .tt { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.req { margin:0 0 12px; color:var(--dim); font-size:14px; white-space:pre-line; } .req summary { list-style:none; cursor:pointer; } .req summary::-webkit-details-marker { display:none; }
+.req .clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; } .req[open] .clamp { display:block; -webkit-line-clamp:unset; }
+.req .more { color:var(--blue); font-size:13px; } .req[open] .more { display:none; }
 .notice.passed-q { background:var(--panel); color:var(--dim); }
 .passed { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:8px 0; font-size:13px; color:var(--dim); border-top:1px solid var(--line); }
 .passed span { color:var(--dim); } .passed a { border:1px solid var(--line-2); border-radius:8px; padding:4px 12px; color:var(--ink); white-space:nowrap; }
@@ -2535,6 +2579,43 @@ mod tests {
         let _gone = std::fs::remove_dir_all(&home);
     }
 
+    // Alan, 21/11: "não consigo saber fácil qual run é de qual projeto". Two runs side by side read "Agreed with Alan on
+    // 2026-11-21…". The page names a run as the app does (listing::name): its project first, then its title, then
+    // what tells it apart; the run's page and the browser's tab too (the design-lead's nome-da-run.md).
+    #[test]
+    fn asked_which_run_is_which_project_on_the_page() {
+        use jaynes_core::{Digest, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-names-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let request = "Agreed with Alan on 2026-11-21: make the export faster. It takes a minute for a small file, and it should take a second.";
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        for (id, project) in [("a", "/w/tidepool"), ("b", "/w/harbor-api")] {
+            let manifest: Manifest = serde_json::from_value(json!({"role": "fix-bug", "version": "4.0.0", "protocol": 1, "steps": [{"name": "fix", "executor": "agent"}]})).expect("manifest");
+            let start = Input::Start { run: id.into(), request: request.into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false };
+            store.append(id, &decide(None, &start).expect("start").events).expect("append");
+            store.put_setup(id, &json!({"project": project})).expect("setup");
+        }
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let title = crate::listing::run_title(None, request);
+        assert!(title.starts_with("Make the export faster"), "{title}");
+        let named = |p: &str| format!("<span class=\"nm\"><span class=\"proj\">{p}</span><span class=\"sep\"> · </span><span class=\"tt\">{}</span></span>", esc(&title));
+        let listed = page.render(View::Overview, now).expect("home");
+        for p in ["tidepool", "harbor-api"] {
+            assert!(listed.contains(&format!("\">{}<small>", named(p))), "the list beside names {p} first");
+        }
+        assert!(!listed.contains("Agreed with Alan"), "no run is named by its opening words: {listed}");
+        let run = page.render(View::Run("a".into()), now).expect("the run");
+        assert!(run.contains(&format!("<title>tidepool · {} · Jaynes</title>", esc(&title))), "the browser's tab");
+        assert!(run.contains("<div class=\"where\">tidepool · fix-bug 4.0.0 · run a · low risk</div>"), "the where line starts with the project");
+        assert!(run.contains(&format!("<h1>{}</h1>", esc(&title))), "the title is the h1");
+        assert!(run.contains(&esc(request)), "the whole request under it");
+        let row = crate::listing::Row { id: "c".into(), project: "tidepool".into(), title: "Fix the export".into(), apart: Some("at “fix”".into()), line: String::new(), mark: crate::listing::Mark::Working };
+        assert_eq!(name_html(&row), "<span class=\"nm\"><span class=\"proj\">tidepool</span><span class=\"sep\"> · </span><span class=\"tt\">Fix the export</span><span class=\"sep\"> · </span><span class=\"apart\">at “fix”</span></span>");
+        let _gone = std::fs::remove_dir_all(&home);
+    }
+
     /// The section of reminders a page shows, or "" when it shows none.
     fn reminders_in(html: &str) -> &str {
         html.split("id=\"remind\"").nth(1).and_then(|r| r.split("</section>").next()).unwrap_or("")
@@ -2551,7 +2632,8 @@ mod tests {
         let first = page.render(View::Home, later).expect("home");
         let shown = reminders_in(&first);
         assert!(shown.contains("<h2>Still waiting for you</h2>") && shown.contains("href=\"/q/w2/q1\"") && !shown.contains("href=\"/q/w1/q1\""), "{shown}");
-        assert!(shown.contains("the request of w2") && shown.contains("at plan: Is the plan right?"), "{shown}");
+        // each run by its name, as the list beside names it (listing::name): no project here, then its title
+        assert!(shown.contains("no project</span><span class=\"sep\"> · </span><span class=\"tt\">The request of w2</span>") && shown.contains("at plan: Is the plan right?"), "{shown}");
         assert!(shown.contains("data-due=\"[[&quot;w1&quot;,&quot;q1&quot;],[&quot;w2&quot;,&quot;q1&quot;]]\""), "{shown}");
         // Home, with no question on the screen, lists both; a run's page and the setup are no pause
         let home = page.render(View::Overview, later).expect("overview");
@@ -2594,34 +2676,34 @@ mod tests {
     #[test]
     fn the_page_says_why_a_run_is_high_risk_and_what_that_changes() {
         let mut r = small_run(false);
-        assert!(!run_html(&r, "", "", None).contains("High risk"), "a low-risk run says nothing of it");
+        assert!(!run_html(&r, "", "", None, None).contains("High risk"), "a low-risk run says nothing of it");
         r.apply(&jaynes_core::event::Event::RiskRaised {
             to: jaynes_core::risk::Risk::High,
             by: By::Rule { rule: "what-the-change-touches".into() },
             reasons: vec!["the change has 45 changed lines outside its tests, more than a small change's 30".into()],
             ceiling: r.ceilings.high,
         });
-        let shown = run_html(&r, "", "", None);
+        let shown = run_html(&r, "", "", None, None);
         assert!(
             shown.contains("High risk: the change has 45 changed lines outside its tests, more than a small change&#39;s 30. It may take up to 120 min and 10 million tokens, where a low-risk run stops at 20 min and 2 million tokens."),
             "{shown}"
         );
         // a name an agent chose is shown as text, never as the page's own markup
         r.apply(&jaynes_core::event::Event::RiskRaised { to: jaynes_core::risk::Risk::High, by: By::Person, reasons: vec!["the change touches `<b>x</b>`".into()], ceiling: r.ceilings.high });
-        assert!(run_html(&r, "", "", None).contains("High risk: the change touches `&lt;b&gt;x&lt;/b&gt;`."));
+        assert!(run_html(&r, "", "", None, None).contains("High risk: the change touches `&lt;b&gt;x&lt;/b&gt;`."));
     }
 
     #[test]
     fn the_run_s_controls_say_what_the_app_s_say() {
         // raising the risk asks at more steps, only where the high risk adds some, with the app's hint
-        let shown = run_html(&small_run(true), "", "", None);
+        let shown = run_html(&small_run(true), "", "", None, None);
         assert!(shown.contains(">Ask me at more steps<") && shown.contains(&format!("title=\"{}\"", crate::listing::ASK_AT_MORE_STEPS_TIP)), "{shown}");
         assert!(!shown.contains("Raise the risk"), "{shown}");
-        assert!(!run_html(&small_run(false), "", "", None).contains("Ask me at more steps"));
+        assert!(!run_html(&small_run(false), "", "", None, None).contains("Ask me at more steps"));
         // abandoning a run already delivered says what stays
         let mut delivered = small_run(false);
         delivered.delivered = Some(jaynes_core::Digest("d".into()));
-        assert!(run_html(&delivered, "", "", None).contains(&format!("title=\"{}\"", crate::listing::ABANDON_DELIVERED_TIP)));
+        assert!(run_html(&delivered, "", "", None, None).contains(&format!("title=\"{}\"", crate::listing::ABANDON_DELIVERED_TIP)));
     }
 
     #[test]
@@ -2629,18 +2711,18 @@ mod tests {
         use jaynes_core::run::Status;
         let mut r = small_run(false);
         r.phase = Phase::Blocked { step: Some("plan".into()), fault: jaynes_core::event::Fault::Agent, reason: "plan spent its 3 attempts: the agent exited with code 1: no tests".into() };
-        let shown = run_html(&r, "", "", None);
+        let shown = run_html(&r, "", "", None, None);
         assert!(shown.contains("Blocked at “plan”") && shown.contains("“plan” used its 3 attempts. The agent exited with code 1.") && shown.contains("Continue tries “plan” again, with its attempts back."), "{shown}");
         assert!(!shown.contains("Blocked (agent)"), "{shown}");
         let mut h = small_run(false);
         h.halted = true;
         h.steps[0].status = Status::Running { attempt: 1, fix: 0 };
-        assert!(run_html(&h, "", "", Some("halted by an agent")).contains("Halted by an agent at “plan”"));
+        assert!(run_html(&h, "", "", Some("halted by an agent"), None).contains("Halted by an agent at “plan”"));
         // halted with no step under way in its record: where it would go on
         let mut idle = small_run(false);
         idle.halted = true;
         idle.steps[0].status = Status::Idle;
-        assert!(run_html(&idle, "", "", Some("halted by an agent")).contains("Halted by an agent at “plan”"));
+        assert!(run_html(&idle, "", "", Some("halted by an agent"), None).contains("Halted by an agent at “plan”"));
         // a run delivered whose answers are still open, as the app's column says it
         let mut w = small_run(false);
         w.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
