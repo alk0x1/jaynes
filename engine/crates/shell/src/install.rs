@@ -717,6 +717,16 @@ pub fn has_app(home_dir: &Path) -> bool {
     home_dir.join("Applications/Jaynes.app").is_dir() || Path::new("/Applications/Jaynes.app").is_dir()
 }
 
+/// Say, before an update installs `version`, the open runs it leaves behind: those an older engine started whose
+/// program is not kept, which no answer, Halt or Abandon will reach after it (the design-lead's words, motor-velho.md).
+/// A record that cannot be read leaves nothing to say, and never stops the update.
+fn stranded(home: &Path, version: &str) {
+    let entries = crate::listing::entries(home).unwrap_or_default();
+    for line in crate::listing::older_runs_said(&entries, |r| crate::stop::left_behind(home, r, version)) {
+        crate::drive::say(&line);
+    }
+}
+
 pub fn update(home: &Path) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
     let manifest = manifest();
@@ -726,6 +736,7 @@ pub fn update(home: &Path) -> Result<Vec<String>, String> {
     match release(&manifest, &target(), env!("CARGO_PKG_VERSION")) {
         Release::Current(v) if !app_missing => said.push(format!("Jaynes {v} is the newest; this one is {}", version())),
         Release::Newer(v) | Release::Current(v) => {
+            stranded(home, &v);
             // the release's own installer, as the person ran it: the app and the program together
             let status = Command::new("sh")
                 .args(["-c", &format!("curl -fsSL '{}' | sh", installer())])
@@ -739,6 +750,8 @@ pub fn update(home: &Path) -> Result<Vec<String>, String> {
         }
         // no build for this machine: cargo builds the newest source
         Release::None => {
+            // the newest source's version is not known before it is built: every open run it may not carry is said
+            stranded(home, "");
             let root = install_root()?;
             let status = Command::new("cargo")
                 .args(["install", "--locked", "--quiet", "--git", SOURCE, "jaynes-shell", "--root"])

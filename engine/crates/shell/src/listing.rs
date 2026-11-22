@@ -301,7 +301,7 @@ pub fn release_of(engine: &str) -> &str {
 pub fn older_runs_said(entries: &[Entry], left: impl Fn(&Run) -> bool) -> Vec<String> {
     let older: Vec<Entry> = entries.iter().filter(|e| !e.run.finished() && left(&e.run)).cloned().collect();
     let mut versions: Vec<&str> = older.iter().map(|e| release_of(&e.run.engine)).collect();
-    versions.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+    versions.sort_by_key(|a| std::cmp::Reverse(version_key(a)));
     versions.dedup();
     let mut said = Vec::new();
     for v in versions {
