@@ -338,14 +338,18 @@ structure GateCase where
   roleStep : Bool
   fixesLeft : Bool
   session : Bool
+  /-- what is judged is the last attempt spent, again, after the person took out a hidden case they saw fail -/
+  again : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 inductive Gate where
   | done | fix | spent | jaynes | role
+  /-- judged again without the cases the person took out, and failing: blocked for the person, no attempt spent -/
+  | again
   deriving DecidableEq, Repr
 
 def Gate.render : Gate → String
-  | .done => "done" | .fix => "fix" | .spent => "spent" | .jaynes => "jaynes" | .role => "role"
+  | .done => "done" | .fix => "fix" | .spent => "spent" | .jaynes => "jaynes" | .role => "role" | .again => "again"
 
 /-- A check the pass takes failed: an open one, a hidden one. -/
 def GateCase.openFails (g : GateCase) : Bool :=
@@ -366,9 +370,31 @@ def GateCase.breaks (g : GateCase) : Bool :=
 def GateCase.outcome (g : GateCase) : Gate :=
   if g.blocked then .jaynes
   else if !g.openFails && !g.breaks && !g.hiddenFails then .done
+  else if g.again then .again
   else if g.roleStep then .role
   else if !g.hiddenFails && g.fixesLeft && g.session then .fix
   else .spent
+
+/-! ## Taking a hidden case out of a run (`Input::DropCase` in `decide.rs`) -/
+
+/-- What the core knows when someone asks to take a hidden case out of a run. Which sentence a case has, and whether
+    a reason the checks gave names it, the model takes as given. -/
+structure DropCase where
+  /-- asked by the person, not by an agent nor a rule -/
+  person : Bool
+  /-- a sentence was given -/
+  named : Bool
+  /-- the run is blocked at that step by the agent's attempts -/
+  blockedHere : Bool
+  alreadyOut : Bool
+  /-- a hidden check of the step's last attempt failed, and a reason it gave is that sentence -/
+  hiddenSaid : Bool
+  /-- the last attempt spent is kept, to be judged again -/
+  kept : Bool
+  deriving Repr, FromJson, ToJson, Inhabited
+
+def DropCase.accepts (d : DropCase) : Bool :=
+  d.person && d.named && d.blockedHere && !d.alreadyOut && d.hiddenSaid && d.kept
 
 end Jaynes
 

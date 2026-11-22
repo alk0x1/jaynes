@@ -750,6 +750,11 @@ fn expand(part: Vec<(Node, usize)>, m: &Manifest, promises: &[Promise], done: &[
             if let Some(mut child) = apply(promises, done, node, &mv) {
                 child.0.late.extend(paused.iter().cloned());
                 child.0.run.manifest = empty.clone();
+                // what a step kept of its last attempt spent is judged again only once the person takes a hidden case
+                // out (DropCase), which no move here does: kept, it would only tell apart states that move alike
+                for s in &mut child.0.run.steps {
+                    s.last_spent = None;
+                }
                 let key = child.0.key();
                 if (!seen.contains(&key) && here.insert(key)) || !child.2.is_empty() {
                     out.push((at, child, key));

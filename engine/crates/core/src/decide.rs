@@ -258,7 +258,31 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.emit(Event::Granted { question: question.clone(), offer: *offer, by: by.clone() });
         }
-        Input::DropCase { .. } => return refuse("not yet"),
+        Input::DropCase { by, step, case } => {
+            if !by.person() {
+                return refuse("only you take a hidden case out of a run, after seeing it fail: an agent or a rule never does");
+            }
+            let case = case.trim();
+            if case.is_empty() {
+                return refuse("which case? Name it by the sentence its card shows");
+            }
+            let blocked_here = matches!(&c.run.phase, Phase::Blocked { step: Some(s), fault: Fault::Agent, .. } if s == step);
+            let Some(i) = c.run.manifest.index(step).filter(|_| blocked_here) else {
+                return refuse(format!("the run is not blocked at {step}: a case comes out only from the card of a run the agent's attempts left blocked"));
+            };
+            if c.run.cases_out(i).iter().any(|x| x == case) {
+                return refuse(format!("“{case}” is already out of this run"));
+            }
+            // a sentence a hidden check of the step's last attempt gave as what failed, and that attempt kept to judge
+            let s = &c.run.steps[i];
+            let hidden_failed = s.checks.iter().any(|r| r.kind == CheckKind::Hidden && !r.passed && !r.blocked);
+            let named = s.failure.iter().any(|r| r == case || r.ends_with(&format!(": {case}")));
+            if !hidden_failed || !named || s.last_spent.is_none() {
+                return refuse(format!("the hidden checks of {step} did not say “{case}” failed: a case comes out only once you saw it fail"));
+            }
+            c.emit(Event::CaseDropped { by: by.clone(), step: step.clone(), case: case.to_string() });
+            c.check_again(i);
+        }
         Input::PortsChosen { any, servers, opened, freed_ports } => {
             if c.run.finished() {
                 return refuse("the run is finished");
@@ -905,6 +929,7 @@ impl Ctx {
         } else {
             format!("This is what lands on your branch. Keep merges it; drop delivers the change on the branch jaynes/{} only, and nothing lands.", self.run.id)
         };
+        let about = format!("{about}{}", self.cases_out_said());
         let rides = self.rides();
         let question = Question { rides, back: Default::default(),
             id: self.question_id("merge"),
@@ -984,6 +1009,20 @@ impl Ctx {
                 keeps.then(|| Ride { question: q.id.clone(), step: q.step.clone(), said: self.run.settled_said(q) })
             })
             .collect()
+    }
+
+    /// The hidden cases the person took out of this run, said on the merge before their touch: " You took out …".
+    fn cases_out_said(&self) -> String {
+        let mut said = String::new();
+        for (step, cases) in &self.run.cases_out {
+            let named = cases.iter().map(|c| format!("“{c}”")).collect::<Vec<_>>().join(", ");
+            said.push_str(&if cases.len() == 1 {
+                format!(" You took out a hidden case after seeing it fail, so the change was judged without it: {named} ({step}).")
+            } else {
+                format!(" You took out {} hidden cases after seeing them fail, so the change was judged without them: {named} ({step}).", cases.len())
+            });
+        }
+        said
     }
 
     fn deliver(&mut self) -> bool {
@@ -1087,7 +1126,7 @@ impl Ctx {
                     self.checks_ended(step, attempt, fix, &[])?;
                 } else {
                     let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
-                    self.command(Command::RunChecks { step: step.to_string(), attempt, fix, output: output.clone(), given, checks, without: Vec::new() });
+                    self.command(Command::RunChecks { step: step.to_string(), attempt, fix, output: output.clone(), given, checks, without: self.run.cases_out(i) });
                 }
             }
             AttemptOutcome::Failed { reasons, usage } => {
@@ -1336,6 +1375,15 @@ impl Ctx {
             self.advance();
             return Ok(());
         }
+        if self.run.steps[i].again {
+            // the last attempt spent, judged again without the cases the person took out: no agent works on it, and
+            // failing still spends no attempt; the run waits for the person again
+            let reasons: Vec<String> = shape.into_iter().chain(behaviour).collect();
+            self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons: reasons.clone(), usage: Default::default(), spent: false });
+            let out = self.run.cases_out(i).iter().map(|c| format!("“{c}”")).collect::<Vec<_>>().join(", ");
+            self.block(Some(step.to_string()), Fault::Agent, format!("{step} still fails its checks without what you took out ({out}): {}", reasons.join("; ")));
+            return Ok(());
+        }
         if decl.executor == Executor::Role || self.run.steps[i].narrow.is_some() {
             let reasons: Vec<String> = shape.into_iter().chain(behaviour).collect();
             self.emit(Event::AttemptFailed { step: step.to_string(), attempt, reasons: reasons.clone(), usage: Default::default(), spent: false });
@@ -1367,7 +1415,7 @@ impl Ctx {
         let Status::Checking { attempt, fix } = self.run.steps[i].status else { return };
         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
         let checks = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
-        self.command(Command::RunChecks { step: self.name(i), attempt, fix, output: p.output, given, checks, without: Vec::new() });
+        self.command(Command::RunChecks { step: self.name(i), attempt, fix, output: p.output, given, checks, without: self.run.cases_out(i) });
     }
 
     /// What a delivered output breaks of what the person kept or dropped.
@@ -1501,7 +1549,7 @@ impl Ctx {
                     if let Some(p) = self.run.steps[i].pending.clone() {
                         let given = self.run.reads(i); // a check reads what its step uses, hidden steps included
                         let checks = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
-                        self.command(Command::RunChecks { step: name, attempt, fix, output: p.output, given, checks, without: Vec::new() });
+                        self.command(Command::RunChecks { step: name, attempt, fix, output: p.output, given, checks, without: self.run.cases_out(i) });
                     }
                 }
                 Status::Probing => self.command(Command::Probe { step: name, reach: decl.reach.clone() }),

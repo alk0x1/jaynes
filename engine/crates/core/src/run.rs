@@ -78,6 +78,10 @@ pub struct Run {
     /// while one is in.
     #[serde(default)]
     pub planted: BTreeMap<String, String>,
+    /// The hidden cases the person took out of this run after seeing them fail, by step, by their sentence: every
+    /// check of that step in this run runs without them. Never the role's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cases_out: BTreeMap<String, Vec<String>>,
     /// The defects planted and taken out since, by id.
     #[serde(default)]
     pub unplanted: std::collections::BTreeSet<String>,
@@ -206,6 +210,14 @@ pub struct StepState {
     /// An attempt of this step, which acts, ended with no outcome recorded: it may have acted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub maybe_acted: bool,
+    /// The last attempt the agent spent, its fix and what it delivered, kept so that what it delivered can be judged
+    /// again once the person takes out a hidden case they saw fail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_spent: Option<(u32, u32, Pending)>,
+    /// What the checks judge is that last attempt again, after the person took a case out: no agent works on it, and
+    /// failing spends no attempt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub again: bool,
     /// Acts the person ordered again: part of the act's key, so a second act is a new intent.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub repeat: u32,
@@ -416,6 +428,7 @@ impl Run {
             merges: BTreeMap::new(),
             never_merge: *never_merge,
             planted: BTreeMap::new(),
+            cases_out: BTreeMap::new(),
             unplanted: Default::default(),
             ports: None,
             granted: Default::default(),
@@ -510,7 +523,7 @@ impl Run {
                     }
                 }
             }
-            Event::AttemptFailed { step, reasons, usage, spent, .. } => {
+            Event::AttemptFailed { step, attempt, reasons, usage, spent } => {
                 self.spent.add(*usage);
                 if *spent {
                     self.counts.spent += 1;
@@ -541,12 +554,18 @@ impl Run {
                         s.carry(Some(&ran), usage.tokens);
                     }
                     s.tried = true;
-                    if *spent {
-                        s.spent += 1;
+                    if *spent || s.again {
+                        if *spent {
+                            s.spent += 1;
+                            let fix = if let Status::Checking { fix, .. } = s.status { fix } else { 0 };
+                            s.last_spent = s.pending.clone().map(|p| (*attempt, fix, p));
+                        }
                         // Only the agent's own failure is told to its next attempt: a fault of Jaynes may name
-                        // what the agent must not see, such as a hidden check.
+                        // what the agent must not see, such as a hidden check. Judged again without a case the
+                        // person took out, what failed is what the agent's next attempt reads, without that case.
                         s.failure = reasons.clone();
                     }
+                    s.again = false;
                     s.pending = None;
                     s.unjudged = false;
                     s.status = Status::Idle;
@@ -579,7 +598,17 @@ impl Run {
                 }
             }
             Event::StaleReport { .. } => {}
-            Event::CaseDropped { .. } => {}
+            Event::CaseDropped { step, case, .. } => {
+                self.cases_out.entry(step.clone()).or_default().push(case.clone());
+                if let Some(s) = self.step_mut(step)
+                    && let Some((attempt, fix, p)) = s.last_spent.clone()
+                {
+                    s.pending = Some(p);
+                    s.status = Status::Checking { attempt, fix };
+                    s.again = true;
+                }
+                self.phase = Phase::Running;
+            }
             Event::ChecksJudged { step, checks, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.checks = checks.clone();
@@ -621,6 +650,8 @@ impl Run {
                     s.status = Status::Done;
                     s.pending = None;
                     s.unjudged = false;
+                    s.last_spent = None;
+                    s.again = false;
                     s.failure.clear();
                     s.tried = false;
                     s.afresh = false;
@@ -959,6 +990,11 @@ impl Run {
     /// has an output. A step the run does not take at its risk has none, so the checks that read it do not run, as
     /// fix-bug's proof on its hidden cases at low risk. Once that step is there (the risk went up), step `i` reads it
     /// and is stale, so it runs again and is judged by them.
+    /// The hidden cases of step `i` the person took out of this run.
+    pub fn cases_out(&self, i: usize) -> Vec<String> {
+        self.cases_out.get(&self.manifest.steps[i].name).cloned().unwrap_or_default()
+    }
+
     pub fn checks_taken(&self, i: usize) -> Vec<&CheckDecl> {
         let there = |r: &String| self.manifest.index(r).is_some_and(|j| self.output(j).is_some());
         self.manifest.steps[i].checks.iter().filter(|c| c.reads.iter().all(there)).collect()

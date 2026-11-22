@@ -19,6 +19,7 @@ def main : IO UInt32 := do
           | "move" => do pure (← j.getObjValAs? Run "run").next.render
           | "answer" => do pure (if (← j.getObjValAs? AnswerCase "case").accepts then "taken" else "refused")
           | "gate" => do pure (← j.getObjValAs? GateCase "case").outcome.render
+          | "drop" => do pure (toString (← j.getObjValAs? DropCase "case").accepts)
           | "effects" => do
               let c ← j.getObjValAs? EffectCase "case"
               let fmt := fun (l : List Nat) => ",".intercalate ((l.mergeSort (· ≤ ·)).eraseDups.map toString)

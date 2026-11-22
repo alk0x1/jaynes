@@ -34,7 +34,8 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   yet", never 0. Codex reports what an attempt spent only when the attempt ends, so a Codex
   attempt is not stopped midway for its tokens: the ceiling stops the attempt after it.
 - **G6.** Every attempt ends with exactly one recorded outcome, and a late report from an
-  older attempt changes nothing.
+  older attempt changes nothing. An attempt judged again after the person took out a hidden
+  case they saw fail (G2) ends once more, after the record of that case.
 
 ## Risk
 

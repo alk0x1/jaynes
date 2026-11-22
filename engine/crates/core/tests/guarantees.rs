@@ -269,6 +269,31 @@ impl World {
 
     /// Send an input, check every guarantee it could break, and record what it decided.
     /// The person, the agent that started the run, or another agent.
+    /// Someone takes a hidden case out of the blocked run: mostly the person, mostly a case a hidden check named.
+    fn drop_case(&mut self, run: &Run) {
+        let by = if self.rng.chance(80) { By::Person } else { By::Agent { who: "claude".to_string() } };
+        let at = match &run.phase {
+            Phase::Blocked { step: Some(s), .. } if self.rng.chance(90) => s.clone(),
+            _ => run.manifest.steps[self.rng.below(run.manifest.steps.len())].name.clone(),
+        };
+        let named: Vec<String> = run.manifest.index(&at).map(|i| run.steps[i].failure.iter().filter_map(|r| r.strip_prefix(HIDDEN_SAID).map(str::to_string)).collect()).unwrap_or_default();
+        let case = match self.rng.pick(&named) {
+            Some(c) if self.rng.chance(80) => c.clone(),
+            _ => format!("case {}", self.rng.below(3)),
+        };
+        let input = Input::DropCase { by: by.clone(), step: at.clone(), case: case.clone() };
+        let before = self.log.len();
+        let accepted = self.send(input);
+        if accepted {
+            let seed = self.seed;
+            assert!(by.person(), "seed {seed}: an agent took a hidden case out");
+            let i = run.manifest.index(&at).expect("step");
+            assert!(run.steps[i].failure.iter().any(|r| r.strip_prefix(HIDDEN_SAID) == Some(case.as_str())), "seed {seed}: a case no hidden check said failed was taken out");
+            assert!(self.log[before..].iter().any(|e| matches!(e, Event::CaseDropped { case: c, .. } if *c == case)), "seed {seed}: taken out unrecorded");
+            assert!(!self.commands.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == at)), "seed {seed}: an agent works on the attempt judged again");
+        }
+    }
+
     fn who(&mut self) -> (By, Option<String>) {
         let agent = By::Agent { who: "claude".to_string() };
         match self.rng.below(10) {
@@ -283,6 +308,10 @@ impl World {
         match decide(before.as_ref(), &input) {
             Err(_) => {
                 assert!(refusal_allowed(&input), "seed {}: refused {input:?}", self.seed);
+                if let (Some(cases), Some(pre)) = (self.cases.as_mut(), before.as_ref())
+                    && let Some(c) = drop_case(pre, &input, false) {
+                        cases.push(c);
+                    }
                 false
             }
             Ok(out) => {
@@ -296,10 +325,22 @@ impl World {
                 };
                 assert_eq!(folded, after, "seed {}: G16 the record folds to another state", self.seed);
                 self.run = folded;
+                if let Some(run) = self.run.as_ref() {
+                    for c in &out.commands {
+                        if let Command::RunChecks { step, without, .. } = c {
+                            let i = run.manifest.index(step).expect("step");
+                            assert_eq!(*without, run.cases_out(i), "seed {}: a check ran with a case the person took out", self.seed);
+                        }
+                    }
+                }
                 // Every state the core passed through on the way, not only where it stopped: it often takes a
                 // move from a state it leaves in the same decision.
                 if let (Some(cases), Some(pre)) = (self.cases.as_mut(), before.as_ref())
                     && let Some(c) = gate_case(pre, &input, &out.events) {
+                        cases.push(c);
+                    }
+                if let (Some(cases), Some(pre)) = (self.cases.as_mut(), before.as_ref())
+                    && let Some(c) = drop_case(pre, &input, true) {
                         cases.push(c);
                     }
                 if let Some(cases) = self.cases.as_mut() {
@@ -421,6 +462,14 @@ impl World {
                 }
                 Event::AttemptFailed { step, attempt, .. } | Event::AttemptInterrupted { step, attempt, .. } => {
                     *self.ended.entry((step.clone(), *attempt)).or_default() += 1;
+                }
+                // the person took a hidden case out: the last attempt spent is judged again, and ends once more
+                Event::CaseDropped { step, .. } => {
+                    let i = pre.manifest.index(step).expect("step");
+                    let (attempt, ..) = pre.steps[i].last_spent.clone().unwrap_or_else(|| panic!("seed {seed}: a case taken out of {step} with no attempt kept"));
+                    let n = self.ended.entry((step.clone(), attempt)).or_default();
+                    assert_eq!(*n, 1, "seed {seed}: G6 attempt {attempt} of {step} judged again before it ended");
+                    *n = 0;
                 }
                 Event::StopSkipped { step, round, coin, .. } => {
                     // G17: a stop skips asking only when certified, not braked, and its coin falls outside its sample.
@@ -637,6 +686,9 @@ impl World {
 /// The agent process that started half the random runs.
 const OWN: &str = "claude:7@1763770000";
 
+/// How a hidden check of the random roles says a case failed: the sentence after it is the case's.
+const HIDDEN_SAID: &str = "A check you cannot see found that this does not hold: ";
+
 fn refusal_allowed(input: &Input) -> bool {
     !matches!(input, Input::Tick | Input::Recovered)
 }
@@ -843,12 +895,23 @@ impl World {
                 };
                 self.send(Input::AttemptEnded { step, attempt, fix: 0, outcome });
             }
-            Command::RunChecks { step, attempt, fix, checks, .. } => {
+            Command::RunChecks { step, attempt, fix, checks, without, .. } => {
                 let mut results = Vec::new();
+                let hidden = |name: &str| {
+                    let run = self.run.as_ref().expect("run");
+                    run.manifest.index(&step).is_some_and(|i| run.manifest.steps[i].checks.iter().any(|c| c.name == name && c.kind == CheckKind::Hidden))
+                };
                 for name in checks {
+                    // a hidden check names the case that failed, as fix-bug's does, never one the person took out
+                    let reasons = if hidden(&name) {
+                        let case = format!("case {}", self.rng.below(3));
+                        if without.contains(&case) { vec![HIDDEN_SAID.to_string() + "another case"] } else { vec![HIDDEN_SAID.to_string() + &case] }
+                    } else {
+                        vec!["it does not hold".to_string()]
+                    };
                     let verdict = match self.rng.below(100) {
                         0..=79 => CheckVerdict::Pass,
-                        80..=95 => CheckVerdict::Fail { reasons: vec!["it does not hold".to_string()], detail: String::new(), cases: vec![] },
+                        80..=95 => CheckVerdict::Fail { reasons, detail: String::new(), cases: vec![] },
                         96..=97 => CheckVerdict::Blocked { reason: "the tool did not start".to_string() },
                         _ => continue,
                     };
@@ -1052,7 +1115,9 @@ impl World {
                 assert!(self.log.len() <= before + 1, "seed {}: G6 a late report did more than being recorded", self.seed);
             }
         } else if roll < 86 {
-            if run.blocked() {
+            if run.blocked() && self.rng.chance(35) {
+                self.drop_case(&run);
+            } else if run.blocked() {
                 let (by, starter) = self.who();
                 self.send(Input::Continue { by, starter });
             } else {
@@ -2083,6 +2148,18 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         if w.asked > 0 {
             hit("a stop's agent asked");
         }
+        let mut again = false;
+        for e in &w.log {
+            match e {
+                Event::CaseDropped { .. } => again = true,
+                Event::AttemptFailed { spent: false, .. } if again => {
+                    hit("judged again without a case and still failing");
+                    again = false;
+                }
+                Event::StepDone { .. } | Event::AttemptFailed { .. } => again = false,
+                _ => {}
+            }
+        }
         // a step done without a check that reads a step the run did not take at its risk
         if (0..run.steps.len()).any(|i| run.steps[i].status == Status::Done && run.checks_taken(i).len() < run.manifest.steps[i].checks.len()) {
             hit("a check the run did not take");
@@ -2096,6 +2173,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
                 Event::StepInvalidated { .. } => hit("sent back"),
                 Event::StaleReport { .. } => hit("late report"),
                 Event::FixAsked { .. } => hit("fix in place"),
+                Event::CaseDropped { .. } => hit("a hidden case taken out by the person"),
                 Event::RiskRaised { by: By::Rule { .. }, .. } => hit("risk raised by a rule"),
                 Event::Waiting { why, .. } if why.contains("cannot be undone") => hit("waits before what cannot be undone"),
                 Event::Blocked { fault: Fault::Jaynes, .. } => hit("fault of Jaynes"),
@@ -2125,7 +2203,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
         "a change judged again on the person's continue", "continued by the agent that started the run", "set aside by the agent that started the run",
         "a stop's agent asked", "an ask answered in time", "an ask answered late", "an ask that got no answer",
-        "a check the run did not take", "delivered without what the role only shows",
+        "a check the run did not take", "delivered without what the role only shows", "a hidden case taken out by the person", "judged again without a case and still failing",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }
@@ -2804,6 +2882,7 @@ fn gate_case(pre: &Run, input: &Input, events: &[Event]) -> Option<String> {
     let case = serde_json::json!({
         "locks": locks, "dropped": dropped, "items": items, "checks": checks,
         "roleStep": d.executor == Executor::Role || s.narrow.is_some(), "fixesLeft": *fix < d.fixes, "session": s.session.is_some(),
+        "again": s.again,
     });
     let expected = if events.iter().any(|e| matches!(e, Event::StepDone { .. })) {
         "done"
@@ -2811,12 +2890,33 @@ fn gate_case(pre: &Run, input: &Input, events: &[Event]) -> Option<String> {
         "fix"
     } else if events.iter().any(|e| matches!(e, Event::Blocked { fault: Fault::Jaynes, .. })) {
         "jaynes"
+    } else if s.again {
+        "again"
     } else if events.iter().any(|e| matches!(e, Event::Blocked { fault: Fault::Role, .. })) {
         "role"
     } else {
         "spent"
     };
     Some(serde_json::json!({"kind": "gate", "case": case, "expected": expected}).to_string())
+}
+
+/// Someone asks to take a hidden case out of a run (`DropCase`), with whether the core took it.
+fn drop_case(pre: &Run, input: &Input, taken: bool) -> Option<String> {
+    let Input::DropCase { by, step, case } = input else { return None };
+    let case = case.trim();
+    let i = pre.manifest.index(step);
+    let s = i.map(|i| &pre.steps[i]);
+    let blocked_here = i.is_some() && matches!(&pre.phase, Phase::Blocked { step: Some(b), fault: Fault::Agent, .. } if b == step);
+    let c = serde_json::json!({
+        "person": by.person(),
+        "named": !case.is_empty(),
+        "blockedHere": blocked_here,
+        "alreadyOut": i.is_some_and(|i| pre.cases_out(i).iter().any(|x| x == case)),
+        "hiddenSaid": s.is_some_and(|s| s.checks.iter().any(|r| r.kind == CheckKind::Hidden && !r.passed && !r.blocked)
+            && s.failure.iter().any(|r| r == case || r.ends_with(&format!(": {case}")))),
+        "kept": s.is_some_and(|s| s.last_spent.is_some()),
+    });
+    Some(serde_json::json!({"kind": "drop", "case": c, "expected": taken.to_string()}).to_string())
 }
 
 /// The model's case for every state each run of a record passed through, read with the sqlite3 program.
@@ -2915,6 +3015,12 @@ fn the_lean_model_decides_as_the_core_does() {
     assert!(clicks("\"taken\"") >= 20 && clicks("\"refused\"") >= 20 && again >= 5, "the random runs click Merge too rarely");
     let (ok, said) = lean_decides(&lake, &cases);
     eprintln!("{} states: {}", cases.len(), said.lines().find(|l| l.contains("agreed")).unwrap_or(""));
+    let drops: Vec<&String> = cases.iter().filter(|c| c.contains("\"kind\":\"drop\"")).collect();
+    let taken = drops.iter().filter(|c| c.contains("\"expected\":\"true\"")).count();
+    eprintln!("{} cases taken out or refused, {taken} taken out", drops.len());
+    assert!(taken >= 5 && drops.len() > taken, "the model was given {} cases taken out or refused, {taken} taken out", drops.len());
+    let again = cases.iter().filter(|c| c.contains("\"kind\":\"gate\"") && c.contains("\"again\":true")).count();
+    assert!(again >= 5, "the model was given {again} passes judged again without a case taken out");
     assert!(ok, "{said}");
 }
 

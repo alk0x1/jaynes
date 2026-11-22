@@ -355,6 +355,21 @@ theorem g2_g3_gate (g : GateCase) :
     have h3 := hhid c hc
     cases hg : c.gave <;> cases hp : c.passed <;> simp_all
 
+/-- G2 and G3 with a case the person took out: the last attempt spent, judged again without it, is never fixed in
+    place nor spends an attempt, so no agent works on it and none is told of the case; it is done only as any pass
+    is, every check it takes having passed (`g2_g3_gate`), and otherwise the run waits for the person again. -/
+theorem g2_g3_again (g : GateCase) (h : g.again = true) :
+    g.outcome ≠ .fix ∧ g.outcome ≠ .spent ∧ g.outcome ≠ .role := by
+  unfold GateCase.outcome
+  repeat' split
+  all_goals simp_all
+
+/-- Only the person takes a hidden case out of a run, and only one a hidden check of the blocked step said failed. -/
+theorem drop_case_only_by_the_person (d : DropCase) (h : d.accepts = true) :
+    d.person = true ∧ d.blockedHere = true ∧ d.hiddenSaid = true ∧ d.alreadyOut = false := by
+  simp only [DropCase.accepts, Bool.and_eq_true, Bool.not_eq_true'] at h
+  exact ⟨h.1.1.1.1.1, h.1.1.1.2, h.1.2, h.1.1.2⟩
+
 end Jaynes
 
 namespace Jaynes
