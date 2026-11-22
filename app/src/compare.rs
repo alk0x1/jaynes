@@ -1377,6 +1377,10 @@ impl Render for Compare {
             && let Some(w) = self.words.clone()
         {
             w.update(cx, |s, cx| s.set_value("", window, cx));
+            // set_value sends no Change: what the foot says of the words goes with them, or it still quotes the
+            // question just asked under an empty field
+            self.reckoned = self.proposal(cx).map(|(_, body)| answer::reckon(&body)).unwrap_or_default();
+            self.all_said = false;
         }
         let thread = self.thread(cx);
         let asks = self.asks(&stop, cx);

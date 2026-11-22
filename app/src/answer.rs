@@ -100,16 +100,19 @@ pub fn all(stop: &Stop, v: jaynes_core::question::VerdictKind) -> Value {
     body(stop, &verdicts, &BTreeMap::new(), &BTreeMap::new(), "")
 }
 
-/// Sends the answer as the person's: their touch first when the stop asks it (`touch_of`), with its reason, then
-/// signed with their key. Resolves to what to tell them.
 /// Sends the person's question to the agent at a stop, about one of its items or the whole: the agent answers in a
-/// turn that only reads, and nothing is redone or chosen. Signed with the app's key, as an answer is.
+/// turn that only reads, and nothing is redone or chosen, so no touch is asked. Signed with the app's key over the
+/// engine's ask (`person::ask_message`), never an answer's, so it cannot stand for one.
 pub async fn ask(key: Option<Arc<Key>>, run: String, question: String, item: Option<String>, text: String) -> Result<(), String> {
-    let _ = (key.ok_or("the app has no key of yours, so it cannot ask as you")?, run, question, item, text);
-    // waits for the engine's signed ask (person::submit_ask, the backend-engineer's, on lote-025m)
-    Err("this build cannot ask the agent yet: the engine's signed ask is not in it".into())
+    let key = key.ok_or("the app has no key of yours, so it cannot ask as you")?;
+    let home = jaynes_shell::home();
+    let state = jaynes_shell::store::Store::open(&home.join("record.sqlite3"))?.state(&run)?.ok_or_else(|| format!("there is no run {run}"))?;
+    let signature = key.sign(&jaynes_shell::person::ask_message(&run, &question, item.as_deref(), &text));
+    jaynes_shell::person::submit_ask(&home, &engine_program(), &state, &question, item.as_deref(), &text, &key.public(), &signature).map(|_| ())
 }
 
+/// Sends the answer as the person's: their touch first when the stop asks it (`touch_of`), with its reason, then
+/// signed with their key. Resolves to what to tell them.
 pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, body: Value) -> Result<(), String> {
     let key = key.ok_or("the app has no key of yours, so it cannot answer as you")?;
     if let Some(reason) = touch {
