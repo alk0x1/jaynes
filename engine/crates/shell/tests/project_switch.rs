@@ -171,7 +171,7 @@ fn the_mcp_server_starts_no_run_in_a_project_that_turns_jaynes_off() {
     let mut out = std::io::BufReader::new(child.stdout.take().expect("stdout"));
     let stdin = child.stdin.as_mut().expect("stdin");
     let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "start", "arguments": {
-        "role": "small-change", "project": w.project().join("src"), "request": "say hi"}}});
+        "role": "small-change", "project": w.project().join("src"), "request": "say hi", "title": "Say hi"}}});
     writeln!(stdin, "{call}").expect("write");
     stdin.flush().expect("flush");
     let mut line = String::new();

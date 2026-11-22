@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn a_run_that_spent_its_attempts_says_where_in_the_inbox_as_the_column_does() {
-        let row = Row { id: "b".into(), title: "Rename the footer link".into(), line: "step 2 of 2, blocked: change spent its 3 attempts: the agent exited with code 1".into(), mark: Mark::Blocked };
+        let row = Row { id: "b".into(), project: String::new(), apart: None, title: "Rename the footer link".into(), line: "step 2 of 2, blocked: change spent its 3 attempts: the agent exited with code 1".into(), mark: Mark::Blocked };
         let runs = Listing { needs: vec![], projects: vec![("site".into(), vec![row])] };
         let (needs, _) = gather(&[], &runs, &HashMap::new());
         assert_eq!(needs[0].place, "Jaynes run · at “change”: used its 3 attempts");
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn a_halted_run_says_who_halted_it_in_the_inbox_as_the_column_does() {
-        let row = Row { id: "h".into(), title: "Landing page".into(), line: "step 1 of 2, halted".into(), mark: Mark::Halted };
+        let row = Row { id: "h".into(), project: String::new(), apart: None, title: "Landing page".into(), line: "step 1 of 2, halted".into(), mark: Mark::Halted };
         let runs = Listing { needs: vec![], projects: vec![("site".into(), vec![row])] };
         let who = HashMap::from([("h".to_string(), "halted by an agent".to_string())]);
         assert_eq!(gather(&[], &runs, &who).0[0].place, "Jaynes run · halted by an agent · step 1 of 2");
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn a_run_delivered_and_not_seen_is_in_finished_with_what_it_delivered() {
-        let row = |id: &str, title: &str, mark: Mark| Row { id: id.into(), title: title.into(), line: String::new(), mark };
+        let row = |id: &str, title: &str, mark: Mark| Row { id: id.into(), project: String::new(), apart: None, title: title.into(), line: String::new(), mark };
         let runs = Listing {
             needs: vec![],
             projects: vec![("site".into(), vec![
@@ -199,13 +199,13 @@ mod tests {
             Space { id: "s2".into(), name: "helm".into(), folder: String::new(), agents: vec![agent("t4", State::Error), agent("t5", State::Idle)], tabs: vec![] },
         ];
         let runs = Listing {
-            needs: vec![Row { id: "r1".into(), title: "Run".into(), line: "Pick one".into(), mark: Mark::Needs }],
+            needs: vec![Row { id: "r1".into(), project: String::new(), apart: None, title: "Run".into(), line: "Pick one".into(), mark: Mark::Needs }],
             projects: vec![(
                 "api".into(),
                 vec![
-                    Row { id: "r2".into(), title: "Stuck".into(), line: "step 2 of 3, blocked: no room".into(), mark: Mark::Blocked },
-                    Row { id: "r3".into(), title: "Going".into(), line: "step 1 of 3, running".into(), mark: Mark::Working },
-                    Row { id: "r4".into(), title: "Stopped".into(), line: "step 1 of 3, halted".into(), mark: Mark::Halted },
+                    Row { id: "r2".into(), project: String::new(), apart: None, title: "Stuck".into(), line: "step 2 of 3, blocked: no room".into(), mark: Mark::Blocked },
+                    Row { id: "r3".into(), project: String::new(), apart: None, title: "Going".into(), line: "step 1 of 3, running".into(), mark: Mark::Working },
+                    Row { id: "r4".into(), project: String::new(), apart: None, title: "Stopped".into(), line: "step 1 of 3, halted".into(), mark: Mark::Halted },
                 ],
             )],
         };

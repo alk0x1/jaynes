@@ -1,6 +1,6 @@
 //! `jaynes`: the shell around the core, on the command line.
 
-use jaynes_shell::{home, agent, conformance, declaration, drive, export, index, install, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
+use jaynes_shell::{home, agent, conformance, declaration, drive, export, index, install, listing, mcp, page, permit, project, project_prefs, protocol, role, store, summary, toml_role};
 
 use drive::{say, Driver, Setup};
 use jaynes_core::question::{Answer, By, Verdict};
@@ -17,7 +17,7 @@ use store::Store;
 
 const USAGE: &str = "jaynes: the redesigned Jaynes engine
 
-  start --role NAME --request TEXT [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
+  start --role NAME --request TEXT [--title WORDS] [--project DIR] [--agent claude|claude:MODEL|codex:MODEL|command:CMD, or JAYNES_AGENT] [--risk high] [--run ID]
         [--task ID] [--arm NAME]   in an evaluation: the task's id in your own list and the arm, letters, digits and hyphens
         [--never-merge]   in an evaluation: deliver the run's branch only, whatever is answered
   continue RUN            go on after a stop of the process, or after a block
@@ -327,9 +327,12 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "runs" => {
             let s = store()?;
+            // each run by its name, as the page and the app show it: its project, its title, and what tells it apart
+            let rows = listing::read(&home())?;
+            let named: BTreeMap<String, String> = rows.needs.iter().chain(rows.projects.iter().flat_map(|(_, r)| r)).map(|r| (r.id.clone(), listing::name(r).join(" · "))).collect();
             for id in s.runs()? {
                 if let Some(r) = s.state(&id)? {
-                    println!("{id}  {}  {}  {}", r.manifest.role, phase(&r.phase), r.request.chars().take(60).collect::<String>());
+                    println!("{id}  {}  {}  {}", r.manifest.role, phase(&r.phase), named.get(&id).cloned().unwrap_or_default());
                 }
             }
             Ok(())
@@ -574,6 +577,8 @@ fn start(args: &[String]) -> Result<(), String> {
     let task = label(args, "--task")?;
     let arm = label(args, "--arm")?;
     let never_merge = args.iter().any(|a| a == "--never-merge");
+    // the short name the run is shown by, kept as the start gave it, cut at a word past 40
+    let title = flag(args, "--title").map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).map(|t| listing::run_title(Some(&t), ""));
     let id = flag(args, "--run").unwrap_or_else(|| {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         format!("r{t}-{}", std::process::id() % 1000)
@@ -639,6 +644,7 @@ fn start(args: &[String]) -> Result<(), String> {
     s.put_setup(&id, &json!({
         "role_given": role_dir, "fingerprint": fingerprint, "agent": agent, "target": manifest.target,
         "project": project.as_ref().map(|p| p.display().to_string()), "branch": project.as_ref().map(|_| branch.clone()),
+        "title": title,
         "ports": ports.as_ref().map(|p| json!({"any": true, "opened": p.opened})),
         "env": drive::started_env(),
     }))?;

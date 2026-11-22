@@ -502,6 +502,22 @@ fn an_input_sent_while_another_process_drives_waits_in_the_inbox() {
     assert!(!t.contains(&"Delivered".to_string()), "nothing is delivered while halted: {t:?}");
 }
 
+/// "não consigo saber fácil qual run é de qual projeto" (Alan, 21/11/2026): the title the start gave is what the run
+/// is listed by, after its project's name, wherever runs are listed.
+#[test]
+fn a_run_is_listed_by_its_project_and_the_title_its_start_gave() {
+    let s = scratch("titled");
+    let role = root().join("crates/shell/tests/roles/small-change");
+    let (_started, out) = engine(&s, &[
+        "start", "--run", "titled", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        "--request", "Agreed with Alan on 2026-11-21: say hi instead of hello", "--title", "  Say hi  ", "--agent", "command:true",
+    ]);
+    let (ok, listed) = engine(&s, &["runs"]);
+    assert!(ok, "{listed}");
+    let folder = s.project.file_name().expect("folder").to_string_lossy().into_owned();
+    assert!(listed.lines().any(|l| l.starts_with("titled ") && l.ends_with(&format!("{folder} · Say hi"))), "{listed}\n{out}");
+}
+
 /// Where Jaynes has no box for a project's commands, a run never runs them open: it stops at once, says why, and
 /// nothing of the project runs, the agent included. No variable opens it: only the person does, with their proof (G18).
 #[test]

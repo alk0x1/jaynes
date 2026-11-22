@@ -127,7 +127,8 @@ pub fn merges(dir: &Path) -> Vec<String> {
 
 /// Start a run in a process of its own, which goes on by itself; what it says goes to `start-<run>.log` in the
 /// engine's home. The run's id is returned before the run is recorded.
-pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, high: bool) -> Result<String, String> {
+/// `title`: the short name the run is shown by, when one was given (`listing::run_title` says what it is otherwise).
+pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str, title: Option<&str>, high: bool) -> Result<String, String> {
     let dir = crate::install::find_role(home, role)?;
     // a role that does not fit the project says why here, to the page or the agent that asked, before a run exists
     let folder = std::fs::canonicalize(project).map_err(|e| format!("{project}: {e}"))?;
@@ -137,6 +138,9 @@ pub fn launch(home: &Path, exe: &Path, role: &str, project: &str, request: &str,
     let mut argv = vec!["start", "--run", &run, "--role", role, "--project", project, "--request", request];
     if high {
         argv.extend(["--risk", "high"]);
+    }
+    if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) {
+        argv.extend(["--title", t]);
     }
     std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
     let log = std::fs::File::create(home.join(format!("start-{run}.log"))).map_err(|e| e.to_string())?;

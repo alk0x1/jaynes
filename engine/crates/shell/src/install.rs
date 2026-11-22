@@ -479,11 +479,13 @@ pub const GUIDE: &str = "How to carry out an agreed change through Jaynes
      jaynes add small-change
      jaynes add fix-bug
 2. Start the run with the Jaynes plugin's MCP tool \"start\" (mcp__plugin_jaynes_jaynes__start): role, the project's
-   folder as a full path, the whole agreed plan as the request, and risk \"high\" if the change is not small (the run
-   then takes the full path and its ceiling is higher). The tool runs Jaynes outside your own sandbox, so Jaynes can
+   folder as a full path, the whole agreed plan as the request, a title, and risk \"high\" if the change is not small
+   (the run then takes the full path and its ceiling is higher). The title is what the person tells the run by, after
+   its project: a few words, up to 40 characters, in their language, saying what changes (\"Login with passkey\"), with
+   no date, no one's name and no \"Agreed with…\". The tool runs Jaynes outside your own sandbox, so Jaynes can
    put its box around the project's commands. Only when the tool is not there (no plugin), start it from the
    project's folder with a command, in the background, since it runs agents for minutes:
-     jaynes start --role <role> --project . --request \"<the plan, in full>\" [--risk high]
+     jaynes start --role <role> --project . --request \"<the plan, in full>\" --title \"<a few words>\" [--risk high]
    From a shell with a sandbox of its own (as Claude Code's Bash with its sandbox on), Jaynes cannot put its box around
    the project's commands, and the run refuses them: use the tool, or a terminal of the person's.
 3. Tell the person that the run goes on by itself and that what needs them is on the page Jaynes opens in their

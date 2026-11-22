@@ -25,8 +25,14 @@ pub enum Mark {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub id: String,
-    /// The request, short.
+    /// The project's folder name, with the folder above it when another project has a folder of the same name;
+    /// "no project" for a run without one.
+    pub project: String,
+    /// The run's title: the one given at its start, or the first sentence of its request (`run_title`).
     pub title: String,
+    /// What tells it apart from another run of the same title in the same project: "at “{step}”", or "started HH:MM"
+    /// when the step is the same too. None when nothing of the same name is in its project.
+    pub apart: Option<String>,
     /// The question that waits, or where the run is.
     pub line: String,
     pub mark: Mark,
@@ -46,6 +52,8 @@ pub struct Entry {
     pub run: Run,
     /// The project's folder, empty when the run has none.
     pub project: String,
+    /// The title given at the run's start, as its setup keeps it.
+    pub title: Option<String>,
     /// When the run started and last changed, in seconds.
     pub started: u64,
     pub at: u64,
@@ -65,10 +73,12 @@ pub fn entries(home: &Path) -> Result<Vec<Entry>, String> {
     let mut entries = Vec::new();
     for id in store.runs()? {
         let Some(run) = store.state(&id)? else { continue };
-        let project = store.setup(&id).ok().and_then(|s| s["project"].as_str().map(str::to_owned)).unwrap_or_default();
+        let setup = store.setup(&id).unwrap_or_default();
+        let project = setup["project"].as_str().map(str::to_owned).unwrap_or_default();
+        let title = setup["title"].as_str().map(str::to_owned);
         let (started, at) = times.get(&id).copied().unwrap_or((0, 0));
         let merged = !crate::drive::merges(&home.join("runs").join(&id)).is_empty();
-        entries.push(Entry { run, project, started, at, merged });
+        entries.push(Entry { run, project, title, started, at, merged });
     }
     Ok(entries)
 }
@@ -76,24 +86,128 @@ pub fn entries(home: &Path) -> Result<Vec<Entry>, String> {
 pub fn arrange(entries: &[Entry]) -> Listing {
     let mut entries: Vec<&Entry> = entries.iter().collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.at));
-    let mut listing = Listing::default();
-    for e in entries {
+    let folders: Vec<&str> = entries.iter().map(|e| e.project.as_str()).collect();
+    // each run's row, and whether it waits for the person
+    let mut rows: Vec<(Row, bool, &Entry)> = Vec::new();
+    for e in &entries {
         let r = &e.run;
-        let request = short(&r.request);
+        let project = project_name(&e.project, &folders);
+        let title = run_title(e.title.as_deref(), &r.request);
         let waiting = if r.finished() { None } else { r.questions.values().find(|q| q.open()) };
-        if let Some(q) = waiting {
-            listing.needs.push(Row { id: r.id.clone(), title: request, line: title(q), mark: Mark::Needs });
+        let (mark, line, needs) = match waiting {
+            Some(q) => (Mark::Needs, self::title(q), true),
+            None => {
+                let (mark, line) = standing(e);
+                (mark, line, false)
+            }
+        };
+        rows.push((Row { id: r.id.clone(), project, title, apart: None, line, mark }, needs, e));
+    }
+    // two runs of one title in one project: the step each is at, or when it started when the step is the same
+    let apart: Vec<Option<String>> = rows
+        .iter()
+        .map(|(row, _, e)| {
+            let same: Vec<&Entry> = rows.iter().filter(|(o, _, _)| o.id != row.id && o.project == row.project && o.title == row.title).map(|(_, _, o)| *o).collect();
+            if same.is_empty() {
+                return None;
+            }
+            let step = step_at(&e.run);
+            if same.iter().any(|o| step_at(&o.run) == step) { Some(format!("started {}", clock(e.started))) } else { Some(format!("at “{step}”")) }
+        })
+        .collect();
+    let mut listing = Listing::default();
+    for ((mut row, needs, _), apart) in rows.into_iter().zip(apart) {
+        row.apart = apart;
+        if needs {
+            listing.needs.push(row);
             continue;
         }
-        let (mark, line) = standing(e);
-        let project = Path::new(&e.project).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "no project".into());
-        let row = Row { id: r.id.clone(), title: request, line, mark };
-        match listing.projects.iter_mut().find(|(p, _)| *p == project) {
+        match listing.projects.iter_mut().find(|(p, _)| *p == row.project) {
             Some((_, rows)) => rows.push(row),
-            None => listing.projects.push((project, vec![row])),
+            None => listing.projects.push((row.project.clone(), vec![row])),
         }
     }
     listing
+}
+
+/// A project's name in the list: its folder's name, with the folder above it when another project of `folders` has
+/// a folder of the same name somewhere else; "no project" for a run without one.
+fn project_name(folder: &str, folders: &[&str]) -> String {
+    let path = Path::new(folder);
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { return "no project".into() };
+    let twin = folders.iter().any(|f| *f != folder && Path::new(f).file_name().is_some_and(|n| n.to_string_lossy() == name));
+    match path.parent().and_then(|p| p.file_name()) {
+        Some(above) if twin => format!("{}/{name}", above.to_string_lossy()),
+        _ => name,
+    }
+}
+
+/// The step a run is at: the first on its path whose output is not fresh, or its last.
+fn step_at(r: &Run) -> String {
+    let path = r.path();
+    let at = path.iter().find(|&&i| !r.fresh(i)).or(path.last());
+    at.map(|&i| r.manifest.steps[i].name.clone()).unwrap_or_default()
+}
+
+/// The hour and minute of a moment on this machine's clock, as the person reads it: "14:02".
+fn clock(ts: u64) -> String {
+    let flags: [&str; 2] = if cfg!(target_os = "macos") { ["-r", ""] } else { ["-d", "@"] };
+    let said = std::process::Command::new("date").args([flags[0].to_string(), format!("{}{ts}", flags[1]), "+%H:%M".into()]).output();
+    match said {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => format!("{:02}:{:02} UTC", ts % 86_400 / 3600, ts % 3600 / 60),
+    }
+}
+
+/// A run's name, in its parts in order: its project, its title, and what tells it apart when another run of its
+/// project has the same title. The app and the page show a run by these, never by a name of their own.
+pub fn name(row: &Row) -> Vec<String> {
+    let mut parts = vec![row.project.clone(), row.title.clone()];
+    parts.extend(row.apart.clone());
+    parts
+}
+
+/// A run's title: the one given at its start, or the first sentence of its request without an opening "Agreed with
+/// … on …:"; past 40 characters, cut at a word.
+pub fn run_title(given: Option<&str>, request: &str) -> String {
+    let title = match given.map(str::trim).filter(|g| !g.is_empty()) {
+        Some(g) => g.to_string(),
+        None => {
+            let r = request.trim();
+            let first_line = r.lines().next().unwrap_or("");
+            let r = match first_line.find(": ") {
+                Some(at) if first_line.to_lowercase().starts_with("agreed with") => r[at + 2..].trim_start(),
+                _ => r,
+            };
+            let mut chars = first_sentence(r).chars();
+            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        }
+    };
+    cut_at_word(&title, 40)
+}
+
+/// The first sentence of `text`: up to its first full stop (left out), question or exclamation mark (kept), or line end.
+fn first_sentence(text: &str) -> &str {
+    let mut end = text.len();
+    for (i, c) in text.char_indices() {
+        let next = text[i + c.len_utf8()..].chars().next();
+        if c == '\n' || (matches!(c, '.' | '?' | '!') && next.is_none_or(char::is_whitespace)) {
+            end = if matches!(c, '?' | '!') { i + 1 } else { i };
+            break;
+        }
+    }
+    text[..end].trim()
+}
+
+/// `text` in at most `max` characters: past it, cut at the last word that fits, with "…".
+fn cut_at_word(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max - 1).collect();
+    let at_word = text.chars().nth(max - 1).is_some_and(char::is_whitespace);
+    let kept = if at_word { kept.as_str() } else { kept.rfind(' ').map(|i| &kept[..i]).unwrap_or(&kept) };
+    format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || ",;:-".contains(c)))
 }
 
 /// A reason as the engine says it now: before 0.2.4 it said how a program ended as Rust's debug text ("exited with
@@ -446,7 +560,7 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), started: 0, at, merged: false }
+        Entry { run, project: project.into(), title: None, started: 0, at, merged: false }
     }
 
     #[test]
@@ -465,11 +579,73 @@ mod tests {
 
         let listing = arrange(&[entry(waits, "/p/app", 30), entry(older, "/p/app", 10), entry(works, "/p/app", 20), entry(other, "/p/site", 40)]);
 
-        assert_eq!(listing.needs, vec![Row { id: "r1".into(), title: "Make the onboarding friendlier".into(), line: "Which plan goes on?".into(), mark: Mark::Needs }]);
+        assert_eq!(listing.needs, vec![Row { id: "r1".into(), project: "app".into(), title: "Make the onboarding friendlier".into(), apart: None, line: "Which plan goes on?".into(), mark: Mark::Needs }]);
         let names: Vec<&str> = listing.projects.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(names, ["site", "app"]);
         let app: Vec<(&str, Mark, &str)> = listing.projects[1].1.iter().map(|r| (r.id.as_str(), r.mark, r.line.as_str())).collect();
         assert_eq!(app, [("r2", Mark::Working, "step 1 of 2, running"), ("r3", Mark::Delivered, "delivered")]);
+    }
+
+    /// "não consigo saber fácil qual run é de qual projeto" (Alan, 21/11/2026): two runs showed side by side as
+    /// "Agreed with Alan on 2026-11-21…". Every run's name starts with its project, then its title; two runs of one
+    /// title in one project are told apart by the step each is at, and by when it started when that is the same too.
+    #[test]
+    fn asked_which_run_is_which_project() {
+        let agreed = "Agreed with Alan on 2026-11-21 (relayed by Otto): the plan tab of the page shows the plan's log and its checklist. Then the rest.";
+        let mut waits = run("r1", agreed);
+        waits.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
+            about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        waits.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        let other = run("r2", agreed);
+        // the same title in one project: at different steps, then at the same step
+        let at_change = |id: &str| {
+            let mut r = run(id, "Fix the export");
+            r.steps[0].status = jaynes_core::run::Status::Done;
+            r.steps[0].done = Some(jaynes_core::run::Done { round: 1, output: jaynes_core::Digest("o".into()), items: vec![], reads: r.reads(0), changed: vec![] });
+            r
+        };
+        let titled = |r: Run, project: &str, at: u64, started: u64| Entry { title: Some("Fix the export".into()), started, ..entry(r, project, at) };
+        let entries = [
+            entry(waits, "/work/tidepool", 50),
+            entry(other, "/work/harbor-api", 40),
+            titled(run("r3", "x"), "/work/tidepool", 30, 1_000),
+            titled(at_change("r4"), "/work/tidepool", 20, 2_000),
+            titled(at_change("r5"), "/work/tidepool", 10, 3_000),
+            // a folder of the same name somewhere else is another project: the folder above it tells them apart
+            entry(run("r6", "Rename the footer link"), "/side/harbor-api", 5),
+        ];
+        let listing = arrange(&entries);
+        let rows: Vec<&Row> = listing.needs.iter().chain(listing.projects.iter().flat_map(|(_, rows)| rows)).collect();
+        let named = |id: &str| name(rows.iter().find(|r| r.id == id).expect(id));
+        // the request without its opening "Agreed with … on …:", its first sentence, cut at a word within 40
+        assert_eq!(named("r1"), ["tidepool", "The plan tab of the page shows the…"]);
+        assert_eq!(named("r2"), ["work/harbor-api", "The plan tab of the page shows the…"]);
+        assert_eq!(named("r6"), ["side/harbor-api", "Rename the footer link"]);
+        // the run that waits for the person says its project there too
+        assert_eq!(listing.needs.iter().map(|r| r.project.as_str()).collect::<Vec<_>>(), ["tidepool"]);
+        assert_eq!(named("r3"), ["tidepool", "Fix the export", "at “plan”"]);
+        let (r4, r5) = (named("r4"), named("r5"));
+        assert_eq!(r4[..2], ["tidepool", "Fix the export"]);
+        for (said, other) in [(&r4, &r5), (&r5, &r4)] {
+            let when = said[2].strip_prefix("started ").expect("when it started");
+            assert!(when.len() == 5 && when.as_bytes()[2] == b':', "{when}");
+            assert_ne!(said[2], other[2]);
+        }
+        let projects: Vec<&str> = listing.projects.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(projects, ["work/harbor-api", "tidepool", "side/harbor-api"]);
+    }
+
+    #[test]
+    fn a_title_given_at_the_start_is_kept_and_cut_at_a_word_past_40() {
+        assert_eq!(run_title(Some("  Login with passkey "), "Agreed with Alan on 2026-11-21: anything"), "Login with passkey");
+        assert_eq!(run_title(Some("Tighten the copy of the pricing page and its footer"), ""), "Tighten the copy of the pricing page…");
+        assert_eq!(run_title(Some(""), "Make the onboarding friendlier.\nRead the brief."), "Make the onboarding friendlier");
+        assert_eq!(run_title(None, "What does RFC 9111 require of a cache? Read it."), "What does RFC 9111 require of a cache?");
+        assert_eq!(run_title(None, "Agreed with Alan on 2026-11-21 (relayed by Otto, ~20h25), slice 1 of 2, wanted before 08:00: a block at the top"), "A block at the top");
+        assert!(run_title(None, &"x".repeat(80)).chars().count() <= 40);
     }
 
     #[test]

@@ -20,7 +20,8 @@ fn tools() -> Value {
         {"name": "start", "description": "Start a run of a role on a project with the agreed plan as its request. It goes on by itself; the person answers on the page.",
          "inputSchema": obj(json!({"role": {"type": "string"}, "project": {"type": "string", "description": "the project's folder"},
                                    "request": {"type": "string", "description": "the whole agreed plan"},
-                                   "risk": {"type": "string", "enum": ["low", "high"], "description": "high when the change is not small"}}), &["role", "project", "request"])},
+                                   "title": {"type": "string", "description": TITLE},
+                                   "risk": {"type": "string", "enum": ["low", "high"], "description": "high when the change is not small"}}), &["role", "project", "request", "title"])},
         {"name": "run", "description": "Where a run is: its steps, what it waits for, what it spent.", "inputSchema": obj(json!({"run": {"type": "string"}}), &["run"])},
         {"name": "answer", "description": "Let a result go on as it is, at a stop the role marks as a release. Only that: everything else is the person's.",
          "inputSchema": obj(json!({"run": {"type": "string"}, "question": {"type": "string"}}), &["run", "question"])},
@@ -36,6 +37,8 @@ pub fn off() -> bool {
     std::env::var("JAYNES_OFF").is_ok_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
 }
 
+/// What the start tool asks of the run's title: what the person tells their runs apart by, after the project.
+const TITLE: &str = "a short name for this work, up to 40 characters, in the person's language, saying what changes (\"Login with passkey\"); no date, no one's name, not \"Agreed with…\"";
 const OFF: &str = "Jaynes is off in this session (JAYNES_OFF is set): it offers no tools here, and agreed changes are made without it. Its guard keeps its own switch. Unset JAYNES_OFF to use Jaynes.";
 
 pub fn serve(home: &Path) -> Result<(), String> {
@@ -119,10 +122,11 @@ fn call(home: &Path, tool: &str, args: &Value) -> Result<String, String> {
             let role = text(args, "role")?;
             let project = text(args, "project")?;
             let request = text(args, "request")?;
+            let title = text(args, "title")?;
             if let Some(file) = conducting_off_in(Path::new(project)) {
                 return Err(format!("{} says conduct = false: Jaynes stays out of this project, so make the change without it. The person removes that line to use Jaynes here.", file.display()));
             }
-            let run = drive::launch(home, &exe, role, project, request, args["risk"].as_str() == Some("high"))?;
+            let run = drive::launch(home, &exe, role, project, request, Some(title), args["risk"].as_str() == Some("high"))?;
             Ok(format!(
                 "Run {run} started; it goes on by itself. What needs the person is on the page, {}. `run` with {run} says where it is.",
                 install::ensure_page(home)
@@ -158,15 +162,20 @@ fn home_text(home: &Path) -> Result<String, String> {
     let store = Store::open(&home.join("record.sqlite3"))?;
     let mut waiting = Vec::new();
     let mut others = Vec::new();
+    // each run by its name, as the person sees it: its project, its title, and what tells it apart
+    let rows = crate::listing::read(home)?;
+    let named: std::collections::BTreeMap<String, String> =
+        rows.needs.iter().chain(rows.projects.iter().flat_map(|(_, r)| r)).map(|r| (r.id.clone(), crate::listing::name(r).join(" · "))).collect();
     for id in store.runs()? {
         let Some(run) = store.state(&id)? else { continue };
         if run.finished() {
             continue;
         }
+        let name = named.get(&id).cloned().unwrap_or_default();
         for q in run.open_questions() {
             let q = &q.question;
             waiting.push(format!(
-                "- run {} ({}), question {} at {}: {} [{}]{}",
+                "- run {} “{name}” ({}), question {} at {}: {} [{}]{}",
                 run.id,
                 run.manifest.role,
                 q.id,
@@ -177,8 +186,8 @@ fn home_text(home: &Path) -> Result<String, String> {
             ));
         }
         match &run.phase {
-            Phase::Blocked { reason, .. } => others.push(format!("- run {} is blocked: {reason}", run.id)),
-            Phase::Running => others.push(format!("- run {} runs", run.id)),
+            Phase::Blocked { reason, .. } => others.push(format!("- run {} “{name}” is blocked: {reason}", run.id)),
+            Phase::Running => others.push(format!("- run {} “{name}” runs", run.id)),
             _ => {}
         }
     }
@@ -230,6 +239,18 @@ fn run_text(r: &Run) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "não consigo saber fácil qual run é de qual projeto" (Alan, 21/11/2026): an agent names the run it starts, so the
+    /// person tells it apart by its project and that title.
+    #[test]
+    fn an_agent_s_start_gives_the_run_a_title() {
+        let all = tools();
+        let start = all.as_array().expect("tools").iter().find(|t| t["name"] == "start").expect("start");
+        let required: Vec<&str> = start["inputSchema"]["required"].as_array().expect("required").iter().filter_map(|v| v.as_str()).collect();
+        assert!(required.contains(&"title"), "{required:?}");
+        let said = call(Path::new("/nonexistent"), "start", &json!({"role": "small-change", "project": "/tmp", "request": "say hi"}));
+        assert_eq!(said, Err("title is needed".to_string()));
+    }
 
     #[test]
     fn no_tool_opens_a_project_s_local_ports() {

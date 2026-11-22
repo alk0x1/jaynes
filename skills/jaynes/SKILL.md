@@ -15,7 +15,8 @@ When the skill starts from an approved plan, the task is that plan, in full, wit
    elsewhere, `cargo install --locked --git https://github.com/alk0x1/jaynes jaynes-shell --root ~/.local` (install
    Rust with rustup first if `cargo` is missing).
 2. Run `jaynes guide` and follow what it prints. Start the run with the Jaynes plugin's MCP tool `start` when it is
-   there, never with `jaynes start` from a sandboxed shell: the guide says why.
+   there, never with `jaynes start` from a sandboxed shell: the guide says why. Give it a `title`: a few words, up to
+   40 characters, in the person's language, saying what changes, so they tell the run apart by its project and title.
 
 ## When the person wants a new role
 

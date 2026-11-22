@@ -934,7 +934,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn row(id: &str, mark: Mark, line: &str) -> Row {
-        Row { id: id.into(), title: id.to_uppercase(), line: line.into(), mark }
+        Row { id: id.into(), project: String::new(), apart: None, title: id.to_uppercase(), line: line.into(), mark }
     }
 
     #[test]

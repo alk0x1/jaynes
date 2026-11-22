@@ -322,7 +322,7 @@ mod tests {
         use jaynes_shell::listing::{Listing, Mark, Row};
         let agent = |a: &str| Agent { address: a.into(), title: a.to_uppercase(), state: State::Idle, since_ms: 0, shell: false, turn: 0, kind: None, msg: String::new(), cwd: String::new() };
         let spaces = [Space { id: "s".into(), name: "helm".into(), folder: String::new(), agents: vec![agent("t1"), agent("t2")], tabs: vec![] }];
-        let row = |id: &str, mark| Row { id: id.into(), title: format!("Run {id}"), line: String::new(), mark };
+        let row = |id: &str, mark| Row { id: id.into(), project: String::new(), apart: None, title: format!("Run {id}"), line: String::new(), mark };
         // a run that waits shows in the list of those that wait and in its project's: once here
         let runs = Listing { needs: vec![row("r1", Mark::Needs)], projects: vec![("p".into(), vec![row("r1", Mark::Needs), row("r2", Mark::Merged)])] };
         let all = super::entries(&spaces, &runs, Some("helm"));

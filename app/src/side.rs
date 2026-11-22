@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn a_dot_on_the_narrow_rail_says_its_run_and_what_it_waits_for() {
-        let row = |mark: Mark, line: &str| Row { id: "r".into(), title: "Tighten the site's copy".into(), line: line.into(), mark };
+        let row = |mark: Mark, line: &str| Row { id: "r".into(), project: String::new(), apart: None, title: "Tighten the site's copy".into(), line: line.into(), mark };
         assert_eq!(rail_tip(&row(Mark::Needs, "Which of these copy changes go in?"), None), "Tighten the site's copy · asks you");
         assert_eq!(rail_tip(&row(Mark::Blocked, "step 2 of 2, blocked: no room"), None), "Tighten the site's copy · blocked · open it");
         assert_eq!(rail_tip(&row(Mark::Working, "step 1 of 2, running"), None), "Tighten the site's copy · working, step 1 of 2");
@@ -865,7 +865,7 @@ mod tests {
 
     #[test]
     fn what_was_seen_starts_from_every_run_finished_when_the_app_first_reads_the_record() {
-        let row = |id: &str, mark: Mark| Row { id: id.into(), title: id.into(), line: String::new(), mark };
+        let row = |id: &str, mark: Mark| Row { id: id.into(), project: String::new(), apart: None, title: id.into(), line: String::new(), mark };
         let listing = Listing { needs: vec![], projects: vec![("p".into(), vec![row("d1", Mark::Delivered), row("w1", Mark::Working), row("a1", Mark::Abandoned)])] };
         // first time: everything finished is taken as seen, so no old run floods the Inbox
         let first = seen_from(None, &listing);
@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn a_run_delivered_while_its_stop_is_open_says_in_the_column_it_can_still_be_corrected() {
-        let row = Row { id: "r".into(), title: "Tighten the site's copy".into(), line: "Which of these copy changes go in?".into(), mark: Mark::Needs };
+        let row = Row { id: "r".into(), project: String::new(), apart: None, title: "Tighten the site's copy".into(), line: "Which of these copy changes go in?".into(), mark: Mark::Needs };
         assert_eq!(needs_line(&row, false, None), "Which of these copy changes go in?");
         assert_eq!(needs_line(&row, true, None), "delivered · you can still correct it");
     }
@@ -887,7 +887,7 @@ mod tests {
     }
 
     fn row(id: &str, mark: Mark, line: &str) -> Row {
-        Row { id: id.into(), title: id.into(), line: line.into(), mark }
+        Row { id: id.into(), project: String::new(), apart: None, title: id.into(), line: line.into(), mark }
     }
 
     #[test]
