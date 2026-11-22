@@ -9,7 +9,10 @@
 //! A state already seen is not explored again. Bounds keep the search finite: a step's attempts and fixes (the
 //! role's own), at most [`SEND_BACKS`] send-backs per step, and at most [`TROUBLE`] mishaps per run (a crash, a cut
 //! off, a fault, a refusal, a check that cannot judge, a step the agent says cannot be done), and the person
-//! continues a blocked run at most [`CONTINUES`] times. Usage is never
+//! continues a blocked run at most [`CONTINUES`] times. A stop that did not hold and that the run went on past is
+//! answered at the run's first pause after it or at the merge, not at every pause between, and sending it back then
+//! counts as the run's mishap: it throws away the work after it, and at every pause it made the search of a role
+//! like screen-layouts more than 40 times as large. Usage is never
 //! counted, so the ceiling is never met: what the ceiling does is the same for every role (G5). The person answers
 //! between the run's moves, not in the middle of an attempt, and a run's risk is the one it starts at or a rule
 //! raises it to.
@@ -193,6 +196,9 @@ struct Node {
     trouble: u32,
     continues: u32,
     sent_back: BTreeMap<String, u32>,
+    /// The questions of stops that did not hold whose run went on and has paused once since: the person answers
+    /// them now only at the merge.
+    late: BTreeSet<String>,
     /// For each promise of the form "only after": whether its condition has held.
     held: Vec<bool>,
 }
@@ -220,6 +226,7 @@ impl Node {
             trouble: u32,
             continues: u32,
             sent_back: &'a BTreeMap<String, u32>,
+            late: &'a BTreeSet<String>,
             held: &'a [bool],
         }
         let r = &self.run;
@@ -269,6 +276,7 @@ impl Node {
             trouble: self.trouble,
             continues: self.continues,
             sent_back: &self.sent_back,
+            late: &self.late,
             held: &self.held,
         };
         // 128 bits of two keyed hashes: a collision among millions of states is out of reach, and a fingerprint
@@ -430,8 +438,14 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
         out.push(Move { input: Input::Recovered, says: "Jaynes crashes and starts again".into(), trouble: true, sends_back: None, answers: None });
         return out;
     }
+    let merging = r.open_questions().iter().any(|q| q.question.kind == QuestionKind::Merge);
     for q in r.open_questions() {
         let q = &q.question;
+        if !merging && node.late.contains(&q.id) {
+            continue;
+        }
+        // sending back a stop the run went on past throws away the work after it: one mishap of the run
+        let past = went_past(r, q);
         // the merge waits for the person, every time, and they merge. Taking the change as a branch only is not
         // searched: it goes on as merging does, with the merge left out, so it never breaks a promise merging keeps
         if q.kind == QuestionKind::Merge {
@@ -469,7 +483,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
                 out.push(Move {
                     input: Input::Answer { answer },
                     says: format!("you {word} at {}", q.step),
-                    trouble: false,
+                    trouble: back && past,
                     sends_back: back.then(|| q.step.clone()),
                     answers: None,
                 });
@@ -493,7 +507,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
             out.push(Move {
                 input: Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts, by: By::Person, context: String::new() } },
                 says: format!("you {word} {}", q.step),
-                trouble: false,
+                trouble: back && past,
                 sends_back: back.then(|| q.step.clone()),
                 answers: None,
             });
@@ -656,8 +670,25 @@ fn apply(promises: &[Promise], done: &[bool], node: &Node, mv: &Move) -> Option<
         *sent_back.entry(s.clone()).or_default() += 1;
     }
     let continues = node.continues + u32::from(matches!(mv.input, Input::Continue { .. }));
-    let child = Node { run, pending, trouble: node.trouble + u32::from(mv.trouble), continues, sent_back, held };
+    let child = Node { run, pending, trouble: node.trouble + u32::from(mv.trouble), continues, sent_back, late: node.late.clone(), held };
     Some((child, says.join(" → "), breaks))
+}
+
+/// The questions whose window to be answered late closes with this node's moves: at a pause of the run (nothing
+/// under way), each open question of a stop that did not hold, once a step that needs its step has started.
+fn late_now(node: &Node) -> Vec<String> {
+    let r = &node.run;
+    if node.pending.iter().any(|c| matches!(c, Command::RunAgent(_) | Command::RunRole { .. } | Command::RunChecks { .. } | Command::Probe { .. })) {
+        return Vec::new();
+    }
+    r.open_questions().iter().filter(|q| went_past(r, &q.question)).map(|q| q.question.id.clone()).collect()
+}
+
+/// Whether the run went on past the stop that asks `q` without holding: a step that needs its step has started.
+fn went_past(r: &Run, q: &crate::question::Question) -> bool {
+    q.kind == QuestionKind::Decision
+        && !q.holds
+        && r.manifest.steps.iter().enumerate().any(|(j, d)| d.needs.iter().any(|n| *n == q.step) && r.steps[j].status != Status::Idle)
 }
 
 /// Every child of the nodes of `part` that the level may keep, with its key: one not `seen` at an earlier level nor
@@ -675,6 +706,7 @@ fn expand(part: Vec<(Node, usize)>, m: &Manifest, promises: &[Promise], done: &[
         if node.run.finished() {
             continue;
         }
+        let paused = late_now(node);
         for mv in moves(node, named) {
             if mv.trouble && node.trouble >= TROUBLE {
                 continue;
@@ -683,6 +715,7 @@ fn expand(part: Vec<(Node, usize)>, m: &Manifest, promises: &[Promise], done: &[
                 continue;
             }
             if let Some(mut child) = apply(promises, done, node, &mv) {
+                child.0.late.extend(paused.iter().cloned());
                 child.0.run.manifest = empty.clone();
                 let key = child.0.key();
                 if (!seen.contains(&key) && here.insert(key)) || !child.2.is_empty() {
@@ -766,7 +799,7 @@ pub fn prove_told(m: &Manifest, promises: &[Promise], most: usize, searched: &mu
         let held = promises.iter().map(|p| matches!(&p.form, Form::OnlyAfter { after, .. } if after.holds(&run))).collect();
         let pending = decided.commands.into_iter().filter(|c| !matches!(c, Command::Ask { .. } | Command::Permit { .. } | Command::Notify { .. })).collect();
         run.manifest = bare(m);
-        let node = Node { run, pending, trouble: 0, continues: 0, sent_back: BTreeMap::new(), held };
+        let node = Node { run, pending, trouble: 0, continues: 0, sent_back: BTreeMap::new(), late: BTreeSet::new(), held };
         if seen.insert(node.key()) {
             trail.push((None, says));
             frontier.push((node, trail.len() - 1));
