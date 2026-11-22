@@ -88,16 +88,21 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 
 - That Jaynes holds against a program that runs as you, outside any box, and rewrites Jaynes's own files.
 - That the list of such files is complete: it holds what is known to run by itself today, and a file a tool starts to obey later is not on it until it is added.
-- That an agent's step is confined to its folder. With Claude Code as the agent, Jaynes sets
+- That an agent's step is confined to its folder beyond these guards. With Claude Code as the agent, Jaynes sets
   Claude Code's own guards for each step and records the settings it applied: the tools it may
-  use and the paths they may touch, and Claude Code's sandbox around its shell commands
-  (writing only in the step's folder, no network but what the step declares, the engine's
-  folder, the other runs, your secrets and the temporary folder your Claude Code sessions share
-  hidden), except where you let the project's tests start their own servers or opened its ports,
-  or where the step names local ports: there, on macOS, the agent's commands may serve on and
-  reach every local port of this Mac, the Jaynes page's and your other programs' among them.
-  Those commands open no app, and these browsers' apps are hidden from them, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp and Thorium do not
-  start; Safari, built from macOS's own parts, is held only in Jaynes's own box. Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
+  use and the paths they may touch. On macOS, every shell command of the agent runs in Jaynes's
+  own box, the one below, which Jaynes puts around each command before it runs, and a command it
+  could not put there does not run: the turn then ends as Jaynes's fault. There the commands write
+  only in the step's folder, read none of your home but the run's copy and the folders the role
+  names, reach no network but the local ports the run reserved or the step names, the ports you let the project's
+  tests use and, in a step that installs packages, the package registries through Jaynes's own
+  proxy; where you opened a project's ports yourself, every local port, the page's among them.
+  They cannot read the engine's folder, the other runs, your secrets or the temporary folder your
+  Claude Code sessions share, open no app and start none of those browsers, Safari among them.
+  Elsewhere, Claude Code's sandbox holds the agent's shell commands (writing only in the step's
+  folder, no network but what the step declares, the engine's folder, the other runs, your secrets
+  and that temporary folder hidden), and these browsers' apps are hidden from them, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp and Thorium do not
+  start. Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
 - That what Jaynes runs itself is held beyond its box. On macOS, a project's test suite, a
   check's commands and a role's own scripts run in Jaynes's own box: they write only in the
   step's folders; they reach no network but the local ports the run reserved or the step

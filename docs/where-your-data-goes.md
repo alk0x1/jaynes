@@ -88,19 +88,24 @@ merge and no Undo. The agent is told where the same file is in its copy, and the
 
 A role declares, per step, what the step may reach on the network:
 
-- **None** (the default): the agent's tools that read the web are denied, and its commands run in a sandbox with no
+- **None** (the default): the agent's tools that read the web are denied, and its commands run in a box with no
   network.
 - **Web**: the agent program's own web tools (WebFetch, WebSearch) are allowed; its commands still have no network.
 - **Packages**: its commands may reach only the package registries (npm, Yarn, Go's proxy and checksum database,
-  PyPI and its files, crates.io), and nothing else.
+  PyPI and its files, crates.io), and nothing else; on macOS through a proxy of Jaynes's own, which opens a
+  connection to those hosts alone and reads nothing of what it carries.
 
-Jaynes sets these as the agent program's own guards, for each step: they also keep a step's commands from reading
-your home folder beyond the run's copy, the folders the role names and the toolchains' folders, and from the
-temporary folder your Claude Code sessions share (their scratchpads and the output of their background tasks): each
-turn of the agent gets one of its own, taken away when it ends. Where you let the project's tests start their own
-servers or opened its ports, or where the step names local ports, on macOS the agent's commands may serve on and reach
-every local port of this Mac, the Jaynes page's among them. These browsers' apps are hidden from the agent's
-commands, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp and Thorium do not start there; Safari is held only in Jaynes's own box, below. Those guards are partial (in Claude Code the sandbox covers shell commands only):
+On macOS, with Claude Code as the agent, every shell command of the agent runs in Jaynes's own box, the one the
+checks run in (below), which Jaynes puts around each command before it runs; a command it could not put there does
+not run. It keeps a step's commands from reading your home folder beyond the run's copy and the folders the role
+names, from what the engine keeps and the other runs, and from the temporary folder your Claude Code sessions share
+(their scratchpads and the output of their background tasks): each turn of the agent gets one of its own, taken away
+when it ends. They reach none of this Mac's local ports but the ones the run reserved for them and the ones the step
+names and, where you let the project's
+tests start their own servers, the ports those servers get; only where you opened the project's ports do they reach
+every one, the Jaynes page's among them. Neither Safari nor any of the browsers named below starts there. Elsewhere Jaynes
+sets these as the agent program's own guards, for each step, and these browsers' apps are hidden from the agent's
+commands, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp and Thorium do not start there. The agent's file tools are held by Claude Code's own rules:
 [what the engine guarantees](guarantees.md#what-this-page-does-not-promise) says how far they go.
 
 The checks a role runs with your project's commands (its tests, its app) run in a box of their own on macOS. It
