@@ -25,7 +25,7 @@ fn manifest() -> Manifest {
         reach: Reach { project: ProjectAccess::Write, write: vec!["design/**".into()], ..Reach::default() },
         effect: Effect::None,
         checks: vec![CheckDecl { name: "shape".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false }],
-        stop: Some(StopDecl { unheld: None,
+        stop: Some(StopDecl { settled: None,
             verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Redo, VerdictKind::Drop],
             holds: true,
             from_risk: Risk::Low,

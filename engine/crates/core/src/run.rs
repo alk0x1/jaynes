@@ -1065,11 +1065,11 @@ impl Run {
     }
 
     /// What a stop that did not hold the run holds now, in Jaynes's words: the role's words for what the request
-    /// settles there (its stop's `unheld`, `{{name}}` the option's name), then whose request it was; without them, the
+    /// settles there (its stop's `settled`, `{{name}}` the option's name), then whose request it was; without them, the
     /// option as it was made. The merge's question says it of each stop its touch keeps, and the run's story too.
-    pub fn unheld_said(&self, q: &Question) -> String {
+    pub fn settled_said(&self, q: &Question) -> String {
         let whose = if self.starter.is_some() { "as the request the agent that started the run wrote says" } else { "as your request says" };
-        let words = self.manifest.index(&q.step).and_then(|j| self.manifest.steps[j].stop.as_ref()).and_then(|s| s.unheld.as_ref());
+        let words = self.manifest.index(&q.step).and_then(|j| self.manifest.steps[j].stop.as_ref()).and_then(|s| s.settled.as_ref());
         match words {
             Some(words) => format!("{}, {whose}", words.replace("{{name}}", q.items.first().map(Item::name).unwrap_or_default())),
             None => match q.items.as_slice() {
