@@ -708,6 +708,11 @@ pub const PRINTED_SHOWN: usize = 6;
 /// The fold over the rest of what a case printed.
 pub const ALL_OF_IT: &str = "▸ all of it";
 
+/// The code a case's command exits with when the check stops it for running too long (the menu's timeout).
+const TIMED_OUT: i32 = 124;
+/// What came, for a case the check stopped for running too long (the design-lead, 22/11).
+const GOT_TIMED_OUT: &str = "Got: it did not finish in time, so the check stopped it (exit 124).";
+
 /// Where the engine keeps the hidden cases that failed at an attempt of a step, in the run's folder: beside the
 /// folders that hold an agent's step, which no agent reads (agent.rs `beside`).
 pub fn failed_cases_file(run_dir: &Path, step: &str, attempt: u32) -> std::path::PathBuf {
@@ -850,7 +855,7 @@ fn cases_said(run_dir: &Path, step: &str, attempt: u32, spent: u32) -> (Vec<Case
             written: if at.is_empty() { "Written by an agent.".into() } else { format!("Written at “{at}”, by the agent there.") },
             ran: format!("Ran: `{}`", one_line(&c.run)),
             expected: "Expected: exit 0.".into(),
-            got: format!("Got: exit {}.", c.code),
+            got: if c.code == TIMED_OUT { GOT_TIMED_OUT.to_string() } else { format!("Got: exit {}.", c.code) },
             printed: c.printed.lines().map(line).filter(|l| !l.is_empty()).collect(),
             failed_in: format!("Failed in {failed} of {} attempts.", spent.max(1)),
         });
