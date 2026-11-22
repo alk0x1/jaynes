@@ -117,7 +117,8 @@ pub struct Landing {
     pub rows: Vec<(String, String, bool)>,
     /// "… and 4 more", past the eighth.
     pub more: Option<String>,
-    /// Each file that runs later outside any box, and how, in plain words: the amber part, empty when none does.
+    /// Each file that runs later outside any box, and how, in plain words, as the card draws them: the amber part,
+    /// empty when none does.
     pub later: Vec<(String, String)>,
 }
 
@@ -780,7 +781,7 @@ impl Island {
                         .flex()
                         .gap(px(8.))
                         .text_size(px(12.5))
-                        .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::text())).child(format!("`{path}`")))
+                        .child(div().flex_none().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::text())).child(path.clone()))
                         .child(div().text_color(rgb(look::dim())).child(how.clone())),
                 );
             }
@@ -1635,6 +1636,12 @@ mod tests {
             ("tests/conftest.py".to_string(), "runs on its own whenever the tests run.".to_string()),
             ("Makefile".to_string(), "runs when you run make.".to_string()),
         ]);
+        // the names are drawn in mono, never with raw backticks around them ("`Makefile` runs when you run make.", the
+        // engineer lead at the floor-merge picture, 22/11)
+        let drawn = l.later.iter().flat_map(|(n, h)| [n, h]).chain(l.rows.iter().flat_map(|(n, r, _)| [n, r])).chain([&l.goes_in]);
+        for said in drawn {
+            assert!(!said.contains('`'), "a visible backtick in {said:?}");
+        }
         assert_eq!((RUNS_LATER, LATER_HEAD, READ_THESE, ONE_TOUCH), (
             "runs later outside any box",
             "Runs later outside any box",
