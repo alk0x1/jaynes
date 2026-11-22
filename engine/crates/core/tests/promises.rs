@@ -46,7 +46,7 @@ fn small_change() -> Manifest {
 }
 
 fn promise(says: &str, form: Form) -> Promise {
-    Promise { says: says.into(), form }
+    Promise { says: says.into(), form, not_taken: None }
 }
 
 #[test]

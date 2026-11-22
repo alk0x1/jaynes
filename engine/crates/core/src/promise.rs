@@ -71,6 +71,9 @@ pub struct Promise {
     /// The promise in the author's words, as the person reads it.
     pub says: String,
     pub form: Form,
+    /// What holds instead on a run that does not take what the promise's condition rests on, in the role's words:
+    /// such a promise is held only on the runs that take it. None: every run that can meet its event takes it.
+    pub not_taken: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +117,12 @@ impl On {
 }
 
 impl Condition {
+    /// The lowest risk at which a run takes everything the condition rests on: the step it names, the steps its check
+    /// reads, and the risk its stop asks from.
+    pub fn from_risk(&self, _m: &Manifest) -> Risk {
+        Risk::Low
+    }
+
     pub fn parse(text: &str, m: &Manifest) -> Result<Condition, String> {
         let t = text.trim();
         let step = |n: &str| -> Result<String, String> {

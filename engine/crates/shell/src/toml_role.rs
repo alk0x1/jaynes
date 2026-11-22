@@ -218,6 +218,8 @@ struct ClaimFile {
     says: String,
     proved_by: Option<String>,
     unchecked: Option<String>,
+    /// What holds on a run that does not take what proved_by rests on, in the role's words.
+    not_taken: Option<String>,
 }
 
 /// A claim of the role about what a run delivers. A promise is about the method and is proved before any run, over
@@ -227,6 +229,8 @@ pub struct Claim {
     pub line: usize,
     pub says: String,
     pub by: ClaimBy,
+    /// What holds instead on a run that does not take what its condition rests on, in the role's words.
+    pub not_taken: Option<String>,
 }
 
 /// What proves a claim in a run.
@@ -250,6 +254,8 @@ struct PromiseFile {
     only_after: Option<String>,
     agent_of: Option<String>,
     never_sees: Option<String>,
+    /// What holds on a run that does not take what the promise's condition rests on, in the role's words.
+    not_taken: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone, Copy, PartialEq, Eq)]
@@ -1580,7 +1586,7 @@ impl TomlRole {
                     _ => Err("a promise is never with unless, event with only_after, or agent_of with never_sees".to_string()),
                 };
                 match form {
-                    Ok(form) if !p.says.trim().is_empty() => promises.push((line, Promise { says: p.says.clone(), form })),
+                    Ok(form) if !p.says.trim().is_empty() => promises.push((line, Promise { says: p.says.clone(), form, not_taken: None })),
                     Ok(_) => errors.push(at(Some(line), FILE, "the promise says nothing: write what it promises in says")),
                     Err(e) => errors.push(at(Some(line), FILE, format!("the promise {:?}: {e}", p.says))),
                 }
@@ -1618,7 +1624,7 @@ impl TomlRole {
                         continue;
                     }
                 };
-                claims.push(Claim { line, says, by });
+                claims.push(Claim { line, says, by, not_taken: None });
             }
         }
         let mut requires: Vec<Requirement> = Vec::new();
@@ -1969,7 +1975,7 @@ impl TomlRole {
     /// the role's reason; one whose condition did not hold in the run, as `holds` says (on a run,
     /// [`Condition::holds`]); and one proved by a check that comes with no cases, since a check never seen to refuse
     /// anything proves nothing by passing. What is not here was proved.
-    pub fn claims_told(&self, holds: &dyn Fn(&Condition) -> bool) -> Vec<String> {
+    pub fn claims_told(&self, _risk: Risk, holds: &dyn Fn(&Condition) -> bool) -> Vec<String> {
         let untested = self.untested();
         self.claims
             .iter()
@@ -2033,7 +2039,7 @@ impl TomlRole {
 
     /// The role's claims that `run` did not prove: [`TomlRole::claims_told`] over the run as it ended.
     pub fn claims_not_proved(&self, run: &jaynes_core::Run) -> Vec<String> {
-        self.claims_told(&|c| c.holds(run))
+        self.claims_told(run.risk, &|c| c.holds(run))
     }
 
     /// Whether the project has all the role needs, each judged by `judge`: Ok, or why no run starts. One need Jaynes
@@ -3610,7 +3616,7 @@ unchecked = "only the person can say, and the role asks them only whether it is 
         assert_eq!(r.claims[1].by, ClaimBy::Condition(Condition::PersonAnswered("approve".into())));
         assert_eq!(r.claims[2].by, ClaimBy::Unchecked("only the person can say, and the role asks them only whether it is good".into()));
         // a run that proved both: only what nothing checks is not proved, with the role's own reason
-        assert_eq!(r.claims_told(&|_| true), [
+        assert_eq!(r.claims_told(Risk::High, &|_| true), [
             "\"The change does what the request asks\": not checked: only the person can say, and the role asks them only whether it is good",
         ]);
         assert_eq!(r.claims_listed(), [
@@ -3619,16 +3625,16 @@ unchecked = "only the person can say, and the role asks them only whether it is 
             "claim \"The change does what the request asks\": nothing checks it: only the person can say, and the role asks them only whether it is good",
         ]);
         // a run where the person did not answer: that claim is not proved, and why
-        assert_eq!(r.claims_told(&|c| !matches!(c, Condition::PersonAnswered(_)))[0], "\"The person read the change\": not proved: the person did not answer at approve in this run");
+        assert_eq!(r.claims_told(Risk::High, &|c| !matches!(c, Condition::PersonAnswered(_)))[0], "\"The person read the change\": not proved: the person did not answer at approve in this run");
         // a check that failed or never ran proves nothing
-        assert_eq!(r.claims_told(&|c| !matches!(c, Condition::CheckPassed { .. }))[0], "\"Every file the change names is in the project\": not proved: the check fits of write did not pass in this run");
+        assert_eq!(r.claims_told(Risk::High, &|c| !matches!(c, Condition::CheckPassed { .. }))[0], "\"Every file the change names is in the project\": not proved: the check fits of write did not pass in this run");
     }
 
     #[test]
     fn a_claim_proved_by_a_check_with_no_cases_is_never_proved() {
         let text = claiming(CLAIMS).replace(", cases = \"cases/fits\"", "");
         let r = TomlRole::load(&checked("claims-untested", &text, REJECT, ACCEPT)).expect("reads");
-        assert_eq!(r.claims_told(&|_| true)[0], "\"Every file the change names is in the project\": not proved: the check fits of write is untested, so its passing proves nothing");
+        assert_eq!(r.claims_told(Risk::High, &|_| true)[0], "\"Every file the change names is in the project\": not proved: the check fits of write is untested, so its passing proves nothing");
     }
 
     #[test]
@@ -3651,6 +3657,68 @@ unchecked = "only the person can say, and the role asks them only whether it is 
         // a claim is a sentence of its own: two that say the same are one claim written twice
         let e = TomlRole::load(&checked("claim-twice", &claiming(&format!("{CLAIMS}\n[[claim]]\nsays = \"The person read the change\"\nproved_by = \"step write done\"\n")), REJECT, ACCEPT)).expect_err("twice").join("\n");
         assert!(e.contains("the claim \"The person read the change\" is written twice"), "{e}");
+    }
+
+    /// fix-bug with its hidden cases only from high risk, as the tech-lead cut a small fix's cost (22/11), its
+    /// role.toml changed by `edit`, in a folder of its own.
+    fn cases_from_high(name: &str, edit: &dyn Fn(String) -> String) -> PathBuf {
+        let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/fix-bug");
+        let dir = std::env::temp_dir().join(format!("jaynes-toml-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        for f in std::fs::read_dir(&from).expect("role") {
+            let f = f.expect("file").path();
+            std::fs::copy(&f, dir.join(f.file_name().expect("name"))).expect("copy");
+        }
+        let text = std::fs::read_to_string(dir.join(FILE)).expect("role").replacen("name = \"cases\"\nhidden = true\n", "name = \"cases\"\nhidden = true\nfrom_risk = \"high\"\n", 1);
+        assert!(text.contains("from_risk = \"high\""), "fix-bug's cases moved");
+        std::fs::write(dir.join(FILE), edit(text)).expect("write");
+        dir
+    }
+
+    const NOT_TAKEN: &str = "a small, low-risk fix is not tried on hidden cases";
+    const ON_THE_CASES: &str = "The fix holds on the cases written from the request alone, by an agent whose work the fix's maker never read";
+    const MERGED_AFTER: &str = "Nothing is merged before the hidden cases passed on the fix";
+
+    /// Both the promise and the claim that rest on the cases say what holds on a run that does not take them.
+    fn saying_not_taken(text: String) -> String {
+        text.replacen("unless = \"check proof of fix passed\"\n", &format!("unless = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), 1)
+            .replacen("proved_by = \"check proof of fix passed\"\n", &format!("proved_by = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), 1)
+    }
+
+    #[test]
+    fn a_claim_or_a_promise_resting_on_what_a_low_run_skips_says_what_holds_there() {
+        // without not_taken: both are refused at their line, naming what a run at low risk does not take
+        let e = TomlRole::load(&cases_from_high("not-taken-none", &|t| t)).expect_err("refused").join("\n");
+        assert!(e.contains(&format!("the promise {MERGED_AFTER:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
+        assert!(e.contains(&format!("the claim {ON_THE_CASES:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
+        assert!(e.contains("role.toml:"), "{e}");
+        // with it: the role reads, and says it where the author and the person read the claim
+        let r = TomlRole::load(&cases_from_high("not-taken", &saying_not_taken)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let promise = &r.promises.iter().find(|(_, p)| p.says == MERGED_AFTER).expect("promise").1;
+        assert_eq!(promise.not_taken.as_deref(), Some(NOT_TAKEN));
+        assert!(r.claims_listed().contains(&format!("claim {ON_THE_CASES:?}: proved in a run when the check proof of fix passes; a run at low risk does not take it: {NOT_TAKEN}")), "{:?}", r.claims_listed());
+        // a run at low risk never ran the proof: the claim says why, not that the proof failed
+        let not_proof = |c: &Condition| !matches!(c, Condition::CheckPassed { check, .. } if check == "proof");
+        assert_eq!(r.claims_told(Risk::Low, &not_proof), [
+            format!("{ON_THE_CASES:?}: not checked in this run: {NOT_TAKEN}"),
+            "\"The fix is the one the person meant\": not checked: the tests and the cases come from the request as written; the person is asked at the stops of reproduce and fix, and what they did not read there is not checked".to_string(),
+        ]);
+        // a run at high risk took the cases: a proof that did not pass is not proved, as before
+        assert_eq!(r.claims_told(Risk::High, &not_proof)[0], format!("{ON_THE_CASES:?}: not proved: the check proof of fix did not pass in this run"));
+        // the proof line says it holds on the runs that take the cases, and what holds on the others
+        let (lines, all) = r.prove_lines(&r.promises.iter().map(|_| Proof::Proved { states: 7 }).collect::<Vec<_>>());
+        assert!(all);
+        assert!(lines.contains(&format!("✔ {MERGED_AFTER:?}: proved (7 states); a run at low risk does not take it: {NOT_TAKEN}")), "{lines:?}");
+    }
+
+    #[test]
+    fn not_taken_where_every_run_takes_what_it_rests_on_is_refused() {
+        // fix-bug as it ships takes the cases at every risk: a not_taken there would tell of a run that never is
+        let dir = cases_from_high("not-taken-needless", &|t| saying_not_taken(t).replacen("from_risk = \"high\"\n", "", 1));
+        let e = TomlRole::load(&dir).expect_err("refused").join("\n");
+        assert!(e.contains(&format!("the claim {ON_THE_CASES:?} says not_taken, and every run that can deliver takes what it rests on")), "{e}");
+        assert!(e.contains(&format!("the promise {MERGED_AFTER:?} says not_taken, and every run that can deliver takes what it rests on")), "{e}");
     }
 
     #[test]
