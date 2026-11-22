@@ -1492,11 +1492,11 @@ impl<'a> Driver<'a> {
             }
             Command::Permit { .. } => None,
             Command::Deliver { digest, merge, .. } => {
-                let (ok, reference) = self.deliver(run, merge);
+                let (ok, reference, merged) = self.deliver(run, merge);
                 if ok {
                     say(&format!("delivered: {reference}"));
                 }
-                Some(Input::DeliveryEnded { digest, ok, reference })
+                Some(Input::DeliveryEnded { digest, ok, reference, merged })
             }
             Command::Notify { text } => {
                 say(&format!("! {text}"));
@@ -1507,8 +1507,8 @@ impl<'a> Driver<'a> {
 
     /// Deliver from the run's copy of its target, and land it on the person's own thing when the role's delivery
     /// lands (on a repository: the run's branch, and the merge into the branch it started from). Whether it was made,
-    /// and what was made.
-    fn deliver(&self, run: &Run, merge: bool) -> (bool, String) {
+    /// and what was made, and, asked to merge, whether it landed on the person's branch (already there counts).
+    fn deliver(&self, run: &Run, merge: bool) -> (bool, String, Option<bool>) {
         let writers: Vec<String> = run
             .path()
             .into_iter()
@@ -1542,6 +1542,7 @@ impl<'a> Driver<'a> {
             None => (true, "no project; the outputs are the delivery".to_string()),
         };
         let mut reference = reference;
+        let mut landed = merge.then_some(false);
         if ok && merge
             && let Some(copy) = &self.setup.copy {
                 let head = delivered.unwrap_or_default();
@@ -1564,12 +1565,16 @@ impl<'a> Driver<'a> {
                         merges.push(m.clone());
                         let _kept = std::fs::write(self.setup.dir.join("merges.json"), serde_json::to_string(&merges).unwrap_or_default());
                         reference.push_str(&format!("; merged as {}", &m[..m.len().min(12)]));
+                        landed = Some(true);
                     }
-                    Ok(None) => reference.push_str("; nothing new to merge"),
+                    Ok(None) => {
+                        reference.push_str("; nothing new to merge");
+                        landed = Some(true);
+                    }
                     Err(why) => reference.push_str(&format!("; not merged: {why}")),
                 }
             }
-        (ok, reference)
+        (ok, reference, landed)
     }
 
     /// The checks of the delivered steps that run the project's tests, once more on `head`, what the run delivers

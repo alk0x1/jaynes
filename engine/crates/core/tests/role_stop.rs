@@ -176,7 +176,7 @@ impl World {
                     let results = checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None }).collect();
                     self.feed(Input::ChecksEnded { step, attempt, fix, results })
                 }
-                Command::Deliver { digest, .. } => self.feed(Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into() }),
+                Command::Deliver { digest, .. } => self.feed(Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into(), merged: None }),
                 Command::Ask { .. } | Command::Permit { .. } | Command::Notify { .. } | Command::AnswerAsk(_) => Vec::new(),
             };
             cmds.extend(more);

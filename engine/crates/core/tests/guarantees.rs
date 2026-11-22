@@ -858,7 +858,7 @@ impl World {
             }
             Command::Deliver { digest, .. } => {
                 let ok = self.rng.chance(95);
-                self.send(Input::DeliveryEnded { digest, ok, reference: "jaynes/run".to_string() });
+                self.send(Input::DeliveryEnded { digest, ok, reference: "jaynes/run".to_string(), merged: None });
             }
             Command::Ask { .. } | Command::Permit { .. } | Command::Notify { .. } => {}
         }
@@ -1385,7 +1385,7 @@ fn g13_a_correction_reruns_only_what_used_it() {
     probe_ok(&mut run, c);
     let c = deliver(&mut run, "tests", 1, "tests-1", Vec::new());
     let Some(Command::Deliver { digest, .. }) = c.into_iter().find(|c| matches!(c, Command::Deliver { .. })) else { panic!("delivers") };
-    feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".to_string() });
+    feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".to_string(), merged: None });
     assert!(matches!(run.phase, Phase::Waiting { step: None, .. }), "delivered, the question still open: {:?}", run.phase);
     // the person sends look back after the run went on
     let answer = Answer { back: Default::default(), context: String::new(),

@@ -141,7 +141,7 @@ fn a_question_already_told_of_is_not_told_again_when_another_is_answered() {
     let mut told = notices(&pending).len();
     while let Some(c) = pending.pop() {
         if let Command::Deliver { digest, .. } = c {
-            let (_, more) = drive(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "branch".into() });
+            let (_, more) = drive(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "branch".into(), merged: None });
             told += notices(&more).len();
         }
     }

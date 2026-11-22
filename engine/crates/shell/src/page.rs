@@ -3259,7 +3259,7 @@ mod tests {
             feed(&mut r, Input::ChecksEnded { step: "stack".into(), attempt: t.attempt, fix: t.fix, results: vec![] });
         }
         if let Some(digest) = r.delivering.clone() {
-            feed(&mut r, Input::DeliveryEnded { digest, ok: true, reference: format!("jaynes/{run}") });
+            feed(&mut r, Input::DeliveryEnded { digest, ok: true, reference: format!("jaynes/{run}"), merged: None });
         }
         store.append(run, &events).expect("append");
         store.put_setup(run, &json!({})).expect("setup");
@@ -3341,7 +3341,7 @@ mod tests {
             feed(&mut run, Input::ChecksEnded { step: "plan".into(), attempt: t.attempt, fix: t.fix, results: vec![] });
         }
         if let Some(digest) = run.delivering.clone() {
-            feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/talk".into() });
+            feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/talk".into(), merged: None });
         }
         let q = run.questions.keys().next().expect("the stop").clone();
         let ask = |text: &str| Input::AskAgent { question: q.clone(), item: None, text: text.into(), by: By::Person };

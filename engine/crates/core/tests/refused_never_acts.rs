@@ -81,7 +81,7 @@ fn delivering() -> (Run, Digest) {
 #[test]
 fn a_delivery_that_failed_waits_for_the_person_s_continue_and_no_process_that_starts_makes_it() {
     let (mut run, digest) = delivering();
-    let (events, _) = feed(&mut run, Input::DeliveryEnded { digest, ok: false, reference: "the copy changed".into() });
+    let (events, _) = feed(&mut run, Input::DeliveryEnded { digest, ok: false, reference: "the copy changed".into(), merged: None });
     assert!(events.iter().any(|e| matches!(e, Event::Blocked { .. })), "{events:?}");
     // a process that starts (a continue that will be refused, a page, a crash) recovers first: it delivers nothing
     let (_, cmds) = feed(&mut run, Input::Recovered);

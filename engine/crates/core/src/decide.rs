@@ -123,7 +123,9 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             return refuse(format!("the defect {id} was already taken out"));
         }
     // an ask's answer that comes after the run finished is kept, late: the ask is not left under way for ever
-    if c.run.finished() && !matches!(input, Input::Correct { .. } | Input::Undo { .. } | Input::AskEnded { .. }) {
+    // a merge the person asks of a finished run, and the delivery it makes, come after the run finished (Input::Merge)
+    let merging = matches!(input, Input::Merge { .. }) || matches!(input, Input::DeliveryEnded { digest, .. } if c.run.delivering.as_ref() == Some(digest));
+    if c.run.finished() && !merging && !matches!(input, Input::Correct { .. } | Input::Undo { .. } | Input::AskEnded { .. }) {
         return refuse("the run is finished");
     }
     match input {
@@ -268,12 +270,15 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.emit(Event::PortsChosen { any: now.any, servers: now.servers, opened: now.opened, freed_ports: now.freed_ports });
         }
-        Input::DeliveryEnded { digest, ok, reference } => {
+        Input::DeliveryEnded { digest, ok, reference, merged } => {
             if c.run.delivering.as_ref() != Some(digest) {
                 return refuse("no such delivery is under way");
             }
             if *ok {
                 c.emit(Event::Delivered { digest: digest.clone(), reference: reference.clone() });
+                if *merged == Some(true) {
+                    c.emit(Event::Merged { digest: digest.clone() });
+                }
                 c.advance();
             } else {
                 c.emit(Event::Blocked {
@@ -314,11 +319,13 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             let cost = c.run.cost();
             c.emit(Event::RunFinished { outcome: Outcome::Abandoned, cost });
         }
+        Input::Merge { by } => c.merge(by)?,
         Input::Undo { note, by } => {
             if !by.person() {
                 return refuse("only you undo what a run merged");
             }
-            if !c.run.manifest.lands() || c.run.delivered.is_none() {
+            // a role that merges, as records before Event::Merged say it; else only what the record says landed
+            if !(c.run.manifest.lands() || c.run.merged) || c.run.delivered.is_none() {
                 return refuse("this run merged nothing");
             }
             if c.run.undone {
@@ -827,7 +834,8 @@ impl Ctx {
     /// Whether the delivery `digest` merges into the person's branch: none while the merge waits for the person, as
     /// every merge does (G19 for what runs later outside any box among what lands).
     fn lands(&self, digest: &Digest) -> Option<bool> {
-        if !(self.run.manifest.lands() && !self.run.undone && !self.run.never_merge) {
+        // a role that merges, or a run whose branch delivery the person asked to merge
+        if !((self.run.manifest.lands() || self.run.merge_asked.is_some()) && !self.run.undone && !self.run.never_merge) {
             return Some(false);
         }
         // a delivery that changes nothing brings nothing in: there is nothing to look at
@@ -901,6 +909,51 @@ impl Ctx {
         self.wait(None, on, why.to_string());
     }
 
+    /// The person merges what the finished run delivered on a branch: at the stop every merge waits at (G19), or at
+    /// once when they kept this very delivery there before and it did not land. Refused, saying why, anywhere else.
+    fn merge(&mut self, by: &By) -> Result<(), Refusal> {
+        if !by.person() {
+            return Err(Refusal("only you merge what a run delivered".into()));
+        }
+        if self.run.open_questions().iter().any(|q| q.question.kind == QuestionKind::Merge) {
+            return Err(Refusal("the merge already waits for you: answer it".into()));
+        }
+        if !self.run.finished() {
+            return Err(Refusal("the run is not finished: it merges once it has delivered".into()));
+        }
+        let Some(digest) = self.run.delivered.clone() else { return Err(Refusal("the run delivered nothing, so there is nothing to merge".into())) };
+        if self.run.undone {
+            return Err(Refusal("you undid this run's merge: it merges nothing again".into()));
+        }
+        if self.run.merged {
+            return Err(Refusal("this run's delivery is already merged; Undo takes it back".into()));
+        }
+        if self.run.never_merge {
+            return Err(Refusal("the run was started never to merge".into()));
+        }
+        if self.run.delivered_files().is_empty() {
+            return Err(Refusal("its delivery changes nothing, so there is nothing to merge".into()));
+        }
+        // a merge dropped at its stop is asked afresh: the person changed their mind
+        if self.run.merge_answer(&digest) == Some(false) {
+            let dropped: Vec<String> = self.run.merges.iter().filter(|(_, d)| **d == digest).map(|(id, _)| id.clone()).filter(|id| self.run.questions.get(id).is_some_and(|q| !q.superseded)).collect();
+            for question in dropped {
+                self.emit(Event::QuestionSuperseded { question });
+            }
+        }
+        self.emit(Event::MergeAsked { by: by.clone() });
+        let (_, given) = self.run.delivery();
+        match self.lands(&digest) {
+            None => self.ask_merge(&digest),
+            Some(true) => {
+                self.emit(Event::DeliveryAsked { digest: digest.clone() });
+                self.command(Command::Deliver { digest, given, merge: true });
+            }
+            Some(false) => return Err(Refusal("the run was started never to merge".into())),
+        }
+        Ok(())
+    }
+
     /// The stops still open that do not hold the run, in the path's order, that the person's touch at the merge keeps:
     /// those a keep of every item answers (a choice with one option, or no choice). A braked stop holds, so it is never
     /// one: the person answers it on its own.
@@ -940,6 +993,22 @@ impl Ctx {
             self.emit(Event::DeliveryAsked { digest: digest.clone() });
             self.command(Command::Deliver { digest, given, merge });
             return false;
+        }
+        // the person asked to merge what went out on a branch, and no delivery went out since: it goes out merged once
+        // they keep it at the merge's stop, and nothing lands when they drop it
+        if self.run.merge_asked == Some(self.run.counts.deliveries) && !self.run.merged {
+            match self.lands(&digest) {
+                None => {
+                    self.ask_merge(&digest);
+                    return false;
+                }
+                Some(true) => {
+                    self.emit(Event::DeliveryAsked { digest: digest.clone() });
+                    self.command(Command::Deliver { digest, given, merge: true });
+                    return false;
+                }
+                Some(false) => {}
+            }
         }
         let open: Vec<String> = self.run.open_questions().iter().map(|q| q.question.id.clone()).collect();
         if !open.is_empty() {

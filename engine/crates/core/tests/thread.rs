@@ -139,7 +139,7 @@ fn asked_with(executor: Executor) -> (Run, Question) {
     let q = events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).unwrap_or_else(|| panic!("asked: {events:?}"));
     // a stop does not hold the run: its branch goes out while the stop waits, and a change comes back on top
     if let Some(digest) = run.delivering.clone() {
-        feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into() });
+        feed(&mut run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into(), merged: None });
     }
     (run, q)
 }

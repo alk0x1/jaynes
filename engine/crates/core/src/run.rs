@@ -51,6 +51,14 @@ pub struct Run {
     pub counts: Counts,
     /// The person reverted what the run merged.
     pub undone: bool,
+    /// The person asked to merge what the run delivered on a branch (Input::Merge), when its deliveries numbered
+    /// this: a delivery after it is the merge's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_asked: Option<u32>,
+    /// A delivery of the run landed on the person's branch, as the record says (Event::Merged); records before it say
+    /// nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merged: bool,
     /// The person's context, by the step whose question it was answered at, oldest first.
     pub context: Vec<(String, String)>,
     /// Each stop's count as it stood at the start.
@@ -398,6 +406,8 @@ impl Run {
             attention: attention.clone(),
             context: Vec::new(),
             undone: false,
+            merge_asked: None,
+            merged: false,
             told: Default::default(),
             seq: 1,
             merges: BTreeMap::new(),
@@ -866,6 +876,8 @@ impl Run {
             Event::RunFinished { outcome, .. } => self.phase = Phase::Finished { outcome: *outcome },
             Event::DeliveryCorrected { .. } => self.counts.corrections += 1,
             Event::MergeUndone { .. } => self.undone = true,
+            Event::MergeAsked { .. } => self.merge_asked = Some(self.counts.deliveries),
+            Event::Merged { .. } => self.merged = true,
             Event::StopSkipped { step, round, .. } => {
                 if let Some(s) = self.step_mut(step) {
                     s.skipped = Some(*round);
