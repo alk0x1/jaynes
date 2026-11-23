@@ -82,6 +82,10 @@ impl Drop for Page {
 }
 
 fn scratch(name: &str) -> Scratch {
+    scratch_with(name, ROLE, AGENT)
+}
+
+fn scratch_with(name: &str, role: &str, agent: &str) -> Scratch {
     let base = std::env::temp_dir().join(format!("jaynes-leave-{name}-{}", std::process::id()));
     let _gone = std::fs::remove_dir_all(&base);
     let project = base.join("estoque");
@@ -92,8 +96,8 @@ fn scratch(name: &str) -> Scratch {
         assert!(Command::new("git").arg("-C").arg(&project).args(&args).status().expect("git").success(), "git {args:?}");
     }
     std::fs::create_dir_all(base.join("leave")).expect("dir");
-    std::fs::write(base.join("leave/role.toml"), ROLE).expect("write");
-    std::fs::write(base.join("agent.sh"), AGENT).expect("write");
+    std::fs::write(base.join("leave/role.toml"), role).expect("write");
+    std::fs::write(base.join("agent.sh"), agent).expect("write");
     Scratch { home: base.join("home"), project, base }
 }
 
@@ -257,4 +261,69 @@ fn asked_the_estoque_without_the_leave_the_suite_as_it_began_still_judges_and_no
     assert_eq!(last["checks"][0]["passed"], false, "the old test on 5432 still judges: {last}");
     let merged = Command::new("git").arg("-C").arg(&s.project).args(["log", "-1", "--format=%s", "main"]).output().expect("git");
     assert_eq!(String::from_utf8_lossy(&merged.stdout).trim(), "start", "nothing lands");
+}
+
+/// The fix-bug role's check, tests-pass (the real-user's contas, 23/11, r1795449920-193): the tests the step names pass,
+/// then the whole suite. The leave was recorded (TestsLeft) and the page promised it, and tests-pass still put the
+/// suite of the start back, failing "as the project defined it when the run began" after the person's words.
+const ROLE_TESTS_PASS: &str = r#"
+role = "leave"
+version = "1.0.0"
+delivery = "merge"
+
+[[step]]
+name = "runner"
+by = "jaynes"
+use = "find-suite"
+
+[[step]]
+name = "reproduce"
+needs = ["runner"]
+about = "Names the tests that show the bug."
+instructions = "Name the tests: {{request}}"
+
+[step.output]
+tests = { type = "array", about = "the tests that show it" }
+
+[[step]]
+name = "change"
+needs = ["runner", "reproduce"]
+reach = { project = "write", write = ["**"] }
+about = "Makes the change."
+instructions = "Make the change: {{request}}"
+checks = [{ use = "tests-pass", tests_from = "reproduce" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+"#;
+
+const AGENT_TESTS: &str = r#"#!/bin/sh
+cat > /dev/null
+n=$(( $(cat "$BASE/count" 2>/dev/null || echo 0) + 1 ))
+echo $n > "$BASE/count"
+if [ $n = 1 ]; then
+  printf '{"tests":["tests/banco.py"]}' > .jaynes/output.json
+  echo '{"tokens":10,"session":"s0"}'; exit 0
+fi
+if [ $n = 2 ]; then
+  echo 'the test reaches its database on 5432, which the box holds: may I change the test?' > .jaynes/impossible.txt
+  echo '{"tokens":10,"session":"s1"}'; exit 0
+fi
+printf 'banco = {}\nprint("banco falso livre da 5432")\n' > tests/banco.py
+printf '{"summary":"o ping passa pelo ESTOQUE_DB"}' > .jaynes/output.json
+echo '{"tokens":10,"session":"s1"}'
+"#;
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_the_contas_tests_pass_judges_the_tests_as_the_agent_left_them_with_the_person_s_leave() {
+    let s = scratch_with("tests-pass", ROLE_TESTS_PASS, AGENT_TESTS);
+    let (_, sent, e) = answered(&s, r#"{"verdicts": {"ITEM": "change"}, "tests": true}"#);
+    assert_eq!(sent["tests_leave"], WORDS, "{sent}");
+    assert!(e.iter().any(|e| e["type"] == "TestsLeft"), "the leave is in the record");
+    let last = judged(&e);
+    assert_eq!((&last["checks"][0]["check"], &last["checks"][0]["passed"]), (&serde_json::json!("tests-pass"), &serde_json::json!(true)), "the tests the agent left pass: {last}");
+    assert_eq!(last["checks"][0]["tests_changed"], serde_json::json!(["tests/banco.py"]), "{last}");
+    let asked: Vec<&Value> = e.iter().filter(|e| e["type"] == "FixAsked").collect();
+    assert!(asked.is_empty(), "no fix asked after the leave: {asked:?}");
 }

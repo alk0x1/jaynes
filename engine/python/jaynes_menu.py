@@ -659,6 +659,13 @@ def _began(call: Call, runner: dict[str, Any]) -> dict[str, str | None] | None:
     return as_it_began(str(runner.get("kind") or ""), start, Path(call["project"]), str(runner.get("suite") or ""))
 
 
+def _left(call: Call, began: dict[str, str | None] | None) -> bool:
+    """The person let the run change how the project's tests are defined, in their own words at a stop (T1, the
+    real-user's estoque; and their contas, 23/11, through tests-pass), and the run changed that: every check that
+    runs the suite judges it as the agent left it, and says the files that changed."""
+    return bool(began) and bool(str(call.get("tests_leave") or "").strip())
+
+
 def suite_passes(call: Call, params: Params) -> Any:
     runner = _suite(call, params)
     command = str(runner.get("suite") or "")
@@ -668,10 +675,8 @@ def suite_passes(call: Call, params: Params) -> Any:
     if emptied:
         return emptied
     began = _began(call, runner)
-    # the person let the run change how the project's tests are defined, in their own words at a stop (T1, the
-    # real-user's estoque): the suite is judged as the agent left it, and the files that changed are said
-    if began and str(call.get("tests_leave") or "").strip():
-        return _passes(call, runner, command, "the suite fails", began, left=True) or Pass(tests_changed=sorted(began))
+    if _left(call, began):
+        return _passes(call, runner, command, "the suite fails", began, left=True) or Pass(tests_changed=sorted(began or {}))
     return _passes(call, runner, command, "the suite fails", began) or Pass()
 
 
@@ -862,8 +867,9 @@ def tests_pass(call: Call, params: Params) -> Any:
     if emptied:
         return emptied
     picked, began = _for_files(runner, tests), _began(call, runner)
+    left = _left(call, began)
     for what, command in [("the tests still fail", picked)] + ([("the suite fails", runner["suite"])] if picked != runner["suite"] else []):
-        failed = _passes(call, runner, command, what, began)
+        failed = _passes(call, runner, command, what, began, left=left)
         if failed:
             return failed
         if command == picked and picked != runner["suite"] and _alone(call, tests, picked):
@@ -871,7 +877,7 @@ def tests_pass(call: Call, params: Params) -> Any:
                         f"other files beside {'it' if len(tests) == 1 else 'them'} ({picked}), so "
                         f"{'it passes' if len(tests) == 1 else 'they pass'} whatever the code does and cannot show "
                         "the bug is fixed; the tests that showed the bug are to run the code they test")
-    return Pass()
+    return Pass(tests_changed=sorted(began or {})) if left else Pass()
 
 
 URL = "JAYNES_URL"
