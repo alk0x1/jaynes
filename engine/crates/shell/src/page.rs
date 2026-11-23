@@ -773,6 +773,16 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
             // the person merges what the run delivered on a branch: the stop every merge waits at opens (G19), and the
             // page goes to it by the question it says
             "merge" => {
+                // the person's branch has it already: no stop to open for a merge that would change nothing
+                if crate::listing::already_in(home, &run) {
+                    let into = crate::listing::into_of(home, run_id);
+                    let project = Store::open(&home.join("record.sqlite3"))?
+                        .setup(run_id)
+                        .ok()
+                        .and_then(|s| s["project"].as_str().and_then(|p| std::path::Path::new(p).file_name()).map(|n| n.to_string_lossy().into_owned()))
+                        .unwrap_or_else(|| "your project".into());
+                    return Ok(json!({"ok": false, "refused": crate::listing::nothing_to_merge_said(if into.is_empty() { "your branch" } else { &into }, &project)}));
+                }
                 let mut said = submit_in(home, exe, &run, Input::Merge { by })?;
                 let now = Store::open(&home.join("record.sqlite3"))?.state(run_id)?;
                 if let Some(q) = now.as_ref().and_then(|r| r.open_questions().into_iter().find(|q| q.question.kind == QuestionKind::Merge)) {
