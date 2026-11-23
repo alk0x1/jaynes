@@ -24,7 +24,9 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 
 - **G4.** A fault of Jaynes or of the machine (a box that refuses, a program that does not
   start, a check that cannot judge) never spends one of the agent's attempts. The run stops at
-  once and says the fault is Jaynes's.
+  once and says the fault is Jaynes's. When the process that drives a run is stopped from
+  outside, by a signal or killed outright, the run says "Jaynes stopped while it ran", spends no
+  attempt on what was under way, and waits for you to resume it.
 - **G5.** Every run has a ceiling of time and of tokens, written down before its first step.
   No attempt starts once either is reached, and an attempt that passes either while it runs is
   stopped there, counted from its agent's stream as it goes. Every attempt's time and tokens
@@ -88,7 +90,8 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 - **G15.** The record only grows, and each entry carries the fingerprint of the one before it,
   so a change to any past entry shows.
 - **G16.** Reading the record again gives the same state, and a run stays on the version of
-  its role and of the engine it started with.
+  its role and of the engine it started with. When that engine is no longer on this Mac, the
+  run's stops show only what is true of them: no answer, Halt or Abandon reaches the run.
 
 ## What lands on your branch
 
@@ -105,16 +108,26 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   use and the paths they may touch. On macOS, every shell command of the agent runs in Jaynes's
   own box, the one below, which Jaynes puts around each command before it runs, and a command it
   could not put there does not run: the turn then ends as Jaynes's fault. There the commands write
-  only in the step's folder, read none of your home but the run's copy and the folders the role
-  names, reach no network but the local ports the run reserved or the step names, the ports you let the project's
-  tests use and, in a step that installs packages, the package registries through Jaynes's own
-  proxy; where you opened a project's ports yourself, every local port, the page's among them.
+  only in the step's folder and in a folder of each command's own, gone after it, where Apple's
+  developer tools keep their cache; read none of your home but the run's copy, and the toolchains
+  your PATH names, read only; reach no network but the local ports the run reserved or the step
+  names, the ports you let the project's tests use and, where you let its tests start their own
+  servers, the ports the system picks for them, and, in a step that installs packages, the
+  package registries through Jaynes's own proxy; where you opened a project's ports yourself,
+  every local port, the page's among them.
   They cannot read the engine's folder, the other runs, your secrets or the temporary folder your
-  Claude Code sessions share, open no app and start none of those browsers, Safari among them.
+  Claude Code sessions share, open no app and start none of your browsers: Chrome, Chromium,
+  Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp, Thorium and
+  Safari. It is the box a check's commands run in: they send no UDP, cannot use your clipboard or
+  keychain and write to no terminal. They start with the environment the run started with, its
+  PATH and toolchains among them. Other services of macOS reached by name still answer them.
+  Inside another sandbox, Jaynes runs none of them.
   Elsewhere, Claude Code's sandbox holds the agent's shell commands (writing only in the step's
   folder, no network but what the step declares, the engine's folder, the other runs, your secrets
-  and that temporary folder hidden), and these browsers' apps are hidden from them, so Chrome, Chromium, Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp and Thorium do not
-  start. Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
+  and that temporary folder hidden). Until Jaynes's own box reaches Linux, two holes are open
+  there: a step that names local ports, or whose project's tests may start their own servers,
+  reaches every local port, the page's among them; and the agent's commands can start your
+  browsers. Claude Code's file tools are held by its permission rules, not by the operating system, and Jaynes claims no more than those guards.
 - That what Jaynes runs itself is held beyond its box. On macOS, a project's test suite, a
   check's commands and a role's own scripts run in Jaynes's own box: they write only in the
   step's folders; they reach no network but the local ports the run reserved or the step
@@ -133,4 +146,7 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   and these commands do not run.
 - That the agent's work is right. The checks say what they checked; you say the rest.
 - That a correction is the same as a run started over with the corrected answer. Steps run
-  again on top of their previous work.
+  again on top of their previous work. So does an attempt after one that failed: it starts from
+  the files that attempt left, in its session while that session is short enough to go on,
+  unless that round you dropped everything or sent it back without words: then the step starts
+  afresh.
