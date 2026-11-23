@@ -191,6 +191,106 @@ pub fn place(e: &Entry, branch: &str, copy: &Path) -> Option<Place> {
     (made && copy.is_dir()).then(|| Place::Copy { folder: copy.display().to_string() })
 }
 
+/// A run delivered on a branch of its own and not merged into the person's: the change is not in their folder yet,
+/// and its page says how to reach it (the tech-lead, T7, 23/11: a run delivered always says how), the branch with
+/// Copy and, when the engine would take it, Merge (the design-lead's quatro-itens.md, item 5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unmerged {
+    /// The run's branch, "jaynes/r…".
+    pub branch: String,
+    /// The branch it started from, which a merge lands on: "main".
+    pub into: String,
+    /// The project's folder name: "horta".
+    pub project: String,
+    /// Why the engine refuses Merge now, in its words; None when it would take it.
+    pub refused: Option<String>,
+    /// The last merge the person asked that did not land, and why.
+    pub failed: Option<NotLanded>,
+}
+
+/// Why a merge the person asked did not land, read from what the delivery said (project.rs's words).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotLanded {
+    /// Their checkout of the branch had changes not committed: the button stays, to merge again once they are.
+    Dirty { git: String },
+    /// The change conflicts with what the branch has now: merged by hand, from the branch, which still has it.
+    Conflict { git: String },
+}
+
+impl Unmerged {
+    /// The first line in three parts, the branch in the middle, shown in mono with a Copy beside it.
+    pub fn line(&self) -> (String, String, String) {
+        ("The change is on the branch “".into(), self.branch.clone(), "”, not in your folder yet.".into())
+    }
+
+    /// The button, primary, never amber: only when the engine takes a Merge and the last did not conflict.
+    pub fn button(&self) -> Option<String> {
+        (self.refused.is_none() && !matches!(self.failed, Some(NotLanded::Conflict { .. }))).then(|| format!("Merge into “{}”", self.into))
+    }
+
+    /// Dim, beside the button.
+    pub fn says(&self) -> String {
+        format!("It lands on “{}” in {}. Nothing is pushed, and Undo takes it back.", self.into, self.project)
+    }
+
+    /// Amber, when the last merge did not land; git's own words go apart, under "▸ What git said".
+    pub fn not_landed(&self) -> Option<(String, String)> {
+        match &self.failed {
+            Some(NotLanded::Dirty { git }) => Some((
+                format!("Not merged: your checkout of “{}” has changes you have not committed. Commit or stash them, then merge again.", self.into),
+                git.clone(),
+            )),
+            Some(NotLanded::Conflict { git }) => Some((
+                format!("Not merged: the change conflicts with what “{}” has now. The branch “{}” still has it, so you can merge it by hand.", self.into, self.branch),
+                git.clone(),
+            )),
+            None => None,
+        }
+    }
+}
+
+/// Under git's words, closed.
+pub const WHAT_GIT_SAID: &str = "What git said";
+
+/// Once merged, in place of the branch's line: "Merged into “main” in horta. Nothing was pushed."
+pub fn merged_said(into: &str, project: &str) -> String {
+    format!("Merged into “{into}” in {project}. Nothing was pushed.")
+}
+
+/// What a delivery said of a merge that did not land, after "; not merged: " (drive.rs's deliver).
+pub fn not_landed(reference: &str) -> Option<NotLanded> {
+    let (_, why) = reference.rsplit_once("; not merged: ")?;
+    if why.contains("has uncommitted changes") {
+        Some(NotLanded::Dirty { git: why.to_string() })
+    } else if let Some((_, git)) = why.split_once(" has now: ").filter(|_| why.contains("it conflicts with what")) {
+        Some(NotLanded::Conflict { git: git.to_string() })
+    } else {
+        None
+    }
+}
+
+/// `Unmerged` of run `r` of the record in `home`: Some for a run that delivered a change on a branch and did not merge
+/// it (nor undo its merge); None for one merged, undone, that delivered nothing or a change of nothing, or that has no
+/// branch. Whether Merge is taken now the engine says, asked as the person would ask it, without recording anything.
+pub fn unmerged(home: &Path, r: &Run) -> Option<Unmerged> {
+    if r.delivered.is_none() || r.merged || r.undone || r.delivered_files().is_empty() {
+        return None;
+    }
+    let store = Store::open(&home.join("record.sqlite3")).ok()?;
+    let setup = store.setup(&r.id).unwrap_or_default();
+    let branch = setup["branch"].as_str().filter(|b| !b.is_empty())?.to_string();
+    let into = into_of(home, &r.id);
+    let project = setup["project"].as_str().and_then(|p| Path::new(p).file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "your project".into());
+    let refused = jaynes_core::decide(Some(r), &jaynes_core::Input::Merge { by: jaynes_core::question::By::Person }).err().map(|e| e.0);
+    // the last delivery, when it came after the person asked to merge
+    let failed = r.merge_asked.and_then(|_| {
+        let events = store.events(&r.id).ok()?;
+        let asked = events.iter().rposition(|e| matches!(e, jaynes_core::Event::MergeAsked { .. }))?;
+        events[asked..].iter().rev().find_map(|e| if let jaynes_core::Event::Delivered { reference, .. } = e { Some(reference.clone()) } else { None })
+    });
+    Some(Unmerged { branch, into: if into.is_empty() { "your branch".into() } else { into }, project, refused, failed: failed.as_deref().and_then(not_landed) })
+}
+
 /// `place` of a run of the record in `home`, its branch read from its setup.
 pub fn place_of(home: &Path, e: &Entry) -> Option<Place> {
     let setup = Store::open(&home.join("record.sqlite3")).and_then(|s| s.setup(&e.run.id)).unwrap_or_default();

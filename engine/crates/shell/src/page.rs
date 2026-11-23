@@ -770,6 +770,16 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
             },
             "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
             "raise-ceiling" => Input::RaiseCeiling { ceiling: crate::listing::ceiling_raise(&run).0, by },
+            // the person merges what the run delivered on a branch: the stop every merge waits at opens (G19), and the
+            // page goes to it by the question it says
+            "merge" => {
+                let mut said = submit_in(home, exe, &run, Input::Merge { by })?;
+                let now = Store::open(&home.join("record.sqlite3"))?.state(run_id)?;
+                if let Some(q) = now.as_ref().and_then(|r| r.open_questions().into_iter().find(|q| q.question.kind == QuestionKind::Merge)) {
+                    said["question"] = json!(q.question.id);
+                }
+                return Ok(said);
+            }
             "undo" => {
                 let mut store = Store::open(&home.join("record.sqlite3"))?;
                 let reverted = drive::undo(&mut store, home, run_id, body["note"].as_str().unwrap_or("").to_string(), by)?;
@@ -992,7 +1002,13 @@ impl Page {
                         .values()
                         .filter_map(|q| Some((q.question.id.clone(), crate::listing::settled_shows(&store.display(&q.question.items.first()?.digest))?)))
                         .collect();
-                    let extra = RunExtra { older: left, blocked: crate::listing::blocked(&self.home, r), showed, into: crate::listing::into_of(&self.home, &r.id) };
+                    let extra = RunExtra {
+                        older: left,
+                        blocked: crate::listing::blocked(&self.home, r),
+                        showed,
+                        into: crate::listing::into_of(&self.home, &r.id),
+                        unmerged: crate::listing::unmerged(&self.home, r),
+                    };
                     run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), extra)
                 }
                 None => match std::fs::read_to_string(self.home.join(format!("start-{id}.log"))) {
@@ -1302,11 +1318,33 @@ struct RunExtra {
     blocked: Option<crate::listing::BlockedSaid>,
     showed: std::collections::BTreeMap<String, String>,
     into: String,
+    /// Delivered on a branch and not merged: the branch with Copy, and Merge when the engine takes it (T7).
+    unmerged: Option<crate::listing::Unmerged>,
 }
 
 #[cfg(test)]
 fn run_html(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>) -> String {
     run_html_of(r, changes, summary, halted_by, name, RunExtra::default())
+}
+
+/// A run delivered on a branch and not merged (the design-lead's quatro-itens.md, item 5): the branch in mono with
+/// Copy; Merge, primary, with what it does beside it in dim, when the engine takes it; and, when the last merge did
+/// not land, why, in amber, with git's own words closed under it.
+fn reach_html(u: &crate::listing::Unmerged) -> String {
+    let (before, branch, after) = u.line();
+    let line = format!(
+        "<div class=\"rline\">{}<code>{}</code>{} <button class=\"copyplace\" data-copy=\"{}\">Copy</button></div>",
+        esc(&before),
+        esc(&branch),
+        esc(&after),
+        esc(&branch)
+    );
+    let button = u.button().map(|b| format!("<div class=\"rmerge\"><button class=\"act primary\" data-act=\"merge\">{}</button><span class=\"odim\">{}</span></div>", ticks(&b), ticks(&u.says()))).unwrap_or_default();
+    let failed = u
+        .not_landed()
+        .map(|(said, git)| format!("<div class=\"rfail\">{}</div><details class=\"git\"><summary>▸ {}</summary><pre class=\"said\">{}</pre></details>", ticks(&said), crate::listing::WHAT_GIT_SAID, esc(&git)))
+        .unwrap_or_default();
+    format!("<div class=\"reach\">{line}{failed}{button}</div>")
 }
 
 /// What a run whose engine left the Mac says in place of its controls (motor-velho.md, row 28): why it cannot go
@@ -1331,7 +1369,7 @@ fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String 
 /// `blocked`: a blocked run's words as listing::blocked reads them from the engine's home, with the hidden cases that
 /// failed; None, its record's reason alone.
 fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, extra: RunExtra) -> String {
-    let RunExtra { older, blocked, showed, into } = extra;
+    let RunExtra { older, blocked, showed, into, unmerged } = extra;
     let path = r.path();
     let gone = older.is_some();
     let steps = stage_list(r, gone);
@@ -1391,7 +1429,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         }
         tipped("abandon", "Abandon", "danger", r.delivered.is_some().then_some(crate::listing::ABANDON_DELIVERED_TIP));
     }
-    if r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge && r.delivered.is_some() && !r.undone {
+    if (r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge || r.merged) && r.delivered.is_some() && !r.undone {
         tipped("undo", "Undo the merge", "danger", None);
     }
     let correct = if r.delivered.is_some() {
@@ -1432,6 +1470,14 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
             ))
         })
         .collect();
+    // how the change reaches the person's folder (T7): the branch it is on, with Copy and Merge, or where it merged
+    let project_name = name.map(|n| n.project.clone()).filter(|p| !p.is_empty()).unwrap_or_else(|| "your project".into());
+    let reach = match &unmerged {
+        Some(u) => reach_html(u),
+        None if r.merged && !r.undone && !into.is_empty() => format!("<div class="reach"><div>{}</div></div>", ticks(&crate::listing::merged_said(&into, &project_name))),
+        None => String::new(),
+    };
+    let phase = format!("{phase}{reach}");
     let (phase, answers, buttons, passed, correct) = match older {
         Some(o) => (o, String::new(), String::new(), String::new(), String::new()),
         None => (phase, answers, buttons, passed, correct),
@@ -2706,7 +2752,8 @@ document.addEventListener("click", async e => {
   const run = JSON.parse(rd.textContent).run;
   const extra = b.dataset.act === "correct" ? { note: document.getElementById("cnote").value, step: document.getElementById("cstep").value } : {};
   const r = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run, action: b.dataset.act, ...extra }) })).json();
-  if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
+  if (r.ok && r.question) location.href = "/q/" + encodeURIComponent(run) + "/" + encodeURIComponent(r.question);
+  else if (r.ok) location.reload(); else document.getElementById("actmsg").textContent = r.refused;
 });
 // Runs whose engine left the Mac: all moved at once after a line that asks, Esc or Cancel closing it; a place copied.
 const moveall = document.getElementById("moveall"), moveask = document.getElementById("moveallask");
@@ -2847,6 +2894,7 @@ main { padding:22px 32px 240px; max-width:900px; }
 h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; } .sub { margin:0 0 20px; }
 h1 .proj { color:var(--dim); font-weight:500; }
 .sent { margin:0 0 16px; padding:9px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--ink); }
+.reach { margin:0 0 14px; padding:12px 14px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; font-size:14px; } .reach code { font-family:var(--mono); font-size:.92em; } .reach .rmerge { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px; } .reach .act.primary { background:var(--blue); color:#04121f; border:0; font-weight:600; } .reach .rfail { margin-top:8px; color:var(--amber); } .reach details.git { margin-top:4px; color:var(--dim); font-size:12.5px; } .reach details.git summary { list-style:none; cursor:pointer; } .reach details.git summary::-webkit-details-marker { display:none; }
 .sent .proj { color:var(--dim); }
 .tests-changed { margin:14px 0 10px; font-size:13.5px; } .tests-changed .r { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
 .tests-changed code { font-family:var(--mono); font-size:.88em; } .tests-changed p.dim { color:var(--dim); font-size:12.5px; margin:6px 0 0; }
@@ -3789,6 +3837,36 @@ mod tests {
     // The real-user, 22/11 (r1795330821-771): "O cartão do bloqueio diz só "A check you cannot see found that this
     // does not hold". A pessoa não vê o caso". The engineer lead, 22/11: the page shows the case that failed as the
     // app's card does, from listing::blocked (what the engine kept), never from the reason alone.
+    // The tech-lead, T7, 23/11 (the horta: "Finished: delivered" and no way to merge): a run delivered on a branch says
+    // how its change reaches the folder, in the design-lead's words (quatro-itens.md, item 5): the branch in mono with
+    // Copy; Merge, primary and never amber, when the engine takes it; a checkout with changes keeps the button and
+    // says to commit or stash; a conflict takes it away and says to merge by hand from the branch, which Copy keeps;
+    // git's own words never in the sentence, closed under "▸ What git said"; a run the engine will not merge (started
+    // never to merge) shows the branch alone.
+    #[test]
+    fn asked_a_run_delivered_on_a_branch_says_how_it_reaches_the_folder() {
+        use crate::listing::{NotLanded, Unmerged};
+        let u = |refused: Option<&str>, failed: Option<NotLanded>| Unmerged { branch: "jaynes/r17".into(), into: "main".into(), project: "horta".into(), refused: refused.map(str::to_string), failed };
+        let line = "The change is on the branch “<code>jaynes/r17</code>”, not in your folder yet. <button class=\"copyplace\" data-copy=\"jaynes/r17\">Copy</button>";
+        let button = "<button class=\"act primary\" data-act=\"merge\">Merge into “main”</button><span class=\"odim\">It lands on “main” in horta. Nothing is pushed, and Undo takes it back.</span>";
+        let open = reach_html(&u(None, None));
+        assert!(open.contains(line) && open.contains(button) && !open.contains("rfail"), "{open}");
+        let dirty = reach_html(&u(None, crate::listing::not_landed("jaynes/r17 at 1a2b3c; not merged: your checkout of main has uncommitted changes")));
+        assert!(dirty.contains(line) && dirty.contains(button), "the button stays: {dirty}");
+        assert!(dirty.contains("<div class=\"rfail\">Not merged: your checkout of “main” has changes you have not committed. Commit or stash them, then merge again.</div>"), "{dirty}");
+        let git = "CONFLICT (content): Merge conflict in greeting.txt";
+        let conflict = reach_html(&u(None, crate::listing::not_landed(&format!("jaynes/r17 at 1a2b3c; not merged: it conflicts with what main has now: {git}"))));
+        assert!(conflict.contains(line) && !conflict.contains("data-act=\"merge\""), "Copy stays, the button goes: {conflict}");
+        assert!(conflict.contains("<div class=\"rfail\">Not merged: the change conflicts with what “main” has now. The branch “jaynes/r17” still has it, so you can merge it by hand.</div>"), "{conflict}");
+        let said = conflict.split("<details").next().expect("before git");
+        assert!(!said.contains("CONFLICT") && conflict.contains(&format!("<summary>▸ What git said</summary><pre class=\"said\">{git}</pre>")), "{conflict}");
+        let never = reach_html(&u(Some("the run was started never to merge"), None));
+        assert!(never.contains(line) && !never.contains("data-act=\"merge\""), "{never}");
+        // a delivery that said nothing of a merge, or one that landed, says no merge failed
+        assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c; merged as 9f8e7d"), None);
+        assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c"), None);
+    }
+
     #[test]
     fn asked_a_run_blocked_by_a_hidden_case_shows_the_case_that_failed_on_the_page() {
         use jaynes_core::event::{Fault, Usage};
