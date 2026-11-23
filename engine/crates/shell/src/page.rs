@@ -817,6 +817,7 @@ impl Page {
             let Some(mut run) = store.state(&id)? else { continue };
             // the page only says: what the turn under way has spent so far counts too (agent::spent_now)
             run.spent = crate::agent::spent_now(&self.home, &run);
+            let run = as_shown(&self.home, run);
             runs.push(run.clone());
             if run.finished() {
                 continue;
@@ -976,7 +977,13 @@ impl Page {
         let main = match (&view, &current) {
             (View::Run(id), _) => match runs.iter().find(|r| &r.id == id) {
                 Some(r) => {
-                    let who = if r.halted { self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e)) } else { None };
+                    let who = if crate::listing::stopped_by_jaynes(r) {
+                        Some(drive::JAYNES_STOPPED_SAID.to_string())
+                    } else if r.halted {
+                        self.store().ok().and_then(|s| s.events(&r.id).ok()).map(|e| crate::listing::halted_by(&e))
+                    } else {
+                        None
+                    };
                     let left = if gone(r) { Some(older_html(&self.home, r, crate::moved::when(&moved_list, &r.id))) } else { None };
                     run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), left, crate::listing::blocked(&self.home, r))
                 }
@@ -1162,6 +1169,17 @@ enum View {
 
 /// How a run stands, in the word of the app's column and of `jaynes runs` (listing::stands); a run delivered whose
 /// answers are open says that they can still correct it, as the app's column does.
+/// A run as the page shows it. One that says it runs while the process driving it is gone (drive::left_running) is
+/// shown as what it is: halted by Jaynes's own rule, "Jaynes stopped while it ran", with Resume and never Halt, as the
+/// app's column says it. Only the showing: the record says so when the person resumes it (drive::settle_left_running).
+fn as_shown(home: &std::path::Path, mut run: Run) -> Run {
+    if drive::left_running(home, &run) {
+        run.halted = true;
+        run.halted_by = Some(By::Rule { rule: drive::JAYNES_STOPPED.to_string() });
+    }
+    run
+}
+
 pub(crate) fn phase_word(e: &crate::listing::Entry) -> String {
     use crate::listing::Mark;
     let (mark, _, _) = crate::listing::stands(e);
@@ -3525,6 +3543,50 @@ mod tests {
         // before what the person can do
         let at = |t: &str| shown.find(t).unwrap_or_else(|| panic!("{t}"));
         assert!(at("The case that failed") < at("Continue"), "the case before the ways out");
+    }
+
+    // The engineer lead, 23/11, after the backend's orphan run (c50391fc): a run that says it runs while the process
+    // driving it is gone (drive::left_running, killed outright) is shown as the app's column says it, "Jaynes stopped
+    // while it ran", and its page offers Resume, never Halt: nothing works on it to halt, and the resume settles the
+    // record first (drive::settle_left_running). A run whose driver lives is still at work, with Halt.
+    #[test]
+    fn asked_a_run_whose_process_is_gone_offers_resume_on_the_page() {
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-left-running-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs/o")).expect("home");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "fix-bug", "version": "4.0.0", "protocol": 1,
+            "steps": [{"name": "fix", "executor": "agent"}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "o".into(), request: "O total do recibo sai errado".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let mut events = decide(None, &start).expect("start").events;
+        events.push(Event::AttemptStarted { step: "fix".into(), round: 0, attempt: 1, fix: 0, session: None, deadline_seconds: 60, tokens_left: 1000, key: None });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("o", &events).expect("append");
+        store.put_setup("o", &json!({"project": "/w/recibo"})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        // its driver lives: at work, with Halt
+        std::fs::write(home.join("runs/o/driver.pid"), std::process::id().to_string()).expect("pid");
+        let working = page.render(View::Run("o".into()), crate::store::now()).expect("the run");
+        assert!(working.contains("data-act=\"halt\"") && !working.contains("data-act=\"resume\""), "{working}");
+        // its driver is gone
+        let mut gone = std::process::Command::new("true").spawn().expect("true");
+        let pid = gone.id();
+        let _ended = gone.wait();
+        std::fs::write(home.join("runs/o/driver.pid"), pid.to_string()).expect("pid");
+        let shown = page.render(View::Run("o".into()), crate::store::now()).expect("the run");
+        let home_page = page.render(View::Home, crate::store::now()).expect("home");
+        let _gone = std::fs::remove_dir_all(&home);
+        assert!(shown.contains("data-act=\"resume\"") && !shown.contains("data-act=\"halt\""), "Resume, never Halt: {shown}");
+        assert!(shown.contains("<div class=\"notice\">Jaynes stopped while it ran at “fix”</div>"), "{shown}");
+        let steps = shown.split("class=\"stages\"").nth(1).unwrap_or_else(|| panic!("no steps: {shown}"));
+        assert!(steps.contains("class=\"halted\"") && !steps.contains("class=\"running\""), "the step stopped, not breathing: {steps}");
+        // the column and the home, as the app says it: halted, waiting for the person
+        assert!(shown.contains("<span class=\"holds\">halted</span>"), "{shown}");
+        assert!(!shown.contains("<i class=\"running\""), "the strip too: {shown}");
+        assert!(home_page.contains("1 halted run"), "{home_page}");
     }
 
     // The real-user's app, 22/11 (recibo, fix-bug): a run blocked at "fix" showed beside as "Is this the bug?", its
