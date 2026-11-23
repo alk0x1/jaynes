@@ -180,7 +180,7 @@ fn every_merge_waits_for_the_person_even_with_nothing_that_runs_later() {
 fn reproduce_then_fix(starter: Option<String>, holds: bool) -> (Run, Vec<Command>) {
     use jaynes_core::manifest::StopDecl;
     use jaynes_core::question::VerdictKind;
-    let stop = StopDecl {
+    let stop = StopDecl { offers: Default::default(),
         verdicts: vec![VerdictKind::Keep, VerdictKind::Redo],
         holds,
         from_risk: Default::default(),
@@ -276,7 +276,7 @@ fn branch_only_keeps_nothing_and_a_stop_that_holds_is_never_in_the_merge() {
 fn stack_then_build(options: &[(&str, Option<(&str, &str)>)], vouch: bool, braked: bool) -> (Run, Vec<Command>) {
     use jaynes_core::manifest::{CheckDecl, CheckKind, StopDecl};
     use jaynes_core::question::{Item, Named, VerdictKind};
-    let stop = StopDecl {
+    let stop = StopDecl { offers: Default::default(),
         verdicts: vec![VerdictKind::Keep, VerdictKind::Change, VerdictKind::Drop],
         holds: true,
         from_risk: Default::default(),
@@ -293,7 +293,7 @@ fn stack_then_build(options: &[(&str, Option<(&str, &str)>)], vouch: bool, brake
         note: String::new(),
         vouched_by: None,
     };
-    let checks = if vouch { vec![CheckDecl { name: "named-in-request".to_string(), kind: CheckKind::Open, about: String::new(), reads: vec![] }] } else { vec![] };
+    let checks = if vouch { vec![CheckDecl { name: "named-in-request".to_string(), kind: CheckKind::Open, about: String::new(), reads: vec![], project_tests: false }] } else { vec![] };
     let stacks = StepDecl { name: "stacks".to_string(), stop: Some(stop), checks, ..build() };
     let built = StepDecl { name: "build".to_string(), needs: vec!["stacks".to_string()], ..build() };
     let manifest = Manifest { role: "scaffold".to_string(), version: "1".to_string(), protocol: 1, steps: vec![stacks, built], target: Default::default(), delivery: DeliveryKind::Merge };
