@@ -248,7 +248,10 @@ fn at_work_parts(row: &Row) -> (Said, Option<Said>) {
 fn finished_parts(row: &Row, files: Option<usize>) -> (Row, Option<Said>, Option<Said>) {
     let shown = Row { line: older_line(row), ..row.clone() };
     match finished_tag(row, files) {
-        Some(t) => (shown, Some((t, look::faint())), None),
+        Some(t) => {
+            let below = (row.line == jaynes_shell::listing::ON_A_BRANCH).then(|| (row.line.clone(), look::dim()));
+            (shown, Some((t, look::faint())), below)
+        }
         None => {
             let below = (shown.line.clone(), look::dim());
             (shown, None, Some(below))
@@ -1099,6 +1102,12 @@ mod tests {
         // alone in its project: what was delivered at the right
         let alone = Row { apart: None, ..same.clone() };
         assert_eq!(finished_parts(&alone, Some(1)).1, Some(("delivered · 1 file".to_string(), crate::look::faint())));
+        // a run delivered onto a branch, not merged: what was delivered at the right and, under the name, that the
+        // change is not in the person's folder yet (the design-lead, 23/11)
+        let on_branch = row("b", Mark::Delivered, jaynes_shell::listing::ON_A_BRANCH);
+        let (_, tag, below) = finished_parts(&on_branch, Some(2));
+        assert_eq!(tag, Some(("delivered · 2 files".to_string(), crate::look::faint())));
+        assert_eq!(below, Some(("on a branch · not merged yet".to_string(), crate::look::dim())));
         // the title keeps at least eight letters and its "…" when there is no room; a shorter one keeps all it has
         assert!(title_floor("Say what the garden is") >= title_floor("Say what") && title_floor("Say what the garden is") == title_floor("Say what the"));
         assert!(title_floor("Kale") < title_floor("Say what") && title_floor("") == 0.);
