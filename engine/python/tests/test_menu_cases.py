@@ -315,5 +315,36 @@ class WhatDefinesTheSuite(unittest.TestCase):
             self.assertEqual(self.back(kind, {"go.mod": "a"}, {"go.mod": "b"}), {})
 
 
+
+# The real-user, 22/11 (uso-real/achados/2026-11-22-01.md): "O fix-bug pode bloquear por um caso escondido que não dá
+# para cumprir onde a checagem roda": its case 6 read an old file from git's history, the fix was judged on a copy of
+# the files with none, and a right fix failed the proof three times.
+IMPOSSIBLE = ("set -e; d=$(mktemp -d); cp -R tests pyproject.toml \"$d\"/; mkdir \"$d/recibo\"; cp recibo/__init__.py \"$d/recibo/\"; "
+              "git show 8527993:recibo/render.py > \"$d/recibo/render.py\"; grep -rqi 'total' \"$d/tests\"; "
+              "grep -rq 'recibo_html' \"$d/tests\"; cd \"$d\"; ! \"$OLDPWD/.venv/bin/python\" -m pytest -q -p no:cacheprovider >/dev/null 2>&1")
+
+
+class ACaseTheFixCanBeJudgedOn(unittest.TestCase):
+    def judge(self, *runs: str) -> Any:
+        cases = [{"says": f"case {n}", "run": r} for n, r in enumerate(runs, 1)]
+        return menu.CHECKS["cases-need-only-the-project"]({"output": {"cases": cases}}, {})
+
+    def test_asked_a_case_that_cannot_be_met_where_the_check_runs_is_refused_where_it_is_written(self):
+        got = self.judge(".venv/bin/python -m pytest -q", IMPOSSIBLE)
+        self.assertIsInstance(got, Fail)
+        said = "\n".join(got.reasons)
+        self.assertIn("case 2", said)
+        self.assertIn("git", said)
+        self.assertNotIn("case 1", said)
+
+    def test_git_named_as_a_word_is_not_git_run(self):
+        for run in ("grep -qi git README.md", "./bin/greet | grep -q 'git hub'", "test -f .gitignore", "grep -q digit x"):
+            with self.subTest(run=run):
+                self.assertIsInstance(self.judge(run), Pass)
+        for run in ("git log -1", "cd src && git diff --quiet", "x=$(git rev-parse HEAD)", "test -n \"`git status`\"",
+                    "true | git show HEAD:a", "( git stash )", "sh -c 'git log'", "env -i git log"):
+            with self.subTest(run=run):
+                self.assertIsInstance(self.judge(run), Fail)
+
 if __name__ == "__main__":
     unittest.main()

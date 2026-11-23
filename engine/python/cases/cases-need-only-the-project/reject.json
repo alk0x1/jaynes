@@ -1,0 +1,15 @@
+[
+ {
+  "id": "real-user-git-show",
+  "expect": "reject",
+  "hole": "the real-user's case of 22/11: it read an old file from git's history, which the copy the fix is judged on has not, and a right fix failed the proof three times",
+  "output": {
+   "cases": [
+    {
+     "says": "The tests catch a receipt whose total is wrong",
+     "run": "set -e; d=$(mktemp -d); cp -R tests pyproject.toml \"$d\"/; mkdir \"$d/recibo\"; cp recibo/__init__.py \"$d/recibo/\"; git show 8527993:recibo/render.py > \"$d/recibo/render.py\"; grep -rqi 'total' \"$d/tests\"; grep -rq 'recibo_html' \"$d/tests\"; cd \"$d\"; ! \"$OLDPWD/.venv/bin/python\" -m pytest -q -p no:cacheprovider >/dev/null 2>&1"
+    }
+   ]
+  }
+ }
+]

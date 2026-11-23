@@ -881,6 +881,47 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
     return Pass()
 
 
+# git run as a command: at the start, after ; & | ( { ` or $(, past variables set before it and env, command, exec
+_GIT = re.compile(r"(?:^|[;&|({`\n]|\$\()\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
+                  r"(?:(?:env(?:\s+-\S+)*(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S*)*|command|exec|sudo)\s+)?git(?=$|[\s;&|)`])")
+# what a shell is told to run with -c, quoted
+_SHELL_C = re.compile(r"\b(?:sh|bash|zsh|dash)\s+-c\s+(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\")")
+
+
+def _runs_git(command: str) -> bool:
+    return bool(_GIT.search(command)) or any(_runs_git(a or b) for a, b in _SHELL_C.findall(command))
+
+
+def cases_need_only_the_project(call: Call, params: Params) -> Any:
+    """Each case a hidden step writes (``cases``: ``says`` and ``run``) can be judged where the fix will be: on a copy
+    of the project's files in the box, with no git history and no internet. A case that runs git, or that run on the
+    project as it is now says it found no git repository or reaches what the box refuses, fails on every fix, right
+    or wrong, and the run blocks on it (the real-user, 22/11). Not told: a case that needs something else the copy
+    lacks fails as a case about something new does, and the two cannot be told apart from outside."""
+    output = call.get("output") if isinstance(call.get("output"), dict) else {}
+    cases = output.get("cases") if isinstance(output.get("cases"), list) else []
+    where = ("cannot be judged where the fix will be, a copy of the project's files with no git history and no "
+             "internet: it {}. Check what the files show once the task is done, or put it in untestable")
+    reasons: list[str] = []
+    for n, case in enumerate(cases, 1):
+        case = case if isinstance(case, dict) else {}
+        says, command = str(case.get("says", "")), str(case.get("run", ""))
+        label = f"case {n} (\u201c{says}\u201d)"
+        if _runs_git(command):
+            reasons.append(f"{label} {where.format('runs git')}")
+            continue
+        if not call.get("project") or expands(command, URL):
+            continue
+        ran = _box(call, command, timeout=CASE_SECONDS)
+        if isinstance(ran, Blocked):
+            if not ran.reason.startswith("the box refused what the command tried"):
+                return ran
+            reasons.append(f"{label} {where.format('reaches what the box refuses: ' + ran.reason.split(': ', 1)[-1][:300])}")
+        elif "not a git repository" in ran.output.lower():
+            reasons.append(f"{label} {where.format('reads git, which finds no repository there')}")
+    return Fail(*reasons) if reasons else Pass()
+
+
 def expands(command: str, name: str) -> bool:
     """Whether the shell expands the variable ``name`` in ``command``: written $name or ${name...}, outside single
     quotes, a backslash's reach and comments."""
@@ -2324,6 +2365,7 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "tests-fail-for-the-bug": tests_fail_for_the_bug,
     "tests-pass": tests_pass,
     "hidden-cases-pass": hidden_cases_pass,
+    "cases-need-only-the-project": cases_need_only_the_project,
     "output-follows-schema": output_follows_schema,
     "field-required": field_required,
     "field-empty": field_empty,

@@ -610,6 +610,14 @@ const MENU_CHECKS: &[MenuCheck] = &[
         project_tests: true,
     },
     MenuCheck {
+        name: "cases-need-only-the-project",
+        kind: CheckKind::Open,
+        params: &[],
+        auto: &[],
+        about: |_| "each case can be judged where the fix will be, a copy of the project's files with no git history and no internet".into(),
+        runs: true,
+    },
+    MenuCheck {
         name: "output-follows-schema",
         kind: CheckKind::Open,
         params: &[],
@@ -738,6 +746,7 @@ fn menu_cases(name: &str) -> Option<(&'static str, &'static str)> {
         "tests-fail-for-the-bug" => cases!("tests-fail-for-the-bug"),
         "tests-pass" => cases!("tests-pass"),
         "hidden-cases-pass" => cases!("hidden-cases-pass"),
+        "cases-need-only-the-project" => cases!("cases-need-only-the-project"),
         "output-follows-schema" => cases!("output-follows-schema"),
         "field-required" => cases!("field-required"),
         "field-empty" => cases!("field-empty"),
@@ -3264,8 +3273,9 @@ with = {{ pages = "read.sources" }}
         // since 21/11 it is 4.0.0: buttons in its words, the summary in plain words and shown alone: another one again
         ("small-change", "468ec9b9df7cef331a38e16751ae4c7757bb8594b22d54ef2756cb200f260c33"),
         // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own; since
-        // 21/11 it is 4.0.0, asking "Is this the bug?" with answers and checking for plain words: another one again
-        ("fix-bug", "c2eb2f0ecd5403afe174b1f898fdb80aeb5b28e51c508aaec402dad818db3aeb"),
+        // 21/11 it is 4.0.0, asking "Is this the bug?" with answers and checking for plain words: another one again;
+        // since 22/11 its cases step refuses a case the fix cannot be judged on (cases-need-only-the-project)
+        ("fix-bug", "39da80b675ef10c82bed589891bb6a08aa4a339d094cd62ee9b609aebe541254"),
         ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
     ];
 
@@ -4236,6 +4246,23 @@ script = "requires/changelog.sh"
         assert_eq!(fix.extras["reproduce"].checks.get("plain-saw"), Some(&plain("saw")));
         let Some(CheckImpl::Menu { with, .. }) = fix.extras["reproduce"].checks.get("tests-fail-for-the-bug") else { panic!("tests-fail-for-the-bug") };
         assert_eq!(with.get("saw"), Some(&json!(true)));
+    }
+
+    // the real-user, 22/11: "O passo de casos não pode aceitar um caso que dependa de algo que não está na cópia onde a
+    // checagem roda (histórico do git, rede, outro commit)"
+    #[test]
+    fn asked_the_cases_step_refuses_a_case_the_fix_cannot_be_judged_on() {
+        // fix-bug as this repository keeps it for its tests, the copy of the public one
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/fix-bug");
+        let fix = TomlRole::load(&dir).expect("reads");
+        let cases = fix.manifest.steps.iter().find(|s| s.name == "cases").expect("cases");
+        // a check the agent that writes the cases knows, so a case it cannot keep goes back to it, never to the fix
+        let check = cases.checks.iter().find(|c| c.name == "cases-need-only-the-project").expect("the check");
+        assert_eq!(check.kind, CheckKind::Open);
+        assert_eq!(fix.extras["cases"].checks["cases-need-only-the-project"], CheckImpl::Menu { uses: "cases-need-only-the-project".into(), with: Default::default() });
+        // and it is told before it writes them
+        let told = std::fs::read_to_string(dir.join("cases.md")).expect("cases.md");
+        assert!(told.contains("a copy of the project's files, with no git history"), "{told}");
     }
 
     #[test]

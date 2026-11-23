@@ -1,0 +1,15 @@
+[
+ {
+  "id": "real-user-files-only",
+  "expect": "accept",
+  "keeps": "a case that reads only the project's files, as the real-user's other cases did",
+  "output": {
+   "cases": [
+    {
+     "says": "The receipt shows the total",
+     "run": "grep -rqi total recibo/render.py"
+    }
+   ]
+  }
+ }
+]

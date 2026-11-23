@@ -7,7 +7,8 @@ The task:
 
 Write each case as a sentence a person reads, saying what must hold once the task is done, and a shell command
 that exits 0 when it holds and not otherwise. A command runs from the project's root, in a box with no internet,
-on the project with the change made.
+on a copy of the project's files, with no git history, with the change made: a case that runs git, reads another
+commit or reaches the internet cannot be met there and is refused.
 
 Check what the task states and can be seen from outside: what a command prints or how it exits, what a file holds.
 Never check how it is built: no internal names the task does not give, no exact wording it does not give; match

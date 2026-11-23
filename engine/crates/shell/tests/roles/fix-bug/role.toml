@@ -24,7 +24,7 @@ reach = { project = "read", commands = true }
 attempts = 2
 about = "Writes, from the request alone, the checks the fix will be judged by."
 instructions = "cases.md"
-checks = ["output-follows-schema", { use = "field-required", field = "cases" }]
+checks = ["output-follows-schema", { use = "field-required", field = "cases" }, "cases-need-only-the-project"]
 
 [step.output]
 cases = { type = "array", max_items = 8, items = { type = "object", fields = { says = "string", run = "string" } } }
