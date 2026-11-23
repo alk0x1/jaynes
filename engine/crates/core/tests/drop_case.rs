@@ -176,7 +176,7 @@ fn merge_about(run: &mut Run, mut cmds: Vec<Command>) -> String {
         let Some(digest) = cmds.iter().find_map(|c| if let Command::Deliver { digest, .. } = c { Some(digest.clone()) } else { None }) else {
             panic!("no merge asked: {cmds:?}");
         };
-        cmds = feed(run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into() }).1;
+        cmds = feed(run, Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into(), merged: None }).1;
     }
     panic!("no merge asked")
 }
