@@ -156,6 +156,9 @@ class Box:
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
     browser: Path | None = None  # the one browser it may start, with its bundle's helpers: a photograph's Chrome
     hide_home: bool = False  # the whole home hidden but for its readable and writable folders: an agent's commands
+    # places its commands only look up, such as the folders of its PATH: their own metadata and that of every folder
+    # and link on the way to them, never what they hold
+    looked_up: tuple[Path, ...] = ()
 
 
 def hidden_paths(box: Box) -> list[Path]:
@@ -284,11 +287,16 @@ def profile(box: Box) -> str:
             lines.append(f"(deny file-read* {_subpaths(box.hidden)})")
     if box.writable:
         lines.append(f"(allow file-read* {_subpaths(box.writable)})")
-    # the folders above what it reads and writes, only their own metadata: a program that resolves where it runs
-    # (node's realpath, npm's) looks at each, and a hidden home above the step's folder refused it EPERM
-    above = sorted({str(a) for p in (*box.writable, *box.readable) for a in Path(os.path.realpath(p)).parents} - {"/"})
-    if above:
-        lines.append("(allow file-read-metadata " + " ".join(f"(literal {_lit(a)})" for a in above) + ")")
+    # every folder and link on the way to what it reads, writes and looks up, only their own metadata: a program
+    # that resolves where it runs (node's realpath, npm's, git's for its alternates) looks at each, and a hidden home
+    # above the step's folder refused it EPERM; a link as it is named, never as it leads, since a rule names where a
+    # link leads and the link itself stays hidden (uv's cpython-3.14-... to cpython-3.14.9-..., refused
+    # "Operation not permitted" to the agent's .venv/bin/python, the real-user's runs of 22/11)
+    on_the_way = sorted({a for p in (*box.writable, *box.readable, *box.looked_up) for a in _chain(p)}
+                        | {str(a) for p in (*box.writable, *box.readable) for a in Path(os.path.realpath(p)).parents}
+                        - {"/"})
+    if on_the_way:
+        lines.append(f"(allow file-read-metadata {_literals(on_the_way)})")
     lines.append("(deny network-outbound)")
     # TCP only: the box sends no UDP, not even to its own machine. Only listed ports: a deny under a wildcard does not
     # hold in sandbox-exec
@@ -1964,12 +1972,27 @@ def agent_box(spec: dict[str, Any]) -> tuple[Box, Path, Path, dict[str, str]]:
         raise AgentRefused(f"the step's folder {work} is not there")
     anyone = spec.get("any_port") is True
     own = spec.get("test_servers") is True and not anyone
+    started = _started(spec.get("env"))
     ports = reserve()
     b = Box(writable, hidden=tuple(Path(p) for p in spec.get("hidden") or ()), hide_home=True, local=True,
             readable=(work, *(Path(p) for p in spec.get("readable") or ()), LISTEN_PRELOAD), reserved=ports,
             local_ports=local_ports,
-            any_port=anyone, window=servers_window() if own else (), home=home)
-    return b, _agent_start(work, pwd), pwd, {"JAYNES_PORTS": ",".join(map(str, ports))}
+            any_port=anyone, window=servers_window() if own else (), home=home, looked_up=_places(started))
+    return b, _agent_start(work, pwd), pwd, {**started, "JAYNES_PORTS": ",".join(map(str, ports))}
+
+
+def _started(env: Any) -> dict[str, str]:
+    """The run's start environment the engine puts in the spec (its PATH and where the toolchains are, as a check's
+    commands run with it): Claude Code's shell gives the agent's commands a PATH of its own, without the person's
+    toolchains (node, go: "command not found" in the real-user's runs of 22/11)."""
+    if not isinstance(env, dict):
+        return {}
+    return {k: v for k, v in env.items() if isinstance(k, str) and isinstance(v, str) and k and "=" not in k}
+
+
+def _places(env: dict[str, str]) -> tuple[Path, ...]:
+    """The folders the start environment names, its PATH's among them, for the box to look them up."""
+    return tuple(dict.fromkeys(Path(p) for v in env.values() for p in v.split(os.pathsep) if p.startswith("/")))
 
 
 def _agent_wait(argv: list[str], start: Path, env: dict[str, str], said: Path) -> int:
