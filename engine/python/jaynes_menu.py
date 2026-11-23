@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import jaynes_box as box
-from jaynes_role import Blocked, Fail, Pass, Refused, _result, _verdict
+from jaynes_role import Blocked, Fail, Pass, Refused, _result, _verdict, _verdict_reply
 
 Call = dict[str, Any]
 Params = dict[str, Any]
@@ -601,15 +601,25 @@ def _script_cannot_fail(text: str) -> str | None:
     return None
 
 
-def _passes(call: Call, runner: dict[str, Any], command: str, what: str, began: dict[str, str | None] | None) -> Any:
+def _passes(call: Call, runner: dict[str, Any], command: str, what: str, began: dict[str, str | None] | None,
+            left: bool = False) -> Any:
     """None when ``command`` passes, run on the run's copy, and again as the project defined the suite when the run
     began (``began``: what to put back) when the run changed that; or why not. With the start not known
-    (``began`` None), a failure make ignored, or a line that cannot fail, is the step's: nothing explains it."""
+    (``began`` None), a failure make ignored, or a line that cannot fail, is the step's: nothing explains it. With
+    the person's leave to change how the tests are defined (``left``), the suite is judged once, as the agent left
+    it, and still never one that cannot fail."""
     ran = _box(call, command)
     if isinstance(ran, Blocked):
         return ran
     if ran.code != 0:
         return Fail(f"{what}: {command} exited with {ran.code}. The end of what it printed:\n{ran.output}")
+    if left:
+        why = _unexplained(call, runner, ran)
+        if why:
+            return Fail(f"{what}: {command} passed, but {why}. The person let the run change how the tests are "
+                        f"defined, never make them unable to fail. A suite passes when nothing in it fails. The end "
+                        f"of what it printed:\n{ran.output}")
+        return None
     if began is None:
         why = _unexplained(call, runner, ran)
         if why:
@@ -646,7 +656,12 @@ def suite_passes(call: Call, params: Params) -> Any:
     emptied = _emptied(call, runner)
     if emptied:
         return emptied
-    return _passes(call, runner, command, "the suite fails", _began(call, runner)) or Pass()
+    began = _began(call, runner)
+    # the person let the run change how the project's tests are defined, in their own words at a stop (T1, the
+    # real-user's estoque): the suite is judged as the agent left it, and the files that changed are said
+    if began and str(call.get("tests_leave") or "").strip():
+        return _passes(call, runner, command, "the suite fails", began, left=True) or Pass(tests_changed=sorted(began))
+    return _passes(call, runner, command, "the suite fails", began) or Pass()
 
 
 def _allowed(path: str, globs: list[str]) -> bool:
@@ -2449,7 +2464,7 @@ def answer(ask: dict[str, Any]) -> dict[str, Any]:
             return {"reply": "error", "message": str(e)}
     if use not in CHECKS:
         return {"reply": "error", "message": f"the menu has no check {use}"}
-    return {"reply": "verdict", "verdict": _verdict(CHECKS[use](call, params))}
+    return _verdict_reply(CHECKS[use](call, params))
 
 
 if __name__ == "__main__":

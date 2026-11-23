@@ -206,7 +206,8 @@ pub trait Workspace {
     /// shows (`shown`). What was made, in words, and the state delivered: what [`Workspace::land`] lands.
     fn deliver(&self, changes: &[(String, String)], shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String>;
     /// Land the delivery `head` on the person's own thing. The id of what landed, or None when it was there already.
-    fn land(&self, head: &str, run: &str) -> Result<Option<String>, String>;
+    /// `note`, when not empty, is said under the merge's first line (T1: the tests changed with the person's leave).
+    fn land(&self, head: &str, run: &str, note: &str) -> Result<Option<String>, String>;
     /// Undo what the run landed, the latest first, over what the person's thing has now.
     fn undo(&self, landed: &[String], run: &str) -> Result<String, String>;
     /// Folders outside the copy the target's own commands must read.
@@ -315,8 +316,8 @@ impl Workspace for Copy {
     fn deliver(&self, changes: &[(String, String)], shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String> {
         Copy::deliver_without(self, changes, shown)
     }
-    fn land(&self, head: &str, run: &str) -> Result<Option<String>, String> {
-        self.merge(head, run)
+    fn land(&self, head: &str, run: &str, note: &str) -> Result<Option<String>, String> {
+        self.merge(head, run, note)
     }
     fn undo(&self, landed: &[String], run: &str) -> Result<String, String> {
         if !self.git.exists() {
@@ -717,7 +718,7 @@ impl Copy {
     }
 
     /// Merge the run's delivery into the branch it started from. The merge commit, or why there is none.
-    pub fn merge(&self, head: &str, run: &str) -> Result<Option<String>, String> {
+    pub fn merge(&self, head: &str, run: &str, note: &str) -> Result<Option<String>, String> {
         let branch = self.start_branch()?;
         if self.started_from_nothing() {
             return self.first_merge(&branch, head, &format!("Jaynes: run {run}, merged"));
@@ -727,7 +728,7 @@ impl Copy {
         if self.g(&["merge-base", "--is-ancestor", head, &tip]).is_ok() {
             return Ok(None);
         }
-        let message = format!("Jaynes: run {run}, merged");
+        let message = if note.is_empty() { format!("Jaynes: run {run}, merged") } else { format!("Jaynes: run {run}, merged\n\n{note}") };
         self.g(&["checkout", "-q", "--detach", &tip])?;
         if let Err(e) = self.g(&["merge", "-q", "--no-ff", "--no-edit", "-m", &message, head]) {
             let _abort = self.g(&["merge", "--abort"]);
@@ -987,7 +988,7 @@ mod git_tests {
         let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
         let steps = vec![("change".to_string(), c)];
         copy.deliver(&steps).expect("delivered");
-        let merged = copy.merge(&copy.head().expect("head"), "r").expect("merged").expect("a merge");
+        let merged = copy.merge(&copy.head().expect("head"), "r", "").expect("merged").expect("a merge");
         assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "b\n");
         Workspace::undo(copy, &[merged], "r").expect("undone");
         assert_eq!(std::fs::read_to_string(copy.source.join("a.txt")).expect("read"), "a\n");
@@ -1006,7 +1007,7 @@ mod git_tests {
         let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
         let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
         copy.deliver(&[("change".to_string(), c)]).expect("delivered");
-        let m = copy.merge(&copy.head().expect("head"), "r").expect("merged").expect("a merge");
+        let m = copy.merge(&copy.head().expect("head"), "r", "").expect("merged").expect("a merge");
         (base, copy, m)
     }
 
@@ -1039,7 +1040,7 @@ mod git_tests {
                    "the run starts from the empty tree");
         assert_eq!(git(&copy.dir, &["status", "--porcelain"]).expect("the agent's git status works"), "");
         let head = delivered_over_nothing(&copy);
-        let merged = copy.merge(&head, "r").expect("merged").expect("a merge");
+        let merged = copy.merge(&head, "r", "").expect("merged").expect("a merge");
         // the merge is main's first commit, with the run's files and no commit of Jaynes's under it
         assert_eq!(git(&source, &["rev-parse", "main"]).expect("main"), merged);
         assert_eq!(git(&source, &["log", "--format=%s", "main"]).expect("log"), "Jaynes: run r, merged");
@@ -1047,7 +1048,7 @@ mod git_tests {
         assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("the checkout has it"), "a\n");
         assert_eq!(git(&source, &["status", "--porcelain"]).expect("status"), "");
         // merged again, as a process that died after landing does: the same merge, no second commit
-        assert_eq!(copy.merge(&head, "r").expect("again"), Some(merged.clone()));
+        assert_eq!(copy.merge(&head, "r", "").expect("again"), Some(merged.clone()));
         assert_eq!(git(&source, &["rev-list", "--count", "main"]).expect("count"), "1");
         // and Undo takes the files away again
         Workspace::undo(&copy, std::slice::from_ref(&merged), "r").expect("undone");
@@ -1064,7 +1065,7 @@ mod git_tests {
         let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
         std::fs::write(source.join("a.txt"), "mine\n").expect("write");
         let head = delivered_over_nothing(&copy);
-        let refused = copy.merge(&head, "r");
+        let refused = copy.merge(&head, "r", "");
         assert!(refused.is_err(), "{refused:?}");
         assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "mine\n", "the person's file is untouched");
         assert!(git(&source, &["rev-parse", "-q", "--verify", "refs/heads/main"]).is_err(), "main is still unborn");
@@ -1079,7 +1080,7 @@ mod git_tests {
         let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
         let head = delivered_over_nothing(&copy);
         git(&source, &["symbolic-ref", "HEAD", "refs/heads/other"]).expect("on another unborn branch");
-        let merged = copy.merge(&head, "r").expect("merged").expect("a merge");
+        let merged = copy.merge(&head, "r", "").expect("merged").expect("a merge");
         assert_eq!(git(&source, &["rev-parse", "main"]).expect("main"), merged);
         assert!(!source.join("a.txt").exists(), "the checkout, on another branch, is untouched");
         let _gone = std::fs::remove_dir_all(&base);
@@ -1113,7 +1114,7 @@ mod git_tests {
         assert_eq!(std::fs::read_to_string(copy.dir.join("design/identity/new.html")).expect("read"), "new\n");
         assert_eq!(std::fs::read_to_string(copy.dir.join("design/identity/old.html")).expect("read"), "drawn\n");
         // the merge brings only what is delivered
-        copy.merge(&head, "r").expect("merged").expect("a merge");
+        copy.merge(&head, "r", "").expect("merged").expect("a merge");
         assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "b\n");
         assert_eq!(std::fs::read_to_string(source.join("design/identity/old.html")).expect("read"), "old\n");
         assert!(!source.join("design/identity/new.html").exists(), "the merge brought a board in");
@@ -1171,9 +1172,25 @@ mod git_tests {
         copy.deliver(&[("change".to_string(), c)]).expect("delivered");
         std::fs::write(source.join("a.txt"), "c\n").expect("write");
         git(&source, &["commit", "-q", "-am", "the person's"]).expect("commit");
-        let e = copy.merge(&copy.head().expect("head"), "r").expect_err("a conflict");
+        let e = copy.merge(&copy.head().expect("head"), "r", "").expect_err("a conflict");
         assert!(e.starts_with("it conflicts with what main has now: ") && e.contains("CONFLICT (content): Merge conflict in a.txt"), "{e}");
         assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "c\n", "the folder as it was");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn asked_the_merge_says_the_tests_changed_with_the_person_s_leave() {
+        let base = std::env::temp_dir().join(format!("jaynes-merge-note-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        std::fs::write(copy.dir.join("a.txt"), "b\n").expect("write");
+        let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
+        let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+        copy.deliver(&[("change".to_string(), c)]).expect("delivered");
+        let m = copy.merge(&copy.head().expect("head"), "r", "Tests changed with the person's leave: tests/conftest.py.").expect("merged").expect("a merge");
+        let said = git(&source, &["log", "-1", "--format=%B", &m]).expect("log");
+        assert_eq!(said.trim(), "Jaynes: run r, merged\n\nTests changed with the person's leave: tests/conftest.py.");
         let _gone = std::fs::remove_dir_all(&base);
     }
 
@@ -1205,7 +1222,7 @@ mod git_tests {
             let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
             let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
             copy.deliver(&[("change".to_string(), c)]).expect("delivered");
-            copy.merge(&copy.head().expect("head"), "r").expect("merged").expect("a merge")
+            copy.merge(&copy.head().expect("head"), "r", "").expect("merged").expect("a merge")
         };
         // the run merges line 1; corrected, it delivers again with line 3 too, and the second merge lands clean
         let first = deliver_merge("one\n2\n3\n");

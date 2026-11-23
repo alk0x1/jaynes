@@ -78,7 +78,7 @@ fn judged(run: &mut Run, attempt: u32, trees: [Option<&str>; 2]) -> Vec<Event> {
     let results = ["suite", "shape"]
         .iter()
         .zip(trees)
-        .map(|(c, t)| CheckResult { check: c.to_string(), verdict: CheckVerdict::Pass, tree: t.map(str::to_string) })
+        .map(|(c, t)| CheckResult { check: c.to_string(), verdict: CheckVerdict::Pass, tree: t.map(str::to_string), tests_changed: Vec::new() })
         .collect();
     feed(run, Input::ChecksEnded { step: "make".into(), attempt, fix: 0, results }).0
 }
@@ -126,7 +126,7 @@ fn person() -> jaynes_core::question::By {
 }
 
 fn verdicts(run: &mut Run, attempt: u32, verdict: CheckVerdict) -> Vec<Event> {
-    let results = ["suite", "shape"].iter().map(|c| CheckResult { check: c.to_string(), verdict: verdict.clone(), tree: Some("t1".into()) }).collect();
+    let results = ["suite", "shape"].iter().map(|c| CheckResult { check: c.to_string(), verdict: verdict.clone(), tree: Some("t1".into()), tests_changed: Vec::new() }).collect();
     feed(run, Input::ChecksEnded { step: "make".into(), attempt, fix: 0, results }).0
 }
 

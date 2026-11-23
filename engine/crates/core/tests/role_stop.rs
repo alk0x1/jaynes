@@ -173,7 +173,7 @@ impl World {
                     self.feed(Input::AttemptEnded { step, attempt, fix: 0, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None } })
                 }
                 Command::RunChecks { step, attempt, fix, checks, .. } => {
-                    let results = checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None }).collect();
+                    let results = checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }).collect();
                     self.feed(Input::ChecksEnded { step, attempt, fix, results })
                 }
                 Command::Deliver { digest, .. } => self.feed(Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into(), merged: None }),

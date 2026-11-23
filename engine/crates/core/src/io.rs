@@ -178,6 +178,13 @@ pub enum Input {
         offer: crate::manifest::Offer,
         by: By,
     },
+    /// The person lets the run change how the project's tests are defined, in their own words (T1): a check that
+    /// compares the suite with the one the run began with judges it as the agent left it, and says which files of
+    /// its definition changed. Only the person, once, with words.
+    LeaveTests {
+        words: String,
+        by: By,
+    },
     /// The person asks the agent of a stop's step something about what it shows, without sending it back: the stop
     /// stays open in the same round, with the same items, and the agent answers in a turn that only reads.
     AskAgent {
@@ -272,12 +279,16 @@ pub struct CheckResult {
     /// The state of the project the check was given to judge, when it was given one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<String>,
+    /// A check that passed with the person's leave to change how the project's tests are defined: the files of that
+    /// definition the run changed, judged as the agent left them (T1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests_changed: Vec<String>,
 }
 
 impl CheckResult {
     /// A verdict on no state of the project in particular.
     pub fn new(check: impl Into<String>, verdict: CheckVerdict) -> CheckResult {
-        CheckResult { check: check.into(), verdict, tree: None }
+        CheckResult { check: check.into(), verdict, tree: None, tests_changed: Vec::new() }
     }
 }
 

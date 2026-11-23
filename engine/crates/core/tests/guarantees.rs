@@ -852,7 +852,7 @@ impl World {
                         96..=97 => CheckVerdict::Blocked { reason: "the tool did not start".to_string() },
                         _ => continue,
                     };
-                    results.push(CheckResult { check: name, verdict, tree: None });
+                    results.push(CheckResult { check: name, verdict, tree: None, tests_changed: Vec::new() });
                 }
                 self.send(Input::ChecksEnded { step, attempt, fix, results });
             }
@@ -1635,7 +1635,7 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
         let c = deliver(&mut run, "send", attempt, "sent", Vec::new());
         assert!(c.iter().any(|c| matches!(c, Command::RunChecks { .. })), "{c:?}");
         let attempt = run.steps[0].attempt;
-        feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: verdict.clone(), tree: None }] });
+        feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: verdict.clone(), tree: None, tests_changed: Vec::new() }] });
         assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
         if matches!(verdict, CheckVerdict::Blocked { .. }) {
             // the check judges the same act again, and nothing acts
@@ -1643,7 +1643,7 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
             assert!(pushes_of(&c, "send").is_empty(), "continuing acted again: {c:?}");
             assert!(c.iter().any(|c| matches!(c, Command::RunChecks { step, attempt: a, .. } if step == "send" && *a == attempt)), "{c:?}");
             let failed = CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new(), cases: vec![] };
-            feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: failed, tree: None }] });
+            feed(&mut run, Input::ChecksEnded { step: "send".to_string(), attempt, fix: 0, results: vec![CheckResult { check: "landed".to_string(), verdict: failed, tree: None, tests_changed: Vec::new() }] });
             assert!(matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
         }
         let c = feed(&mut run, Input::Continue { by: By::Person, starter: None });
@@ -1684,7 +1684,7 @@ fn a_failed_shape_check_is_fixed_in_the_same_session() {
         step: "build".to_string(),
         attempt: 1,
         fix: 0,
-        results: vec![CheckResult { check: "short".to_string(), verdict: CheckVerdict::Fail { reasons: vec!["93 characters".to_string()], detail: String::new(), cases: vec![] }, tree: None }],
+        results: vec![CheckResult { check: "short".to_string(), verdict: CheckVerdict::Fail { reasons: vec!["93 characters".to_string()], detail: String::new(), cases: vec![] }, tree: None, tests_changed: Vec::new() }],
     });
     let Some(Command::RunAgent(turn)) = c.first() else { panic!("a fix: {c:?}") };
     assert_eq!((turn.attempt, turn.fix, turn.session.as_deref()), (1, 1, Some("s")));
@@ -2003,8 +2003,8 @@ fn every_check_leaves_its_kind_its_verdict_and_what_it_read_in_the_record() {
         attempt: 1,
         fix: 0,
         results: vec![
-            CheckResult { check: "suite".to_string(), verdict: CheckVerdict::Pass, tree: None },
-            CheckResult { check: "proof".to_string(), verdict: CheckVerdict::Pass, tree: None },
+            CheckResult { check: "suite".to_string(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() },
+            CheckResult { check: "proof".to_string(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() },
         ],
     })
     .expect("checked");

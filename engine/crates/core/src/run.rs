@@ -87,6 +87,9 @@ pub struct Run {
     /// What the person granted at the run's stops, each once.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub granted: std::collections::BTreeSet<crate::manifest::Offer>,
+    /// The person's words that let the run change how the project's tests are defined, when they gave them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_leave: Option<String>,
 }
 
 /// The project's ports as the person chose them: every local port (`any`), test servers on ports the system picks
@@ -416,6 +419,7 @@ impl Run {
             unplanted: Default::default(),
             ports: None,
             granted: Default::default(),
+            tests_leave: None,
         })
     }
 
@@ -831,6 +835,7 @@ impl Run {
                     s.unjudged = true;
                 }
             }
+            Event::TestsLeft { words, .. } => self.tests_leave = Some(words.clone()),
             Event::PortsChosen { any, servers, opened, freed_ports } => {
                 self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened, freed_ports: freed_ports.clone() })
             }
@@ -1022,6 +1027,17 @@ impl Run {
 
     /// G19: what the delivery brings in that holds a merge, each with the last step on the path that changed it, in
     /// the order the path changed them.
+    /// The files of how the project's tests are defined that the run changed with the person's leave, as the checks
+    /// that passed on the steps it takes judged them, each once, in order: what the merge and the claims name.
+    pub fn tests_changed(&self) -> Vec<String> {
+        let all: std::collections::BTreeSet<String> = self
+            .path()
+            .into_iter()
+            .flat_map(|i| self.steps[i].checks.iter().filter(|c| c.passed && !c.blocked).flat_map(|c| c.tests_changed.iter().cloned()))
+            .collect();
+        all.into_iter().collect()
+    }
+
     pub fn merge_holds(&self) -> Vec<(Changed, String)> {
         self.delivered_files().into_iter().filter(|(c, _)| crate::risk::holds_merge(self.manifest.target, c)).collect()
     }

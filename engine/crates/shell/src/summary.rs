@@ -48,6 +48,9 @@ pub struct StepLine {
     /// The checks that passed on what the step made, last time they judged it: each name, and whether it was hidden
     /// from the agent that made it.
     pub passed: Vec<(String, bool)>,
+    /// Of those, each that judged the tests as the agent left them, with the person's leave, and the files of their
+    /// definition the run changed (T1).
+    pub tests_changed: Vec<(String, Vec<String>)>,
     /// Who answered what the step asked, when it asked.
     pub asked: Option<String>,
 }
@@ -244,6 +247,11 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
                 attempts: attempts.get(d.name.as_str()).copied().unwrap_or(0),
                 rounds: s.round + 1,
                 passed: if done { s.checks.iter().filter(|c| c.passed && !c.blocked).map(|c| (c.check.clone(), c.kind == CheckKind::Hidden)).collect() } else { Vec::new() },
+                tests_changed: if done {
+                    s.checks.iter().filter(|c| c.passed && !c.blocked && !c.tests_changed.is_empty()).map(|c| (c.check.clone(), c.tests_changed.clone())).collect()
+                } else {
+                    Vec::new()
+                },
                 asked: if on_path { asked(&r, i) } else { None },
             }
         })
@@ -499,8 +507,12 @@ impl Summary {
             .iter()
             .flat_map(|s| {
                 s.passed.iter().map(move |(check, hidden)| {
-                    let how = if *hidden { ": a hidden check, which the agent that made it never saw" } else { "" };
-                    format!("- **{check}**, on what {} made{how}\n", s.name)
+                    let how = if *hidden { ": a hidden check, which the agent that made it never saw".to_string() } else { String::new() };
+                    let leave = match s.tests_changed.iter().find(|(c, _)| c == check) {
+                        Some((_, files)) => format!(": tests changed with the person's leave: {}", files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")),
+                        None => String::new(),
+                    };
+                    format!("- **{check}**, on what {} made{how}{leave}\n", s.name)
                 })
             })
             .collect();
@@ -820,8 +832,8 @@ mod tests {
         let judged = |passed: bool| Event::ChecksJudged {
             step: "change".into(), attempt: if passed { 2 } else { 1 }, fix: 0,
             checks: vec![
-                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: true, blocked: false, read: vec![], tree: None },
-                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed, blocked: false, read: vec![], tree: None },
+                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: true, blocked: false, read: vec![], tree: None, tests_changed: vec![] },
+                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed, blocked: false, read: vec![], tree: None, tests_changed: vec![] },
             ],
         };
         e.extend([
@@ -916,6 +928,23 @@ What Jaynes refused on the way, in its checks' own words, and what came of it:
         let not_proved = told.split("### Not proved").nth(1).and_then(|t| t.split("###").next()).expect("not proved");
         assert!(not_proved.contains("did not prove the role's promises"), "{told}");
         assert!(told.contains("agent not recorded, low risk, engine 0.1.0+older\n"), "{told}");
+    }
+
+    #[test]
+    fn asked_a_check_that_judged_the_tests_as_the_agent_left_them_says_which_with_the_person_s_leave() {
+        let mut e = whole();
+        for (_, ev) in &mut e {
+            if let Event::ChecksJudged { step, checks, attempt: 2, .. } = ev
+                && step == "change"
+            {
+                checks[0].tests_changed = vec!["tests/conftest.py".into(), "Makefile".into()];
+            }
+        }
+        let told = summarize(&e, &[], Promises::Unread).expect("summary").markdown();
+        assert!(told.contains("- **suite-passes**, on what change made: tests changed with the person's leave: `tests/conftest.py`, `Makefile`\n"), "{told}");
+        assert!(told.contains("- **cases-pass**, on what change made: a hidden check"), "the others as before: {told}");
+        let plain = summarize(&whole(), &[], Promises::Unread).expect("summary").markdown();
+        assert!(!plain.contains("person's leave"), "{plain}");
     }
 
     #[test]

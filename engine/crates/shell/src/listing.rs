@@ -2618,7 +2618,7 @@ mod blocked_tests {
         let mut r = super::tests::run("r1", "Filter the items by price");
         let started = |attempt: u32| Event::AttemptStarted { step: "change".into(), round: 0, attempt, fix: 0, session: None, deadline_seconds: 0, tokens_left: 0, key: None };
         let delivered = |attempt: u32| Event::AttemptDelivered { step: "change".into(), attempt, fix: 0, output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Usage::default(), session: None, tree: None, reply: None };
-        let check = |name: &str, kind: CheckKind, passed: bool| CheckRecord { check: name.into(), kind, passed, blocked: false, read: vec![], tree: None };
+        let check = |name: &str, kind: CheckKind, passed: bool| CheckRecord { check: name.into(), kind, passed, blocked: false, read: vec![], tree: None, tests_changed: vec![] };
         let judged = |attempt: u32, checks: Vec<CheckRecord>| Event::ChecksJudged { step: "change".into(), attempt, fix: 0, checks };
         let failed = |attempt: u32| Event::AttemptFailed { step: "change".into(), attempt, reasons: vec!["no".into()], usage: Usage::default(), spent: true };
         for e in [started(1), delivered(1), judged(1, vec![check("tests", CheckKind::Open, false), check("scope", CheckKind::Open, true)]), failed(1)] {

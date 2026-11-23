@@ -430,7 +430,7 @@ fn moves(node: &Node, named: &BTreeSet<String>) -> Vec<Move> {
                 out.push(mv(ended(AttemptOutcome::Fault { usage: Default::default(), reason: "the role crashed".into() }), format!("{step}'s role program crashes"), true));
             }
             Command::RunChecks { step, attempt, fix, checks, .. } => {
-                let all = |v: &dyn Fn(usize) -> CheckVerdict| checks.iter().enumerate().map(|(n, c)| CheckResult { check: c.clone(), verdict: v(n), tree: None }).collect::<Vec<_>>();
+                let all = |v: &dyn Fn(usize) -> CheckVerdict| checks.iter().enumerate().map(|(n, c)| CheckResult { check: c.clone(), verdict: v(n), tree: None, tests_changed: Vec::new() }).collect::<Vec<_>>();
                 let ended = |results| Input::ChecksEnded { step: step.clone(), attempt: *attempt, fix: *fix, results };
                 out.push(mv(ended(all(&|_| CheckVerdict::Pass)), format!("{step}'s checks pass"), false));
                 // A check fails the same way as any other of its kind (open: fixed in place; hidden: an attempt spent),

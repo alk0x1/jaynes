@@ -322,6 +322,12 @@ pub enum Event {
         attempt: u32,
         fix: u32,
     },
+    /// The person let the run change how the project's tests are defined, in these words: from here a check that
+    /// compares the suite with the one the run began with judges it as the agent left it.
+    TestsLeft {
+        words: String,
+        by: By,
+    },
     /// The person opened the project's checks to every local port (`any`, at `opened`), let its tests start their
     /// own test servers (`servers`), or closed them again, after the run's setup; the setup stays as it was, and from
     /// here the run's commands reach what this says; `freed_ports`: the ports Jaynes holds for test servers that the
@@ -457,6 +463,7 @@ impl Event {
             Event::ChecksUnjudged { .. } => "ChecksUnjudged",
             Event::PortsChosen { .. } => "PortsChosen",
             Event::Granted { .. } => "Granted",
+            Event::TestsLeft { .. } => "TestsLeft",
             Event::Halted { .. } => "Halted",
             Event::Resumed { .. } => "Resumed",
             Event::DeliveryAsked { .. } => "DeliveryAsked",
@@ -491,6 +498,10 @@ pub struct CheckRecord {
     /// The state of the project it judged, when it was given one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<String>,
+    /// It passed with the person's leave to change how the project's tests are defined: the files of that
+    /// definition the run changed, which it judged as the agent left them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests_changed: Vec<String>,
 }
 
 /// What an agent program says, in the first message of a turn, it runs with: what actually held, beside what Jaynes

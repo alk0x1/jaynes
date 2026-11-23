@@ -91,7 +91,7 @@ fn deliver(run: &mut Run, t: &AgentTurn, output: &str, reply: Option<&str>) -> V
         },
     });
     assert!(cmds.iter().any(|c| matches!(c, Command::RunChecks { .. })), "{cmds:?}");
-    feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: t.fix, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None }] }).0
+    feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: t.fix, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }] }).0
 }
 
 /// A run whose one step made one option and asks about it.
@@ -124,7 +124,7 @@ fn asked_with(executor: Executor) -> (Run, Question) {
             let item = Item { named: None, id: "go".into(), label: "Go".into(), digest: Digest("one-go".into()) };
             let outcome = AttemptOutcome::Delivered { output: Digest("one".into()), items: vec![item], changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None };
             feed(&mut run, Input::AttemptEnded { step: "look".into(), attempt, fix: 0, outcome });
-            let results = vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None }];
+            let results = vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }];
             feed(&mut run, Input::ChecksEnded { step: "look".into(), attempt, fix: 0, results }).0
         }
         _ => {
@@ -132,7 +132,7 @@ fn asked_with(executor: Executor) -> (Run, Question) {
             let item = Item { named: None, id: "go".into(), label: "Go".into(), digest: Digest("one-go".into()) };
             let outcome = AttemptOutcome::Delivered { output: Digest("one".into()), items: vec![item], changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None };
             feed(&mut run, Input::AttemptEnded { step: "look".into(), attempt, fix: 0, outcome });
-            let results = vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None }];
+            let results = vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }];
             feed(&mut run, Input::ChecksEnded { step: "look".into(), attempt, fix: 0, results }).0
         }
     };

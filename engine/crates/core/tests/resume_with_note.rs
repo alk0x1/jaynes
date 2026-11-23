@@ -90,7 +90,7 @@ fn deliver(run: &mut Run, t: &AgentTurn, session: &str, tokens: u64) -> Question
     let usage = Usage { seconds: 1, tokens, cached: 0, ..Default::default() };
     let output = Digest(format!("out-{}-{}", t.round, t.attempt));
     feed(run, Input::AttemptEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output, items: items(), changed: Vec::new(), usage, session: Some(session.into()), tree: None, reply: None } });
-    let (events, _) = feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None }] });
+    let (events, _) = feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }] });
     events.iter().find_map(|e| if let Event::QuestionOpened { question } = e { Some(question.clone()) } else { None }).expect("asked")
 }
 

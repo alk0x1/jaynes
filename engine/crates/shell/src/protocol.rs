@@ -117,6 +117,10 @@ pub enum Call {
         /// bound and reached as a step's own. Left out when none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         freed_ports: Vec<u16>,
+        /// The person's words that let the run change how the project's tests are defined (T1): a check that compares
+        /// the suite with the one the run began with judges it as the agent left it. Left out when they gave none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tests_leave: Option<String>,
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },
@@ -173,7 +177,13 @@ pub enum Body {
     NeedsInput { items: Vec<ShownItem>, offered: Vec<VerdictKind>, #[serde(default)] about: String },
     /// The step cannot be done, for a reason of the role's.
     Refused { reason: String },
-    Verdict { verdict: jaynes_core::CheckVerdict },
+    Verdict {
+        verdict: jaynes_core::CheckVerdict,
+        /// A check that passed with the person's leave to change how the project's tests are defined: the files of
+        /// that definition the run changed (T1).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tests_changed: Vec<String>,
+    },
     Items { items: Vec<ShownItem> },
     /// The role could not answer the call at all: the engine counts it as its own fault, never the agent's.
     Error { message: String },

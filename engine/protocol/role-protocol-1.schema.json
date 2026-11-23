@@ -685,6 +685,13 @@
               "const": "verdict",
               "type": "string"
             },
+            "tests_changed": {
+              "description": "A check that passed with the person's leave to change how the project's tests are defined: the files of\nthat definition the run changed (T1).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "verdict": {
               "$ref": "#/$defs/CheckVerdict"
             }
@@ -1004,6 +1011,13 @@
             "test_servers": {
               "description": "The person let this project's tests start their own test servers (`jaynes project test-servers`), as the\nrun's setup recorded it or the person chose since: macOS's box then lets its commands serve on a port the\nsystem picks, and reach the window of ports the system gives next. Left out when not.",
               "type": "boolean"
+            },
+            "tests_leave": {
+              "description": "The person's words that let the run change how the project's tests are defined (T1): a check that compares\nthe suite with the one the run began with judges it as the agent left it. Left out when they gave none.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

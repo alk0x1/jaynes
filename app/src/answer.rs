@@ -134,6 +134,11 @@ pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, body: Value) -> 
     }
     let home = jaynes_shell::home();
     let (run, _, answer) = jaynes_shell::page::answer_in(&home, &body, By::Agent { who: "the Jaynes app, before it is signed".into() })?;
+    // the person's leave to change how the tests are defined goes first, signed over their words (T1)
+    if let Some(words) = jaynes_shell::page::leave_in(&run, &body) {
+        let signed = key.sign(&jaynes_shell::person::leave_message(&run.id, &words));
+        jaynes_shell::person::submit_leave(&home, &engine_program(), &run, &words, &key.public(), &signed)?;
+    }
     let signature = key.sign(&jaynes_shell::person::message(&run.id, &answer));
     jaynes_shell::person::submit(&home, &engine_program(), &run, answer, &key.public(), &signature).map(|_| ())
 }

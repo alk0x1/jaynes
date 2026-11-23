@@ -72,7 +72,7 @@ fn asked(ask: &str, changed: Vec<Changed>) -> Option<String> {
         let input = match cmds.remove(0) {
             Command::Probe { step, .. } => Input::ProbeEnded { step, ok: true, reason: String::new() },
             Command::RunAgent(t) => Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: t.fix, outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed: changed.clone(), usage: Usage::default(), session: Some("s".into()), tree: None, reply: None } },
-            Command::RunChecks { step, attempt, fix, checks, .. } => Input::ChecksEnded { step, attempt, fix, results: checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None }).collect() },
+            Command::RunChecks { step, attempt, fix, checks, .. } => Input::ChecksEnded { step, attempt, fix, results: checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }).collect() },
             Command::Deliver { digest, .. } => Input::DeliveryEnded { digest, ok: true, reference: "jaynes/r".into(), merged: None },
             _ => continue,
         };

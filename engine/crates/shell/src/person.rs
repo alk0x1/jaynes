@@ -44,6 +44,12 @@ pub fn ask_message(run: &str, question: &str, item: Option<&str>, text: &str) ->
     .into_bytes()
 }
 
+/// What the signature of a leave to change how the project's tests are defined covers: the run and the person's
+/// words. Its "jaynes" is neither an answer's nor an ask's (T1).
+pub fn leave_message(run: &str, words: &str) -> Vec<u8> {
+    jaynes_core::digest::canonical(&json!({"jaynes": "leave-tests/1", "run": run, "words": words.trim()})).into_bytes()
+}
+
 /// What the signature of a move to Finished covers: the runs moved, in order. Its "jaynes" is neither an answer's
 /// nor an ask's.
 pub fn move_message(runs: &[String]) -> Vec<u8> {
@@ -82,6 +88,20 @@ pub fn check(home: &Path, run: &str, answer: &Answer, key: &str, signature: &str
 /// Whether `signature` (hex) is the paired key's over this ask.
 pub fn check_ask(home: &Path, run: &str, question: &str, item: Option<&str>, text: &str, key: &str, signature: &str) -> Result<(), String> {
     holds(home, &ask_message(run, question, item, text), "ask", key, signature)
+}
+
+/// Whether `signature` (hex) is the paired key's over this leave to change the tests.
+pub fn check_leave(home: &Path, run: &str, words: &str, key: &str, signature: &str) -> Result<(), String> {
+    holds(home, &leave_message(run, words), "leave", key, signature)
+}
+
+/// Lets the run change how the project's tests are defined, from the app as the person, if the signature holds over
+/// their words; the signature is kept beside it as "tests-leave", never under a question's id.
+pub fn submit_leave(home: &Path, exe: &Path, run: &Run, words: &str, key: &str, signature: &str) -> Result<&'static str, String> {
+    check_leave(home, &run.id, words, key, signature)?;
+    let sent = crate::drive::submit(home, exe, run, Input::LeaveTests { words: words.trim().to_string(), by: By::Person })?;
+    Store::open(&home.join("record.sqlite3"))?.put_proof(&run.id, "tests-leave", key, signature)?;
+    Ok(sent)
 }
 
 fn holds(home: &Path, message: &[u8], what: &str, key: &str, signature: &str) -> Result<(), String> {
@@ -229,6 +249,27 @@ mod tests {
         let answer_sig = hex(&me.sign(&message("r1", &a)).to_bytes());
         assert!(check_ask(&h, "r1", "q1", None, "", &public, &answer_sig).is_err());
         assert_ne!(ask_message("r1", "q1", None, ""), message("r1", &a));
+    }
+
+    #[test]
+    fn asked_a_leave_to_change_the_tests_signed_with_the_paired_key_holds_and_nothing_else_does() {
+        let h = home("leave");
+        let me = key(7);
+        let public = hex(me.verifying_key().as_bytes());
+        pair(&h, &public).expect("pair");
+        let words = "pode mudar o teste, usa uma porta livre";
+        let sig = hex(&me.sign(&leave_message("r1", words)).to_bytes());
+        assert_eq!(check_leave(&h, "r1", words, &public, &sig), Ok(()));
+        assert!(check_leave(&h, "r1", "pode mudar tudo", &public, &sig).is_err(), "other words");
+        assert!(check_leave(&h, "r2", words, &public, &sig).is_err(), "another run");
+        let other = key(9);
+        let their_sig = hex(&other.sign(&leave_message("r1", words)).to_bytes());
+        assert!(check_leave(&h, "r1", words, &hex(other.verifying_key().as_bytes()), &their_sig).is_err());
+        // an answer's or an ask's signature is never a leave's
+        let answer_sig = hex(&me.sign(&message("r1", &answer())).to_bytes());
+        assert!(check_leave(&h, "r1", words, &public, &answer_sig).is_err());
+        let ask_sig = hex(&me.sign(&ask_message("r1", "q1", None, words)).to_bytes());
+        assert!(check_leave(&h, "r1", words, &public, &ask_sig).is_err());
     }
 
     #[test]

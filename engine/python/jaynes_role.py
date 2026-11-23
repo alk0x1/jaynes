@@ -35,7 +35,10 @@ VERDICTS = ("keep", "change", "redo", "drop", "skip")
 
 @dataclass
 class Pass:
-    pass
+    """A check that passed. ``tests_changed``: the files of how the project's tests are defined that the run changed
+    with the person's leave, so the suite was judged as the agent left it; the merge and the claims name them."""
+
+    tests_changed: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -187,7 +190,7 @@ class Role:
             found = step.checks.get(str(request.get("check")))
             if found is None:
                 return {"reply": "error", "message": f"{step.name} has no check {request.get('check')}"}
-            return {"reply": "verdict", "verdict": _verdict(found[3](request))}
+            return _verdict_reply(found[3](request))
         if call == "items":
             output = request.get("output")
             listed = step.items(output) if step.items else [{"id": step.name, "label": f"what {step.name} made",
@@ -220,6 +223,15 @@ def _verdict(v: Any) -> dict[str, Any]:
     if isinstance(v, Blocked):
         return {"verdict": "blocked", "reason": v.reason}
     return {"verdict": "blocked", "reason": f"the check returned {type(v).__name__}, not Pass, Fail or Blocked"}
+
+
+def _verdict_reply(v: Any) -> dict[str, Any]:
+    """A check's reply: its verdict, and beside it the files of how the tests are defined that a check that passed
+    judged as the agent left them, with the person's leave."""
+    reply: dict[str, Any] = {"reply": "verdict", "verdict": _verdict(v)}
+    if isinstance(v, Pass) and v.tests_changed:
+        reply["tests_changed"] = list(v.tests_changed)
+    return reply
 
 
 def _result(r: Any) -> dict[str, Any]:

@@ -114,7 +114,7 @@ fn asked_checks(cmds: &[Command]) -> (Vec<String>, Vec<String>) {
 }
 
 fn pass(run: &mut Run, step: &str, attempt: u32, checks: &[String]) -> Vec<Command> {
-    let results = checks.iter().map(|c| CheckResult { check: c.clone(), verdict: CheckVerdict::Pass, tree: None }).collect();
+    let results = checks.iter().map(|c| CheckResult { check: c.clone(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }).collect();
     feed(run, Input::ChecksEnded { step: step.into(), attempt, fix: 0, results })
 }
 

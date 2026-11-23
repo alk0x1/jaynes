@@ -271,6 +271,11 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
     let dir = home.join("runs").join(&run.id);
     let lock = File::create(dir.join("lock")).map_err(|e| e.to_string())?;
     if lock.try_lock().is_ok() {
+        // a leave to change the tests starts nothing: recorded, for the checks the person's answer sets going (T1)
+        if matches!(input, Input::LeaveTests { .. }) {
+            store.decide(&run.id, &input)?;
+            return Ok("now");
+        }
         // An input that starts work is left to the process carried on here, which recovers first and then takes it:
         // decided here, the attempt it begins would be taken by that process for one Jaynes stopped. The rest is
         // recorded at once.
@@ -1557,7 +1562,9 @@ impl<'a> Driver<'a> {
                     reference.push_str(&format!("; not merged: {why}"));
                     return (ok, reference, landed);
                 }
-                let merged = copy.land(&head, &self.setup.run);
+                let tests = run.tests_changed();
+                let note = if tests.is_empty() { String::new() } else { format!("Tests changed with the person's leave: {}.", tests.join(", ")) };
+                let merged = copy.land(&head, &self.setup.run, &note);
                 // For the tests of recovery: die where a kill can fall, once the merge landed.
                 if std::env::var("JAYNES_DIE_AFTER_MERGE").is_ok() && matches!(merged, Ok(Some(_))) {
                     std::process::exit(9);
@@ -2197,7 +2204,7 @@ impl<'a> Driver<'a> {
     /// The checks of `step` on what its attempt made, measured as `output`; or, `on`, on that state of the copy
     /// (what the run delivers) in its place.
     fn checks(&self, run: &Run, step: &str, output: &Digest, given: &[Read], checks: &[String], on: Option<&str>) -> Vec<CheckResult> {
-        let blocked = |check: &str, reason: String| CheckResult { check: check.to_string(), verdict: CheckVerdict::Blocked { reason }, tree: None };
+        let blocked = |check: &str, reason: String| CheckResult { check: check.to_string(), verdict: CheckVerdict::Blocked { reason }, tree: None, tests_changed: Vec::new() };
         let (output, tree) = match self.store.get(output) {
             Ok(v) => (v["output"].clone(), on.map(str::to_string).or_else(|| v["tree"].as_str().map(str::to_string))),
             Err(e) => return checks.iter().map(|c| blocked(c, e.clone())).collect(),
@@ -2274,8 +2281,9 @@ impl<'a> Driver<'a> {
                     any_port: self.setup.any_port,
                     test_servers: self.setup.servers,
                     freed_ports: self.setup.freed_ports.clone(),
+                    tests_leave: run.tests_leave.clone(),
                 }) {
-                    Ok(Body::Verdict { verdict }) => CheckResult { check: name.clone(), verdict: told(name, verdict), tree: judged.clone() },
+                    Ok(Body::Verdict { verdict, tests_changed }) => CheckResult { check: name.clone(), verdict: told(name, verdict), tree: judged.clone(), tests_changed },
                     Ok(other) => CheckResult { tree: judged.clone(), ..blocked(name, format!("the role answered a check with {other:?}")) },
                     Err(e) => CheckResult { tree: judged.clone(), ..blocked(name, e) },
                 }
@@ -3035,7 +3043,7 @@ mod tests {
         fn deliver(&self, _changes: &[(String, String)], _shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String> {
             unreachable!()
         }
-        fn land(&self, _head: &str, _run: &str) -> Result<Option<String>, String> {
+        fn land(&self, _head: &str, _run: &str, _note: &str) -> Result<Option<String>, String> {
             unreachable!()
         }
         fn undo(&self, _landed: &[String], _run: &str) -> Result<String, String> {

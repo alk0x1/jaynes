@@ -74,9 +74,12 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
          - Their words go with a change as they wrote them: you write no note and no summary of them.\n\
          - If they ask again for something they asked in an earlier round, quote it in repeats.\n\
          - If you cannot tell what they mean, still give your best reading, and ask one short question in unsure, in \
-         their language.\n\n\
+         their language.\n\
+         - tests is true only when their words plainly let the run change how the project's tests are defined (the \
+         test setup, its fixtures, the suite's configuration), such as \"you may change the test\": then the checks \
+         judge the suite as the agent leaves it. Never for a guess, and never for words that only ask for a fix.\n\n\
          Answer with this JSON only:\n\
-         {{\"verdicts\": {{\"<id>\": \"keep|change|drop\"}}, \"back\": {{\"<id>\": \"as it was|changed\"}},\"unsure\": \"\", \"repeats\": []}}\n",
+         {{\"verdicts\": {{\"<id>\": \"keep|change|drop\"}}, \"back\": {{\"<id>\": \"as it was|changed\"}},\"unsure\": \"\", \"repeats\": [], \"tests\": false}}\n",
         offered.join(", ")
     ));
     p
@@ -136,14 +139,19 @@ pub fn proposal(q: &Question, read: &Value, text: &str) -> Value {
         }
     }
     let repeats: Vec<Value> = read["repeats"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).map(|r| json!(r)).collect();
-    json!({
+    let mut out = json!({
         "verdicts": verdicts,
         "notes": notes,
         "back": back,
         "context": words,
         "unsure": read["unsure"].as_str().unwrap_or("").trim(),
         "repeats": repeats,
-    })
+    });
+    // the leave to change how the tests are defined goes in the person's words, read so only by a plain true (T1)
+    if read["tests"] == json!(true) && !words.is_empty() {
+        out["tests_leave"] = json!(words);
+    }
+    out
 }
 
 /// Ask the run's model to read the words: Claude Code with no tool, no project and no settings, one answer in JSON.
@@ -306,6 +314,25 @@ mod tests {
         assert!(prompt(&run, &one, &|_| String::new(), words, None).contains(sentence));
         // two or more: nothing changes
         assert!(!prompt(&run, &question(), &|_| String::new(), words, None).contains("With one option"));
+    }
+
+    // T1, the real-user's estoque: "pode mudar o teste, usa uma porta livre" lets the run change how the tests are
+    // defined. The reader only says whether the words give that leave; what goes is the person's words, never its own.
+    #[test]
+    fn asked_words_that_let_the_run_change_the_tests_are_read_as_a_leave_and_go_as_the_person_wrote_them() {
+        let words = "pode mudar o teste, usa uma porta livre pro banco falso";
+        let p = proposal(&question(), &json!({"verdicts": {"Prumo": "keep"}, "tests": true}), words);
+        assert_eq!(p["tests_leave"], words);
+        for read in [json!({"tests": false}), json!({}), json!({"tests": "yes"})] {
+            assert!(proposal(&question(), &read, words).get("tests_leave").is_none(), "{read}");
+        }
+        assert!(proposal(&question(), &json!({"tests": true}), "  ").get("tests_leave").is_none(), "no words, no leave");
+        let manifest: jaynes_core::manifest::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "pick", "executor": "agent"}]})).expect("manifest");
+        let start = jaynes_core::Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let run = Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run");
+        let asked = prompt(&run, &question(), &|_| String::new(), words, None);
+        assert!(asked.contains("\"tests\": false"), "{asked}");
+        assert!(asked.contains("how the project's tests are defined"), "{asked}");
     }
 
     #[test]

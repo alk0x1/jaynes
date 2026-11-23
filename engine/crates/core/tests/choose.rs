@@ -104,7 +104,7 @@ fn deliver(run: &mut Run, t: &AgentTurn, output: &str, items: Vec<Item>) -> (Vec
         outcome: AttemptOutcome::Delivered { output: Digest(output.into()), items, changed: Vec::new(), usage: Usage::default(), session: Some("s".into()), tree: None, reply: None },
     });
     assert!(cmds.iter().any(|c| matches!(c, Command::RunChecks { .. })), "{cmds:?}");
-    feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None }] })
+    feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, results: vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }] })
 }
 
 /// A run whose directions step made three options and asks which goes on.

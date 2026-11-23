@@ -567,6 +567,15 @@ fn reply_json(stream: &TcpStream, until: std::time::Instant, status: &str, said:
     send(stream, until, &[head.as_bytes(), body.as_bytes()])
 }
 
+/// What a leave to change how the project's tests are defined does, in Jaynes's words, before it goes (G11, T1).
+pub const LEAVE_SAYS: &str = "You let this run change how the project's tests are defined: from here its checks run the suite as the agent leaves it, and the merge and the claims name the files changed.";
+
+/// The leave to change the tests a body carries, when the run has none yet: the person's words.
+pub fn leave_in(run: &Run, body: &Value) -> Option<String> {
+    let words = body["tests_leave"].as_str().map(str::trim).filter(|w| !w.is_empty())?;
+    run.tests_leave.is_none().then(|| words.to_string())
+}
+
 /// The person's words read into the answer they mean, with what Jaynes says it will do: a proposal, never an answer.
 pub fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Value, String> {
     let run_id = body["run"].as_str().ok_or("which run?")?;
@@ -592,14 +601,25 @@ pub fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Val
         sent[k] = body[k].clone();
     }
     let (run, q, answer) = answer_in(home, &sent, by)?;
-    let fx = drive::effects(home, &run, &q.question, &answer)?;
+    let mut fx = drive::effects(home, &run, &q.question, &answer)?;
+    if sent.get("tests_leave").is_some() {
+        if run.tests_leave.is_some() {
+            sent.as_object_mut().map(|m| m.remove("tests_leave"));
+        } else {
+            fx.sentences.push(LEAVE_SAYS.to_string());
+        }
+    }
     let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
     Ok(json!({"ok": refused.is_none(), "body": sent, "sentences": fx.sentences, "refused": refused, "unsure": proposal["unsure"], "repeats": proposal["repeats"]}))
 }
 
 impl Page {
     fn answer(&self, body: &Value, by: By) -> Result<Value, String> {
-        let (run, _, answer) = self.answer_from(body, by)?;
+        let (run, _, answer) = self.answer_from(body, by.clone())?;
+        // the leave first, so the checks the answer sets going judge with it; refused, nothing goes
+        if let Some(words) = leave_in(&run, body) {
+            self.submit(&run, Input::LeaveTests { words, by })?;
+        }
         self.submit(&run, Input::Answer { answer })
     }
 

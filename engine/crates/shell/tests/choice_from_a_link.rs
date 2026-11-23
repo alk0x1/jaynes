@@ -74,7 +74,7 @@ fn choosing(home: &Path) -> String {
                 Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items, changed: vec![], usage: Default::default(), session: None, tree: None, reply: None } }
             }
             Do::RunChecks { step, attempt, fix, checks, .. } => {
-                Input::ChecksEnded { step, attempt, fix, results: checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None }).collect() }
+                Input::ChecksEnded { step, attempt, fix, results: checks.into_iter().map(|check| CheckResult { check, verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }).collect() }
             }
             _ => continue,
         };

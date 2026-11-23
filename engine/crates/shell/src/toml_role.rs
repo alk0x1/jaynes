@@ -2165,7 +2165,7 @@ impl TomlRole {
         self.cases_told(&|script, case| {
             let ask = json!({"kind": "case", "use": "script", "with": {"path": script.display().to_string(), "role": self.dir.display().to_string()}, "case": case.input});
             match menu(library, &self.dir, ask) {
-                Body::Verdict { verdict } => verdict,
+                Body::Verdict { verdict, .. } => verdict,
                 Body::Error { message } => jaynes_core::CheckVerdict::Blocked { reason: message },
                 other => jaynes_core::CheckVerdict::Blocked { reason: format!("the menu answered a case with {other:?}") },
             }
@@ -2278,9 +2278,9 @@ impl TomlRole {
                     _ => json!({"use": "suite"}),
                 };
                 match menu(library, &self.dir, json!({"kind": "requires", "with": with, "project": project.display().to_string()})) {
-                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Pass } => Need::Met,
-                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Fail { reasons, .. } } => Need::Unmet(reasons.join("; ")),
-                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Blocked { reason } } | Body::Error { message: reason } => Need::Unknown(reason),
+                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Pass, .. } => Need::Met,
+                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Fail { reasons, .. }, .. } => Need::Unmet(reasons.join("; ")),
+                    Body::Verdict { verdict: jaynes_core::CheckVerdict::Blocked { reason }, .. } | Body::Error { message: reason } => Need::Unknown(reason),
                     other => Need::Unknown(format!("the menu answered with {other:?}")),
                 }
             }
@@ -2739,7 +2739,7 @@ impl TomlRole {
                     }
                 }
             },
-            Call::Check { step, check, request, output, given, project, source, start, any_port, test_servers, freed_ports } => match step_of(&step) {
+            Call::Check { step, check, request, output, given, project, source, start, any_port, test_servers, freed_ports, tests_leave } => match step_of(&step) {
                 Err(b) => b,
                 Ok((_, x)) => {
                     // where the project stood when the run began, as the engine gives it: a check of the menu compares
@@ -2747,7 +2747,7 @@ impl TomlRole {
                     let start = start.map(|s| json!({"git": s.git, "commit": s.commit}));
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
                                       "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port,
-                                      "test_servers": test_servers, "freed_ports": freed_ports, "start": start});
+                                      "test_servers": test_servers, "freed_ports": freed_ports, "start": start, "tests_leave": tests_leave});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),

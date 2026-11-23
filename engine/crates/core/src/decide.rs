@@ -270,6 +270,21 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             }
             c.emit(Event::PortsChosen { any: now.any, servers: now.servers, opened: now.opened, freed_ports: now.freed_ports });
         }
+        Input::LeaveTests { words, by } => {
+            if !by.person() {
+                return refuse("only you let a run change how the project's tests are defined");
+            }
+            if c.run.finished() {
+                return refuse("the run is finished");
+            }
+            if words.trim().is_empty() {
+                return refuse("a leave to change the tests is given in your words");
+            }
+            if c.run.tests_leave.is_some() {
+                return refuse("you already let this run change how the project's tests are defined");
+            }
+            c.emit(Event::TestsLeft { words: words.trim().to_string(), by: by.clone() });
+        }
         Input::DeliveryEnded { digest, ok, reference, merged } => {
             if c.run.delivering.as_ref() != Some(digest) {
                 return refuse("no such delivery is under way");
@@ -1276,6 +1291,7 @@ impl Ctx {
                     blocked: matches!(verdict, CheckVerdict::Blocked { .. }),
                     read,
                     tree: result.tree.clone(),
+                    tests_changed: if *verdict == CheckVerdict::Pass { result.tests_changed.clone() } else { Vec::new() },
                 })
             })
             .collect();
@@ -2010,6 +2026,10 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         } else {
             format!("Nothing lands on your branch: the change stays on the branch jaynes/{}, where you can look at it.", run.id)
         });
+        let tests = run.tests_changed();
+        if !tests.is_empty() {
+            sentences.push(format!("Tests changed with your leave: {}.", tests.join(", ")));
+        }
         return Effects { sentences, reruns: Vec::new(), may_rerun: Vec::new() };
     }
     let Some(i) = run.manifest.index(&q.step) else { return Effects::default() };

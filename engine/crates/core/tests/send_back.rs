@@ -74,7 +74,7 @@ fn fails(run: &mut Run, t: &AgentTurn) -> Vec<Command> {
     feed(run, Input::AttemptEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output, items: Vec::new(), changed: Vec::new(), usage, session: None, tree: None, reply: None } });
     let reasons = vec!["A check you cannot see found that this does not hold: greet says hi with the name".to_string()];
     let failed = CheckVerdict::Fail { reasons, detail: String::new(), cases: Vec::new() };
-    feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, results: vec![CheckResult { check: "proof".into(), verdict: failed, tree: None }] }).1
+    feed(run, Input::ChecksEnded { step: t.step.clone(), attempt: t.attempt, fix: 0, results: vec![CheckResult { check: "proof".into(), verdict: failed, tree: None, tests_changed: Vec::new() }] }).1
 }
 
 /// A run blocked at fix: its three attempts spent at the hidden case.
