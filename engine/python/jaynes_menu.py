@@ -884,35 +884,46 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
 # where a shell starts a command: at the start, after ; & | ( { ` ! or $(, and past what may stand before the
 # command itself (variables set for it, env, command, exec, sudo, time, nohup, xargs)
 _AT = (r"(?:^|[;&|({`\n!]|\$\()\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
-       r"(?:(?:env(?:\s+-\S+)*(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S*)*|command|exec|sudo|time|nohup|xargs(?:\s+-\S+)*)\s+)?")
+       r"(?:(?:env(?:\s+-\S+)*(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S*)*|command|exec|sudo|time|nohup|xargs(?:\s+-\S+)*"
+       r"|nice(?:\s+-\S+)*|ionice(?:\s+-\S+)*|stdbuf(?:\s+-\S+)*|timeout(?:\s+-\S+)*\s+\S+|-exec(?:dir)?|-ok)\s+)*")
 _END = r"(?=$|[\s;&|)`'\"])"
-# git run as a command, by its name or a whole path to it
-_GIT = re.compile(_AT + r"(?:\S*/)?git" + _END)
+# git as a word anywhere, as a command, in quotes, under another program or inside code: a case that names git is
+# refused even where it is not plainly run, but for the words a search looks for (grep -q git README.md), since a case refused costs its author one rewrite, and one taken that
+# needs git costs the fix every attempt (the real-user's run, 22/11). Never .git, .github, .gitignore nor digit.
+_GIT = re.compile(r"(?<![\w.])git(?!\w)")
+# the words a search is given, up to the end of its command, unless something in them runs ($ or `)
+_SEARCHED = re.compile(r"\b(?:grep|egrep|fgrep|rg|ag)\b[^;&|)\n`$]*(?=$|[;&|)\n])")
 # git's own files: the folder .git, never .github nor .gitignore
 _DOT_GIT = re.compile(r"(?:^|[\s'\"=:(<>])(?:\./)?\.git(?=/|$|[\s;&|)'\"<>])")
 # a command named through a variable or built by eval, so what it runs is not written in the case
 _UNSAID = re.compile(_AT + r"(?:[\"']?\$\{?[A-Za-z_]|eval" + _END + ")")
 # what reaches the internet: a program that only talks to hosts, a package manager fetching, code that opens a
 # connection from python -c or node -e
-_NET = re.compile(_AT + r"(?:\S*/)?(?:(curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|npx)" + _END
+_NET_PROGRAMS = r"curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|npx|ping|ping6|dig|nslookup"
+_NET = re.compile(_AT + r"(?:\S*/)?(?:(" + _NET_PROGRAMS + ")" + _END
                   + r"|(pip[0-9.]*\s+install|python[0-9.]*\s+-m\s+pip\s+install|uv\s+(?:pip\s+install|add|sync)"
                   r"|npm\s+(?:install|i|ci|add)|pnpm\s+(?:install|i|add)|yarn\s+(?:install|add)|gem\s+install"
                   r"|bundle\s+install|cargo\s+(?:install|fetch|add)|go\s+(?:get|install|mod\s+download)"
                   r"|poetry\s+install|brew\s+install|apt(?:-get)?\s+install)" + _END + ")")
-_CODE_RUN = re.compile(r"\b(?:python[0-9.]*|node)(?:\s+-\S+)*\s+-[ce]\b")
-_CODE_NET = re.compile(r"\b(urllib|urlopen|http\.client|requests\.|socket\.|httpx|aiohttp|fetch\(|https?\.get)")
+# a host reached by a shell's own /dev/tcp, or a copy from or to a host:path
+_NET_SHELL = re.compile(r"(/dev/(?:tcp|udp)/|\b(?:rsync|scp)\s+(?:-\S+\s+)*(?:\S+\s+)*?[\w.@-]+:(?!/))")
+_CODE_RUN = re.compile(r"\b(?:python[0-9.]*|node|perl|ruby)(?:\s+-\S+)*\s+-[ce]\b")
+_CODE_NET = re.compile(r"\b(urllib|urlopen|http\.client|requests\.|socket\.|httpx|aiohttp|fetch\(|https?\.get"
+                       r"|IO::Socket|LWP|Net::|open-uri|\b(?:" + _NET_PROGRAMS + r")\b)")
 # what builds a copy of the project, or a stand-in of its code, outside it
 _OWN_COPY = re.compile(r"(\bmktemp\b|(?<![\w.~])/(?:private/)?(?:var/)?tmp\b|\$\{?TMPDIR\b"
                        r"|\b(?:PYTHONPATH|NODE_PATH|RUBYLIB|PERL5LIB|CLASSPATH)=)")
 # what a shell is told to run with -c, quoted
-_SHELL_C = re.compile(r"\b(?:sh|bash|zsh|dash)\s+-c\s+(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\")")
+_SHELL_C = re.compile(r"\b(?:sh|bash|zsh|dash)\s+-[a-z]*c\s+(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\")")
 
 
 def _not_judged_there(command: str) -> str:
     """Why a case's command cannot be judged on a copy of the project's files with no git history and no internet,
-    read from its words before it runs: empty when nothing in them says so. What a shell runs with -c is read too."""
-    if _GIT.search(command):
-        return "runs git"
+    read from its words before it runs: empty when nothing in them says so. What a shell runs with -c is read too,
+    and the words are read as the shell joins them: a backslash before a letter and an empty pair of quotes join."""
+    command = re.sub(r"''|\"\"|\\(?=[A-Za-z])", "", command)
+    if _GIT.search(_SEARCHED.sub("", command)):
+        return "names git, and the copy has no git history"
     if _DOT_GIT.search(command):
         return "reads git's own files (.git), which the copy has not"
     if _UNSAID.search(command):
@@ -920,6 +931,9 @@ def _not_judged_there(command: str) -> str:
     net = _NET.search(command)
     if net:
         return f"reaches the internet ({(net.group(1) or net.group(2)).split()[0]})"
+    shell = _NET_SHELL.search(command)
+    if shell:
+        return f"reaches the internet ({'/dev/tcp' if shell.group(1).startswith('/dev/') else shell.group(1).split()[0]})"
     if _CODE_RUN.search(command):
         code = _CODE_NET.search(command)
         if code:
