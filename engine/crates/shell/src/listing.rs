@@ -101,6 +101,9 @@ pub struct Entry {
     pub at: u64,
     /// Whether what it delivered was merged into the person's branch.
     pub merged: bool,
+    /// Whether the person's branch has every change the run delivered already, so there is nothing to merge
+    /// (`already_in`).
+    pub already: bool,
     /// The branch the run merges into, the one checked out when it started; empty when unknown.
     pub into: String,
     /// The version of the engine that started it, when that engine is no longer on this Mac and the run cannot go
@@ -145,7 +148,8 @@ pub fn entry_of(home: &Path, run: Run) -> Entry {
     let moved = gone.as_ref().and_then(|_| crate::moved::when(&crate::moved::read(home).unwrap_or_default(), &run.id));
     let stopped = stopped_by_jaynes(&run) || crate::drive::left_running(home, &run);
     let waiting = crate::port_wait::live(&home.join("runs").join(&run.id));
-    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into, gone, moved, stopped, waiting }
+    let already = !merged && already_in(home, &run);
+    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, already, into, gone, moved, stopped, waiting }
 }
 
 /// An engine's version, without the build after its "+": "0.2.3" of "0.2.3+5a1c0de".
@@ -274,7 +278,7 @@ pub fn not_landed(reference: &str) -> Option<NotLanded> {
 /// it (nor undo its merge); None for one merged, undone, that delivered nothing or a change of nothing, or that has no
 /// branch. Whether Merge is taken now the engine says, asked as the person would ask it, without recording anything.
 pub fn unmerged(home: &Path, r: &Run) -> Option<Unmerged> {
-    if r.delivered.is_none() || r.merged || r.undone || r.delivered_files().is_empty() {
+    if r.delivered.is_none() || r.merged || r.undone || r.delivered_files().is_empty() || already_in(home, r) {
         return None;
     }
     let store = Store::open(&home.join("record.sqlite3")).ok()?;
@@ -290,6 +294,38 @@ pub fn unmerged(home: &Path, r: &Run) -> Option<Unmerged> {
         events[asked..].iter().rev().find_map(|e| if let jaynes_core::Event::Delivered { reference, .. } = e { Some(reference.clone()) } else { None })
     });
     Some(Unmerged { branch, into: if into.is_empty() { "your branch".into() } else { into }, project, refused, failed: failed.as_deref().and_then(not_landed) })
+}
+
+/// Whether the person's branch has every change run `r` delivered already, so that merging it changes nothing: the
+/// engine's merge found nothing new, or, before any merge, git says the branch brings nothing (project::nothing_to_merge).
+/// Such a run says so, and offers neither Merge nor Undo (the design-lead, T7, 23/11).
+pub fn already_in(home: &Path, r: &Run) -> bool {
+    if r.delivered.is_none() || r.undone || r.delivered_files().is_empty() {
+        return false;
+    }
+    let Ok(store) = Store::open(&home.join("record.sqlite3")) else { return false };
+    let found_nothing = store.events(&r.id).ok().and_then(|events| {
+        events.iter().rev().find_map(|e| if let jaynes_core::Event::Delivered { reference, .. } = e { Some(reference.ends_with(NOTHING_NEW)) } else { None })
+    });
+    if found_nothing == Some(true) {
+        return true;
+    }
+    if r.merged {
+        return false;
+    }
+    let setup = store.setup(&r.id).unwrap_or_default();
+    let (Some(branch), Some(project)) = (setup["branch"].as_str().filter(|b| !b.is_empty()), setup["project"].as_str().filter(|p| !p.is_empty())) else { return false };
+    let into = into_of(home, &r.id);
+    !into.is_empty() && crate::project::nothing_to_merge(Path::new(project), &into, branch)
+}
+
+/// What a delivery says when the person's branch had every change already (drive.rs's deliver).
+pub const NOTHING_NEW: &str = "; nothing new to merge";
+
+/// In place of the branch's line when there is nothing to merge: "Nothing to merge: “main” in horta already has this
+/// change." In text, never amber: nothing went wrong.
+pub fn nothing_to_merge_said(into: &str, project: &str) -> String {
+    format!("Nothing to merge: “{into}” in {project} already has this change.")
 }
 
 /// `place` of a run of the record in `home`, its branch read from its setup.
@@ -645,9 +681,11 @@ fn standing(e: &Entry) -> (Mark, String) {
     match &r.phase {
         Phase::Finished { outcome: Outcome::Abandoned } => (Mark::Abandoned, "abandoned".into()),
         Phase::Finished { outcome: Outcome::Delivered } if r.undone => (Mark::Undone, "reverted by you".into()),
-        Phase::Finished { outcome: Outcome::Delivered } if e.merged || r.merged => (Mark::Merged, "merged".into()),
+        Phase::Finished { outcome: Outcome::Delivered } if e.merged => (Mark::Merged, "merged".into()),
+        // the person's branch has it already: nothing to merge, nothing merged (the design-lead, T7)
+        Phase::Finished { outcome: Outcome::Delivered } if e.already => (Mark::Delivered, "delivered".into()),
         // a change on the run's branch, not in the person's folder (T7, the design-lead's words, item 5)
-        Phase::Finished { outcome: Outcome::Delivered } if !r.delivered_files().is_empty() => (Mark::Delivered, ON_A_BRANCH.into()),
+        Phase::Finished { outcome: Outcome::Delivered } if !r.merged && !r.delivered_files().is_empty() => (Mark::Delivered, ON_A_BRANCH.into()),
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
         _ if r.set_aside.is_some() => (Mark::SetAside, format!("set aside by the agent that started it · {}", where_in(r))),
         _ if e.stopped => (Mark::Halted, format!("{}, {}", where_in(r), crate::drive::JAYNES_STOPPED_SAID)),
@@ -2797,7 +2835,7 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new(), gone: None, moved: None, stopped: false, waiting: None }
+        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, already: false, into: String::new(), gone: None, moved: None, stopped: false, waiting: None }
     }
 
     // The engineer lead and the tech-lead, 22/11 (row 28): a run whose engine left the Mac never waits for the person
@@ -3304,6 +3342,8 @@ mod tests {
         let changed: jaynes_core::risk::Changed = serde_json::from_value(serde_json::json!({"what": "greeting.txt", "size": 2})).expect("changed");
         branch.steps[0].done = Some(jaynes_core::run::Done { round: 1, output: jaynes_core::Digest("o".into()), items: vec![], reads: branch.reads(0), changed: vec![changed] });
         cases.push(("delivered", entry(branch.clone(), "/p", 1), "on a branch · not merged yet"));
+        branch.id = "already-there".into();
+        cases.push(("delivered", Entry { already: true, ..entry(branch.clone(), "/p", 1) }, "delivered"));
         branch.id = "on-branch-merged".into();
         cases.push(("merged", Entry { merged: true, ..entry(branch, "/p", 1) }, "merged"));
         r.id = "merged".into();

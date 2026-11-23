@@ -50,6 +50,16 @@ fn run(mut c: Command, args: &[&str]) -> Result<String, String> {
 const UNBORN: &str = "jaynes-unborn";
 
 /// git in the person's own repository, as they set it up.
+/// Whether merging `branch` into `into`, in the person's repository `source`, would change nothing of `into`: it has
+/// every change the branch brings already. Asked of git without a merge and without touching the folder (merge-tree);
+/// a conflict, a branch that is not there or a git that cannot tell is "something to merge".
+pub fn nothing_to_merge(source: &Path, into: &str, branch: &str) -> bool {
+    let (into_ref, branch_ref) = (format!("refs/heads/{into}"), format!("refs/heads/{branch}"));
+    let Ok(tree) = git(source, &["merge-tree", "--write-tree", "--no-messages", &into_ref, &branch_ref]) else { return false };
+    let Ok(has) = git(source, &["rev-parse", &format!("{into_ref}^{{tree}}")]) else { return false };
+    tree.lines().next().is_some_and(|t| t == has)
+}
+
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut c = git_command();
     c.arg("-C").arg(dir);
@@ -1110,6 +1120,40 @@ mod git_tests {
         // nothing only shown: the delivery is the steps' change, as before
         let (_, same) = copy.deliver_without(&[("change".to_string(), c.clone())], &|_| false).expect("delivered");
         assert_eq!(same, copy.head().expect("head"));
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    // The design-lead, T7, 23/11: a branch that brings what the person's branch already has said "Merged" with an
+    // Undo of nothing. Whether merging would change anything is asked of git before any merge, without touching
+    // the folder: merge-tree's result against the branch's own tree.
+    #[test]
+    fn a_branch_that_brings_what_the_branch_has_has_nothing_to_merge() {
+        let base = std::env::temp_dir().join(format!("jaynes-nothing-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        let on = |name: &str, text: &str| {
+            git(&source, &["checkout", "-q", "-b", name, "main"]).expect("branch");
+            std::fs::write(source.join("a.txt"), text).expect("write");
+            git(&source, &["commit", "-q", "-am", name]).expect("commit");
+            git(&source, &["checkout", "-q", "main"]).expect("back");
+        };
+        on("jaynes/same", "b\n");
+        on("jaynes/new", "c\n");
+        // main gets the same change by another commit, as when an earlier run merged it
+        std::fs::write(source.join("a.txt"), "b\n").expect("write");
+        git(&source, &["commit", "-q", "-am", "the same change"]).expect("commit");
+        on("jaynes/conflict", "d\n");
+        git(&source, &["reset", "-q", "--hard", "HEAD"]).expect("clean");
+        assert!(nothing_to_merge(&source, "main", "jaynes/same"), "main has it already");
+        assert!(!nothing_to_merge(&source, "main", "jaynes/new"), "c over b conflicts: not nothing");
+        assert!(!nothing_to_merge(&source, "main", "jaynes/missing"), "a branch that is not there: not nothing");
+        git(&source, &["checkout", "-q", "-b", "jaynes/more", "main"]).expect("branch");
+        std::fs::write(source.join("b.txt"), "more\n").expect("write");
+        git(&source, &["add", "-A"]).expect("add");
+        git(&source, &["commit", "-q", "-m", "more"]).expect("commit");
+        git(&source, &["checkout", "-q", "main"]).expect("back");
+        assert!(!nothing_to_merge(&source, "main", "jaynes/more"), "a new file is something");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "b\n", "the folder untouched");
         let _gone = std::fs::remove_dir_all(&base);
     }
 
