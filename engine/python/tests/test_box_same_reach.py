@@ -50,6 +50,7 @@ class TheAgentReachesWhatTheCheckReaches(unittest.TestCase):
         self.path = ["/usr/bin", "/bin"]  # the start environment's PATH, toolchains first (added below)
         self.reads: list[Path] = []  # what the engine names for the agent's box to read (copy.reads, toolchains)
         self.env: dict[str, str] = {}
+        self.outer: dict[str, str] = {}  # what the person's environment also holds, for the agent's shell and the engine
 
     def toolchain(self, kind: str, version: str, root: Path) -> Path:
         """``root`` installed as a version manager does under the hidden home: a folder of its version, reached by a
@@ -65,11 +66,12 @@ class TheAgentReachesWhatTheCheckReaches(unittest.TestCase):
 
     def copy(self) -> Path:
         """The run's copy of the person's project, a git clone sharing the run's objects as the engine lays it out
-        (objects/info/alternates relative, to ../../../project.git/objects)."""
+        (objects/info/alternates relative, to ../../../project.git/objects). The branch is named: the git of the
+        Command Line Tools names it main in its own gitconfig, the git of GitHub's macOS runner master."""
         bare = self.run_dir / "project.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", "--bare", str(bare)], check=True)
         g = ["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-C", str(self.person)]
-        subprocess.run(["git", "init", "-q", str(self.person)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.person)], check=True)
         (self.person / ".gitignore").write_text(".venv/\nnode_modules/\n")
         subprocess.run([*g, "add", "-A"], check=True)
         subprocess.run([*g, "commit", "-qm", "start"], check=True)
@@ -97,15 +99,16 @@ class TheAgentReachesWhatTheCheckReaches(unittest.TestCase):
         at.write_text(json.dumps(spec))
         env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "TMPDIR": str(scratch),
                "GOCACHE": str(scratch / "go-cache"), "GOPATH": str(scratch / "go-path"),
-               "npm_config_cache": str(scratch / "npm-cache"), "GOTOOLCHAIN": "local", "GOTELEMETRY": "off"}
+               "npm_config_cache": str(scratch / "npm-cache"), "GOTOOLCHAIN": "local", "GOTELEMETRY": "off",
+               **self.outer}
         done = subprocess.run([sys.executable, str(BOX_PY), "agent-run", str(at), "--", command],
                               capture_output=True, text=True, timeout=120, cwd=work, env=env)
         return done.returncode, done.stdout + done.stderr
 
     def check_run(self, work: Path, command: str) -> tuple[int, str]:
         """The same command as a check runs it: from the engine, whose environment is the run's start environment."""
-        was = {k: os.environ.get(k) for k in ("PATH", *self.env)}
-        os.environ.update({"PATH": os.pathsep.join(self.path), **self.env})
+        was = {k: os.environ.get(k) for k in ("PATH", *self.env, *self.outer)}
+        os.environ.update({"PATH": os.pathsep.join(self.path), **self.env, **self.outer})
         try:
             ran = box.run(work, command, timeout=120)
         finally:
@@ -169,6 +172,30 @@ class TheAgentReachesWhatTheCheckReaches(unittest.TestCase):
         self.assertEqual(code, 0, said)
         self.assertIn("a.txt", said)
         self.assertNotIn("unable to normalize", said)
+
+    def test_the_git_that_comes_with_the_mac_works_in_the_agent_s_box_and_the_check_s(self):
+        """/usr/bin/git, the git of a Mac without Homebrew, is a shim that finds the real one through xcrun, and
+        xcrun keeps a cache in the user's temporary folder (getconf DARWIN_USER_TEMP_DIR), whatever TMPDIR says:
+        on GitHub's macOS runner, where it had none yet, the agent's box refused it "couldn't create cache file
+        '/var/folders/.../T/xcrun_db-...' (errno=Operation not permitted)" (CI 45110746893). The tech-lead's rule
+        (23/11): that git works in the agent's box and the check's, alike."""
+        git = Path("/usr/bin/git")
+        found = subprocess.run(["/usr/bin/xcrun", "--find", "git"], capture_output=True, text=True) \
+            if git.exists() and Path("/usr/bin/xcrun").exists() else None
+        if found is None or found.returncode != 0:
+            self.skipTest("this Mac has no developer tools for /usr/bin/git")
+        # a Mac whose xcrun has no cache yet, as the runner: xcrun's own variable names a new cache outside the
+        # box, so this Mac's real cache is never read nor written
+        outside = self.tmp / "user-temp"
+        outside.mkdir()
+        self.outer["xcrun_db"] = str(outside / "xcrun_db")
+        (self.person / "a.txt").write_text("a\n")
+        work = self.copy()
+        command = ("/usr/bin/git init -q . && /usr/bin/git -c user.name=t -c user.email=t@t.invalid "
+                   "commit -q --allow-empty -m it 2>&1 && /usr/bin/git log --oneline -1 2>&1")
+        for who, (code, said) in (("the agent", self.agent_run(work, command)), ("the check", self.check_run(work, command))):
+            self.assertEqual((code, "couldn't create cache file" in said, " it" in said), (0, False, True), f"{who}: {said}")
+        self.assertFalse((outside / "xcrun_db").exists(), "xcrun wrote outside the box")
 
 
 if __name__ == "__main__":

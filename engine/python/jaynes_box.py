@@ -765,7 +765,15 @@ def environment(tmp: Path) -> dict[str, str]:
     # Go ignores XDG_CACHE_HOME on macOS and writes its build cache to ~/Library/Caches unless told
     return {"TMPDIR": str(tmp), "XDG_CACHE_HOME": str(tmp / "cache"), "npm_config_cache": str(tmp / "npm"),
             "npm_config_userconfig": str(tmp / "npmrc"), "npm_config_update_notifier": "false",
-            "GOCACHE": str(tmp / "go"), "GOPROXY": "off", "GOTOOLCHAIN": "local"}
+            "GOCACHE": str(tmp / "go"), "GOPROXY": "off", "GOTOOLCHAIN": "local", **developer_cache(tmp)}
+
+
+def developer_cache(folder: Path) -> dict[str, str]:
+    """Where xcrun keeps its cache, in a folder of the command's own that the box writes: /usr/bin/git and the
+    other shims of the developer tools find their program through xcrun, which keeps its cache in the user's
+    temporary folder (DARWIN_USER_TEMP_DIR), whatever TMPDIR says, and a Mac where it had none yet refused the
+    command's git "couldn't create cache file" (GitHub's macOS runner, 23/11). The user's folder stays closed."""
+    return {"xcrun_db": str(folder / "xcrun_db")}
 
 
 # --- installed dependencies ------------------------------------------------------------------------------------
@@ -2048,9 +2056,10 @@ def agent_run(spec_path: Path | str, command: str) -> int:
             proxy = PackageProxy(tuple(str(h) for h in packages["hosts"]), int(packages.get("port", 443)))
             b = _replaced(b, ports=(*b.ports, proxy.port))
             adds = adds | proxy.env()
-        # the command's own folder for what the box refused, new for it, gone after it
+        # the command's own folder for what the box refused and xcrun's cache, new for it, gone after it
         refusals = Path(tempfile.mkdtemp(prefix="jaynes-refused-"))
         b = _replaced(b, writable=(*b.writable, refusals))
+        adds = adds | developer_cache(refusals)
         argv = [str(SANDBOX_EXEC), "-p", profile(b), "/bin/bash", "-c", AGENT_SCRIPT, "jaynes-agent", str(start), command,
                 str(pwd)]
     except AgentRefused as e:
