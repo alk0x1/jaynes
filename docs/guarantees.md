@@ -34,7 +34,9 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   included. Tokens read back from the cache are recorded apart and do not count toward the
   ceiling. An attempt whose program died before reporting what it spent shows "not counted
   yet", never 0. Codex reports what an attempt spent only when the attempt ends, so a Codex
-  attempt is not stopped midway for its tokens: the ceiling stops the attempt after it.
+  attempt is not stopped midway for its tokens: the ceiling stops the attempt after it. A risk
+  that rises during the run never raises its ceiling by itself: the run keeps the ceiling it
+  started with, and on reaching it stops and says the ceiling its new risk has; only you raise it.
 - **G6.** Every attempt ends with exactly one recorded outcome, and a late report from an
   older attempt changes nothing. An attempt judged again after the person took out a hidden
   case they saw fail (G2) ends once more, after the record of that case.
