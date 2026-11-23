@@ -1711,6 +1711,53 @@ fn g7_what_the_person_s_git_obeys_when_the_delivery_lands_raises_the_risk() {
     }
 }
 
+/// The tech-lead's T6 (23/11): a risk that rises during the run never raises its ceiling by itself (in stock a run
+/// went from 20 minutes and 2M tokens to 120 minutes and 10M without the person knowing). The run goes on with the
+/// ceiling it started with; when it reaches it, it stops saying the ceiling its new risk has, and only the person
+/// raises it.
+#[test]
+fn asked_a_risk_that_rises_during_the_run_never_raises_its_ceiling_by_itself() {
+    let mut change = step("change", Executor::Agent);
+    change.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
+    let mut more = step("more", Executor::Agent);
+    more.needs = vec!["change".to_string()];
+    let (mut run, cmds) = start(vec![change, more]);
+    let started = run.ceiling;
+    assert_eq!(started, run.ceilings.low);
+    let c = probe_ok(&mut run, cmds);
+    let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).expect("a turn");
+    let c = feed(&mut run, Input::AttemptEnded {
+        step: "change".to_string(),
+        attempt,
+        fix: 0,
+        outcome: AttemptOutcome::Delivered { output: Digest("o".to_string()), items: Vec::new(), changed: vec![Changed::file(".gitattributes".to_string(), 1)], usage: Usage::default(), session: None, tree: None, reply: None },
+    });
+    assert_eq!(run.risk, Risk::High, "the change raised the risk");
+    assert_eq!(run.ceiling, started, "the risk raised the ceiling by itself");
+    // the next step spends the whole ceiling the run started with: the run stops there, and says the new ceiling
+    let c = probe_ok(&mut run, c);
+    let attempt = c.iter().find_map(|c| if let Command::RunAgent(t) = c { (t.step == "more").then_some(t.attempt) } else { None }).expect("more's turn");
+    feed(&mut run, Input::AttemptEnded {
+        step: "more".to_string(),
+        attempt,
+        fix: 0,
+        outcome: AttemptOutcome::Failed { reasons: vec!["slow".to_string()], usage: Usage { seconds: started.seconds, tokens: 1, ..Default::default() } },
+    });
+    let Phase::Blocked { fault: Fault::Ceiling, reason, .. } = &run.phase else { panic!("stopped at the ceiling: {:?}", run.phase) };
+    let high = run.ceilings.high;
+    assert!(
+        reason.contains(&format!("its risk rose to high during the run, where a run's ceiling is {} seconds and {} tokens", high.seconds, high.tokens))
+            && reason.contains("only you raise it"),
+        "{reason}"
+    );
+    // an agent does not raise it; the person does, to what the card said
+    let refused = decide(Some(&run), &Input::RaiseCeiling { ceiling: high, by: By::Agent { who: "a".to_string() } });
+    assert!(refused.is_err(), "an agent raised the ceiling");
+    feed(&mut run, Input::RaiseCeiling { ceiling: high, by: By::Person });
+    assert_eq!(run.ceiling, high);
+    assert!(!matches!(run.phase, Phase::Blocked { .. }), "{:?}", run.phase);
+}
+
 /// A run of one agent step on the whole project, delivered by merge, whose attempt brings in `changed`: what it
 /// commands once the change is in.
 fn merging(changed: Vec<Changed>) -> (Run, Vec<Command>) {

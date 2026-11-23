@@ -639,10 +639,18 @@ impl Ctx {
         }
         let (spent, ceiling) = (self.run.spent, self.run.ceiling);
         if spent.seconds >= ceiling.seconds || spent.tokens >= ceiling.tokens {
-            let reason = format!(
+            let mut reason = format!(
                 "the run reached its ceiling: {} of {} seconds, {}",
                 spent.seconds, ceiling.seconds, spent.tokens_of(ceiling.tokens)
             );
+            // a risk that rose during the run left the ceiling as it was: the stop says the one its risk has
+            let at = self.run.ceilings.at(self.run.risk);
+            if at.seconds > ceiling.seconds || at.tokens > ceiling.tokens {
+                reason.push_str(&format!(
+                    "; its risk rose to {} during the run, where a run's ceiling is {} seconds and {} tokens: only you raise it",
+                    self.run.risk.word(), at.seconds.max(ceiling.seconds), at.tokens.max(ceiling.tokens)
+                ));
+            }
             self.block(Some(name), Fault::Ceiling, reason);
             return false;
         }
@@ -1107,7 +1115,8 @@ impl Ctx {
         all.retain(|c| !self.run.manifest.only_shown(&c.what));
         let (level, reasons) = risk::of_change(self.run.manifest.target, &all);
         if level > self.run.risk {
-            let ceiling = higher(self.run.ceiling, self.run.ceilings.at(level));
+            // the run keeps the ceiling it started with: what the change touches never raises it by itself (T6)
+            let ceiling = self.run.ceiling;
             self.emit(Event::RiskRaised {
                 to: level,
                 by: By::Rule { rule: WHAT_THE_CHANGE_TOUCHES.to_string() },

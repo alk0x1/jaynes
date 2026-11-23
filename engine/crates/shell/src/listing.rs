@@ -985,6 +985,18 @@ impl Work {
 pub const ASK_AT_MORE_STEPS: &str = "Ask me at more steps";
 /// What raising the risk does: the full path, with more stops and the higher limit (core risk.rs and decide.rs).
 pub const ASK_AT_MORE_STEPS_TIP: &str = "Takes this run on the full path: more steps and stops, and the time and token limit of a high-risk run.";
+/// Where the person's Raise the ceiling takes a run, and its button's words: to the ceiling of the run's risk when a
+/// risk that rose during the run left it below that (a rule never raises it, T6), or else 30 minutes and 2,000,000
+/// tokens over the one it has.
+pub fn ceiling_raise(r: &Run) -> (jaynes_core::risk::Ceiling, String) {
+    let (c, at) = (r.ceiling, r.ceilings.at(r.risk));
+    if at.seconds > c.seconds || at.tokens > c.tokens {
+        let to = jaynes_core::risk::Ceiling { seconds: at.seconds.max(c.seconds), tokens: at.tokens.max(c.tokens) };
+        return (to, format!("Raise the ceiling to {} min, as a {}-risk run's", to.seconds / 60, r.risk.word()));
+    }
+    (jaynes_core::risk::Ceiling { seconds: c.seconds + 1800, tokens: c.tokens + 2_000_000 }, "Raise the ceiling by 30 min".to_string())
+}
+
 /// What abandoning a run already delivered does: the core's Abandon finishes the run, never undoes it.
 pub const ABANDON_DELIVERED_TIP: &str = "Ends the run here. What it delivered stays as it is, and you can no longer correct it at its stops.";
 
@@ -2576,6 +2588,19 @@ mod tests {
         let start = Input::Start { run: id.into(), request: request.into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let out = jaynes_core::decide(None, &start).expect("start");
         Run::fold(&out.events).expect("run")
+    }
+
+    /// T6 (23/11): the run kept the ceiling it started with when a rule raised its risk; the person's raise takes it to
+    /// the ceiling of that risk, and says so.
+    #[test]
+    fn asked_raising_the_ceiling_of_a_run_whose_risk_rose_takes_it_to_that_risk_s() {
+        let mut r = run("r", "x");
+        let (to, words) = ceiling_raise(&r);
+        assert_eq!((to.seconds, to.tokens, words.as_str()), (r.ceiling.seconds + 1800, r.ceiling.tokens + 2_000_000, "Raise the ceiling by 30 min"));
+        r.risk = jaynes_core::risk::Risk::High;
+        let (to, words) = ceiling_raise(&r);
+        assert_eq!(to, r.ceilings.high);
+        assert_eq!(words, "Raise the ceiling to 120 min, as a high-risk run's");
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {

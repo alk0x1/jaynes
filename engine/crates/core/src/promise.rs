@@ -222,13 +222,14 @@ struct Node {
 
 impl Node {
     /// What tells two states apart for what can still happen: the run without what is the same in every state of
-    /// the search or only counts the past.
+    /// the search or only counts the past. Nor its ceiling, with what is left of it in a turn: usage is never counted
+    /// here, so the ceiling is never met, and a run whose risk a rule raised, which keeps the ceiling it started
+    /// with (T6), goes on as one that started at that risk.
     fn key(&self) -> u128 {
         #[derive(serde::Serialize)]
         struct View<'a> {
             id: &'a str,
             risk: Risk,
-            ceiling: &'a crate::risk::Ceiling,
             spent: &'a Usage,
             steps: Vec<crate::run::StepState>,
             questions: &'a BTreeMap<String, crate::run::QuestionState>,
@@ -267,7 +268,12 @@ impl Node {
             .map(|c| match c.clone() {
                 Command::RunAgent(mut t) => {
                     t.attempt = 0;
+                    (t.deadline_seconds, t.tokens_left) = (0, 0);
                     Command::RunAgent(t)
+                }
+                Command::AnswerAsk(mut t) => {
+                    (t.deadline_seconds, t.tokens_left) = (0, 0);
+                    Command::AnswerAsk(t)
                 }
                 Command::RunRole { step, round, given, previous, answers, key, .. } => Command::RunRole { step, round, attempt: 0, given, previous, answers, key },
                 Command::RunChecks { step, fix, output, given, checks, .. } => Command::RunChecks { step, attempt: 0, fix, output, given, checks },
@@ -277,7 +283,6 @@ impl Node {
         let view = View {
             id: &r.id,
             risk: r.risk,
-            ceiling: &r.ceiling,
             spent: &r.spent,
             steps,
             questions: &r.questions,

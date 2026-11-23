@@ -767,10 +767,7 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
                 by,
             },
             "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
-            "raise-ceiling" => {
-                let c = run.ceiling;
-                Input::RaiseCeiling { ceiling: jaynes_core::risk::Ceiling { seconds: c.seconds + 1800, tokens: c.tokens + 2_000_000 }, by }
-            }
+            "raise-ceiling" => Input::RaiseCeiling { ceiling: crate::listing::ceiling_raise(&run).0, by },
             "undo" => {
                 let mut store = Store::open(&home.join("record.sqlite3"))?;
                 let reverted = drive::undo(&mut store, home, run_id, body["note"].as_str().unwrap_or("").to_string(), by)?;
@@ -1328,7 +1325,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         }
         let near = r.spent.seconds * 5 >= r.ceiling.seconds * 4 || r.spent.tokens * 5 >= r.ceiling.tokens * 4;
         if near || matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }) {
-            tipped("raise-ceiling", "Raise the ceiling by 30 min", "", None);
+            tipped("raise-ceiling", &crate::listing::ceiling_raise(r).1, "", None);
         }
         tipped("abandon", "Abandon", "danger", r.delivered.is_some().then_some(crate::listing::ABANDON_DELIVERED_TIP));
     }
