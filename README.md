@@ -54,7 +54,7 @@ is still there the next time someone hits it. Nothing in the run told you.
 
 The core is a pure function from a run's state and one event to what it
 records and does next. What it promises is one page,
-[docs/guarantees.md](docs/guarantees.md), eighteen sentences such as "something
+[docs/guarantees.md](docs/guarantees.md), nineteen sentences such as "something
 you kept stays as it is unless you change it". Each is tested on thousands of
 random runs, and thirteen are proved in Lean for a model of the core that a test
 compares with the code on every state of those runs
@@ -201,7 +201,7 @@ one before it, so a change to any past entry shows (`jaynes verify`).
 
 | Part | State |
 |---|---|
-| Core, its eighteen guarantees, the Lean model | Works; the guarantees are tested on random runs, thirteen are proved in Lean for a model of the core that a test compares with the code |
+| Core, its nineteen guarantees, the Lean model | Works; the guarantees are tested on random runs, thirteen are proved in Lean for a model of the core that a test compares with the code |
 | Claude Code as the agent: per-step settings, leaves asked mid-turn, fixes in place in the same session | Works; checked with real turns |
 | The page: questions across runs, verdicts per item with pictures, context, each run's view and actions | Works |
 | Recovery after a crash, a record that shows tampering, runs pinned to their role's and engine's version | Works in tests |
