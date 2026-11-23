@@ -2123,12 +2123,34 @@ fn delivery_html(home: &std::path::Path, run: &Run) -> String {
         text.truncate(cut);
         text.push_str(&format!("\n[{more} more bytes not shown: read the branch before it lands]"));
     }
-    let into = crate::listing::into_of(home, &run.id);
+    // counted before the cut, so a long delivery never says fewer files than land
+    delivery_of(&text, n, &crate::listing::into_of(home, &run.id), &drive::tests_run(home, run))
+}
+
+/// What a merge lands, from its diff `text`, onto `into`: what of it changes how the project's tests run
+/// (`tests_run`, by path) said apart first and marked on its file, then the tests it changed, then every file.
+fn delivery_of(text: &str, n: usize, into: &str, tests_run: &std::collections::BTreeMap<String, String>) -> String {
     format!(
-        "{}<div class=\"changes\"><div class=\"qh\">{}</div><pre class=\"diff\">{}</pre></div>",
-        tests_changed_html(&crate::listing::changed_tests(&text)),
-        esc(&delivery_title(&into, n)),
-        diff_html(&text)
+        "{}{}<div class=\"changes\"><div class=\"qh\">{}</div><pre class=\"diff\">{}</pre></div>",
+        tests_run_html(tests_run),
+        tests_changed_html(&crate::listing::changed_tests(text)),
+        esc(&delivery_title(into, n)),
+        diff_marked(text, tests_run)
+    )
+}
+
+/// The files that change how the tests run, said at the merge in the backend's words with See it, which shows only
+/// them in what lands, and why to read them. Nothing when none does.
+fn tests_run_html(tests_run: &std::collections::BTreeMap<String, String>) -> String {
+    let lands: Vec<crate::stop::Lands> = tests_run.iter().map(|(path, t)| crate::stop::Lands { path: path.clone(), added: 0, removed: 0, runs: None, tests: Some(t.clone()) }).collect();
+    let Some(said) = crate::stop::tests_run_said(&lands) else { return String::new() };
+    let files: Vec<&String> = tests_run.keys().collect();
+    let data = esc(&serde_json::to_string(&files).unwrap_or_default());
+    format!(
+        "<div class=\"tests-changed tests-run\"><div class=\"r\"><span>{}</span><button class=\"seethem\" data-files=\"{data}\">{}</button></div><p class=\"dim\">{}</p></div>",
+        esc(&said),
+        if files.len() == 1 { "See it" } else { "See them" },
+        esc(crate::stop::TESTS_RUN_WHY)
     )
 }
 
@@ -2156,6 +2178,11 @@ fn delivery_title(into: &str, files: usize) -> String {
 
 /// A unified diff, escaped: each file's header set apart, added lines green, removed lines red.
 fn diff_html(text: &str) -> String {
+    diff_marked(text, &Default::default())
+}
+
+/// [`diff_html`], each file of `marked` marked on its header as changing how the tests run.
+fn diff_marked(text: &str, marked: &std::collections::BTreeMap<String, String>) -> String {
     // each file's lines in a block of its own, named by its path, so See them can show only some
     let mut open = false;
     let mut html: String = text
@@ -2178,7 +2205,8 @@ fn diff_html(text: &str) -> String {
                 return String::new();
             }
             let mark = if mark.is_empty() { String::new() } else { format!("<i>{mark}</i>") };
-            let line = format!("<span class=\"{class}\">{mark}{}</span>", if rest.is_empty() { " ".to_string() } else { esc(rest) });
+            let tag = if class == "file" && marked.contains_key(rest) { "<em class=\"trm\">changes how your tests run</em>" } else { "" };
+            let line = format!("<span class=\"{class}\">{mark}{}{tag}</span>", if rest.is_empty() { " ".to_string() } else { esc(rest) });
             if class == "file" {
                 let close = if std::mem::replace(&mut open, true) { "</span>" } else { "" };
                 format!("{close}<span class=\"fb\" data-f=\"{}\">{line}", esc(rest))
@@ -2652,10 +2680,12 @@ document.addEventListener("click", e => {
   const b = e.target.closest("button.seethem"); if (!b) return;
   const pre = document.querySelector(".changes pre.diff"); if (!pre) return;
   const files = new Set(JSON.parse(b.dataset.files || "[]"));
-  const only = !pre.classList.contains("only");
+  // two of them at the merge (how the tests run, the tests changed): each keeps its own words, one shows at a time
+  const only = b.dataset.on !== "1";
+  document.querySelectorAll("button.seethem").forEach(x => { x.dataset.was = x.dataset.was || x.textContent; x.dataset.on = ""; x.textContent = x.dataset.was; });
   pre.classList.toggle("only", only);
   pre.querySelectorAll(".fb").forEach(f => f.classList.toggle("on", files.has(f.dataset.f)));
-  b.textContent = only ? "See every file" : "See them";
+  if (only) { b.dataset.on = "1"; b.textContent = "See every file"; }
   if (only) pre.scrollIntoView({ block: "start", behavior: "smooth" });
 });
 const el = document.getElementById("data");
@@ -3049,6 +3079,7 @@ h1 .proj { color:var(--dim); font-weight:500; }
 .reach { margin:0 0 14px; padding:12px 14px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; font-size:14px; } .reach code { font-family:var(--mono); font-size:.92em; } .reach .rmerge { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px; } .reach .act.primary { background:var(--blue); color:#04121f; border:0; font-weight:600; } .reach .rfail { margin-top:8px; color:var(--amber); } .reach details.git { margin-top:4px; color:var(--dim); font-size:12.5px; } .reach details.git summary { list-style:none; cursor:pointer; } .reach details.git summary::-webkit-details-marker { display:none; }
 .sent .proj { color:var(--dim); }
 .tests-changed { margin:14px 0 10px; font-size:13.5px; } .tests-changed .r { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.file .trm { font-style:normal; font-family:inherit; font-size:11.5px; color:var(--amber); border:1px solid var(--amber); border-radius:6px; padding:0 6px; margin-left:10px; }
 .tests-changed code { font-family:var(--mono); font-size:.88em; } .tests-changed p.dim { color:var(--dim); font-size:12.5px; margin:6px 0 0; }
 .tests-changed button { border:1px solid var(--line-2); border-radius:8px; padding:3px 12px; background:none; color:var(--ink); white-space:nowrap; cursor:pointer; }
 pre.diff .fb { display:block; } pre.diff.only .fb:not(.on) { display:none; }
@@ -3857,6 +3888,29 @@ mod tests {
         let home_page = page.render(View::Overview, now).expect("home");
         assert!(home_page.contains("Waiting for you · 0") && !home_page.contains("halted run"), "{home_page}");
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // The real-user's case (23/11, trava of 0.2.5): the merge card said "1 FILE" while three landed, one of them a
+    // pyproject.toml whose pytest settings changed. The card names every file, and the one that changes how the tests
+    // run is marked in what lands and said apart above it, with why to read it (the backend's words, stop.rs).
+    #[test]
+    fn asked_a_merge_that_changes_how_the_tests_run_the_card_names_the_file_and_why() {
+        let diff = "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n\
+diff --git a/tests/test_app.py b/tests/test_app.py\n--- a/tests/test_app.py\n+++ b/tests/test_app.py\n@@ -1 +1 @@\n-assert x == 1\n+assert x == 2\n\
+diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n+++ b/pyproject.toml\n@@ -1,2 +1,2 @@\n [tool.pytest.ini_options]\n-addopts = \"\"\n+addopts = \"-k 'not slow'\"\n";
+        let marked: std::collections::BTreeMap<String, String> = [("pyproject.toml".to_string(), "its pytest settings change".to_string())].into();
+        let html = delivery_of(diff, 3, "main", &marked);
+        assert!(html.contains("What lands on “main” · 3 files"), "every file counted: {html}");
+        assert!(
+            html.contains("<div class=\"tests-changed tests-run\"><div class=\"r\"><span>It changes how your tests run: pyproject.toml (its pytest settings change).</span><button class=\"seethem\" data-files=\"[&quot;pyproject.toml&quot;]\">See it</button></div><p class=\"dim\">A change there can make the tests pass by running fewer of them, or none. Read it before you merge.</p></div>"),
+            "said apart, with why: {html}"
+        );
+        assert_eq!(html.matches("class=\"trm\"").count(), 1, "only pyproject.toml is marked: {html}");
+        assert!(html.contains("<span class=\"fb\" data-f=\"pyproject.toml\"><span class=\"file\">pyproject.toml<em class=\"trm\">changes how your tests run</em></span>"), "{html}");
+        assert!(html.contains("<span class=\"fb\" data-f=\"src/app.py\"><span class=\"file\">src/app.py</span>"), "the others as before: {html}");
+        assert!(html.contains("It changed your tests: <code>tests/test_app.py</code>"), "the changed test still said: {html}");
+        assert!(!delivery_of(diff, 3, "main", &Default::default()).contains("tests-run"), "nothing that changes how they run: nothing said");
+        assert!(PAGE.contains(".file .trm {"), "the mark's look");
     }
 
     // The tech-lead (S4): the merge's one touch merges everything at once; file by file only when the person asks. In
