@@ -323,5 +323,44 @@
     }
    ]
   }
+ },
+ {
+  "id": "grep-word-git-in-pattern-list",
+  "expect": "accept",
+  "keeps": "git among the words a search looks for",
+  "output": {
+   "cases": [
+    {
+     "says": "The README names the tools",
+     "run": "grep -qE 'git|make|pytest' README.md"
+    }
+   ]
+  }
+ },
+ {
+  "id": "rg-word-git",
+  "expect": "accept",
+  "keeps": "rg searching for git in the docs",
+  "output": {
+   "cases": [
+    {
+     "says": "The docs explain the hooks",
+     "run": "rg -q git docs"
+    }
+   ]
+  }
+ },
+ {
+  "id": "socket-word-in-test-name",
+  "expect": "accept",
+  "keeps": "socket in the name of a test of the project",
+  "output": {
+   "cases": [
+    {
+     "says": "The socket test passes offline",
+     "run": "python3 -m pytest -q tests/test_socket_names.py"
+    }
+   ]
+  }
  }
 ]

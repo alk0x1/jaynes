@@ -609,5 +609,109 @@
     }
    ]
   }
+ },
+ {
+  "id": "grep-process-substitution",
+  "expect": "reject",
+  "hole": "git inside a grep's <( ), which runs with neither $ nor a backtick",
+  "output": {
+   "cases": [
+    {
+     "says": "The old render had a total",
+     "run": "grep -q total <(git show HEAD:recibo/render.py)"
+    }
+   ]
+  }
+ },
+ {
+  "id": "rg-pre",
+  "expect": "reject",
+  "hole": "rg's --pre runs a program on every file it searches",
+  "output": {
+   "cases": [
+    {
+     "says": "Every file the history knows says total",
+     "run": "rg --pre git -q total ."
+    }
+   ]
+  }
+ },
+ {
+  "id": "grep-then-pipe-git",
+  "expect": "reject",
+  "hole": "a grep whose output goes to git, past the end of the search",
+  "output": {
+   "cases": [
+    {
+     "says": "The files with total are tracked",
+     "run": "grep -l total -r recibo | git check-ignore --stdin"
+    }
+   ]
+  }
+ },
+ {
+  "id": "grep-or-git",
+  "expect": "reject",
+  "hole": "git after a grep's ||, a command of its own",
+  "output": {
+   "cases": [
+    {
+     "says": "Total is there or in the history",
+     "run": "grep -q total recibo/render.py || git log -S total --oneline | grep -q ."
+    }
+   ]
+  }
+ },
+ {
+  "id": "grep-file-from-git-dir",
+  "expect": "reject",
+  "hole": "grep reading git's own files",
+  "output": {
+   "cases": [
+    {
+     "says": "The repository's config names a remote",
+     "run": "grep -q url .git/config"
+    }
+   ]
+  }
+ },
+ {
+  "id": "grep-heredoc-git",
+  "expect": "reject",
+  "hole": "a here-document fed by a substitution that runs git",
+  "output": {
+   "cases": [
+    {
+     "says": "The head says tree",
+     "run": "grep -q tree <<EOF\n$(git cat-file -p HEAD)\nEOF"
+    }
+   ]
+  }
+ },
+ {
+  "id": "python-urlopen-alias",
+  "expect": "reject",
+  "hole": "the internet through a module imported under another name",
+  "output": {
+   "cases": [
+    {
+     "says": "The tax table answers",
+     "run": "python3 -c \"from urllib import request as r; r.urlopen('https://example.com')\""
+    }
+   ]
+  }
+ },
+ {
+  "id": "python-socket",
+  "expect": "reject",
+  "hole": "a raw socket from python",
+  "output": {
+   "cases": [
+    {
+     "says": "The receipt server answers",
+     "run": "python3 -c \"import socket; socket.create_connection(('example.com', 80))\""
+    }
+   ]
+  }
  }
 ]
