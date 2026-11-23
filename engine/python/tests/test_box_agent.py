@@ -151,11 +151,14 @@ class TheAgentSCommandsRunInJaynesSBox(unittest.TestCase):
                         pass
 
         threading.Thread(target=serve, daemon=True).start()
+        # the client waits before it reads, so the proxy's answer and the registry's first bytes reach it together, as
+        # on a slow runner (CI, 23/11: "200\n\n"): what follows the answer's blank line is the registry's
         ask = ("python3 -c 'import os,socket,sys; u=os.environ[\"HTTPS_PROXY\"].split(\"//\")[1].rstrip(\"/\"); "
                "h,p=u.rsplit(\":\",1); s=socket.create_connection((h,int(p)),timeout=5); "
                "s.sendall((\"CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n\" % (sys.argv[1], sys.argv[1])).encode()); "
-               "head=s.recv(4096).decode(); print(head.split()[1]); "
-               "head.startswith(\"HTTP/1.1 200\") and (print(s.recv(64).decode()), s.sendall(b\"hello\"))' {}")
+               "import time; time.sleep(0.3); "
+               "got=s.recv(4096).decode(); head,_,rest=got.partition(\"\\r\\n\\r\\n\"); print(head.split()[1]); "
+               "head.startswith(\"HTTP/1.1 200\") and (print(rest or s.recv(64).decode()), s.sendall(b\"hello\"))' {}")
         try:
             spec = self.spec(packages={"hosts": ["localhost"], "port": port})
             code, said = self.agent_run(ask.format(f"localhost:{port}"), spec)
