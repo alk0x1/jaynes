@@ -1889,6 +1889,64 @@ fn a_merge_waits_for_a_clean_checkout_and_says_why() {
     assert_eq!(String::from_utf8_lossy(&branch.stdout), "echo \"hi $1\"\n", "the branch is delivered all the same");
 }
 
+// The real-user and the tech-lead, 23/11 (T7, the horta): "Finished: delivered", the folder unchanged, the change only
+// on jaynes/r…, and no way to merge it. A run delivered on a branch always says how to reach the project: the branch
+// with Copy, and Merge into the branch it started from, one click from its page; the merge waits at the stop every
+// merge waits at (G19), the person keeps it, the change lands in their folder, nothing is pushed, and Undo takes it
+// back. Only the person merges.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_a_run_delivered_on_a_branch_shows_the_branch_and_merges_into_the_folder_from_its_page() {
+    let s = scratch("horta");
+    let out = start(&s, "horta", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
+    assert!(out.contains("finished: delivered"), "{out}");
+    assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "on its branch, not in the folder");
+    let (_page, port) = page_on_any_port(
+        jaynes()
+        .arg("page")
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .env("JAYNES_PYTHON", python())
+        .env("PYTHONPATH", "")
+        .env("JAYNES_PAGE_KEY", "k3y"),
+    );
+    let me = "jaynes_key=k3y";
+    let view = |port: u16| http(port, &format!("GET /run/horta HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+    let before = view(port);
+    assert!(before.contains("The change is on the branch “<code>jaynes/horta</code>”, not in your folder yet.") && before.contains("data-copy=\"jaynes/horta\""), "{before}");
+    assert!(before.contains("data-act=\"merge\">Merge into “main”</button>") && before.contains("It lands on “main” in project. Nothing is pushed, and Undo takes it back."), "{before}");
+    // an agent may not merge
+    let refused = post(port, "/api/act", r#"{"run":"horta","action":"merge"}"#, "");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(open_merge(&s, "horta").is_none(), "an agent's merge opens nothing");
+    // the person's opens the merge's stop, and says which, so the page goes to its card
+    let asked = post(port, "/api/act", r#"{"run":"horta","action":"merge"}"#, me);
+    assert_eq!(asked["ok"], true, "{asked}");
+    let q = (0..50).find_map(|_| open_merge(&s, "horta").or_else(|| { std::thread::sleep(std::time::Duration::from_millis(100)); None })).expect("the merge's stop");
+    assert_eq!(asked["question"].as_str(), Some(q.as_str()), "{asked}");
+    // a second Merge while it waits opens no other
+    assert_eq!(post(port, "/api/act", r#"{"run":"horta","action":"merge"}"#, me)["ok"], false);
+    let (_, said) = merge_as_person(&s, "horta", |c| {
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "");
+    });
+    assert!(said.contains("merged as"), "{said}");
+    assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hi\n", "the change is in the folder");
+    let after = view(port);
+    assert!(after.contains("Merged into “main” in project. Nothing was pushed.") && after.contains("data-act=\"undo\""), "{after}");
+    assert!(!after.contains("not in your folder yet") && !after.contains("data-act=\"merge\""), "{after}");
+    // the summary says where it went: merged, not only on its branch
+    let (ok, told) = engine(&s, &["summary", "horta"]);
+    assert!(ok && told.contains("merged as"), "{told}");
+    // Undo takes it back
+    assert_eq!(post(port, "/api/act", r#"{"run":"horta","action":"undo","note":"not now"}"#, me)["ok"], true);
+    assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "undone");
+    let t = types(&events(&s, "horta"));
+    for want in ["MergeAsked", "Merged", "MergeUndone"] {
+        assert!(t.contains(&want.to_string()), "{want} missing: {t:?}");
+    }
+    let (ok, out) = engine(&s, &["verify"]);
+    assert!(ok, "{out}");
+}
+
 #[test]
 fn the_page_shows_each_item_with_its_sentence_and_picture() {
     let s = scratch("looks");
