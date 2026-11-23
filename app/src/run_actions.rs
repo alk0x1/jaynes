@@ -41,6 +41,14 @@ impl Act {
         }
     }
 
+    /// Its button on run `f`: Raise the ceiling says where it takes this run; the others say what `label` does.
+    pub fn said(self, f: &Facts) -> String {
+        match self {
+            Act::RaiseCeiling if !f.raise.is_empty() => f.raise.clone(),
+            _ => self.label().to_string(),
+        }
+    }
+
     /// What its button says on hovering, when its label does not say it all: raising the risk takes the run on the full
     /// path, with more stops and the higher limit (core risk.rs and decide.rs); abandoning a run already delivered
     /// keeps what it delivered (the core's Abandon finishes the run, never undoes it).
@@ -60,7 +68,7 @@ impl Act {
 }
 
 /// What the controls are decided from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Facts {
     pub finished: bool,
     pub halted: bool,
@@ -79,6 +87,9 @@ pub struct Facts {
     /// Jaynes stopped while it ran: it says it runs, and the process that drove it is gone (`drive::left_running`).
     /// Nobody works on it; the person resumes it, as a halted run.
     pub stopped: bool,
+    /// What Raise the ceiling says, in the core's words (listing::ceiling_raise): "Raise the ceiling by 30 min", or the
+    /// ceiling of a risk that rose during the run, "Raise the ceiling to 120 min, as a high-risk run's" (T6, 23/11).
+    pub raise: String,
 }
 
 impl Facts {
@@ -95,8 +106,14 @@ impl Facts {
             delivered: !r.finished() && r.delivered.is_some(),
             gone: jaynes_shell::stop::gone(&jaynes_shell::home(), r).is_some(),
             stopped: jaynes_shell::drive::left_running(&jaynes_shell::home(), r),
+            raise: raise_of(r),
         }
     }
+}
+
+/// What Raise the ceiling says for run `r`, as the page says it; where it takes the run is the core's too, from act_in.
+pub fn raise_of(r: &Run) -> String {
+    jaynes_shell::listing::ceiling_raise(r).1
 }
 
 /// The controls a run shows, in the page's order: Halt first while its agent works, as Command-period does on its tab.
@@ -161,11 +178,34 @@ pub fn send(run: &str, act: Act) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ARMED_FOR, Act, Armed, Facts, acts};
+    use super::{ARMED_FOR, Act, Armed, Facts, acts, raise_of};
     use std::time::{Duration, Instant};
 
     fn facts() -> Facts {
-        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false, gone: false, stopped: false }
+        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false, gone: false, stopped: false, raise: "Raise the ceiling by 30 min".into() }
+    }
+
+    /// The tech-lead's T6, 23/11: "o botão \"Raise the ceiling by 30 min\" diz e leva o teto novo pelo
+    /// jaynes_shell::listing::ceiling_raise, como a página". A run whose risk a rule raised kept the ceiling it started
+    /// with; the person's raise takes it to that risk's, and its button says so.
+    #[test]
+    fn asked_raise_the_ceiling_says_where_it_takes_the_run_as_the_page_does() {
+        let manifest: jaynes_core::manifest::Manifest = serde_json::from_value(serde_json::json!({
+            "role": "r", "version": "1", "protocol": 1, "steps": [{"name": "change", "executor": "agent"}],
+        }))
+        .expect("manifest");
+        let start = jaynes_core::Input::Start {
+            run: "r1".into(), request: "Fix it".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(),
+            raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None,
+        };
+        let mut r = jaynes_core::run::Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run");
+        r.risk = jaynes_core::risk::Risk::High;
+        let f = Facts { raise: raise_of(&r), near_ceiling: true, ..facts() };
+        assert_eq!(Act::RaiseCeiling.said(&f), "Raise the ceiling to 120 min, as a high-risk run's");
+        r.risk = jaynes_core::risk::Risk::Low;
+        assert_eq!(Act::RaiseCeiling.said(&Facts { raise: raise_of(&r), ..f.clone() }), "Raise the ceiling by 30 min");
+        // the others say their own words
+        assert_eq!(Act::Halt.said(&f), "Halt");
     }
 
     #[test]

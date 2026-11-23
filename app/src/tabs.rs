@@ -391,7 +391,7 @@ impl Tabs {
     /// The open run's block when it is halted: who halted it and at which step.
     pub fn halted(&self, cx: &App) -> Option<String> {
         let open = self.open.as_ref()?;
-        if !self.facts.is_some_and(|f| (f.halted || f.stopped) && !f.finished) {
+        if !self.facts.as_ref().is_some_and(|f| (f.halted || f.stopped) && !f.finished) {
             return None;
         }
         let runs = self.runs.read(cx);
@@ -662,7 +662,7 @@ impl Tabs {
                 .flex_col()
                 .child(lines)
                 // plain words, not a box that reads as a field; none once no agent works in the run
-                .when_some(self.facts.and_then(|f| note_for(f.finished, f.halted, f.blocked)), |d, note| {
+                .when_some(self.facts.as_ref().and_then(|f| note_for(f.finished, f.halted, f.blocked)), |d, note| {
                     d.child(div().mx(px(20.)).mb(px(10.)).font_family(look::UI_FONT).text_size(px(12.)).text_color(rgb(look::faint())).child(note))
                 })
                 .into_any_element(),

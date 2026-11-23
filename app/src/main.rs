@@ -788,7 +788,7 @@ impl Root {
     /// The open run's controls in a row.
     fn controls_row(&self, cx: &mut Context<Self>) -> Option<Div> {
         let run = self.tabs.read(cx).open.clone()?;
-        let facts = self.tabs.read(cx).facts?;
+        let facts = self.tabs.read(cx).facts.clone()?;
         let acts = run_actions::acts(&facts);
         if acts.is_empty() {
             return None;
@@ -796,7 +796,7 @@ impl Root {
         let mut bar = div().flex().items_center().gap(px(8.)).flex_wrap();
         for act in acts {
             let armed = self.armed.as_ref().is_some_and(|a| a.holds(Some(&run), act, std::time::Instant::now()));
-            let label = if armed { format!("{}: press again", act.label()) } else { act.label().to_string() };
+            let label = if armed { format!("{}: press again", act.said(&facts)) } else { act.said(&facts) };
             let danger = act.asks_twice();
             let run = run.clone();
             bar = bar.child(
@@ -2535,7 +2535,7 @@ pub(crate) fn press_act(word: String, cx: &mut App) {
     let _ = main.update(cx, |_, window, cx| {
         if let Some(Some(root)) = window.root::<Root>() {
             root.update(cx, |r, cx| {
-                let shown = r.tabs.read(cx).facts.map(|f| run_actions::acts(&f)).unwrap_or_default();
+                let shown = r.tabs.read(cx).facts.as_ref().map(run_actions::acts).unwrap_or_default();
                 tracing::info!("controls shown: {:?}", shown.iter().map(|a| a.word()).collect::<Vec<_>>());
                 if let Some(run) = r.tabs.read(cx).open.clone() {
                     r.press(run, act, cx);
