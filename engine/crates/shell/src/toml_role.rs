@@ -590,12 +590,14 @@ const MENU_CHECKS: &[MenuCheck] = &[
     MenuCheck {
         name: "tests-fail-for-the-bug",
         kind: CheckKind::Open,
-        params: &[("saw", Param::YesNo, false)],
+        params: &[("saw", Param::YesNo, false), ("collected", Param::YesNo, false)],
         auto: &[Auto::Suite, Auto::Write],
         about: |t| {
-            let saw = if t.get("saw").and_then(toml::Value::as_bool) == Some(true) { ", and saw is what the test got, as it printed it" } else { "" };
+            let on = |k: &str| t.get(k).and_then(toml::Value::as_bool) == Some(true);
+            let saw = if on("saw") { ", and saw is what the test got, as it printed it" } else { "" };
+            let collected = if on("collected") { ", and are among the tests the suite runs as the project defined it when the run began" } else { "" };
             format!("the tests named in tests are test files the step may write, and fail because of the bug on what they assert, not on \
-                     their own code, printing the line quoted in failure{saw}")
+                     their own code, printing the line quoted in failure{saw}{collected}")
         },
         runs: true,
         project_tests: false,

@@ -414,5 +414,45 @@
    "tests/done.sh": "echo 'got \"Total 10.00\", expected \"Total 9.00\"'; exit 1\n",
    "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
   }
+ },
+ {
+  "id": "collected-run-by-the-suite",
+  "keeps": "a test the suite as it began runs, failing as quoted",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "collected": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "sh",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/says_hi.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "start": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "true\n",
+   "greeting.txt": "hello\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n",
+   "greeting.txt": "hello\n"
+  },
+  "expect": "accept"
  }
 ]

@@ -132,6 +132,23 @@ class OtherRunners(unittest.TestCase):
         self.assertIsInstance(judged({"package.json": '{"name": "a", "scripts": {"test": "true"}}'}, start, node), Fail)
 
 
+class TheStepSOwnTests(unittest.TestCase):
+    MAKE = {"step": "runner", "output": {"kind": "make", "suite": "make test", "each": "sh"}}
+    START = {"Makefile": "test:\n\tsh tests/run.sh\n", "tests/run.sh": "grep -q hi g.txt\n", "g.txt": "hi\n"}
+    NOW = {**START, "tests/run.sh": "grep -q hi g.txt\ngrep -q 31 g.txt || { echo 'sem o dia 31'; exit 1; }\n"}
+
+    def test_a_script_the_suite_runs_that_the_step_names_as_its_test_is_its_test(self):
+        got = judged(self.NOW, self.START, self.MAKE, output={"tests": ["tests/run.sh"]})
+        self.assertIsInstance(got, Pass, got)
+
+    def test_the_same_change_by_a_step_that_names_no_test_is_refused(self):
+        self.assertIsInstance(judged(self.NOW, self.START, self.MAKE, output={"files": ["g.txt"]}), Fail)
+
+    def test_a_configuration_the_runner_reads_by_itself_is_never_a_test(self):
+        got = judged({**START, "tests/conftest.py": "x = 1\n"}, output={"tests": ["tests/conftest.py"]})
+        self.assertIsInstance(got, Fail, got)
+
+
 class WhatItCannotSee(unittest.TestCase):
     def test_with_the_start_unknown_it_cannot_judge(self):
         self.assertIsInstance(judged(START, None), Blocked)
@@ -139,6 +156,89 @@ class WhatItCannotSee(unittest.TestCase):
     def test_with_no_suite_found_there_is_nothing_to_hold(self):
         self.assertIsInstance(judged(START, START, {"step": "runner", "output": {}}), Pass)
 
+
+# tests-fail-for-the-bug with collected = true: the reproduce's test is among the tests the suite runs, as the project
+# defined it when the run began (case 2 of the contas wrote it in tests/relatorio_test.py, which that suite never runs)
+FAILED = "tests/x.py F\nE       assert 30 == 31\n1 failed in 0.01s\n"
+
+
+def failing(tests: list[str], now: dict[str, str], params: dict | None = None, runner: dict | None = None,
+            suite_prints: str = FAILED, suite_code: int = 1, **call: object) -> tuple[object, list[str]]:
+    root = Path(tempfile.mkdtemp(prefix="jaynes-collected-"))
+    MADE.append(root)
+    for path, text in now.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    commands: list[str] = []
+
+    def run(where: Path, command: str, **kw: object) -> object:
+        commands.append(command)
+        if "--collect-only" in command:
+            seen = (kw.get("over") or {}).get("pyproject.toml") or (Path(where) / "pyproject.toml").read_text()
+            listed = "".join(f"{f}: 1\n" for f in sorted(now) if f.startswith("tests/") and
+                             any(Path(f).match(g) for g in (["test_*.py", "*_test.py"] if "*_test.py" in seen else ["test_*.py"])))
+            return menu.box.Ran(0, listed, listed)
+        if any(t in command for t in tests):
+            return menu.box.Ran(1, FAILED, FAILED)
+        return menu.box.Ran(suite_code, suite_prints, suite_prints)
+    whole = {"project": str(root), "start": {"files": START}, "given": [runner or PYTEST], **call,
+             "output": {"reproduced": True, "tests": tests, "failure": "assert 30 == 31", "bug": "o dia 31 some"}}
+    with mock.patch.object(menu.box, "run", side_effect=run):
+        return menu.tests_fail_for_the_bug(whole, {"suite_step": "runner", "write": ["tests/**"], **(params or {"collected": True})}), commands
+
+
+class TheTestIsAmongTheOnesTheSuiteRuns(unittest.TestCase):
+    def test_case_2_a_test_in_a_file_the_suite_of_the_start_does_not_collect_is_refused(self):
+        got, _ = failing(["tests/relatorio_test.py"], START)
+        self.assertIsInstance(got, Fail, got)
+        said = " ".join(got.reasons)
+        self.assertIn("tests/relatorio_test.py", said)
+        self.assertIn("reproduced to false", said)
+
+    def test_case_1_a_test_in_a_file_it_collects_passes(self):
+        got, _ = failing(["tests/test_linha.py"], {**START, "tests/test_linha.py": "def test_31():\n    assert 30 == 31\n"})
+        self.assertIsInstance(got, Pass, got)
+
+    def test_with_the_person_s_leave_the_suite_as_the_agent_left_it_judges(self):
+        got, _ = failing(["tests/relatorio_test.py"], {**START, "pyproject.toml": WIDENED}, tests_leave="pode mudar o python_files")
+        self.assertIsInstance(got, Pass, got)
+
+    def test_without_collected_it_judges_as_before(self):
+        got, commands = failing(["tests/relatorio_test.py"], START, params={"collected": False})
+        self.assertIsInstance(got, Pass, got)
+        self.assertFalse([c for c in commands if "--collect-only" in c])
+
+    def test_a_runner_it_cannot_list_runs_the_suite_and_needs_the_failure_there(self):
+        node = {"step": "runner", "output": {"kind": "node", "suite": "npm test", "each": "node --test"}}
+        start = {"package.json": '{"scripts": {"test": "node --test tests/old.test.js"}}', "tests/old.test.js": "\n"}
+        now = {**start, "tests/new_bug.test.js": "\n"}
+        got, commands = failing(["tests/new_bug.test.js"], now, runner=node, suite_prints="ok\n", suite_code=0, start={"files": start})
+        self.assertIsInstance(got, Fail, got)
+        self.assertIn("npm test", commands)
+        self.assertIn("reproduced to false", " ".join(got.reasons))
+        got, _ = failing(["tests/new_bug.test.js"], now, runner=node, start={"files": start})
+        self.assertIsInstance(got, Pass, got)
+
+    def test_a_runner_whose_one_command_is_the_suite_is_not_run_twice(self):
+        make = {"step": "runner", "output": {"kind": "make", "suite": "make test", "each": ""}}
+        start = {"Makefile": "test:\n\tsh tests/says_hi.sh\n", "tests/says_hi.sh": "exit 1\n"}
+        got, commands = failing(["tests/says_hi.sh"], start, runner=make, start={"files": start})
+        self.assertIsInstance(got, Pass, got)
+        self.assertEqual(commands, ["make test"])
+
+    def test_a_test_the_suite_runs_by_its_path_is_run_as_the_step_wrote_it(self):
+        make = {"step": "runner", "output": {"kind": "make", "suite": "make test", "each": "sh"}}
+        start = {"Makefile": "test:\n\tsh tests/says_hi.sh\n", "tests/says_hi.sh": "true\n"}
+        now = {**start, "tests/says_hi.sh": "exit 1\n"}
+        seen: list[object] = []
+        real = menu._box
+        def spy(call, command, **kw):
+            seen.append(kw.get("over"))
+            return real(call, command, **kw)
+        with mock.patch.object(menu, "_box", side_effect=spy):
+            got, _ = failing(["tests/says_hi.sh"], now, runner=make, start={"files": start})
+        self.assertIsInstance(got, Pass, got)
+        self.assertNotIn("tests/says_hi.sh", seen[-1] or {})
 
 if __name__ == "__main__":
     unittest.main()

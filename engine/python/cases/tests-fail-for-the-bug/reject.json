@@ -910,5 +910,46 @@
    "tests/done.sh": "echo 'expected Done, got Not done'; exit 1\n",
    "page.html": "<style>[data-row=\"todo\"]{color:red}</style>\n<div data-row=\"todo\">Buy milk</div>\n<span class=\"state\">Not done</span>\n"
   }
+ },
+ {
+  "id": "collected-not-run-by-the-suite",
+  "hole": "a test the suite never runs, which shows nothing when it passes (the real-user's contas, 23/11: tests/relatorio_test.py, which python_files left out)",
+  "with": {
+   "suite_step": "runner",
+   "write": [
+    "tests/**"
+   ],
+   "collected": true
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "sh",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {
+   "reproduced": true,
+   "tests": [
+    "tests/new_bug.sh"
+   ],
+   "failure": "expected hi, got hello"
+  },
+  "start": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "true\n",
+   "greeting.txt": "hello\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/says_hi.sh\n",
+   "tests/says_hi.sh": "true\n",
+   "greeting.txt": "hello\n",
+   "tests/new_bug.sh": "grep -q hi greeting.txt || { echo 'expected hi, got hello'; exit 1; }\n"
+  },
+  "expect": "reject"
  }
 ]

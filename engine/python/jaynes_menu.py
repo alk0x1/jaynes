@@ -737,6 +737,15 @@ def _test_settings(kind: str, path: str, text: str | None) -> str | None:
     return "\n".join(kept)
 
 
+def _own_tests(kind: str, output: Any) -> set[str]:
+    """The files a step names as its tests (``tests`` in its output), save the configuration a runner reads by itself:
+    a script the suite runs by its path that the step wrote as its test is its test, never how the tests are
+    defined; a Makefile, pytest's settings or a conftest.py is never a test."""
+    named = (output or {}).get("tests") if isinstance(output, dict) else None
+    paths = {in_project(str(t)) or str(t) for t in named or []}
+    return {p for p in paths if not _read_on_its_own(kind, p) and p != "package.json"}
+
+
 def tests_defined_as_they_began(call: Call, params: Params) -> Any:
     """The step left how the project's tests are defined as it was when the run began: the files that say what the
     suite runs, as suite-passes holds them, compared by what in them says how the tests run. A step that changed
@@ -754,7 +763,9 @@ def tests_defined_as_they_began(call: Call, params: Params) -> Any:
     then, now = _definition(kind, start, suite), _definition(kind, _now(Path(call["project"])), suite)
     if then is None or now is None:
         return Blocked("a file that defines the project's tests cannot be read")
-    changed = sorted(p for p in set(then) | set(now) if _test_settings(kind, p, then.get(p)) != _test_settings(kind, p, now.get(p)))
+    own = _own_tests(kind, call.get("output"))
+    changed = sorted(p for p in (set(then) | set(now)) - own
+                     if _test_settings(kind, p, then.get(p)) != _test_settings(kind, p, now.get(p)))
     if not changed:
         return Pass()
     if str(call.get("tests_leave") or "").strip():
@@ -941,7 +952,46 @@ def tests_fail_for_the_bug(call: Call, params: Params) -> Any:
     if saw and saw not in " ".join(ran.printed.split()):
         return Fail(f"saw, \"{saw}\", is not in what the tests printed; quote what the test got, as it printed it. "
                     f"The end of what {command} printed (exit {ran.code}):\n{ran.output}")
-    return _quoted(str(out.get("failure") or ""), ran, "because of the bug") or Pass()
+    quoted = _quoted(str(out.get("failure") or ""), ran, "because of the bug")
+    if quoted:
+        return quoted
+    if params.get("collected"):
+        return _among_the_suite(call, runner, tests, command, str(out.get("failure") or "")) or Pass()
+    return Pass()
+
+
+def _among_the_suite(call: Call, runner: dict[str, Any], tests: list[str], picked: str, failure: str) -> Any:
+    """None when the suite, as the project defined it when the run began (as the agent left it, with the person's
+    leave), runs ``tests``, or why not: pytest's by what it collects; a runner Jaynes cannot list by the suite failing
+    and printing ``failure``. A test the suite never runs shows nothing when it passes (the real-user's contas, 23/11:
+    a test in tests/relatorio_test.py, which python_files left out)."""
+    began = _began(call, runner)
+    left = _left(call, began)
+    suite = str(runner.get("suite") or "")
+    how = "as the agent left it, with the person's leave" if left else "as the project defined it when the run began"
+    names = ", ".join(tests)
+    missing = _collected(call, runner, tests, began, left)
+    if isinstance(missing, Blocked):
+        return missing
+    if missing is None:
+        # what the run changed of the suite's definition goes back, save the tests themselves, which run as written
+        own = _own_tests(str(runner.get("kind") or ""), {"tests": tests})
+        back = {} if left else {p: t for p, t in (began or {}).items() if p not in own}
+        if picked == suite and not back:
+            return None  # the tests ran as the suite, which failed printing the failure
+        ran = _box(call, suite, over=back or None)
+        if isinstance(ran, Blocked):
+            return ran
+        if ran.code != 0 and " ".join(failure.split()) in " ".join(ran.printed.split()):
+            return None
+        why = f"the suite {how} ({suite}) {'passes' if ran.code == 0 else 'fails without printing the failure quoted'}, so it does not run {names}"
+    elif not missing:
+        return None
+    else:
+        why = f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} not among the tests the suite collects {how}"
+    return Fail(f"{why}: a test the suite never runs cannot show the bug is fixed. Write it in a file the suite runs, "
+                "beside the project's tests and named as they are. If none can be without changing how the tests are "
+                "defined, change nothing, set reproduced to false and say so in bug, for the person to decide")
 
 
 def _alone(call: Call, tests: list[str], command: str) -> bool:
