@@ -3581,7 +3581,7 @@ mod tests {
         let _gone = std::fs::remove_dir_all(&home);
         assert!(shown.contains("data-act=\"resume\"") && !shown.contains("data-act=\"halt\""), "Resume, never Halt: {shown}");
         assert!(shown.contains("<div class=\"notice\">Jaynes stopped while it ran at “fix”</div>"), "{shown}");
-        let steps = shown.split("class=\"stages\"").nth(1).unwrap_or_else(|| panic!("no steps: {shown}"));
+        let steps = shown.split("class=\"stages told\"").nth(1).unwrap_or_else(|| panic!("no steps: {shown}"));
         assert!(steps.contains("class=\"halted\"") && !steps.contains("class=\"running\""), "the step stopped, not breathing: {steps}");
         // the column and the home, as the app says it: halted, waiting for the person
         assert!(shown.contains("<span class=\"holds\">halted</span>"), "{shown}");
