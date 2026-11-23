@@ -12,7 +12,7 @@ use jaynes_core::manifest::ProjectAccess;
 use jaynes_core::question::{Answer, Question};
 use jaynes_core::{AgentTurn, AskOutcome, AskTurn, AttemptOutcome, CheckResult, CheckVerdict, Command, Digest, Input, Run};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1716,6 +1716,9 @@ impl<'a> Driver<'a> {
             Err(e) => return fault(e),
         };
         let previous = self.output_of(&turn.previous);
+        // what the session this turn goes on in already heard, word for word, read before anything of this turn runs
+        let heard_before = heard(&self.setup.dir, turn.session.as_deref());
+        let mut sent = Vec::new();
         let left = if turn.fix == 0 {
             match self.prepare(run, i) {
                 Ok(left) => left,
@@ -1768,7 +1771,8 @@ impl<'a> Driver<'a> {
             let name = &run.manifest.steps[i].name;
             let read = run.manifest.steps[i].stop.is_some()
                 || run.manifest.steps.iter().any(|s| s.stop.as_ref().and_then(|st| st.redo.as_deref()) == Some(name.as_str()));
-            let mut p = compose(&run.request, &text, &schema, &turn, &given, read);
+            let (mut p, fixed) = compose_heard(&run.request, &text, &schema, &turn, &given, read, &heard_before);
+            sent = fixed;
             if left {
                 p.push_str(LEFT_BY_THE_LAST_ATTEMPT);
             }
@@ -1863,7 +1867,9 @@ impl<'a> Driver<'a> {
         if let Some(t) = &spec.transcript {
             let _made = std::fs::create_dir_all(t.parent().unwrap_or(Path::new(".")));
         }
+        let log = spec.transcript.clone().unwrap_or_default();
         let done = self.setup.agent.turn(spec);
+        remember(&self.setup.dir, turn.session.as_deref(), &done.ended, heard_before, &sent, &log);
         let _kept = std::fs::write(exchange.join(format!("applied-{}-{}.json", turn.attempt, turn.fix)), done.applied.to_string());
         let outcome = match done.ended {
             Ended::Fault { reason, usage } => AttemptOutcome::Fault { reason, usage },
@@ -1898,6 +1904,7 @@ impl<'a> Driver<'a> {
             Err(e) => return failed(e, Default::default()),
         };
         let prompt = ask_prompt(&run.request, &turn);
+        let heard_before = heard(&self.setup.dir, turn.session.as_deref());
         say(&format!("· {} answers a question", turn.step));
         let transcript = self.setup.dir.join("steps").join(&turn.step).join(format!("ask-{}.jsonl", turn.ask));
         let _made = std::fs::create_dir_all(transcript.parent().unwrap_or(Path::new(".")));
@@ -1910,7 +1917,7 @@ impl<'a> Driver<'a> {
             deadline: Duration::from_secs(turn.deadline_seconds.max(1)),
             reads: &reads,
             env: AGENT_GIT_ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            transcript: Some(transcript),
+            transcript: Some(transcript.clone()),
             pidfile: Some(self.setup.dir.join("agent.pid")),
             paused: None,
             waits: self.setup.role.waits.clone(),
@@ -1924,6 +1931,8 @@ impl<'a> Driver<'a> {
             turns: None,
         };
         let done = self.setup.agent.turn(spec);
+        // a question's turn tells the session none of the fixed texts, but Claude Code may compact the session in it
+        remember(&self.setup.dir, turn.session.as_deref(), &done.ended, heard_before, &[], &transcript);
         let reply = reply_in(&exchange);
         let _gone = std::fs::remove_file(exchange.join(REPLY));
         let _gone = std::fs::remove_file(exchange.join(ASKED_ABOUT));
@@ -2394,8 +2403,26 @@ fn write_exchange(exchange: &Path, given: &[Given], previous: Option<&Value>) ->
 pub const LEFT_BY_THE_LAST_ATTEMPT: &str = "\n# Your last attempt's files\n\nThe project is as your last attempt left it, uncommitted: start from these files, change what made it fail, and do not make again what is already there.\n";
 
 pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, given: &[Given], read: bool) -> String {
+    compose_heard(request, text, schema, turn, given, read, &BTreeSet::new()).0
+}
+
+/// The prompt, leaving out each text that stays the same between turns (the request, what to do when it cannot be done
+/// as asked, how to reply to the person) when the session already heard exactly it, by its hash in `heard`; with the
+/// hashes of those texts, which the session has heard once this turn ran. Everything else comes whole every time: the
+/// step's own text, what is new since the session's last turn, the checks, the schema (the engineer lead's rule for
+/// the tech-lead's cost lever, 0.2.5).
+pub fn compose_heard(request: &str, text: &str, schema: &Value, turn: &AgentTurn, given: &[Given], read: bool, heard: &BTreeSet<String>) -> (String, Vec<String>) {
     let mut p = String::new();
-    p.push_str(&format!("# The request\n\n{request}\n\n# Your step: {}\n\n{text}\n\n", turn.step));
+    let mut sent = Vec::new();
+    let mut once = |p: &mut String, section: &str| {
+        let hash = text_hash(section);
+        if !heard.contains(&hash) {
+            p.push_str(section);
+        }
+        sent.push(hash);
+    };
+    once(&mut p, &format!("# The request\n\n{request}\n\n"));
+    p.push_str(&format!("# Your step: {}\n\n{text}\n\n", turn.step));
     if !given.is_empty() {
         p.push_str("# What earlier steps made\n\nRead them in .jaynes/inputs/: ");
         p.push_str(&given.iter().map(|g| format!("{}.json", g.step)).collect::<Vec<_>>().join(", "));
@@ -2479,7 +2506,8 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         }
         p.push('\n');
     }
-    p.push_str(
+    once(
+        &mut p,
         "# If it cannot be done as asked\n\nIf the request contradicts itself, needs something you cannot reach, or could pass \
          the checks only by gaming them, do not write an output. Write why, in a few plain sentences, to \
          .jaynes/impossible.txt. The person reads it and tells you how to go on; it costs you no attempt. If you ask them \
@@ -2493,7 +2521,8 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
          nor a sandbox of your own.\n\n",
     );
     if read {
-        p.push_str(
+        once(
+            &mut p,
             "# Your reply to the person\n\nThe person reads what you make at a stop. When you are done, write to \
              .jaynes/reply.md, in their language and in a few plain sentences, what you made or changed and why, and \
              answer there any question they asked. It goes beside your work, never inside it: no code, no JSON, no file \
@@ -2504,7 +2533,52 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
         "# Your output\n\nWhen you are done, write your output as JSON to .jaynes/output.json, following this schema:\n\n{}\n",
         schema
     ));
-    p
+    (p, sent)
+}
+
+/// A fixed text's hash, as what a session heard keeps it.
+fn text_hash(text: &str) -> String {
+    <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Where the engine keeps what a session heard: beside the run, one file a session, by its id.
+const HEARD: &str = "heard";
+
+fn heard_file(dir: &Path, session: &str) -> Option<PathBuf> {
+    let named = !session.is_empty() && session.len() <= 128 && session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    named.then(|| dir.join(HEARD).join(format!("{session}.json")))
+}
+
+/// What `session` already heard of the fixed texts, by their hashes. Nothing whenever the engine cannot know: no turn
+/// of it was kept, its last turn's log is gone or unreadable, that log is not Claude Code's stream of this very session,
+/// or Claude Code compacted the session in it ("compact_boundary", as its stream says it), which loses what came
+/// before.
+pub(crate) fn heard(dir: &Path, session: Option<&str>) -> BTreeSet<String> {
+    let Some(file) = session.and_then(|s| heard_file(dir, s)) else { return BTreeSet::new() };
+    let Some(kept) = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return BTreeSet::new() };
+    let Some(log) = kept["log"].as_str().and_then(|l| std::fs::read_to_string(l).ok()) else { return BTreeSet::new() };
+    let said: Vec<Value> = log.lines().filter_map(|l| serde_json::from_str(l).ok()).filter(|l: &Value| l["type"] == "system").collect();
+    let its_own = said.iter().any(|l| l["session_id"].as_str() == session);
+    let compacted = said.iter().any(|l| l["subtype"] == "compact_boundary");
+    if !its_own || compacted {
+        return BTreeSet::new();
+    }
+    kept["texts"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+}
+
+/// After a turn: the session it ran in heard what it had heard before, if it is the one the turn went on in, and the
+/// fixed texts this turn was given, `sent`; `log` is the turn's own, which the next reads for a compaction. A turn
+/// that did not end as it should leaves what its session heard unknown, and the next hears everything.
+fn remember(dir: &Path, asked: Option<&str>, ended: &Ended, before: BTreeSet<String>, sent: &[String], log: &Path) {
+    if let Some(file) = asked.and_then(|s| heard_file(dir, s)) {
+        let _gone = std::fs::remove_file(file);
+    }
+    let Ended::Ran { session: Some(ran), .. } = ended else { return };
+    let Some(file) = heard_file(dir, ran) else { return };
+    let mut texts = if asked == Some(ran.as_str()) { before } else { BTreeSet::new() };
+    texts.extend(sent.iter().cloned());
+    let kept = json!({"texts": texts, "log": log.display().to_string()});
+    let _kept = std::fs::create_dir_all(dir.join(HEARD)).and_then(|()| std::fs::write(&file, kept.to_string()));
 }
 
 /// What the agent is told when the person asks a question at a stop. An agent in the step's session knows the rest;
@@ -3403,6 +3477,35 @@ mod tests {
         let said = p.split("following this schema:\n\n").nth(1).expect("the schema").trim_end();
         assert_eq!(said, schema.to_string(), "{p}");
         assert!(!said.contains('\n'), "{said}");
+    }
+
+    /// What a session heard counts only while the engine can read it from the session's last turn: a log that is
+    /// gone, or is not Claude Code's stream of that session, or a turn that did not end as it should, and the next
+    /// turn hears everything.
+    #[test]
+    fn what_a_session_heard_is_forgotten_whenever_the_engine_cannot_know_it() {
+        let dir = std::env::temp_dir().join(format!("jaynes-heard-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let log = dir.join("turn.jsonl");
+        let ran = |s: &str| Ended::Ran { usage: Default::default(), session: Some(s.into()), model: String::new(), said: String::new() };
+        let heard_now = |texts: &[&str]| texts.iter().map(|t| t.to_string()).collect::<BTreeSet<String>>();
+        std::fs::write(&log, "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}\n").expect("write");
+        remember(&dir, None, &ran("s1"), BTreeSet::new(), &["a".into()], &log);
+        assert_eq!(heard(&dir, Some("s1")), heard_now(&["a"]));
+        remember(&dir, Some("s1"), &ran("s1"), heard(&dir, Some("s1")), &["b".into()], &log);
+        assert_eq!(heard(&dir, Some("s1")), heard_now(&["a", "b"]), "a turn in the same session adds to what it heard");
+        assert!(heard(&dir, Some("s2")).is_empty(), "another session heard nothing");
+        std::fs::write(&log, "{\"type\":\"thread.started\",\"thread_id\":\"s1\"}\n").expect("write");
+        assert!(heard(&dir, Some("s1")).is_empty(), "a log that is not Claude Code's stream of s1");
+        std::fs::remove_file(&log).expect("rm");
+        assert!(heard(&dir, Some("s1")).is_empty(), "a log that is gone");
+        std::fs::write(&log, "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}\n").expect("write");
+        remember(&dir, Some("s1"), &Ended::Interrupted { reason: "quota".into(), usage: Default::default() }, heard_now(&["a"]), &[], &log);
+        assert!(heard(&dir, Some("s1")).is_empty(), "a turn cut off leaves it unknown");
+        remember(&dir, Some("s1"), &ran("s9"), heard_now(&["a"]), &["c".into()], &log);
+        assert!(heard(&dir, Some("s1")).is_empty() && heard(&dir, Some("s9")).is_empty(), "a resume that ran in another session: s9 is not in this log");
+        let _gone = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
