@@ -54,8 +54,9 @@ const USAGE: &str = "jaynes: the redesigned Jaynes engine
   check DIR               read a role in TOML strictly, every error with its line, and prove its promises
   project ports DIR       whether a project's checks reach any local port of this machine, and since when
   project open-ports DIR | project close-ports DIR   let them, or not: the person's alone, at a terminal
-  project test-servers DIR [PORT...]  let a project's tests start their own test servers (macOS), and with PORT use
-                            one Jaynes holds for databases and caches; the person's alone; close-ports closes it
+  project test-servers DIR [PORT...]  Let a project's tests start their own test servers (macOS). With PORT, also let
+                            them use that port, which Jaynes otherwise holds for databases and caches. Only the
+                            person runs this; close-ports undoes it.
   schema                  print the protocol's schema
 
 The record lives in $JAYNES_ENGINE_HOME (default ~/.jaynes/engine).";
