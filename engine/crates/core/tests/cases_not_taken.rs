@@ -42,8 +42,8 @@ fn fix_bug() -> Manifest {
     let mut fix = step("fix", &[]);
     fix.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], commands: true, ..Reach::default() };
     fix.checks = vec![
-        CheckDecl { name: "tests-pass".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() },
-        CheckDecl { name: "proof".into(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".into()] },
+        CheckDecl { name: "tests-pass".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false },
+        CheckDecl { name: "proof".into(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".into()], project_tests: false },
     ];
     Manifest { role: "fix-bug".into(), version: "5.0.0".into(), protocol: 1, steps: vec![cases, fix], target: Default::default(), delivery: DeliveryKind::Merge }
 }

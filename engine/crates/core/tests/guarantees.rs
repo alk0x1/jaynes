@@ -65,7 +65,7 @@ fn cases_from_high(rng: &mut Rng) -> Manifest {
     let mut cases = step("s0", Vec::new(), Reach { project: ProjectAccess::Read, commands: true, ..Reach::default() }, Vec::new());
     cases.hidden = true;
     cases.from_risk = Risk::High;
-    let check = |name: &str, kind: CheckKind, reads: Vec<String>| CheckDecl { name: name.to_string(), kind, about: String::new(), reads };
+    let check = |name: &str, kind: CheckKind, reads: Vec<String>| CheckDecl { name: name.to_string(), kind, about: String::new(), reads, project_tests: false };
     let fix = step("s1", Vec::new(), Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], commands: true, ..Reach::default() }, vec![
         check("shapecheck1x0", CheckKind::Open, Vec::new()),
         check("hiddencheck1x1", CheckKind::Hidden, vec!["s0".to_string()]),
@@ -135,7 +135,7 @@ fn role(rng: &mut Rng) -> Manifest {
                         CheckKind::Hidden => steps.iter().filter(|s| s.hidden && rng.chance(70)).map(|s| s.name.clone()).collect(),
                         CheckKind::Open => Vec::new(),
                     };
-                    checks.push(CheckDecl { name, kind, about: format!("holds {k}"), reads });
+                    checks.push(CheckDecl { name, kind, about: format!("holds {k}"), reads, project_tests: false });
                 }
             }
             let stop = if executor == Executor::Person || rng.chance(45) {
@@ -1597,7 +1597,7 @@ fn g14_an_act_whose_check_failed_is_not_done_again_when_the_person_continues() {
     for verdict in [CheckVerdict::Fail { reasons: vec!["not landed".to_string()], detail: String::new(), cases: vec![] }, CheckVerdict::Blocked { reason: "could not look".to_string() }] {
         let mut send = step("send", Executor::Role);
         send.effect = Effect::Irreversible { idempotent: false };
-        send.checks = vec![CheckDecl { name: "landed".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }];
+        send.checks = vec![CheckDecl { name: "landed".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false }];
         let (mut run, cmds) = start(vec![send]);
         let c = probe_ok(&mut run, cmds);
         let first = pushes_of(&c, "send");
@@ -1647,7 +1647,7 @@ fn g4_a_box_that_refuses_spends_no_attempt() {
 #[test]
 fn a_failed_shape_check_is_fixed_in_the_same_session() {
     let mut build = step("build", Executor::Agent);
-    build.checks = vec![CheckDecl { name: "short".to_string(), kind: CheckKind::Open, about: "at most 80 characters".to_string(), reads: Vec::new() }];
+    build.checks = vec![CheckDecl { name: "short".to_string(), kind: CheckKind::Open, about: "at most 80 characters".to_string(), reads: Vec::new(), project_tests: false }];
     let (mut run, cmds) = start(vec![build]);
     probe_ok(&mut run, cmds);
     deliver(&mut run, "build", 1, "long", Vec::new());
@@ -1872,8 +1872,8 @@ fn every_check_leaves_its_kind_its_verdict_and_what_it_read_in_the_record() {
     let cases = step("cases", Executor::Agent);
     let mut build = step("build", Executor::Agent);
     build.checks = vec![
-        CheckDecl { name: "suite".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() },
-        CheckDecl { name: "proof".to_string(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".to_string()] },
+        CheckDecl { name: "suite".to_string(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false },
+        CheckDecl { name: "proof".to_string(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".to_string()], project_tests: false },
     ];
     let (mut run, cmds) = start(vec![cases, build]);
     let c = probe_ok(&mut run, cmds);

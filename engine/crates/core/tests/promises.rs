@@ -26,7 +26,7 @@ fn step(name: &str, executor: Executor, needs: &[&str]) -> StepDecl {
 }
 
 fn open(name: &str) -> CheckDecl {
-    CheckDecl { name: name.into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }
+    CheckDecl { name: name.into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false }
 }
 
 fn stop(from_risk: Risk, holds: bool) -> StopDecl {
@@ -113,7 +113,7 @@ fn fix_bug() -> Manifest {
     let found = step("found", Executor::Role, &["reproduce"]);
     let mut fix = step("fix", Executor::Agent, &["runner", "reproduce", "found"]);
     fix.reach = Reach { project: ProjectAccess::Write, write: vec!["**".into(), "!tests/**".into()], commands: true, ..Reach::default() };
-    fix.checks = vec![open("tests-pass"), CheckDecl { name: "proof".into(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".into()] }];
+    fix.checks = vec![open("tests-pass"), CheckDecl { name: "proof".into(), kind: CheckKind::Hidden, about: String::new(), reads: vec!["cases".into()], project_tests: false }];
     fix.stop = Some(stop(Risk::Low, false));
     Manifest { role: "fix-bug".into(), version: "3.0.0".into(), protocol: 1, steps: vec![runner, cases, reproduce, found, fix], target: Default::default(), delivery: DeliveryKind::Merge }
 }

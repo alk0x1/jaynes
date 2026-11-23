@@ -121,6 +121,10 @@
         "name": {
           "type": "string"
         },
+        "project_tests": {
+          "description": "Whether the check runs the project's tests: such a check runs once more on what the run delivers, before the\nmerge, since what a step drew only for the person to choose from (a step not delivered) is not in it. The\nmenu's suite-passes, tests-pass and hidden-cases-pass say so of themselves; a script check says it in its\nrole. Never one that reads what is not delivered, such as a check of the layout the person chose.",
+          "type": "boolean"
+        },
         "reads": {
           "default": [],
           "description": "Earlier steps the check reads besides what its step uses, such as the hidden cases a proof runs. Only a\nhidden check may read a hidden step.",

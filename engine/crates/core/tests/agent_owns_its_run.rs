@@ -21,7 +21,7 @@ fn step() -> StepDecl {
         session: SessionKind::Fresh,
         reach: Reach { project: ProjectAccess::Write, write: vec!["**".into()], ..Reach::default() },
         effect: Effect::None,
-        checks: vec![CheckDecl { name: "tests".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }],
+        checks: vec![CheckDecl { name: "tests".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false }],
         stop: None,
         from_risk: Default::default(),
         attempts: 3,

@@ -517,6 +517,8 @@ struct MenuCheck {
     about: fn(&toml::Table) -> String,
     /// Whether it runs commands in the box, and so may name the local ports they reach.
     runs: bool,
+    /// Whether it runs the project's tests, and so runs once more on what the run delivers.
+    project_tests: bool,
 }
 
 fn read_project() -> Reach {
@@ -574,6 +576,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[Auto::Suite],
         about: |_| "the project's whole suite passes, run by Jaynes without internet".into(),
         runs: true,
+        project_tests: true,
     },
     MenuCheck {
         name: "tests-fail-for-the-bug",
@@ -586,6 +589,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
                      their own code, printing the line quoted in failure{saw}")
         },
         runs: true,
+        project_tests: false,
     },
     MenuCheck {
         name: "tests-pass",
@@ -594,6 +598,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[Auto::Suite],
         about: |t| format!("the tests {} named pass, and then the whole suite", text(t, "tests_from")),
         runs: true,
+        project_tests: true,
     },
     MenuCheck {
         name: "hidden-cases-pass",
@@ -602,6 +607,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[Auto::Cases],
         about: |_| "the cases written from the request alone hold on the changed project".into(),
         runs: true,
+        project_tests: true,
     },
     MenuCheck {
         name: "output-follows-schema",
@@ -610,6 +616,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[Auto::Schema],
         about: |_| "the output has every field the schema requires, none blank, each of its type and within its limits".into(),
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "field-required",
@@ -618,6 +625,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |t| format!("the output has {}, not empty", text(t, "field")),
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "field-empty",
@@ -626,6 +634,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |t| format!("{} is empty; when it is not, the person decides", text(t, "field")),
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "field-max-length",
@@ -634,6 +643,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |t| format!("{} has at most {} characters", text(t, "field"), text(t, "max")),
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "files-within",
@@ -645,6 +655,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
             format!("every file in {} is one the step may write", if f.is_empty() { "files".to_string() } else { f })
         },
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "quotes-found",
@@ -653,6 +664,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |t| format!("every quote in {} is, word for word, in the text Jaynes downloaded from its page in {}", text(t, "field"), text(t, "pages")),
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "plain-words",
@@ -661,6 +673,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |t| format!("what {} says is in plain words: no braces or JSON, no file name or path, no name() and no name_with_underscores", text(t, "field")),
         runs: false,
+        project_tests: false,
     },
     MenuCheck {
         name: "named-in-request",
@@ -669,6 +682,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |t| format!("an option of {} whose {} says the request named it quotes the request word for word, is not refused there, and is the only one", text(t, "field"), text(t, "words")),
         runs: false,
+        project_tests: false,
     },
 ];
 
@@ -1411,6 +1425,9 @@ impl TomlRole {
                         if given.remove("cases").is_some() {
                             errs.push(format!("the check {u} is on the menu: its cases come with Jaynes, so it names none"));
                         }
+                        if given.remove("project_tests").is_some() {
+                            errs.push(format!("the check {u} is on the menu: Jaynes knows whether it runs the project's tests, so it says no project_tests"));
+                        }
                         let name = named.unwrap_or_else(|| u.to_string());
                         if table.contains_key("local_ports") && !m.runs {
                             errs.push(format!("the check {name} runs nothing in the box, so it reaches no port"));
@@ -1442,12 +1459,12 @@ impl TomlRole {
                                 }
                             }
                         }
-                        checks.push(CheckDecl { name: name.clone(), kind: m.kind, about: (m.about)(&given), reads });
+                        checks.push(CheckDecl { name: name.clone(), kind: m.kind, about: (m.about)(&given), reads, project_tests: m.project_tests });
                         impls.insert(name, CheckImpl::Menu { uses: u.to_string(), with });
                     }
                     (None, Some(script)) => {
                         for k in table.keys() {
-                            if !["script", "kind", "about", "name", "reads", "cases", "local_ports"].contains(&k.as_str()) {
+                            if !["script", "kind", "about", "name", "reads", "cases", "local_ports", "project_tests"].contains(&k.as_str()) {
                                 errs.push(format!("the check {script} takes no {k}"));
                             }
                         }
@@ -1457,6 +1474,15 @@ impl TomlRole {
                             Some(other) => {
                                 errs.push(format!("the check {script} has kind {other:?}, not open or hidden"));
                                 CheckKind::Open
+                            }
+                        };
+                        // whether it runs the project's tests: only the role knows, since nothing in a script says it for sure
+                        let project_tests = match table.get("project_tests") {
+                            None => false,
+                            Some(toml::Value::Boolean(b)) => *b,
+                            Some(_) => {
+                                errs.push(format!("the check {script} says project_tests = true or false"));
+                                false
                             }
                         };
                         let about = table.get("about").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1485,7 +1511,7 @@ impl TomlRole {
                                 None
                             }
                         };
-                        checks.push(CheckDecl { name: name.clone(), kind, about, reads });
+                        checks.push(CheckDecl { name: name.clone(), kind, about, reads, project_tests });
                         check_ports.insert(name.clone(), ports_of_check(&table, &name, &mut errs));
                         impls.insert(name, CheckImpl::Script { path: script.to_string(), cases });
                     }
@@ -2010,6 +2036,20 @@ impl TomlRole {
                 }
             }
         }
+        if told.is_empty() {
+            return told;
+        }
+        // what is delivered is not the tree the checks judged: the project's tests run once more on it
+        let again: Vec<String> = steps
+            .iter()
+            .filter(|s| s.delivered)
+            .flat_map(|s| s.checks.iter().filter(|c| c.project_tests).map(move |c| format!("{} of {}", c.name, s.name)))
+            .collect();
+        told.push(if again.is_empty() {
+            "no check runs the project's tests, so nothing runs again on what is delivered".to_string()
+        } else {
+            format!("{} run{} the project's tests once more on what is delivered, before the merge", again.join(", "), if again.len() == 1 { "s" } else { "" })
+        });
         told
     }
 
@@ -2896,10 +2936,11 @@ files = { type = "array", items = "string" }
             vec![
                 "boards draws design/identity/** for you to choose from: kept in the run's record and on its page, never merged into your project".to_string(),
                 "what change writes in design/identity/** is left out of the merge too".to_string(),
+                "suite-passes of change runs the project's tests once more on what is delivered, before the merge".to_string(),
             ]
         );
         let narrow = TomlRole::load(&role("shown-only-narrow", &with(boards).replacen("write = [\"**\"], commands", "write = [\"src/**\"], commands", 1))).expect("reads");
-        assert_eq!(narrow.shown_told().len(), 1, "a delivered step that cannot write there is not named: {:?}", narrow.shown_told());
+        assert!(!narrow.shown_told().iter().any(|t| t.contains("left out of the merge too")), "a delivered step that cannot write there is not named: {:?}", narrow.shown_told());
         assert!(TomlRole::load(&role("shown-none", GOOD)).expect("reads").shown_told().is_empty(), "a role that delivers all says nothing");
         for (name, from, to, says) in [
             ("shown-everywhere", "write = [\"design/identity/**\"]", "write = [\"**\"]", "step boards is never delivered and may write anywhere: name in write the folders it draws in, which are never merged"),
@@ -2909,6 +2950,42 @@ files = { type = "array", items = "string" }
             let e = errors(name, &with(boards).replacen(from, to, 1));
             assert!(e.contains(says), "{name}:\n{e}");
         }
+    }
+
+    /// The backend's question (23/11), for the tech-lead's third part of item 2 ("where the role's checks ran the
+    /// project's tests, they run once more on what is delivered, before the merge"): a check says it runs the
+    /// project's tests. The menu's suite-passes, tests-pass and hidden-cases-pass say so of themselves, never
+    /// tests-fail-for-the-bug, which wants the tests to fail; a script check says it in the role, since nothing in a
+    /// script tells it for sure, and a check of what is never delivered (the layout chosen) leaves it out.
+    #[test]
+    fn asked_a_check_says_it_runs_the_project_s_tests_so_it_runs_again_on_what_is_delivered() {
+        let check = |r: &TomlRole, step: &str, name: &str| {
+            r.manifest.steps.iter().find(|s| s.name == step).and_then(|s| s.checks.iter().find(|c| c.name == name)).cloned().expect("the check")
+        };
+        let r = TomlRole::load(&role("tests-menu", GOOD)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        assert!(check(&r, "change", "suite-passes").project_tests, "suite-passes runs the project's tests");
+        assert!(!check(&r, "change", "field-max-length").project_tests, "a check of the output runs none");
+        let json = serde_json::to_value(&r.manifest).expect("json");
+        assert!(json["steps"][1]["checks"][1].get("project_tests").is_none(), "one that runs none describes itself as before: {json}");
+        for (name, says) in [("tests-pass", true), ("hidden-cases-pass", true), ("tests-fail-for-the-bug", false)] {
+            let m = menu_check(name).expect("on the menu");
+            assert_eq!(m.project_tests, says, "{name}");
+        }
+        let with_script = |line: &str| {
+            let text = GOOD.replacen("checks = [\"suite-passes\",", &format!("checks = [{{ script = \"checks/tests.py\", about = \"the project's tests pass\"{line} }},"), 1);
+            let dir = role(&format!("tests-script{}", line.len()), &text);
+            std::fs::create_dir_all(dir.join("checks")).expect("dir");
+            std::fs::write(dir.join("checks/tests.py"), "import subprocess\n").expect("script");
+            TomlRole::load(&dir)
+        };
+        let r = with_script(", project_tests = true").unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        assert!(check(&r, "change", "tests").project_tests, "a script check says it in the role");
+        let r = with_script("").unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        assert!(!check(&r, "change", "tests").project_tests, "left out, a script runs none, whatever its text");
+        let e = with_script(", project_tests = \"yes\"").map(|_| ()).expect_err("refused").join("\n");
+        assert!(e.contains("the check checks/tests.py says project_tests = true or false"), "{e}");
+        let e = errors("tests-menu-said", &GOOD.replacen("checks = [\"suite-passes\",", "checks = [{ use = \"suite-passes\", project_tests = true },", 1));
+        assert!(e.contains("the check suite-passes is on the menu: Jaynes knows whether it runs the project's tests, so it says no project_tests"), "{e}");
     }
 
     /// A role whose fetch step, a step of Jaynes's own that downloads addresses an agent chose, reaches as given.

@@ -256,6 +256,12 @@ pub struct CheckDecl {
     /// hidden check may read a hidden step.
     #[serde(default)]
     pub reads: Vec<String>,
+    /// Whether the check runs the project's tests: such a check runs once more on what the run delivers, before the
+    /// merge, since what a step drew only for the person to choose from (a step not delivered) is not in it. The
+    /// menu's suite-passes, tests-pass and hidden-cases-pass say so of themselves; a script check says it in its
+    /// role. Never one that reads what is not delivered, such as a check of the layout the person chose.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub project_tests: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

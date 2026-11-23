@@ -20,7 +20,7 @@ fn step(name: &str, needs: &[&str]) -> StepDecl {
         session: SessionKind::Fresh,
         reach: Reach { project: ProjectAccess::Write, write: vec!["design/**".into()], ..Reach::default() },
         effect: Effect::None,
-        checks: vec![CheckDecl { name: "shape".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() }],
+        checks: vec![CheckDecl { name: "shape".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false }],
         stop: None,
         from_risk: Risk::Low,
         attempts: 3,

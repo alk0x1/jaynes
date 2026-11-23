@@ -17,7 +17,7 @@ fn feed(run: &mut Run, input: Input) -> (Vec<Event>, Vec<Command>) {
 
 /// A run of one agent's step with two open checks, whose attempt delivered an output measured at `tree`.
 fn checking(tree: Option<&str>) -> (Run, u32) {
-    let check = |name: &str| CheckDecl { name: name.into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new() };
+    let check = |name: &str| CheckDecl { name: name.into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests: false };
     let make = StepDecl {
         name: "make".into(),
         needs: Vec::new(),
