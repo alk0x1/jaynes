@@ -208,6 +208,17 @@ pub trait Workspace {
     fn drifted(&self) -> Result<Vec<String>, String>;
     /// Put the copy back as Jaynes last measured it or put it there.
     fn put_back(&self) -> Result<(), String>;
+    /// Keep what a failed attempt left in the copy, over the state the copy was put in for it, so the next attempt
+    /// starts from it: None when it left nothing, or anything `write` does not let through (a nested repository among
+    /// it), which the next attempt would be refused for. The copy is not changed.
+    fn keep_tried(&self, _write: &[String], _message: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    /// Lay what a failed attempt left (`tried`, from [`Workspace::keep_tried`]) over the copy as it is now, uncommitted,
+    /// as that attempt left it. False, the copy untouched, when the copy is not where that attempt started.
+    fn lay_tried(&self, _tried: &str) -> Result<bool, String> {
+        Ok(false)
+    }
     /// `change` with an evaluation's `patch` in it, as a change of its own on the same parent, and the files the
     /// patch changes; the copy untouched until it is composed.
     fn plant(&self, _change: &str, _patch: &Path, _message: &str) -> Result<(String, Vec<String>), String> {
@@ -317,6 +328,12 @@ impl Workspace for Copy {
     }
     fn plant(&self, change: &str, patch: &Path, message: &str) -> Result<(String, Vec<String>), String> {
         self.with_patch(change, patch, message)
+    }
+    fn keep_tried(&self, write: &[String], message: &str) -> Result<Option<String>, String> {
+        Copy::keep_tried(self, write, message)
+    }
+    fn lay_tried(&self, tried: &str) -> Result<bool, String> {
+        Copy::lay_tried(self, tried)
     }
 }
 
@@ -530,6 +547,42 @@ impl Copy {
     /// The tree of a commit.
     pub fn tree_of(&self, commit: &str) -> Result<String, String> {
         self.g(&["rev-parse", &format!("{commit}^{{tree}}")])
+    }
+
+    /// What a failed attempt left, over the state the copy was put in for it, read with an index of its own so the
+    /// engine's stays as it is: None when it left nothing or anything outside `write`.
+    pub fn keep_tried(&self, write: &[String], message: &str) -> Result<Option<String>, String> {
+        if !nested_git(&self.dir).is_empty() {
+            return Ok(None);
+        }
+        let (_, index) = self.aside("tried");
+        let kept = self.git.join("index");
+        if kept.exists() {
+            std::fs::copy(&kept, &index).map_err(|e| e.to_string())?;
+        }
+        let on = |args: &[&str]| git_on_index(&self.git, &self.dir, Some(&index), args);
+        let made = (|| {
+            on(&["add", "-A"])?;
+            let raw = on(&["diff", "--cached", "--raw", "--no-renames", "HEAD"])?;
+            let paths: Vec<(&str, &str)> = raw.lines().filter_map(|l| Some((l.split_whitespace().nth(1)?, l.split('\t').nth(1)?))).collect();
+            if paths.is_empty() || paths.iter().any(|(mode, path)| *mode == "160000" || !glob::allowed(path, write)) {
+                return Ok(None);
+            }
+            let tree = on(&["write-tree"])?;
+            self.g(&["commit-tree", &tree, "-p", "HEAD", "-m", message]).map(Some)
+        })();
+        let _gone = std::fs::remove_file(&index);
+        made
+    }
+
+    /// `tried`'s files over the copy, uncommitted, when the copy has the files it was kept over: compared by tree, as a
+    /// round that goes on from its change lays it again as a new commit each time.
+    pub fn lay_tried(&self, tried: &str) -> Result<bool, String> {
+        if self.tree_of(&format!("{tried}^"))? != self.tree_of(&self.head()?)? {
+            return Ok(false);
+        }
+        self.g(&["read-tree", "-m", "-u", "HEAD", tried])?;
+        Ok(true)
     }
 
     /// Throw away what is not committed.

@@ -641,23 +641,24 @@ impl Ctx {
         let key = decl.effect.irreversible().then(|| self.act_key(i));
         // after the person answered the agent's "it cannot be done", it goes on in that session
         let answered = decl.executor == Executor::Agent && !s.inputs.is_empty() && s.session.is_some();
-        // A round the person sent back with their words goes on in the session of the step's last attempt that
-        // delivered: the agent knows what it made and why. Afresh after an attempt it spent, when the person dropped
-        // everything it showed (they want new ideas), and past the session's ceiling (RESUME_CEILING).
-        let noted = decl.executor == Executor::Agent
-            && !s.notes.is_empty()
-            && s.spent == 0
-            && !s.dropped_all
+        // A step goes on from where it was (the tech-lead's cut of a run's cost, 22/11): a round the person sent back
+        // with their words goes on in the session of the step's last attempt that delivered, and an attempt after one
+        // that failed in that one's session, from the files it left. Afresh when the person starts over (they want new
+        // ideas), and past the session's ceiling (RESUME_CEILING), where its conversation weighs more than it saves.
+        let carry_on = decl.executor == Executor::Agent
+            && s.session.is_some()
             && s.carried <= RESUME_CEILING
-            && s.session.is_some();
+            && (s.tried || (!s.afresh && !s.notes.is_empty()));
         let session = match decl.session {
             // an attempt cut off from outside goes on where it was
             _ if decl.executor == Executor::Agent && s.resume.is_some() => s.resume.clone(),
-            _ if answered || noted => s.session.clone(),
+            _ if answered || carry_on => s.session.clone(),
             SessionKind::Continue => self.run.manifest.steps[..i]
                 .iter()
                 .rposition(|b| b.executor == Executor::Agent)
-                .and_then(|j| self.run.steps[j].session.clone()),
+                .map(|j| &self.run.steps[j])
+                .filter(|b| b.carried <= RESUME_CEILING)
+                .and_then(|b| b.session.clone()),
             SessionKind::Fresh => None,
         };
         let deadline_seconds = ceiling.seconds.saturating_sub(spent.seconds);
@@ -713,7 +714,8 @@ impl Ctx {
             session,
             reach: decl.reach.clone(),
             given: self.given(i),
-            previous: (s.round > 0).then(|| s.done.as_ref().map(|d| d.output.clone())).flatten(),
+            // a round started over is made from nothing, never on top of what it made
+            previous: (s.round > 0 && !s.afresh).then(|| s.done.as_ref().map(|d| d.output.clone())).flatten(),
             notes: s.notes.clone(),
             // the person's words reach every step from the stop on, and the maker that stop sends work back to
             context: self

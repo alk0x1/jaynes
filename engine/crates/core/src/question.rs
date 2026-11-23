@@ -181,6 +181,15 @@ impl Answer {
         !q.items.is_empty() && self.back.is_empty() && q.items.iter().all(|x| self.verdict(&x.id) == Verdict::Drop)
     }
 
+    /// Whether the answer asks the step to start over: it sends everything the question showed back, each item dropped
+    /// or to be done again without a word, keeps none and brings nothing back. The person wants new ideas, which what
+    /// the step made, and the conversation that made it, would hold back.
+    pub fn starts_over(&self, q: &Question) -> bool {
+        let wordless = |v: Verdict| matches!(v, Verdict::Drop) || matches!(v, Verdict::Redo { note } if note.trim().is_empty());
+        self.drops_all(q)
+            || (!q.items.is_empty() && self.back.is_empty() && self.context.trim().is_empty() && q.items.iter().all(|x| wordless(self.verdict(&x.id))))
+    }
+
     /// What an answer to a stop that chooses does: one option goes on, two or three finalists are developed and
     /// asked about again, or none goes on and new options are made. None when it is no valid choice.
     pub fn choice(&self, q: &Question) -> Option<Choice> {
