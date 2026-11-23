@@ -15,6 +15,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -84,6 +85,28 @@ class TheAgentSCommandsRunInJaynesSBox(unittest.TestCase):
             self.assertNotIn("FILE", said)
             self.assertNotIn("RUN", said)
             self.assertNotIn("KEY", said)
+
+    def test_neither_its_box_nor_a_check_s_reads_the_engine_s_folder_but_what_the_step_is_given(self):
+        # A3 of the guarantees' audit (23/11): "cannot read the engine's folder", whole, not a list of its secrets: the
+        # salt that hides the runs' names in an export, the proofs, the guard's, the update's log, the roles
+        kept = {"export.salt": "SALT", "guard.json": "GUARD", "update.log": "UPDATE", "proofs/p.json": "PROOF",
+                "roles/r/role.toml": "ROLE", "engines/0.2.4/notes": "ENGINES"}
+        for name, text in kept.items():
+            (self.engine / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.engine / name).write_text(text)
+        for name, text in kept.items():
+            code, said = self.agent_run(f"cat {self.engine / name}")
+            self.assertNotEqual(code, 0, f"the agent read {name}: {said}")
+            self.assertNotIn(text, said)
+        project = self.outside / "project"
+        project.mkdir()
+        with mock.patch.dict(os.environ, {"JAYNES_ENGINE_HOME": str(self.engine)}):
+            for name, text in kept.items():
+                ran = box.run(project, f"cat {self.engine / name}", timeout=60)
+                self.assertNotEqual(ran.code, 0, f"a check read {name}: {ran.printed}")
+                self.assertNotIn(text, ran.printed)
+        # the step's folder, inside it, stays the agent's to read and write
+        self.assertEqual(self.agent_run("echo mine > mine.txt && cat mine.txt"), (0, "mine\n"))
 
     def test_it_reaches_no_local_server_but_the_ports_the_step_names(self):
         servers = [socket.create_server(("127.0.0.1", 0)) for _ in range(2)]

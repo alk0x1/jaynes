@@ -203,16 +203,13 @@ def browser_installs(home: Path, env=None) -> list[Path]:
 
 
 def hidden_paths(box: Box) -> list[Path]:
-    """Everything the box may not read: where secrets usually live, what the engine keeps, the runs, and the
-    box's own hidden folders. One list for every system's box; ``box.readable`` and the writable folders inside
-    these stay readable."""
-    engine, old = engine_home(), box.home / ".jaynes"
-    # the runs are hidden from a box that says what it reads in them; a photograph's box does not, and its page is
-    # a step's output under the runs
-    runs = [engine / "runs"] if box.local or box.readable else []
-    return ([box.home / s for s in SECRETS] + [engine / f for f in ENGINE_SECRETS] + [engine / "projects"]
-            + [old / f for f in OLD_ENGINE] + browser_caches(box.home)
-            + runs + list(box.hidden) + ([box.home] if box.hide_home else []))
+    """Everything the box may not read: where secrets usually live, the engine's folder whole (its keys and record,
+    the runs, the projects, the salt of an export, the proofs, the roles: A3 of the guarantees' audit, 23/11), and
+    the box's own hidden folders. One list for every system's box; ``box.readable`` and the writable folders inside
+    these stay readable, so a step's copy, the run's copy of its role and the page a photograph is of are read."""
+    old = box.home / ".jaynes"
+    return ([box.home / s for s in SECRETS] + [engine_home()] + [old / f for f in OLD_ENGINE] + browser_caches(box.home)
+            + list(box.hidden) + ([box.home] if box.hide_home else []))
 
 
 def engine_home() -> Path:
@@ -2108,7 +2105,9 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
         script = " ".join(shlex.quote(a) for a in argv)
         try:
             # the one browser it starts is the one chosen here, with its bundle's helpers: never another
-            argv = command_in_box(script, Box((Path(tmp),), ports=ports, browser=Path(program)))
+            # a page file is read where it is, with what it links beside it, the engine's folder hidden but for that
+            argv = command_in_box(script, Box((Path(tmp),), ports=ports, browser=Path(program),
+                                              readable=() if local else (Path(target).resolve().parent,)))
             # Chrome keeps its default folders under the home macOS reports; the box lets it write none there, so
             # it is given one of its own, inside the temporary folder
             env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
@@ -2143,7 +2142,8 @@ def _height(program: str, page: Path, size: tuple[int, int], ports: tuple[int, .
                 f"--user-data-dir={Path(tmp) / 'profile'}", f"--window-size={size[0]},{size[1]}",
                 "--virtual-time-budget=2000", "--dump-dom", copy.as_uri()]
         try:
-            argv = command_in_box(" ".join(shlex.quote(a) for a in argv), Box((Path(tmp),), ports=ports, browser=Path(program)))
+            argv = command_in_box(" ".join(shlex.quote(a) for a in argv), Box((Path(tmp),), ports=ports, browser=Path(program),
+                                                                                         readable=(page.resolve().parent,)))
             env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
             code, said, _, late = _wait_in_box(argv, cwd=None, env=env, stdin=None, timeout=90, stderr_apart=True)
         except Unavailable as e:
