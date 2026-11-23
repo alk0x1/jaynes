@@ -639,7 +639,7 @@ impl Copy {
     }
 
     /// The run started in a project with no commit yet.
-    fn from_nothing(&self) -> bool {
+    fn started_from_nothing(&self) -> bool {
         self.git.join(UNBORN).exists()
     }
 
@@ -663,7 +663,7 @@ impl Copy {
     /// Merge the run's delivery into the branch it started from. The merge commit, or why there is none.
     pub fn merge(&self, head: &str, run: &str) -> Result<Option<String>, String> {
         let branch = self.start_branch()?;
-        if self.from_nothing() {
+        if self.started_from_nothing() {
             return self.first_merge(&branch, head, &format!("Jaynes: run {run}, merged"));
         }
         let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
