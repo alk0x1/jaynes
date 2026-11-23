@@ -2954,6 +2954,7 @@ mod tests {
         cwd: PathBuf,
         transcript: Option<PathBuf>,
         previous: Option<String>,
+        waits: Option<PathBuf>,
     }
 
     struct StandIn {
@@ -2986,6 +2987,7 @@ mod tests {
                     cwd: spec.cwd.to_path_buf(),
                     transcript: spec.transcript.clone(),
                     previous: std::fs::read_to_string(exchange.join(ASKED_ABOUT)).ok(),
+                    waits: spec.waits.as_ref().map(|w| w.0.clone()),
                 };
             }
             if let Some(r) = &self.reply {
@@ -3083,6 +3085,10 @@ mod tests {
         }
     }
 
+    fn setup_waits(home: &Path) -> Option<PathBuf> {
+        Some(crate::port_wait::folder(&home.join("runs/r")))
+    }
+
     /// A run whose agent step "stack" stops to ask the person about what it made, driven with `agent` in a copy that
     /// holds main.py; and the output the stop shows, in the record.
     fn asking(name: &str, agent: StandIn) -> (PathBuf, Store, Setup, Run, Digest) {
@@ -3145,7 +3151,7 @@ mod tests {
         let setup = Setup {
             run: "r".into(),
             dir: dir.clone(),
-            role: RoleProgram::new(&dir.join("role"), &dir.join("library")),
+            role: RoleProgram { waits: setup_waits(&home).map(|w| (w, "tracker · a habit tracker".into())), ..RoleProgram::new(&dir.join("role"), &dir.join("library")) },
             copy: Some(Box::new(Folder::new(&copy))),
             agent: Box::new(agent),
             any_port: false,
@@ -3195,6 +3201,8 @@ mod tests {
         assert!(reach.project == jaynes_core::manifest::ProjectAccess::Read && reach.write.is_empty(), "only reads: {reach:?}");
         assert!(!seen.permit, "nothing it asks beyond its settings reaches the person: it is refused");
         assert!(!seen.on_session, "a question's session is never the one a cut-off attempt goes on in");
+        // what its commands' box waits for a port another run holds is not the agent's time (T10, 23/11)
+        assert_eq!(seen.waits, setup_waits(&home), "the question's turn knows the run's waits");
         assert!(seen.prompt.contains("e se fosse Go?") && seen.prompt.contains("“Python + FastAPI”"), "{}", seen.prompt);
         assert!(seen.prompt.contains("Change nothing") && seen.prompt.contains(".jaynes/reply.md"), "{}", seen.prompt);
         assert!(seen.previous.as_deref().is_some_and(|p| p.contains("Python + FastAPI")), "what the stop shows: {:?}", seen.previous);
