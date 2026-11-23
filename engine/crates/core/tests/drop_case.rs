@@ -120,8 +120,8 @@ fn judged(run: &mut Run, attempt: u32, failing: &[&str]) -> (Vec<Event>, Vec<Com
         attempt,
         fix: 0,
         results: vec![
-            CheckResult { check: "tests-pass".into(), verdict: CheckVerdict::Pass, tree: None },
-            CheckResult { check: "proof".into(), verdict: proof, tree: None },
+            CheckResult { check: "tests-pass".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() },
+            CheckResult { check: "proof".into(), verdict: proof, tree: None, tests_changed: Vec::new() },
         ],
     })
 }
