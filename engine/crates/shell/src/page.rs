@@ -3079,6 +3079,7 @@ h1 .proj { color:var(--dim); font-weight:500; }
 .reach { margin:0 0 14px; padding:12px 14px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; font-size:14px; } .reach code { font-family:var(--mono); font-size:.92em; } .reach .rmerge { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px; } .reach .act.primary { background:var(--blue); color:#04121f; border:0; font-weight:600; } .reach .rfail { margin-top:8px; color:var(--amber); } .reach details.git { margin-top:4px; color:var(--dim); font-size:12.5px; } .reach details.git summary { list-style:none; cursor:pointer; } .reach details.git summary::-webkit-details-marker { display:none; }
 .sent .proj { color:var(--dim); }
 .tests-changed { margin:14px 0 10px; font-size:13.5px; } .tests-changed .r { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.tests-run .r span { color:var(--amber); }
 .file .trm { font-style:normal; font-family:inherit; font-size:11.5px; color:var(--amber); border:1px solid var(--amber); border-radius:6px; padding:0 6px; margin-left:10px; }
 .tests-changed code { font-family:var(--mono); font-size:.88em; } .tests-changed p.dim { color:var(--dim); font-size:12.5px; margin:6px 0 0; }
 .tests-changed button { border:1px solid var(--line-2); border-radius:8px; padding:3px 12px; background:none; color:var(--ink); white-space:nowrap; cursor:pointer; }
@@ -3911,6 +3912,8 @@ diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n+++ b/pyproj
         assert!(html.contains("It changed your tests: <code>tests/test_app.py</code>"), "the changed test still said: {html}");
         assert!(!delivery_of(diff, 3, "main", &Default::default()).contains("tests-run"), "nothing that changes how they run: nothing said");
         assert!(PAGE.contains(".file .trm {"), "the mark's look");
+        // the design-lead: the sentence the person did not read is the one amber above what lands, as the mark is
+        assert!(PAGE.contains(".tests-run .r span { color:var(--amber); }"), "said in amber");
     }
 
     // The tech-lead (S4): the merge's one touch merges everything at once; file by file only when the person asks. In
