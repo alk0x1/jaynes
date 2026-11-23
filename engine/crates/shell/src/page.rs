@@ -1165,6 +1165,7 @@ pub(crate) fn phase_word(e: &crate::listing::Entry) -> String {
         Mark::Blocked | Mark::Undone => "bad",
         Mark::Delivered if !e.run.finished() => return format!("<span class=\"goes\">{word} · you can still correct it</span>"),
         Mark::Delivered | Mark::Merged | Mark::Abandoned | Mark::Older | Mark::Moved => return word.to_string(),
+        Mark::SetAside => return word.to_string(),
     };
     format!("<span class=\"{class}\">{word}</span>")
 }

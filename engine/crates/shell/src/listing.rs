@@ -19,6 +19,8 @@ pub enum Mark {
     Merged,
     Undone,
     Abandoned,
+    /// Set aside by the agent that started it: it waits for no one (Resume and Abandon stay on its page).
+    SetAside,
     /// Started on an engine no longer on this Mac: it cannot go on, and waits apart until the person moves it.
     Older,
     /// One of those, moved to Finished by the person.
@@ -37,6 +39,7 @@ impl Mark {
             Mark::Merged => "merged",
             Mark::Undone => "undone",
             Mark::Abandoned => "abandoned",
+            Mark::SetAside => "set aside",
             Mark::Older => "can't go on",
             Mark::Moved => "moved by you",
         }
@@ -239,7 +242,8 @@ pub fn stands(e: &Entry) -> (Mark, String, bool) {
         let moved = e.moved.is_some();
         return (if moved { Mark::Moved } else { Mark::Older }, older_line(version, moved), false);
     }
-    let waiting = if r.finished() || r.blocked() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
+    // set aside, it waits for no one, not even at an open stop
+    let waiting = if r.finished() || r.blocked() || r.set_aside.is_some() { None } else { r.questions.values().find(|q| q.open() && crate::stop::went_on(r, q).is_none()) };
     match waiting {
         Some(q) => (Mark::Needs, title_into(q, &e.into), true),
         None => {
@@ -504,7 +508,7 @@ fn standing(e: &Entry) -> (Mark, String) {
         Phase::Finished { outcome: Outcome::Delivered } if r.undone => (Mark::Undone, "reverted by you".into()),
         Phase::Finished { outcome: Outcome::Delivered } if e.merged => (Mark::Merged, "merged".into()),
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
-        _ if r.set_aside.is_some() => (Mark::Halted, format!("{}, set aside by the agent that started it", where_in(r))),
+        _ if r.set_aside.is_some() => (Mark::SetAside, format!("set aside by the agent that started it · {}", where_in(r))),
         _ if e.stopped => (Mark::Halted, format!("{}, {}", where_in(r), crate::drive::JAYNES_STOPPED_SAID)),
         _ if r.halted => (Mark::Halted, format!("{}, halted", where_in(r))),
         Phase::Blocked { step, fault, reason } => (Mark::Blocked, format!("{}, {}", where_in(r), blocked_words(step.as_deref(), *fault, reason))),
@@ -879,29 +883,68 @@ fn tail(path: &Path, max: u64) -> Option<String> {
 
 /// What the agents of a run did, counted one way for the page, the app and the summary: the attempts at the steps
 /// an agent works (a step Jaynes or the person does is no attempt), the fixes it made inside them after a check, and
-/// the attempts that failed by its own fault, the only ones a step's limit counts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// what ended the attempts it spent, the only ones a step's limit counts: a check that refused it, by name, or nothing
+/// to check (it ended without a result). Never whose fault.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Work {
     pub attempts: u32,
     pub fixes: u32,
-    pub own_failures: u32,
+    /// Spent attempts a check refused.
+    pub refused: u32,
+    /// Spent attempts that ended without a result: no check refused them.
+    pub ended: u32,
+    /// Each check that refused attempts: its name, whether it is hidden from the agent, how many; most first.
+    pub by: Vec<(String, bool, u32)>,
 }
 
 /// What the agents of a run did, from its steps: an attempt is a step's go from the start, numbered by the core.
 pub fn work(r: &Run) -> Work {
     use jaynes_core::manifest::Executor;
     let attempts = r.manifest.steps.iter().zip(&r.steps).filter(|(d, _)| d.executor == Executor::Agent).map(|(_, s)| s.attempt).sum();
-    Work { attempts, fixes: r.counts.fixes, own_failures: r.counts.spent }
+    let mut by: Vec<(String, bool, u32)> = r.counts.refused_by.iter().map(|(name, n)| (name.clone(), n.hidden, n.attempts)).collect();
+    by.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    Work { attempts, fixes: r.counts.fixes, refused: r.counts.refused, ended: r.counts.spent.saturating_sub(r.counts.refused), by }
 }
 
 impl Work {
-    /// "2 attempts by the agent, 1 failed through its own fault, 1 fix"; a part that is none is not said, but the
-    /// attempts.
+    /// "3 attempts by the agent, 1 refused by the check “tests”, 2 fixes"; with more checks, "3 refused by checks:
+    /// “criteria-hold” 2, “scope” 1" (three named, then how many more), "(hidden from the agent)" after a hidden one's
+    /// name; "1 ended without a result". A part that is none is not said, but the attempts.
     pub fn said(&self) -> String {
         let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let named = |(name, hidden, _): &(String, bool, u32)| format!("“{name}”{}", if *hidden { " (hidden from the agent)" } else { "" });
         let mut out = if self.attempts == 0 { "no attempt by the agent".to_string() } else { format!("{} by the agent", plural(self.attempts, "attempt", "attempts")) };
-        if self.own_failures > 0 {
-            out.push_str(&format!(", {} failed through its own fault", if self.attempts == 1 { "it".to_string() } else { self.own_failures.to_string() }));
+        if self.refused > 0 {
+            if let [one] = self.by.as_slice() {
+                out.push_str(&format!(", {} refused by the check {}", self.refused, named(one)));
+            } else {
+                let first: Vec<String> = self.by.iter().take(3).map(|c| format!("{} {}", named(c), c.2)).collect();
+                let more = self.by.len().saturating_sub(3);
+                out.push_str(&format!(", {} refused by checks: {}{}", self.refused, first.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() }));
+            }
+        }
+        if self.ended > 0 {
+            out.push_str(&format!(", {} ended without a result", self.ended));
+        }
+        if self.fixes > 0 {
+            out.push_str(&format!(", {}", plural(self.fixes, "fix", "fixes")));
+        }
+        out
+    }
+
+    /// The same, short, for the run's summary: "3 attempts (1 refused by a check), 2 fixes".
+    pub fn short(&self) -> String {
+        let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let mut why = Vec::new();
+        if self.refused > 0 {
+            why.push(format!("{} refused by {}", self.refused, if self.refused == 1 { "a check" } else { "checks" }));
+        }
+        if self.ended > 0 {
+            why.push(format!("{} ended without a result", self.ended));
+        }
+        let mut out = plural(self.attempts, "attempt", "attempts");
+        if !why.is_empty() {
+            out.push_str(&format!(" ({})", why.join(", ")));
         }
         if self.fixes > 0 {
             out.push_str(&format!(", {}", plural(self.fixes, "fix", "fixes")));
@@ -2213,7 +2256,7 @@ mod blocked_tests {
             r.apply(&e);
         }
         // the run's count and the step's line say the same: one attempt, the agent's
-        assert_eq!(work(&r), Work { attempts: 1, fixes: 0, own_failures: 0 });
+        assert_eq!(work(&r), Work { attempts: 1, ..Default::default() });
         assert_eq!(work(&r).said(), "1 attempt by the agent");
         assert_eq!(stages(&r)[1].detail, "blocked, 1 attempt");
         assert!(!stages(&r).iter().any(|s| s.name == "plan" && s.detail.contains("attempt")), "{:?}", stages(&r));
@@ -2228,10 +2271,55 @@ mod blocked_tests {
         // the agent worked twice, its second attempt with a fix in it
         assert_eq!(work(&r).said(), "2 attempts by the agent, 1 fix");
         assert_eq!(stages(&r)[1].detail, "running, attempt 2");
-        // a failure of its own is said as such, and the fixes as fixes
-        let mine = Work { attempts: 3, fixes: 2, own_failures: 1 };
-        assert_eq!(mine.said(), "3 attempts by the agent, 1 failed through its own fault, 2 fixes");
-        assert_eq!(Work { attempts: 1, fixes: 0, own_failures: 1 }.said(), "1 attempt by the agent, it failed through its own fault");
+    }
+
+    // The tech-lead and the design-lead (22/11, quatro-itens.md, item 6): "3 failed through its own fault" blamed the
+    // agent, and in the finding the criterion was what was wrong. The count says what ended each attempt: the check
+    // that refused it, by name (one the agent cannot see said so), or that it ended without a result; the summary
+    // says it short.
+    #[test]
+    fn asked_the_attempts_say_what_refused_them_never_whose_fault() {
+        use jaynes_core::event::{CheckRecord, Event, Usage};
+        use jaynes_core::manifest::CheckKind;
+        let mut r = super::tests::run("r1", "Filter the items by price");
+        let started = |attempt: u32| Event::AttemptStarted { step: "change".into(), round: 0, attempt, fix: 0, session: None, deadline_seconds: 0, tokens_left: 0, key: None };
+        let delivered = |attempt: u32| Event::AttemptDelivered { step: "change".into(), attempt, fix: 0, output: jaynes_core::Digest("o".into()), items: vec![], changed: vec![], usage: Usage::default(), session: None, tree: None, reply: None };
+        let check = |name: &str, kind: CheckKind, passed: bool| CheckRecord { check: name.into(), kind, passed, blocked: false, read: vec![], tree: None };
+        let judged = |attempt: u32, checks: Vec<CheckRecord>| Event::ChecksJudged { step: "change".into(), attempt, fix: 0, checks };
+        let failed = |attempt: u32| Event::AttemptFailed { step: "change".into(), attempt, reasons: vec!["no".into()], usage: Usage::default(), spent: true };
+        for e in [started(1), delivered(1), judged(1, vec![check("tests", CheckKind::Open, false), check("scope", CheckKind::Open, true)]), failed(1)] {
+            r.apply(&e);
+        }
+        assert_eq!(work(&r).said(), "1 attempt by the agent, 1 refused by the check “tests”");
+        for e in [
+            started(2),
+            delivered(2),
+            judged(2, vec![check("criteria-hold", CheckKind::Hidden, false), check("scope", CheckKind::Open, true)]),
+            failed(2),
+            started(3),
+            delivered(3),
+            judged(3, vec![check("criteria-hold", CheckKind::Hidden, false), check("scope", CheckKind::Open, false)]),
+            failed(3),
+            // the agent's turn ended with nothing to check: no check refused it
+            started(4),
+            failed(4),
+        ] {
+            r.apply(&e);
+        }
+        let w = work(&r);
+        assert_eq!(
+            w.said(),
+            "4 attempts by the agent, 3 refused by checks: “criteria-hold” (hidden from the agent) 2, “scope” 1, “tests” 1, 1 ended without a result"
+        );
+        assert_eq!(w.short(), "4 attempts (3 refused by checks, 1 ended without a result)");
+        // past three checks, how many more; fixes as fixes; one refused, said short
+        let more = Work { attempts: 5, fixes: 2, refused: 5, ended: 0, by: ["a", "b", "c", "d", "e"].iter().map(|n| (n.to_string(), false, 1)).collect() };
+        assert_eq!(more.said(), "5 attempts by the agent, 5 refused by checks: “a” 1, “b” 1, “c” 1 and 2 more, 2 fixes");
+        let one = Work { attempts: 3, fixes: 2, refused: 1, ended: 0, by: vec![("tests".into(), false, 1)] };
+        assert_eq!(one.said(), "3 attempts by the agent, 1 refused by the check “tests”, 2 fixes");
+        assert_eq!(one.short(), "3 attempts (1 refused by a check), 2 fixes");
+        assert_eq!(Work { attempts: 1, ..Default::default() }.short(), "1 attempt");
+        assert!(!w.said().contains("fault"));
     }
 
     #[test]
@@ -2771,6 +2859,28 @@ mod tests {
         assert_eq!(title(&asked(vec![item("py", "Python")], false)), "Which stack goes on?");
     }
 
+    /// The tech-lead and the design-lead (22/11, quatro-itens.md, item 7): a run the agent that started it set aside
+    /// read "halted", in amber, among what waits for the person. It reads "set aside", why first, and waits for no
+    /// one: not even an open stop puts it in "Waiting for you" (Resume and Abandon stay on its page).
+    #[test]
+    fn asked_a_run_set_aside_says_so_and_waits_for_no_one() {
+        use jaynes_core::question::By;
+        let mut r = run("aside", "x");
+        let question = Question {
+            id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
+            about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
+        };
+        r.questions.insert("q1".into(), QuestionState { question, answer: None, effects: None, superseded: false });
+        r.phase = Phase::Waiting { step: Some("plan".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
+        r.halted = true;
+        r.set_aside = Some(By::Agent { who: "claude:1@x".into() });
+        let e = entry(r, "/p", 1);
+        assert_eq!(stands(&e), (Mark::SetAside, "set aside by the agent that started it · step 1 of 2".to_string(), false));
+        let listing = arrange(std::slice::from_ref(&e));
+        assert!(listing.needs.is_empty(), "{:?}", listing.needs);
+        assert_eq!(listing.projects[0].1[0].mark.word(), "set aside");
+    }
+
     /// Item 10 of 0.2.5: `jaynes runs` said "running" of a halted run, where the app said "halted". Every state the
     /// list knows reads the same in `jaynes runs` (said), on the page (phase_word) and in the app (the row's mark).
     #[test]
@@ -2804,7 +2914,7 @@ mod tests {
         let mut r = run("aside", "x");
         r.halted = true;
         r.set_aside = Some(By::Agent { who: "claude:1@x".into() });
-        cases.push(("halted", entry(r, "/p", 1), "step 1 of 2, set aside by the agent that started it"));
+        cases.push(("set aside", entry(r, "/p", 1), "set aside by the agent that started it · step 1 of 2"));
         let mut r = run("blocked", "x");
         r.phase = Phase::Blocked { step: Some("plan".into()), fault: jaynes_core::event::Fault::Agent, reason: "no tests".into() };
         cases.push(("blocked", entry(r, "/p", 1), "step 1 of 2, blocked: no tests"));

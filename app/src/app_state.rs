@@ -173,12 +173,13 @@ pub fn mark_word(m: jaynes_shell::listing::Mark) -> &'static str {
         Abandoned => "abandoned",
         Older => "older",
         Moved => "moved",
+        SetAside => "set-aside",
     }
 }
 
 pub fn mark_of(word: &str) -> Option<jaynes_shell::listing::Mark> {
     use jaynes_shell::listing::Mark::*;
-    [Needs, Working, Halted, Blocked, Delivered, Merged, Undone, Abandoned, Older, Moved].into_iter().find(|m| mark_word(*m) == word)
+    [Needs, Working, Halted, Blocked, Delivered, Merged, Undone, Abandoned, Older, Moved, SetAside].into_iter().find(|m| mark_word(*m) == word)
 }
 
 #[cfg(test)]

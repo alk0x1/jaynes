@@ -161,7 +161,8 @@ pub fn colour(mark: Mark) -> u32 {
         Mark::Halted => grey(),
         Mark::Blocked | Mark::Undone => red(),
         Mark::Delivered | Mark::Merged => green(),
-        Mark::Abandoned => faint(),
+        // set aside: faint, never amber (quatro-itens.md item 7): nothing is lost if the person never looks
+        Mark::Abandoned | Mark::SetAside => faint(),
         Mark::Older | Mark::Moved => grey(),
     }
 }
@@ -178,6 +179,7 @@ pub fn word(mark: Mark) -> &'static str {
         Mark::Abandoned => "abandoned",
         Mark::Older => "can't go on",
         Mark::Moved => "moved by you",
+        Mark::SetAside => "set aside",
     }
 }
 
