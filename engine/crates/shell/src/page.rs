@@ -1438,6 +1438,8 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         Phase::Running => String::new(),
     };
     // what waits for the person comes first, as a way to its question, so the run's controls are not taken for it
+    // a run its agent set aside waits for no one: its open stops are answered from beside Resume, never in blue over it
+    let aside = r.set_aside.is_some() && !r.finished();
     let answers: String = r
         .questions
         .values()
@@ -1449,9 +1451,10 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
                 QuestionKind::Merge => esc(&crate::listing::title_into(q, &into)),
                 _ => esc(&q.question.about),
             };
-            format!("<a class=\"answer\" href=\"/q/{}/{}\">Answer: {asks}</a>", esc(&r.id), esc(&q.question.id))
+            format!("<a class=\"{}\" href=\"/q/{}/{}\">Answer: {asks}</a>", if aside { "act later" } else { "answer" }, esc(&r.id), esc(&q.question.id))
         })
         .collect();
+    let (answers, later) = if aside { (String::new(), answers) } else { (answers, String::new()) };
     let finished = r.finished();
     let mut buttons = String::new();
     let mut tipped = |act: &str, text: &str, cls: &str, tip: Option<&str>| {
@@ -1462,7 +1465,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         // each control only when it can do something: halting needs something at work, raising the ceiling a run
         // stopped by it or near it (four fifths of its time or tokens)
         if r.halted {
-            tipped("resume", "Resume", "", None);
+            tipped("resume", "Resume", if aside { "primary" } else { "" }, None);
         } else if matches!(r.phase, Phase::Running) {
             tipped("halt", "Halt", "", None);
         }
@@ -1482,6 +1485,10 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
     // only what merged undoes: a run still on its branch, whatever kept it there, has nothing to take back
     if (r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge || r.merged) && r.delivered.is_some() && !r.undone && already.is_none() && unmerged.is_none() {
         tipped("undo", "Undo the merge", "danger", None);
+    }
+    // a set-aside run's open stops, right after Resume: Resume, Answer, Abandon
+    if let Some(at) = buttons.find("data-act=\"resume\"").and_then(|i| buttons[i..].find("</button>").map(|j| i + j + "</button>".len())) {
+        buttons.insert_str(at, &later);
     }
     let correct = if r.delivered.is_some() {
         let options: String = std::iter::once("<option value=\"\">the step that erred, if you know it</option>".to_string())
@@ -3173,7 +3180,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .notice.bad { background:var(--red-soft); color:var(--red); } .notice.blocked { color:var(--ink); } .notice.blocked > b { color:var(--red); } .notice .cases { margin-top:10px; color:var(--ink); } .notice .cases .ch { color:var(--dim); font-size:12px; margin-bottom:4px; } .notice .case { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:10px 12px; margin-top:6px; } .notice .case .by { display:block; color:var(--dim); font-size:12px; } .notice .case p { margin:4px 0 0; } .notice .case code { color:var(--ink); } .notice .case pre { margin:6px 0 0; font-family:var(--mono); font-size:12px; color:var(--faint); white-space:pre-wrap; } .notice .case details.all summary { list-style:none; cursor:pointer; color:var(--dim); font-size:12px; margin-top:4px; } .notice .case details.all summary::-webkit-details-marker { display:none; } .notice .case .fi { color:var(--dim); font-size:12px; } .notice .way { margin-top:8px; } .notice .way code { color:var(--ink); } .notice .then { display:block; color:var(--dim); margin-top:2px; } .notice details.still { margin-top:4px; color:var(--dim); } .notice details.still summary { cursor:pointer; } .notice details.still ul { margin:4px 0 0 18px; padding:0; } .notice.ok { background:var(--green-soft); color:var(--green); }
 .steps { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0 18px; } .steps th { text-align:left; font-family:var(--mono); font-size:11px; color:var(--dim); font-weight:400; text-transform:uppercase; letter-spacing:.06em; padding:6px 8px; border-bottom:1px solid var(--line-2); }
 .steps td { padding:7px 8px; border-bottom:1px solid var(--line); }
-.acts { display:flex; flex-wrap:wrap; gap:8px; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
+.acts { display:flex; flex-wrap:wrap; gap:8px; } .acts .act.primary { background:var(--blue); color:#04121f; border-color:var(--blue); font-weight:600; } .acts a.act.later { display:inline-block; color:var(--dim); text-decoration:none; } .act { background:var(--panel); border:1px solid var(--line-2); border-radius:8px; padding:7px 14px; font-size:13px; }
 .answer code { font-family:var(--mono); font-size:.9em; } .answer { display:inline-block; margin:2px 0 14px; background:var(--blue); color:#04121f; border-radius:8px; padding:9px 18px; font-weight:600; text-decoration:none; }
 .act:hover { border-color:var(--blue); } .act.danger { color:var(--red); } .act.armed { border-color:var(--red); background:var(--red-soft); }
 select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px; font:inherit; font-size:13px; }
@@ -3839,6 +3846,14 @@ mod tests {
         let said = run_html(&done, "", "", None, None);
         assert!(said.contains("<div class=\"notice aside\">Set aside by the agent that started it. Its work is kept: Resume brings it back, Abandon ends it.</div>"), "{said}");
         assert!(PAGE.contains(".notice.aside { background:var(--panel); color:var(--dim); }"), "no amber");
+        // its stop stays answerable, but the run waits for no one: Resume is the main control, the Answer beside it
+        // secondary, outlined and dim, never blue over it; then Abandon (the design-lead, 23/11)
+        assert!(!shown.contains("<a class=\"answer\""), "no blue Answer on top: {shown}");
+        assert!(shown.contains("<div class=\"acts\"><button class=\"act primary\" data-act=\"resume\">Resume</button><a class=\"act later\" href=\"/q/a/merge-1\">Answer: Merge into your branch?</a><button class=\"act danger\" data-act=\"abandon\">Abandon</button>"), "{shown}");
+        let acts = shown.split("<div class=\"acts\">").nth(1).expect("the controls");
+        assert!(acts.find("Answer: Merge").expect("answer") < acts.find("data-act=\"abandon\"").expect("abandon"), "Resume, Answer, Abandon: {acts}");
+        assert!(PAGE.contains(".acts .act.primary { background:var(--blue); color:#04121f; border-color:var(--blue); font-weight:600; }"), "Resume filled");
+        assert!(PAGE.contains(".acts a.act.later { display:inline-block; color:var(--dim); text-decoration:none; }"), "Answer outlined and dim");
         let home_page = page.render(View::Overview, now).expect("home");
         assert!(home_page.contains("Waiting for you · 0") && !home_page.contains("halted run"), "{home_page}");
         let _gone = std::fs::remove_dir_all(&home);

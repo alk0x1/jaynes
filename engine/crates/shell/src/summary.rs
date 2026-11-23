@@ -905,7 +905,7 @@ What Jaynes refused on the way, in its checks' own words, and what came of it:
 
 ### Cost
 
-- Agents: 12 min of work, 252,250 tokens, 3 attempts (1 refused by a check).
+- Agents: 12 min of work, 252,250 tokens, 3 attempts (1 refused by the check “cases-pass”, hidden from the agent).
 - People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.
 - The run stood 11 h 0 min at its stops, waiting for an answer. That is waiting, not anyone's attention.
 

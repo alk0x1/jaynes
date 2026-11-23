@@ -1286,7 +1286,12 @@ impl Work {
         let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         let mut why = Vec::new();
         if self.refused > 0 {
-            why.push(format!("{} refused by {}", self.refused, if self.refused == 1 { "a check" } else { "checks" }));
+            // one check, by its name, as the page's line says it; checks apart, "checks" (never "a check" unnamed)
+            let by = match self.by.as_slice() {
+                [(name, hidden, _)] => format!("the check “{name}”{}", if *hidden { ", hidden from the agent" } else { "" }),
+                _ => "checks".to_string(),
+            };
+            why.push(format!("{} refused by {by}", self.refused));
         }
         if self.ended > 0 {
             why.push(format!("{} ended without a result", self.ended));
@@ -2814,7 +2819,13 @@ mod blocked_tests {
         assert_eq!(more.said(), "5 attempts by the agent, 5 refused by checks: “a” 1, “b” 1, “c” 1 and 2 more, 2 fixes");
         let one = Work { attempts: 3, fixes: 2, refused: 1, ended: 0, by: vec![("tests".into(), false, 1)] };
         assert_eq!(one.said(), "3 attempts by the agent, 1 refused by the check “tests”, 2 fixes");
-        assert_eq!(one.short(), "3 attempts (1 refused by a check), 2 fixes");
+        // short names the check when it is one (the design-lead, 23/11: never "by a check" without its name), the
+        // same check twice too; checks apart, "refused by checks"
+        assert_eq!(one.short(), "3 attempts (1 refused by the check “tests”), 2 fixes");
+        let twice = Work { attempts: 4, fixes: 0, refused: 2, ended: 0, by: vec![("tests".into(), false, 2)] };
+        assert_eq!(twice.short(), "4 attempts (2 refused by the check “tests”)");
+        let hidden = Work { attempts: 3, fixes: 0, refused: 1, ended: 0, by: vec![("cases-pass".into(), true, 1)] };
+        assert_eq!(hidden.short(), "3 attempts (1 refused by the check “cases-pass”, hidden from the agent)");
         assert_eq!(Work { attempts: 1, ..Default::default() }.short(), "1 attempt");
         assert!(!w.said().contains("fault"));
     }
