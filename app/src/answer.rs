@@ -4,6 +4,7 @@
 //! when something that cannot be undone lies ahead.
 
 use crate::key::Key;
+use jaynes_core::manifest::Offer;
 use jaynes_core::question::By;
 use jaynes_shell::stop::Stop;
 use serde_json::{json, Map, Value};
@@ -125,14 +126,24 @@ pub async fn move_to_finished(key: Option<Arc<Key>>, runs: Vec<String>) -> Resul
     jaynes_shell::person::submit_move(&home, &runs, &key.public(), &signature)
 }
 
-/// Sends the answer as the person's: their touch first when the stop asks it (`touch_of`), with its reason, then
-/// signed with their key. Resolves to what to tell them.
-pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, body: Value) -> Result<(), String> {
+/// What the stop offers that the person marked, as the page's act "grant" for the stop `body` answers: the person's
+/// alone, and the core refuses it from anyone else (the engineer lead's T5, 23/11).
+pub fn grant_body(body: &Value, offer: Offer) -> Value {
+    json!({"run": body["run"], "action": "grant", "question": body["question"], "offer": offer})
+}
+
+/// Sends the answer as the person's: their touch first when the stop asks it (`touch_of`), with its reason; then what
+/// they marked of what the stop offers (`grants`), as theirs; then the answer, signed with their key. Resolves to what
+/// to tell them.
+pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, grants: Vec<Offer>, body: Value) -> Result<(), String> {
     let key = key.ok_or("the app has no key of yours, so it cannot answer as you")?;
     if let Some(reason) = touch {
         crate::presence::ask(&reason).recv().await.unwrap_or_else(|_| Err("no answer from macOS".into()))?;
     }
     let home = jaynes_shell::home();
+    for offer in grants {
+        jaynes_shell::page::act_in(&home, &engine_program(), &grant_body(&body, offer), By::Person)?;
+    }
     let (run, _, answer) = jaynes_shell::page::answer_in(&home, &body, By::Agent { who: "the Jaynes app, before it is signed".into() })?;
     // the person's leave to change how the tests are defined goes first, signed over their words (T1)
     if let Some(words) = jaynes_shell::page::leave_in(&run, &body) {
@@ -141,4 +152,19 @@ pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, body: Value) -> 
     }
     let signature = key.sign(&jaynes_shell::person::message(&run.id, &answer));
     jaynes_shell::person::submit(&home, &engine_program(), &run, answer, &key.public(), &signature).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grant_body;
+    use jaynes_core::manifest::Offer;
+    use serde_json::json;
+
+    // the engineer lead's T5 (23/11): a marked box goes before the answer as the page's own act "grant", for the run
+    // and the stop the answer is for, and the core reads its offer by name
+    #[test]
+    fn asked_a_marked_box_goes_as_the_page_s_act_grant_for_the_stop_answered() {
+        let body = json!({"run": "new-1", "question": "q1-stacks", "shown": "s", "verdicts": {}});
+        assert_eq!(grant_body(&body, Offer::TestServers), json!({"run": "new-1", "action": "grant", "question": "q1-stacks", "offer": "test_servers"}));
+    }
 }

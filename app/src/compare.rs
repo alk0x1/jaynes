@@ -492,6 +492,8 @@ pub struct Compare {
     stop: Option<Stop>,
     open: bool,
     marks: Marks,
+    /// The boxes of what the stop offers that the person set themselves (`Stop.offers`).
+    ticks: crate::offers::Ticks,
     why: Option<Entity<InputState>>,
     words: Option<Entity<InputState>>,
     reckoned: Reckoned,
@@ -545,6 +547,7 @@ impl Compare {
     pub fn new(key: Option<Arc<Key>>, runs: Entity<crate::model::Runs>, cx: &mut Context<Self>) -> Self {
         cx.observe(&runs, |_, _, cx| cx.notify()).detach();
         Compare {
+            ticks: Default::default(),
             runs,
             ask_kind: None,
             clear_words: false,
@@ -730,7 +733,8 @@ impl Compare {
         self.sending = true;
         self.said = None;
         cx.notify();
-        let sent = answer::send(self.key.clone(), answer::touch_of(&stop).map(str::to_string), body);
+        let grants = self.ticks.grants(&stop, self.picked().as_deref());
+        let sent = answer::send(self.key.clone(), answer::touch_of(&stop).map(str::to_string), grants, body);
         cx.spawn(async move |this, cx| {
             let sent = sent.await;
             let _ = this.update(cx, |this, cx| {
@@ -749,6 +753,13 @@ impl Compare {
             });
         })
         .detach();
+    }
+
+    /// The item a box of what the stop offers follows: the one the main button chooses, else the one shown.
+    fn picked(&self) -> Option<String> {
+        let stop = self.stop.as_ref()?;
+        let i = self.marks.chosen(stop).unwrap_or(self.marks.dir);
+        stop.items.get(i).map(|it| it.id.clone())
     }
 
     /// The stop's conversation as the record has it now; empty while the record shows another question.
@@ -1114,6 +1125,17 @@ impl Compare {
                 self.reckon(cx);
             }
             "go" => self.go(cx),
+            // a press on a box of what the stop offers: `offer test_servers`
+            "offer" => {
+                let picked = self.picked();
+                if let Some(stop) = self.stop.clone() {
+                    self.ticks.at(&stop.question);
+                    for o in stop.offers.iter().filter(|o| crate::offers::id_of(o.offer) == rest) {
+                        self.ticks.flip(o, picked.as_deref());
+                    }
+                    cx.notify();
+                }
+            }
             "also" => self.go_also(cx),
             // a click on Question or Change in the field
             "ask-kind" => {
@@ -1736,6 +1758,18 @@ impl Render for Compare {
         } else {
             go.into_any_element()
         };
+        // what the stop offers beside the answer, over the words: each box follows the option chosen until pressed
+        self.ticks.at(&stop.question);
+        let picked = self.picked();
+        let mut offers = Vec::new();
+        for o in &stop.offers {
+            let flip = o.clone();
+            let at = picked.clone();
+            offers.push(crate::offers::row(o, self.ticks.ticked(o, picked.as_deref())).on_click(cx.listener(move |this, _, _, cx| {
+                this.ticks.flip(&flip, at.as_deref());
+                cx.notify();
+            })));
+        }
         let bar = div()
             .relative()
             .flex()
@@ -1746,6 +1780,7 @@ impl Render for Compare {
             .border_t_1()
             .border_color(rgb(look::line()))
             .bg(rgb(look::panel()))
+            .children(offers)
             .child(div().flex().gap(px(8.)).items_center().child(none_part).children(kind).child(div().flex_1().children(words_field)).child(button("read".into(), "Read my words", false, look::blue()).on_click(cx.listener(|this, _, _, cx| this.read_words(cx)))))
             .children(understood)
             .child(

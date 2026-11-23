@@ -33,6 +33,7 @@ mod look;
 mod model;
 mod menubar;
 mod news;
+mod offers;
 mod notify;
 mod open_page;
 mod prefs;

@@ -46,6 +46,8 @@ pub struct Island {
     /// Branch only's sentences. Read once a question.
     merge_said: Option<(String, Vec<String>, Vec<String>)>,
     shrunk: HashSet<String>,
+    /// The boxes of what the stop offers that the person set themselves (`Stop.offers`).
+    ticks: crate::offers::Ticks,
     sending: bool,
     said: Option<String>,
     /// The answer just sent, and to which question: the foot of its run's tab says so for a few seconds.
@@ -652,6 +654,7 @@ impl Island {
             drive_from(PathBuf::from(file), cx);
         }
         Island {
+            ticks: Default::default(),
             runs,
             key,
             lightbox,
@@ -905,7 +908,8 @@ impl Island {
         self.sending = true;
         self.said = None;
         cx.notify();
-        let sent = answer::send(self.key.clone(), answer::touch_of(&stop).map(str::to_string), body);
+        let grants = self.ticks.grants(&stop, None);
+        let sent = answer::send(self.key.clone(), answer::touch_of(&stop).map(str::to_string), grants, body);
         cx.spawn(async move |this, cx| {
             let sent = sent.await;
             let _ = this.update(cx, |this, cx| {
@@ -1463,6 +1467,16 @@ impl Island {
                 }
             }
             "send" => self.send(cx),
+            // a press on a box of what the stop offers: `offer test_servers`
+            "offer" => {
+                if let Some(stop) = self.stop(cx) {
+                    self.ticks.at(&stop.question);
+                    for o in stop.offers.iter().filter(|o| crate::offers::id_of(o.offer) == rest) {
+                        self.ticks.flip(o, None);
+                    }
+                    cx.notify();
+                }
+            }
             // the card's Move to Finished, on a run whose engine left
             "move-to-finished" => {
                 // the card's, or the block at the top of the run's tab when no card of it is open
@@ -1574,6 +1588,15 @@ impl Render for Island {
         } else {
             for it in &stop.items {
                 items = items.child(if stop.permission { self.leave_view(it, &stop, cx) } else { self.item_view(it, &stop, false, window, cx) });
+            }
+            // what the stop offers beside the answer, under the items: in items, so WORDS_ROW still counts right
+            self.ticks.at(&stop.question);
+            for o in &stop.offers {
+                let flip = o.clone();
+                items = items.child(crate::offers::row(o, self.ticks.ticked(o, None)).on_click(cx.listener(move |this, _, _, cx| {
+                    this.ticks.flip(&flip, None);
+                    cx.notify();
+                })));
             }
         }
         let mut back = div().flex().flex_col().gap(px(8.));
