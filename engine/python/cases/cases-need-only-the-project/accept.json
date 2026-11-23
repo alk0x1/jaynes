@@ -11,5 +11,161 @@
     }
    ]
   }
+ },
+ {
+  "id": "suite",
+  "expect": "accept",
+  "keeps": "running the project's suite as it is",
+  "output": {
+   "cases": [
+    {
+     "says": "The suite passes",
+     "run": "python3 -m pytest -q"
+    }
+   ]
+  }
+ },
+ {
+  "id": "suite-failing-today",
+  "expect": "accept",
+  "keeps": "a case that runs one test and fails today, before the fix: it reads only the project",
+  "output": {
+   "cases": [
+    {
+     "says": "The total test passes",
+     "run": ".venv/bin/python -m pytest -q tests/test_render.py::test_total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "make-test",
+  "expect": "accept",
+  "keeps": "the suite through make",
+  "output": {
+   "cases": [
+    {
+     "says": "The suite passes through make",
+     "run": "make test"
+    }
+   ]
+  }
+ },
+ {
+  "id": "cd-tests",
+  "expect": "accept",
+  "keeps": "changing into a folder of the project",
+  "output": {
+   "cases": [
+    {
+     "says": "The render tests pass",
+     "run": "cd tests && python3 -m pytest -q test_render.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "python-import",
+  "expect": "accept",
+  "keeps": "python reading the project's own module",
+  "output": {
+   "cases": [
+    {
+     "says": "The render shows the total",
+     "run": "python3 -c \"import recibo.render as r; assert 'Total' in r.render({'items': [{'price': 2}]})\""
+    }
+   ]
+  }
+ },
+ {
+  "id": "dot-github",
+  "expect": "accept",
+  "keeps": "a folder whose name starts with .git and is not git's",
+  "output": {
+   "cases": [
+    {
+     "says": "The project has its CI",
+     "run": "test -f .github/workflows/ci.yml"
+    }
+   ]
+  }
+ },
+ {
+  "id": "word-digit",
+  "expect": "accept",
+  "keeps": "the letters git inside another word",
+  "output": {
+   "cases": [
+    {
+     "says": "The render formats each digit",
+     "run": "grep -q digit recibo/render.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "word-legitimate",
+  "expect": "accept",
+  "keeps": "git inside a word in a test's name",
+  "output": {
+   "cases": [
+    {
+     "says": "The tests name a legitimate receipt",
+     "run": "grep -rq legitimate tests"
+    }
+   ]
+  }
+ },
+ {
+  "id": "url-in-file",
+  "expect": "accept",
+  "keeps": "a web address read from a file, nothing reached",
+  "output": {
+   "cases": [
+    {
+     "says": "The README links the docs",
+     "run": "grep -q 'https://' README.md"
+    }
+   ]
+  }
+ },
+ {
+  "id": "gitignore-read",
+  "expect": "accept",
+  "keeps": "reading .gitignore, a file of the project",
+  "output": {
+   "cases": [
+    {
+     "says": "The virtual environment is ignored",
+     "run": "grep -q .venv .gitignore"
+    }
+   ]
+  }
+ },
+ {
+  "id": "sh-c-suite",
+  "expect": "accept",
+  "keeps": "the suite inside sh -c",
+  "output": {
+   "cases": [
+    {
+     "says": "The suite passes in a shell",
+     "run": "sh -c 'python3 -m pytest -q'"
+    }
+   ]
+  }
+ },
+ {
+  "id": "count-lines",
+  "expect": "accept",
+  "keeps": "reading files with plain tools",
+  "output": {
+   "cases": [
+    {
+     "says": "The render is short",
+     "run": "test $(wc -l < recibo/render.py) -lt 400"
+    }
+   ]
+  }
  }
 ]

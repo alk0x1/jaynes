@@ -11,5 +11,239 @@
     }
    ]
   }
+ },
+ {
+  "id": "git-plain",
+  "expect": "reject",
+  "hole": "a case that asks git for the last commit, which the copy has none of",
+  "output": {
+   "cases": [
+    {
+     "says": "The last commit touched the total",
+     "run": "git log -1 --name-only | grep -q recibo/render.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-diff-head",
+  "expect": "reject",
+  "hole": "a case that reads the change from git's history instead of the files",
+  "output": {
+   "cases": [
+    {
+     "says": "The fix changes how the total is summed",
+     "run": "git diff HEAD~1 -- recibo/render.py | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-full-path",
+  "expect": "reject",
+  "hole": "git named by its whole path, past a check that looks only for the word at the start",
+  "output": {
+   "cases": [
+    {
+     "says": "The old render had no total",
+     "run": "/usr/bin/git show HEAD:recibo/render.py | grep -vq total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-after-env",
+  "expect": "reject",
+  "hole": "git run through env with a variable before it",
+  "output": {
+   "cases": [
+    {
+     "says": "The repository's head names the render",
+     "run": "env GIT_PAGER=cat git cat-file -p HEAD | grep -q tree"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-in-sh-c",
+  "expect": "reject",
+  "hole": "git hidden inside a quoted sh -c",
+  "output": {
+   "cases": [
+    {
+     "says": "The render of before is kept",
+     "run": "sh -c 'git show HEAD~1:recibo/render.py' | grep -q def"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-after-and",
+  "expect": "reject",
+  "hole": "git as the second command of a chain, the first one harmless",
+  "output": {
+   "cases": [
+    {
+     "says": "The tests are there and the history agrees",
+     "run": "test -d tests && git rev-parse --verify HEAD~1 >/dev/null"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-in-subshell",
+  "expect": "reject",
+  "hole": "git inside a command substitution",
+  "output": {
+   "cases": [
+    {
+     "says": "The render file is the one git tracks",
+     "run": "test \"$(git ls-files recibo/render.py)\" = recibo/render.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-by-variable",
+  "expect": "reject",
+  "hole": "git named through a variable, never written as a command word",
+  "output": {
+   "cases": [
+    {
+     "says": "The render of before had a total",
+     "run": "G=git; $G show HEAD:recibo/render.py | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "dot-git-read",
+  "expect": "reject",
+  "hole": "reading git's own files, another commit by another road",
+  "output": {
+   "cases": [
+    {
+     "says": "The branch is the main one",
+     "run": "grep -q main .git/HEAD"
+    }
+   ]
+  }
+ },
+ {
+  "id": "dot-git-objects",
+  "expect": "reject",
+  "hole": "searching git's object store for an older file",
+  "output": {
+   "cases": [
+    {
+     "says": "Some older render is in the repository",
+     "run": "find .git/objects -type f | head -1 | grep -q objects"
+    }
+   ]
+  }
+ },
+ {
+  "id": "curl",
+  "expect": "reject",
+  "hole": "a case that reaches the internet, which the copy has not",
+  "output": {
+   "cases": [
+    {
+     "says": "The receipt service answers",
+     "run": "curl -fsS https://example.com/recibo | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "wget",
+  "expect": "reject",
+  "hole": "the internet through wget",
+  "output": {
+   "cases": [
+    {
+     "says": "The published page has the total",
+     "run": "wget -qO- http://example.com/recibo | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "python-urllib",
+  "expect": "reject",
+  "hole": "the internet from inside python -c",
+  "output": {
+   "cases": [
+    {
+     "says": "The tax table online agrees",
+     "run": "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com/taxes')\""
+    }
+   ]
+  }
+ },
+ {
+  "id": "pip-install",
+  "expect": "reject",
+  "hole": "installing a package from the network before the suite",
+  "output": {
+   "cases": [
+    {
+     "says": "The suite passes with the newest pytest",
+     "run": "pip install -q --upgrade pytest && python3 -m pytest -q"
+    }
+   ]
+  }
+ },
+ {
+  "id": "npm-install",
+  "expect": "reject",
+  "hole": "npm reaching the registry",
+  "output": {
+   "cases": [
+    {
+     "says": "The front end builds",
+     "run": "npm install --no-audit && npm test"
+    }
+   ]
+  }
+ },
+ {
+  "id": "nc",
+  "expect": "reject",
+  "hole": "a raw connection to a host",
+  "output": {
+   "cases": [
+    {
+     "says": "The receipt server is up",
+     "run": "nc -z example.com 80"
+    }
+   ]
+  }
+ },
+ {
+  "id": "own-copy-tmp",
+  "expect": "reject",
+  "hole": "a case that builds its own copy of the project to check against, as the real-user's did, even without git",
+  "output": {
+   "cases": [
+    {
+     "says": "The tests fail on the render without the fix",
+     "run": "d=$(mktemp -d); cp -R tests recibo \"$d\"/; cd \"$d\"; ! python3 -m pytest -q"
+    }
+   ]
+  }
+ },
+ {
+  "id": "stand-in-module",
+  "expect": "reject",
+  "hole": "a case that writes its own stand-in of the code and runs the tests against it",
+  "output": {
+   "cases": [
+    {
+     "says": "The tests catch a render that drops the total",
+     "run": "mkdir -p /tmp/fake/recibo && printf 'def render(r):\\n    return \"\"\\n' > /tmp/fake/recibo/render.py && ! PYTHONPATH=/tmp/fake python3 -m pytest -q"
+    }
+   ]
+  }
  }
 ]
