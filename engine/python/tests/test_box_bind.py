@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -59,8 +60,10 @@ class ABoxMadeForAPhotographOrAScriptBindsOnlyItsPorts(unittest.TestCase):
         self.assertEqual(self.bind("127.0.0.1", given, ports=(given,), bind_given_only=True), "bound")
 
     def test_the_page_s_port_is_never_bound_even_when_given(self):
-        self.assertTrue(self.bind("127.0.0.1", box.PAGE_PORT, ports=(box.PAGE_PORT,), bind_given_only=True)
-                        .startswith("refused"))
+        # the page's port is a free one chosen now, so that the bind fails only for the box's rule, on any machine
+        page = free_port()
+        with mock.patch.object(box, "PAGE_PORT", page):
+            self.assertTrue(self.bind("127.0.0.1", page, ports=(page,), bind_given_only=True).startswith("refused"))
 
     def test_the_boxes_of_a_photograph_and_of_a_role_s_script_ask_for_it(self):
         source = Path(box.__file__).read_text()
