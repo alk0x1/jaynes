@@ -1968,27 +1968,73 @@ def ports_refused(ran: Ran) -> list[str]:
 
 def browsers_refused(ran: Ran, home: Path | None = None) -> list[str]:
     """The programs of the person's browsers (``browsers``) a refused command tried to start, as its refusals name
-    them: the path from the browser's bundle to the end of the name, before the ": " that tells the error."""
+    them: the path from the browser's bundle to the end of the name. A shell names it on the refusal's line, before the
+    ": " that tells the error; Node only in the lines under it ("Error: spawn EPERM", then ``path: '...'``)."""
     found: list[str] = []
     held = [str(b) for b in browsers(home or Path.home())]
     held += [os.path.realpath(b) for b in held if os.path.realpath(b) not in held]
-    for line in refused(ran):
-        for b in held:
-            at = line.find(b)
-            if at < 0:
-                continue
-            end = line.find(": ", at)
-            program = line[at:end if end >= 0 else len(line)].strip()
-            if program not in found:
-                found.append(program)
+    lines = ran.printed.splitlines() if ran.code != 0 else []
+    for i, line in enumerate(lines):
+        if not _refusal(line):
+            continue
+        for near in lines[i:i + 12]:
+            for b in held:
+                at = near.find(b)
+                if at < 0:
+                    continue
+                end = min((e for e in (near.find(": ", at), near.find("'", at), near.find('"', at)) if e >= 0),
+                          default=len(near))
+                program = near[at:end].strip()
+                if program not in found:
+                    found.append(program)
     return found
+
+
+# The folders of a project's copy where no file of its own names a program it starts: git's, the dependencies, Jaynes's.
+NOT_THE_PROJECT_S = (".git", "node_modules", ".jaynes", ".venv", "venv", "target", "dist", "build")
+
+
+def browsers_named(project: Path, home: Path | None = None) -> list[str]:
+    """The programs of the person's browsers the project's own files name, for a refused start whose output names
+    none: Node throws "Error: spawn EPERM" and nothing more (the real user's of 23/11, a test that started
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"). Each named once, up to its closing quote."""
+    held = [str(b) for b in browsers(home or Path.home())]
+    found: list[str] = []
+    for root, dirs, files in os.walk(project):
+        dirs[:] = [d for d in dirs if d not in NOT_THE_PROJECT_S]
+        for name in files:
+            f = Path(root) / name
+            try:
+                if f.is_symlink() or f.stat().st_size > 1_000_000:
+                    continue
+                text = f.read_text(errors="ignore")
+            except OSError:
+                continue
+            for b in held:
+                for m in re.finditer(re.escape(b) + r"[^'\"`\n]*", text):
+                    if m.group(0).strip() not in found:
+                        found.append(m.group(0).strip())
+    return found
+
+
+# What a browser prints when its own sandbox does not start, inside Jaynes's box: macOS starts no sandbox inside
+# another (Playwright's headless shell and Chromium, 23/11). Playwright starts them without it; a suite that starts
+# one itself passes --no-sandbox, and the box stays the browser's sandbox.
+BROWSER_SANDBOX = ("sandbox initialization failed", "failed to initialize sandbox")
+
+
+def browser_sandbox_refused(ran: Ran) -> bool:
+    """Whether a failed command started a browser whose own sandbox the box kept from starting."""
+    return ran.code != 0 and any(s in ran.printed.lower() for s in BROWSER_SANDBOX)
+
+
+def _refusal(line: str) -> bool:
+    return ("operation not permitted" in line.lower() or "eperm" in line.lower()) and not any(h in line for h in HARMLESS)
 
 
 def refused(ran: Ran) -> list[str]:
     """What the box refused, when the command failed for it: then its failure says nothing about the project."""
-    lines = [line.strip() for line in ran.printed.splitlines()
-             if ("operation not permitted" in line.lower() or "eperm" in line.lower())
-             and not any(h in line for h in HARMLESS)]
+    lines = [line.strip() for line in ran.printed.splitlines() if _refusal(line)]
     return lines if ran.code != 0 else []
 
 

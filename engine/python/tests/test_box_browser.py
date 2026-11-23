@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -186,6 +187,110 @@ class ARoleSScriptCheckStillDrawsItsPages(unittest.TestCase):
         self.assertIn(str(bundle / "Contents/MacOS/browser"), said.reason)
         for ports in ("JAYNES_PORTS", "open-ports", "local port"):
             self.assertNotIn(ports, said.reason)
+
+
+NODE = os.environ.get("JAYNES_TEST_NODE") or shutil.which("node")
+# A program run by node that starts the browser it is given against a test server of its own, as a project's browser
+# test does: Node says a refused start as "Error: spawn EPERM" and names the program only in the lines under it.
+SPAWNS = """const CHROME = '%s';
+const http = require('http'), { spawn } = require('child_process'), fs = require('fs'), os = require('os');
+const srv = http.createServer((q, r) => r.end('<html><body>page-of-the-test</body></html>'));
+srv.listen(0, '127.0.0.1', () => {
+  const profile = fs.mkdtempSync(require('path').join(os.tmpdir(), 'profile-'));
+  const p = spawn(process.argv[2] || CHROME, [...process.argv.slice(3), '--headless', '--no-first-run', `--user-data-dir=${profile}`,
+                  '--dump-dom', `http://127.0.0.1:${srv.address().port}/`]);
+  let out = '';
+  p.stdout.on('data', d => out += d); p.stderr.on('data', d => process.stderr.write(d));
+  p.on('error', e => { console.error(e); process.exit(2); });
+  p.on('close', () => { srv.close(); console.log(out.includes('page-of-the-test') ? 'THE PAGE OPENED' : 'NO PAGE'); process.exit(out.includes('page-of-the-test') ? 0 : 1); });
+});
+"""
+
+
+def installed_headless_shell() -> Path | None:
+    """The headless shell Playwright installed for the person, a project's own browser: the newest, never an app."""
+    found = sorted(c for cache in box.browser_caches(Path.home()) for c in cache.glob("chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell"))
+    return found[-1] if found else None
+
+
+@unittest.skipUnless(box.available() and NODE, "Jaynes's box is macOS's sandbox-exec, and the suite is node's")
+class ABrowserASuiteStarts(unittest.TestCase):
+    """The real user's of 23/11 (T8): a suite's browser test was refused with "spawn EPERM", and the card offered the
+    ports, which start no browser."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="jaynes-browser-suite-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.project = self.tmp / "project"
+        (self.project / ".jaynes" / "tmp").mkdir(parents=True)
+        (self.project / "browser.test.js").write_text(SPAWNS % "")
+
+    def check(self, *program: Path | str) -> object:
+        import jaynes_menu as menu
+        line = " ".join(shlex.quote(str(a)) for a in (NODE, "browser.test.js", *program))
+        return menu._box({"project": str(self.project), "test_servers": True}, line)
+
+    def agent(self, program: Path, *flags: str) -> tuple[int, str]:
+        """The same command in the agent's box, as agent.rs gives it, with the person's home hidden."""
+        import json
+        scratch = self.project / ".jaynes" / "tmp"
+        line = " ".join(shlex.quote(str(a)) for a in (NODE, "browser.test.js", program, *flags))
+        spec = {"work": str(self.project), "writable": [str(self.project)],
+                "readable": [os.path.realpath(Path(NODE).parent.parent)], "hidden": [], "home": str(Path.home()),
+                "engine": str(self.tmp / "engine"), "local_ports": [], "test_servers": True, "any_port": False,
+                "pwd": str(scratch / "pwd"), "env": {"PATH": f"{Path(NODE).parent}:/usr/bin:/bin"}}
+        (self.tmp / "spec.json").write_text(json.dumps(spec))
+        done = subprocess.run([sys.executable, box.__file__, "agent-run", str(self.tmp / "spec.json"), "--", line],
+                              capture_output=True, text=True, timeout=120, cwd=self.project,
+                              env={"HOME": str(Path.home()), "PATH": "/usr/bin:/bin", "TMPDIR": str(scratch)})
+        return done.returncode, done.stdout + done.stderr
+
+    def test_the_browser_playwright_installed_opens_a_page_of_the_suite_s_own_server_in_the_check_s_box_and_the_agent_s(self):
+        shell = installed_headless_shell()
+        if not shell:
+            self.skipTest("no headless shell of Playwright's installed on this Mac")
+        # as Playwright starts it: a profile of its own, and without the browser's own sandbox, which does not start
+        # inside another
+        said = self.check(shell, "--no-sandbox")
+        self.assertIsInstance(said, box.Ran, getattr(said, "reason", said))
+        self.assertEqual((said.code, "THE PAGE OPENED" in said.printed), (0, True), said.printed[-1500:])
+        code, printed = self.agent(shell, "--no-sandbox")
+        self.assertEqual((code, "THE PAGE OPENED" in printed), (0, True), printed[-1500:])
+
+    def test_a_browser_started_with_its_own_sandbox_says_to_start_it_without_and_nothing_of_ports(self):
+        # what Chrome prints when its own sandbox cannot start inside the box (measured with Playwright's headless
+        # shell and Chromium, 23/11), from a stand-in: no browser starts
+        chrome = self.tmp / "chrome"
+        chrome.write_text("#!/bin/sh\necho 'sandbox initialization failed: Operation not permitted' >&2\n"
+                          "echo 'FATAL:gpu_data_manager_impl_private.cc(387)] GPU process isn'\\''t usable. Goodbye.' >&2\nexit 1\n")
+        chrome.chmod(0o755)
+        said = self.check(chrome)
+        self.assertIsInstance(said, menu_blocked())
+        self.assertIn("the box refused what the command tried, so its failure says nothing about the project", said.reason)
+        self.assertIn("It started a browser with its own sandbox, which does not start inside the box:", said.reason)
+        self.assertIn("--no-sandbox", said.reason)
+        for ports in ("JAYNES_PORTS", "open-ports", "local port"):
+            self.assertNotIn(ports, said.reason)
+
+    def test_a_suite_that_starts_a_browser_of_the_person_s_by_node_says_so_and_nothing_of_ports(self):
+        # as the real user's agent wrote it: the browser's program in the test's file, and Node's refusal names none
+        bundle = stand_in(self.tmp, "Browser")
+        program = bundle / "Contents/MacOS/browser"
+        (self.project / "browser.test.js").write_text(SPAWNS % program)
+        env = {k: v for k, v in os.environ.items() if k != "JAYNES_CHROME"}
+        with mock.patch.object(box, "browsers", lambda home: [bundle]), mock.patch.dict(os.environ, env, clear=True):
+            said = self.check()
+        self.assertIsInstance(said, menu_blocked())
+        self.assertIn("Error: spawn EPERM", said.reason)
+        self.assertIn(f"It tried to start a browser of this Mac, which no check's command starts: {program}.", said.reason)
+        self.assertIn("A browser the project installs runs in the box, as Playwright's and Puppeteer's do.", said.reason)
+        for ports in ("JAYNES_PORTS", "open-ports", "local port"):
+            self.assertNotIn(ports, said.reason)
+
+
+def menu_blocked() -> type:
+    import jaynes_menu as menu
+    return menu.Blocked
 
 
 class ARoleSProgramStartsNoBrowserOfThePerson(unittest.TestCase):

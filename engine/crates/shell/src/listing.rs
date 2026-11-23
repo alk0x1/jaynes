@@ -1399,6 +1399,11 @@ const BOX_REFUSED: &str = "the box refused what the command tried, so its failur
 const TRIED_PORT: &str = " It tried local port ";
 /// The words of a check whose command tried to start a browser of the person's (jaynes_menu.py), which no port helps.
 const TRIED_BROWSER: &str = " It tried to start a browser of this Mac";
+/// What runs in the box in place of it (jaynes_menu.py), the card's way out.
+const INSTALLED_RUNS: &str = " A browser the project installs runs in the box";
+/// The words of a check whose command started a browser with its own sandbox (jaynes_menu.py), which does not start
+/// inside the box.
+const OWN_SANDBOX: &str = " It started a browser with its own sandbox";
 const OWN_CHOOSING: &str = "0, a port of its own choosing";
 const REACH_ONLY: &str = " A check's commands bind and reach only the ports in JAYNES_PORTS (";
 const OPEN_DID_NOT_HELP: &str = " The person's open ports did not help here.";
@@ -1612,11 +1617,15 @@ struct Boxed<'a> {
     servers_did_not_help: bool,
     /// The sentence of the person's browser it tried to start, which the box keeps every check's command from.
     browser: Option<&'a str>,
+    /// The sentence of what runs in its place, a browser the project installs.
+    installed_runs: Option<&'a str>,
+    /// The sentence of a browser started with its own sandbox, which does not start inside the box.
+    own_sandbox: Option<&'a str>,
 }
 
 fn boxed(said: &str) -> Option<Boxed<'_>> {
     let rest = said.strip_prefix(BOX_REFUSED)?;
-    let end = [TRIED_PORT, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, TRIED_BROWSER].iter().filter_map(|m| rest.find(m)).min().unwrap_or(rest.len());
+    let end = [TRIED_PORT, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, TRIED_BROWSER, OWN_SANDBOX].iter().filter_map(|m| rest.find(m)).min().unwrap_or(rest.len());
     let (lines, tail) = rest.split_at(end);
     let numbers = |t: &str| t.split(", ").filter_map(|p| p.trim().parse().ok()).collect::<Vec<u16>>();
     Some(Boxed {
@@ -1626,7 +1635,9 @@ fn boxed(said: &str) -> Option<Boxed<'_>> {
         project: tail.split_once(OPEN_PORTS).and_then(|(_, t)| t.split_once('`')).map(|(p, _)| p),
         open_did_not_help: tail.contains(OPEN_DID_NOT_HELP),
         servers_did_not_help: tail.contains(SERVERS_DID_NOT_HELP),
-        browser: tail.find(TRIED_BROWSER).map(|at| tail[at..].trim()),
+        browser: tail.find(TRIED_BROWSER).map(|at| tail[at..tail.find(INSTALLED_RUNS).unwrap_or(tail.len())].trim()),
+        installed_runs: tail.find(INSTALLED_RUNS).map(|at| tail[at..].trim()),
+        own_sandbox: tail.find(OWN_SANDBOX).map(|at| tail[at..].trim()),
     })
 }
 
@@ -1989,11 +2000,34 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
                 details.push("Or the suite takes its test servers' ports from JAYNES_PORTS, and the box stays closed.".into());
             }
         }
+        Some(b) if b.browser.is_some() || b.own_sandbox.is_some() => {
+            // a browser the box kept from starting (T8, the real user's of 23/11): its own way out, never a port's
+            let abandon = Way { says: "Or abandon: the run ends and its change is not kept. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() };
+            if let Some(browser) = b.browser {
+                said.why = format!(
+                    "The project's tests tried to start {}, a browser of {}. The box Jaynes checks in starts none of your browsers, so their cookies, saved logins and history stay out of reach.",
+                    browser_name(browser),
+                    this_machine()
+                );
+                said.ways.push(Way { says: "Have the tests start a browser the project installs, as Playwright's or Puppeteer's, then Continue.".into(), then: None, command: None, still_open: Vec::new() });
+            } else {
+                said.why = "The project's tests started a browser with its own sandbox on, and a browser's own sandbox does not start inside the box Jaynes checks in.".into();
+                said.ways.push(Way {
+                    says: "Have the tests start the browser with --no-sandbox, as Playwright does, then Continue.".into(),
+                    then: Some("The box Jaynes checks in stays around the browser.".into()),
+                    command: None,
+                    still_open: Vec::new(),
+                });
+            }
+            said.ways.push(abandon);
+            details.extend(once(b.refused.iter().map(|l| go_annotation_off(l))));
+            details.extend(b.browser.or(b.own_sandbox).map(sentence));
+            details.extend(b.installed_runs.map(sentence));
+        }
         Some(b) => {
             // the person's words for the box's own (the design-lead's, 21/11): what was not judged is the change
             said.why = "The project's checks tried something the box Jaynes checks in does not allow, so their failure says nothing about the change.".into();
             details.extend(once(b.refused.iter().map(|l| go_annotation_off(l))));
-            details.extend(b.browser.map(sentence));
             if b.open_did_not_help {
                 details.push(OPEN_DID_NOT_HELP.trim().into());
             }
@@ -2011,6 +2045,16 @@ fn judged(said: &mut BlockedSaid, inner: &str, not_given: Option<&str>) {
     }
     details.extend(not_given.map(not_given_said));
     said.details = details;
+}
+
+/// The browser a sentence of a refused start names, as the person knows it: its app's name, "Google Chrome" for
+/// "…: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome.", else its program's.
+fn browser_name(said: &str) -> &str {
+    let program = said.rsplit_once(": ").map_or(said, |(_, p)| p).split(", ").next().unwrap_or("").trim_end_matches('.');
+    match program.split('/').find(|part| part.ends_with(".app")) {
+        Some(app) => app.trim_end_matches(".app"),
+        None => program.rsplit('/').next().unwrap_or(program),
+    }
 }
 
 /// A line Go printed without the note it adds to a panic recovered and raised again ("[recovered, repanicked]").
@@ -2282,17 +2326,46 @@ mod blocked_tests {
     #[test]
     fn a_check_that_tried_to_start_a_browser_says_so_apart_and_offers_no_ports() {
         // the box keeps every check's command from starting the person's browsers; no port the person opens changes
-        // that, so the card offers none, and the browser's sentence is a line of its own under Details
+        // that, so the card offers none: what does is a browser the project installs (T8, the real user's of 23/11)
         let program = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
         let reason = format!(
-            "the check tests of change could not judge: the box refused what the command tried, so its failure says nothing about the project: /bin/sh: {program}: Operation not permitted It tried to start a browser of this Mac, which no check's command starts: {program}.. No attempt was spent"
+            "the check tests of change could not judge: the box refused what the command tried, so its failure says nothing about the project: Error: spawn EPERM; code: 'EPERM', It tried to start a browser of this Mac, which no check's command starts: {program}. A browser the project installs runs in the box, as Playwright's and Puppeteer's do.. No attempt was spent"
         );
         let b = blocked_said(Some("change"), Fault::Jaynes, &reason);
         assert_eq!(b.what, "The change is done. Jaynes could not check it.");
+        assert_eq!(b.why, "The project's tests tried to start Google Chrome, a browser of this Mac. The box Jaynes checks in starts none of your browsers, so their cookies, saved logins and history stay out of reach.");
+        assert_eq!(b.ways.iter().map(|w| w.says.as_str()).collect::<Vec<_>>(), [
+            "Have the tests start a browser the project installs, as Playwright's or Puppeteer's, then Continue.",
+            "Or abandon: the run ends and its change is not kept. Your project stays as it was.",
+        ]);
         assert!(b.ways.iter().all(|w| w.command.is_none()), "{b:?}");
+        assert!(!format!("{b:?}").contains("port"), "{b:?}");
         assert_eq!(b.details, [
-            format!("/bin/sh: {program}: Operation not permitted"),
+            "Error: spawn EPERM".to_string(),
+            "code: 'EPERM',".to_string(),
             format!("It tried to start a browser of this Mac, which no check's command starts: {program}."),
+            "A browser the project installs runs in the box, as Playwright's and Puppeteer's do.".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn a_check_that_started_a_browser_with_its_own_sandbox_says_to_start_it_without_and_offers_no_ports() {
+        // a browser's own sandbox does not start inside Jaynes's box: Playwright starts it without, a suite that starts
+        // one itself passes --no-sandbox (T8, measured 23/11 with Playwright's headless shell and Chromium)
+        let reason = "the check tests of change could not judge: the box refused what the command tried, so its failure says nothing about the project: sandbox initialization failed: Operation not permitted It started a browser with its own sandbox, which does not start inside the box: the suite starts it with --no-sandbox, as Playwright does, and the box stays its sandbox.. No attempt was spent";
+        let b = blocked_said(Some("change"), Fault::Jaynes, reason);
+        assert_eq!(b.what, "The change is done. Jaynes could not check it.");
+        assert_eq!(b.why, "The project's tests started a browser with its own sandbox on, and a browser's own sandbox does not start inside the box Jaynes checks in.");
+        assert_eq!(b.ways.iter().map(|w| w.says.as_str()).collect::<Vec<_>>(), [
+            "Have the tests start the browser with --no-sandbox, as Playwright does, then Continue.",
+            "Or abandon: the run ends and its change is not kept. Your project stays as it was.",
+        ]);
+        assert_eq!(b.ways[0].then.as_deref(), Some("The box Jaynes checks in stays around the browser."));
+        assert!(b.ways.iter().all(|w| w.command.is_none()), "{b:?}");
+        assert!(!format!("{b:?}").contains("port"), "{b:?}");
+        assert_eq!(b.details, [
+            "sandbox initialization failed: Operation not permitted".to_string(),
+            "It started a browser with its own sandbox, which does not start inside the box: the suite starts it with --no-sandbox, as Playwright does, and the box stays its sandbox.".to_string(),
         ]);
     }
 
@@ -2676,7 +2749,7 @@ mod blocked_tests {
     fn the_words_the_card_reads_are_the_ones_the_box_check_writes() {
         // jaynes_menu.py says why the box kept a check from judging; the card finds its parts by these words
         let menu = include_str!("../../../python/jaynes_menu.py");
-        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED, PAST_TRIED, PAST_GAVE, TRIED_BROWSER] {
+        for words in [BOX_REFUSED, TRIED_PORT, OWN_CHOOSING, REACH_ONLY, OPEN_DID_NOT_HELP, SERVERS_DID_NOT_HELP, OPEN_PORTS, HIDDEN_FAILED, PAST_TRIED, PAST_GAVE, TRIED_BROWSER, INSTALLED_RUNS, OWN_SANDBOX] {
             assert!(menu.contains(words.trim_start()), "jaynes_menu.py no longer says {words:?}");
         }
     }

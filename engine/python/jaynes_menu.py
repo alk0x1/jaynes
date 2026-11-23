@@ -108,6 +108,9 @@ def serves(project: Path) -> bool:
     return bool(_SERVES.search(_project_text(project)))
 
 
+# What runs in the box in place of a browser of the person's: one the project installs, which the box lets start.
+INSTALLED_RUNS = " A browser the project installs runs in the box, as Playwright's and Puppeteer's do."
+
 # Only macOS's box keeps the tests from serving until the person lets the project's test servers; Linux's has a
 # network of its own, where they serve.
 SERVERS_NEED_LETTING = sys.platform == "darwin"
@@ -153,6 +156,20 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
     except box.Unavailable as e:
         return Blocked(f"there is no box to run the project's commands in: {e}")
     if box.refused(ran):
+        # a browser the box kept from starting, before any port: no port the person opens starts it (T8, 23/11)
+        started = box.browsers_refused(ran)
+        if not started and call.get("project") and any("spawn" in line.lower() for line in box.refused(ran)):
+            started = box.browsers_named(Path(call["project"]))
+        if started:
+            return Blocked(BOX_REFUSED
+                           + "; ".join(box.refused(ran)[:3])
+                           + f" It tried to start a browser of this Mac, which no check's command starts: {', '.join(started)}."
+                           + INSTALLED_RUNS)
+        if box.browser_sandbox_refused(ran):
+            return Blocked(BOX_REFUSED
+                           + "; ".join(box.refused(ran)[:3])
+                           + " It started a browser with its own sandbox, which does not start inside the box: the suite"
+                             " starts it with --no-sandbox, as Playwright does, and the box stays its sandbox.")
         past = box.past_window(ran)
         if past:
             # its own test server, on a port macOS gave after the window: never a service of the person's
@@ -162,12 +179,6 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
                            f" let the tests reach ({ran.window[0]} to {ran.window[-1]})."
                            f" The person may open this project's ports with `jaynes project open-ports {_source(call) or call['project']}`.")
         ports = box.ports_refused(ran)
-        started = box.browsers_refused(ran)
-        if started and not ports:
-            # a browser of the person's, which no port the person opens lets start
-            return Blocked(BOX_REFUSED
-                           + "; ".join(box.refused(ran)[:3])
-                           + f" It tried to start a browser of this Mac, which no check's command starts: {', '.join(started)}.")
         tried = (f" It tried local port {', '.join('0, a port of its own choosing' if p == '0' else p for p in ports)}.")\
             if ports else ""
         given = ", ".join(map(str, ran.reserved))
