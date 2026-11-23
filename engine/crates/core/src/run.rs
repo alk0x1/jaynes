@@ -97,6 +97,20 @@ pub struct Counts {
     pub sent_back: u32,
     pub deliveries: u32,
     pub corrections: u32,
+    /// Of the spent attempts, those a check refused: what ended each, said by name, never as the agent's fault.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub refused: u32,
+    /// Each check that refused spent attempts, by name: how many, and whether the agent could not see it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refused_by: BTreeMap<String, Refusals>,
+}
+
+/// A check's refusals of the agent's attempts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Refusals {
+    pub attempts: u32,
+    /// The check is hidden from the agent.
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -460,6 +474,23 @@ impl Run {
                 self.spent.add(*usage);
                 if *spent {
                     self.counts.spent += 1;
+                    // the checks of this attempt that refused it, when it ended at its checks (an attempt that
+                    // ended before them has none: what its step kept is an earlier attempt's)
+                    let refusing: Vec<(String, bool)> = self
+                        .manifest
+                        .index(step)
+                        .and_then(|i| self.steps.get(i))
+                        .filter(|s| matches!(s.status, Status::Checking { .. }))
+                        .map(|s| s.checks.iter().filter(|c| !c.passed && !c.blocked).map(|c| (c.check.clone(), c.kind == crate::manifest::CheckKind::Hidden)).collect())
+                        .unwrap_or_default();
+                    if !refusing.is_empty() {
+                        self.counts.refused += 1;
+                    }
+                    for (check, hidden) in refusing {
+                        let r = self.counts.refused_by.entry(check).or_default();
+                        r.attempts += 1;
+                        r.hidden |= hidden;
+                    }
                 }
                 if let Some(s) = self.step_mut(step) {
                     s.resume = None;

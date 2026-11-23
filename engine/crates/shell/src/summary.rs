@@ -110,9 +110,11 @@ pub struct Summary {
     pub agent_seconds: u64,
     pub tokens: u64,
     pub attempts: u32,
-    /// Attempts the agent spent by its own fault.
+    /// Attempts the agent spent: a check refused them, or they ended without a result.
     pub spent: u32,
     pub fixes: u32,
+    /// The agents' work as the page and the app count it (listing::work).
+    pub work: crate::listing::Work,
     pub person: Person,
 }
 
@@ -288,6 +290,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         tokens: r.spent.tokens,
         spent: r.counts.spent,
         fixes: r.counts.fixes,
+        work: crate::listing::work(&r),
         person,
     })
 }
@@ -507,7 +510,7 @@ impl Summary {
             span(self.agent_seconds),
             thousands(self.tokens),
             // said as the page and the app say it (listing::work)
-            crate::listing::Work { attempts: self.attempts, fixes: self.fixes, own_failures: self.spent }.said(),
+            self.work.said(),
         ));
         if p.waited > 0 {
             out.push_str(&format!("- The run stood {} at its stops, waiting for an answer. That is waiting, not anyone's attention.\n", span(p.waited)));
@@ -783,7 +786,7 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 
 ### Cost
 
-- Agents: 12 min of work, 252,250 tokens, 3 attempts by the agent, 1 failed through its own fault.
+- Agents: 12 min of work, 252,250 tokens, 3 attempts by the agent, 1 refused by the check “cases-pass” (hidden from the agent).
 - People: 1 stop answered by a person, 0 sent back. Their time on Jaynes's screens: not measured.
 - The run stood 11 h 0 min at its stops, waiting for an answer. That is waiting, not anyone's attention.
 
