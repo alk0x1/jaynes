@@ -891,8 +891,9 @@ _END = r"(?=$|[\s;&|)`'\"])"
 # refused even where it is not plainly run, but for the words a search looks for (grep -q git README.md), since a case refused costs its author one rewrite, and one taken that
 # needs git costs the fix every attempt (the real-user's run, 22/11). Never .git, .github, .gitignore nor digit.
 _GIT = re.compile(r"(?<![\w.])git(?!\w)")
-# the words a search is given, up to the end of its command, unless something in them runs ($ or `)
-_SEARCHED = re.compile(r"\b(?:grep|egrep|fgrep|rg|ag)\b[^;&|)\n`$]*(?=$|[;&|)\n])")
+# the words a search is given, up to the end of its command, unless something in them runs: $, `, a process
+# substitution <( ), or a search that runs a program on each file (rg --pre)
+_SEARCHED = re.compile(r"\b(?:grep|egrep|fgrep|rg|ag)\b(?![^;&|)\n]*--pre)[^;&|)\n`$(]*(?=$|[;&|)\n])")
 # git's own files: the folder .git, never .github nor .gitignore
 _DOT_GIT = re.compile(r"(?:^|[\s'\"=:(<>])(?:\./)?\.git(?=/|$|[\s;&|)'\"<>])")
 # a command named through a variable or built by eval, so what it runs is not written in the case
