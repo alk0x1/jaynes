@@ -258,7 +258,8 @@ pub fn merged_said(into: &str, project: &str) -> String {
 pub fn not_landed(reference: &str) -> Option<NotLanded> {
     let (_, why) = reference.rsplit_once("; not merged: ")?;
     if why.contains("has uncommitted changes") {
-        Some(NotLanded::Dirty { git: why.to_string() })
+        // Jaynes's own check of the checkout, before git is asked: no words of git's
+        Some(NotLanded::Dirty { git: String::new() })
     } else if let Some((_, git)) = why.split_once(" has now: ").filter(|_| why.contains("it conflicts with what")) {
         Some(NotLanded::Conflict { git: git.to_string() })
     } else {
