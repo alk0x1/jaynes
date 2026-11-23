@@ -674,12 +674,15 @@ def _collected(call: Call, runner: dict[str, Any], tests: list[str], began: dict
     when it passes: pytest runs a file it is given by its path whatever ``python_files`` says."""
     if runner.get("kind") != "pytest" or not runner.get("suite"):
         return None
-    ran = _box(call, f"{runner['suite']} --collect-only -q", over=None if left or not began else began)
+    ran = _box(call, f"{runner['suite']} --collect-only -qq", over=None if left or not began else began)
     if isinstance(ran, Blocked):
         return ran
     if ran.code not in (0, 5):
         return None
-    listed = {line.split("::", 1)[0].strip() for line in ran.printed.splitlines() if "::" in line}
+    # two quiet flags list a file and its count ("tests/x.py: 2"); a project whose addopts say -v lists node ids
+    # ("tests/x.py::test_a"): pytest 7.2.1 on titan, addopts none, -q, -v
+    listed = {m.group(1) for line in ran.printed.splitlines()
+              if (m := re.match(r"^(\S[^:]*?)(?:::.*|: \d+)$", line.strip()))}
     if ran.code == 0 and not listed:  # not the listing of node ids: a runner configured to print another way
         return None
     return [t for t in tests if t not in listed]

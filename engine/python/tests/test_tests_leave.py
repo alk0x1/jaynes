@@ -182,7 +182,7 @@ class TheTestOfTheBugIsAmongTheOnesRun(unittest.TestCase):
 
         def run(where: Path, command: str, **kw: object) -> box.Ran:
             ran_commands.append(command)
-            if "--collect-only" in command:  # what pytest lists, by the pyproject it reads: the start's when put back
+            if "--collect-only" in command:  # -qq  # what pytest lists, by the pyproject it reads: the start's when put back
                 seen = (kw.get("over") or {}).get("pyproject.toml") or (Path(where) / "pyproject.toml").read_text()
                 listed = "".join(f"{f}::test_x\n" for f in _collected_by(seen, files))
                 return box.Ran(0, listed, listed)
@@ -213,6 +213,16 @@ class TheTestOfTheBugIsAmongTheOnesRun(unittest.TestCase):
         got, _ = self.judged(["tests/relatorio_test.py"], now, tests_leave=CONTAS_WORDS)
         self.assertIsInstance(got, Fail, got)
         self.assertIn("does not collect", " ".join(got.reasons))
+
+    def test_the_listing_pytest_7_2_1_prints_on_titan_in_both_forms_is_read(self):
+        # titan, jaynes-linux-test: `--collect-only -qq` prints "path: N" (with addopts none or -q) and node ids (-v)
+        for printed in ("tests/relatorio_test.py: 1\ntests/test_linha.py: 1\n", "tests/relatorio_test.py::test_a\n1 test collected in 0.00s\n"):
+            root = project(CONTAS_NOW)
+            with mock.patch.object(menu.box, "run", return_value=box.Ran(0, printed, printed)) as run:
+                got = menu._collected({"project": str(root), "source": str(root)}, {"kind": "pytest", "suite": "python3 -m pytest"},
+                                      ["tests/relatorio_test.py", "tests/other_test.py"], None, False)
+            self.assertEqual(got, ["tests/other_test.py"], printed)
+            self.assertIn("--collect-only -qq", run.call_args[0][1])
 
     def test_case_1_a_test_the_suite_of_the_start_collects_still_passes(self):
         got, _ = self.judged(["tests/test_linha.py"], CONTAS_NOW)
