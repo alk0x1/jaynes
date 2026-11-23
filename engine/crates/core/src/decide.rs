@@ -236,6 +236,26 @@ pub fn decide(run: Option<&Run>, input: &Input) -> Result<Decided, Refusal> {
             c.emit(Event::Continued { by: by.clone(), words: Some(words.to_string()) });
             c.advance();
         }
+        Input::Grant { question, offer, by } => {
+            // what lets the project's tests do more is the person's, never an agent's nor a rule's
+            if !by.person() {
+                return refuse("only you let this project's tests start their own test servers: an agent never does");
+            }
+            let Some(q) = c.run.questions.get(question) else {
+                return refuse(format!("there is no question {question}"));
+            };
+            if !q.open() {
+                return refuse("this stop was already answered, or replaced by a newer one");
+            }
+            let offered = c.run.manifest.index(&q.question.step).and_then(|i| c.run.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.offers.list.contains(offer));
+            if !offered {
+                return refuse("this stop does not offer that");
+            }
+            if c.run.granted.contains(offer) {
+                return refuse("you already let this project's tests start their own test servers in this run");
+            }
+            c.emit(Event::Granted { question: question.clone(), offer: *offer, by: by.clone() });
+        }
         Input::PortsChosen { any, servers, opened, freed_ports } => {
             if c.run.finished() {
                 return refuse("the run is finished");

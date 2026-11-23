@@ -335,6 +335,13 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         freed_ports: Vec<u16>,
     },
+    /// The person granted what the stop of `question` offered (`offer`): for the project's test servers, the run's
+    /// own process then lets them for the project, as `jaynes project test-servers` does, and records it (`PortsChosen`).
+    Granted {
+        question: String,
+        offer: crate::manifest::Offer,
+        by: By,
+    },
     Halted {
         by: By,
     },

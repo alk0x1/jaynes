@@ -162,6 +162,13 @@ pub enum Input {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         freed_ports: Vec<u16>,
     },
+    /// The person grants what an open stop offers (`offer`), at the stop of `question`, beside their answer: the
+    /// person's alone.
+    Grant {
+        question: String,
+        offer: crate::manifest::Offer,
+        by: By,
+    },
     /// The person asks the agent of a stop's step something about what it shows, without sending it back: the stop
     /// stays open in the same round, with the same items, and the agent answers in a turn that only reads.
     AskAgent {

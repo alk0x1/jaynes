@@ -45,6 +45,7 @@ fn stop(redo: Option<&str>) -> StopDecl {
         rounds: None,
         answers: Default::default(),
         note: String::new(),
+        offers: Default::default(),
     }
 }
 

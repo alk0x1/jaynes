@@ -76,6 +76,9 @@ pub struct Run {
     /// What the person chose for the project's ports since the run's setup, the last choice: none, as the setup says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports: Option<Ports>,
+    /// What the person granted at the run's stops, each once.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub granted: std::collections::BTreeSet<crate::manifest::Offer>,
 }
 
 /// The project's ports as the person chose them: every local port (`any`), test servers on ports the system picks
@@ -402,6 +405,7 @@ impl Run {
             planted: BTreeMap::new(),
             unplanted: Default::default(),
             ports: None,
+            granted: Default::default(),
         })
     }
 
@@ -819,6 +823,9 @@ impl Run {
             }
             Event::PortsChosen { any, servers, opened, freed_ports } => {
                 self.ports = Some(Ports { any: *any, servers: *servers, opened: *opened, freed_ports: freed_ports.clone() })
+            }
+            Event::Granted { offer, .. } => {
+                self.granted.insert(*offer);
             }
             Event::Halted { by } => {
                 self.halted = true;

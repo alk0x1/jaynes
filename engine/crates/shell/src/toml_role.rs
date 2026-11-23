@@ -389,6 +389,21 @@ struct StopFile {
     answers: BTreeMap<VerdictKind, String>,
     /// A line under the question, said before the person looks: what the stop keeps, or what it leaves for later.
     note: Option<String>,
+    /// What the person may grant with their answer, beside their verdicts: `offers = ["test_servers"]`, the
+    /// project's tests starting their own test servers, at the first stop of a new project.
+    #[serde(default)]
+    offers: Vec<jaynes_core::manifest::Offer>,
+    /// For an offer, the boolean field of the step's output that marks it beforehand: `offers_default = {
+    /// test_servers = "serves_http" }`. One not named starts unmarked.
+    #[serde(default)]
+    offers_default: BTreeMap<jaynes_core::manifest::Offer, String>,
+}
+
+/// An offer as a role names it.
+fn offer_word(o: jaynes_core::manifest::Offer) -> &'static str {
+    match o {
+        jaynes_core::manifest::Offer::TestServers => "test_servers",
+    }
 }
 
 /// The most characters a stop's note has: one line under the question.
@@ -1514,6 +1529,19 @@ impl TomlRole {
                         errs.push(format!("answers gives {name} {n} characters; keep it to {ANSWER_MOST}: it goes on a button, and Jaynes says under it what it does"));
                     }
                 }
+                for (o, field) in &st.offers_default {
+                    let name = offer_word(*o);
+                    let ty = s.output.as_ref().and_then(|t| t.get(field)).map(|f| match f {
+                        toml::Value::String(t) => t.clone(),
+                        toml::Value::Table(t) => text(t, "type"),
+                        _ => String::new(),
+                    });
+                    if !st.offers.contains(o) {
+                        errs.push(format!("offers_default names {name}, which this stop does not offer: offers = [\"{name}\"]"));
+                    } else if ty.as_deref() != Some("boolean") {
+                        errs.push(format!("offers_default names {field}, which the step's output does not declare as a boolean: {field} = \"boolean\""));
+                    }
+                }
                 if st.choose && s.show.as_ref().is_none_or(|sh| sh.each.is_none() || sh.id.is_none()) {
                     errs.push("chooses among options, so its show lists them with an id that stays: show = { each = \"FIELD\", id = \"{{name}}\", label = \"...\" }".into());
                 }
@@ -1535,6 +1563,7 @@ impl TomlRole {
                 about: st.ask.clone(),
                 answers: st.answers.iter().map(|(v, w)| (*v, w.trim().to_string())).collect(),
                 note: st.note.as_deref().map(str::trim).unwrap_or_default().to_string(),
+                offers: jaynes_core::manifest::Offers { list: st.offers.clone(), marked_by: st.offers_default.clone() },
             });
             // a step of Jaynes's or of the role's own is never tried again by itself
             let default_attempts = if matches!(s.by, By::Jaynes | By::Role) { 1 } else { 3 };

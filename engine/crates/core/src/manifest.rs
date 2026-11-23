@@ -265,6 +265,31 @@ pub enum CheckKind {
     Hidden,
 }
 
+/// What a stop may let the person grant with their answer, beside their verdicts: only the person, never an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Offer {
+    /// The project's tests start their own test servers on ports the system picks, as `jaynes project test-servers
+    /// DIR` lets them: never the ports of the usual databases and caches, which only that command lets, naming them.
+    TestServers,
+}
+
+/// What a stop offers the person to grant, and the field of its step's output that marks each beforehand.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Offers {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list: Vec<Offer>,
+    /// For an offer, the boolean field of the step's output that marks it beforehand; one not named starts unmarked.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub marked_by: BTreeMap<Offer, String>,
+}
+
+impl Offers {
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty() && self.marked_by.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StopDecl {
     /// The verdicts the person may give each item, from the closed list.
@@ -310,6 +335,10 @@ pub struct StopDecl {
     /// comes later." at a stop that keeps only colours and fonts. Empty: nothing is said.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// What the person may grant with their answer at this stop, such as the project's test servers at the first stop
+    /// of a new project: only the person, and only while the stop is open.
+    #[serde(default, skip_serializing_if = "Offers::is_empty")]
+    pub offers: Offers,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {
@@ -429,6 +458,13 @@ impl Manifest {
                 }
                 if stop.from_risk < s.from_risk {
                     errors.push(format!("{at} asks at a risk the step does not run at"));
+                }
+                // what the person may grant there: each once, and marked beforehand only by what it offers
+                if stop.offers.list.iter().enumerate().any(|(i, o)| stop.offers.list[..i].contains(o)) {
+                    errors.push(format!("{at} offers the same thing twice"));
+                }
+                if let Some(o) = stop.offers.marked_by.keys().find(|o| !stop.offers.list.contains(o)) {
+                    errors.push(format!("{at} marks {o:?} beforehand and does not offer it"));
                 }
                 // A stop sends the work back to the agent that made it from an agent's step that reviews it, or from a
                 // step of the role's own that shows it, such as quotes in the pages they came from; never from the

@@ -270,7 +270,7 @@ pub fn submit(home: &Path, exe: &Path, run: &Run, input: Input) -> Result<&'stat
         // An input that starts work is left to the process carried on here, which recovers first and then takes it:
         // decided here, the attempt it begins would be taken by that process for one Jaynes stopped. The rest is
         // recorded at once.
-        if matches!(input, Input::Answer { .. } | Input::Continue { .. } | Input::SendBack { .. } | Input::Resume { .. } | Input::AskAgent { .. }) {
+        if matches!(input, Input::Answer { .. } | Input::Grant { .. } | Input::Continue { .. } | Input::SendBack { .. } | Input::Resume { .. } | Input::AskAgent { .. }) {
             store.inbox_put(&run.id, &input)?;
         } else {
             store.decide(&run.id, &input)?;
@@ -1105,6 +1105,11 @@ impl<'a> Driver<'a> {
                 std::process::exit(9);
             }
             self.follow_project(&state, &events)?;
+            // what the person granted at a stop, recorded first: the project's tests start their own test servers
+            // from here, as `jaynes project test-servers` lets them, and the run records it as that does
+            if events.iter().any(|e| matches!(e, Event::Granted { offer: jaynes_core::manifest::Offer::TestServers, .. })) {
+                self.let_test_servers()?;
+            }
             if events.iter().any(|e| matches!(e, Event::RunFinished { .. })) {
                 clear_caches(&self.setup.dir);
             }
@@ -1266,6 +1271,24 @@ impl<'a> Driver<'a> {
         d.removed = Some(crate::planted::Removed { by: remover.to_string(), at: crate::store::now(), verified });
         crate::planted::write(&self.setup.dir, &defects)?;
         end
+    }
+
+    /// The project's tests start their own test servers, as the person granted at a stop: the project's choice, as
+    /// `jaynes project test-servers DIR` makes it, never the ports of the usual databases and caches, which only that
+    /// command lets, naming them; then the run records it. Only macOS's box keeps tests from serving.
+    fn let_test_servers(&mut self) -> Result<(), String> {
+        let Some(project) = self.setup.project.clone() else { return Ok(()) };
+        if !cfg!(target_os = "macos") {
+            return Ok(());
+        }
+        let mut prefs = crate::project_prefs::load(&self.setup.home, &project)?;
+        let was = prefs.ports.clone().unwrap_or_default();
+        if !was.servers {
+            let opened = if was.any { was.opened } else { crate::store::now() };
+            prefs.ports = Some(crate::project_prefs::Ports { any: was.any, servers: true, opened, freed_ports: Vec::new() });
+            crate::project_prefs::save(&self.setup.home, &project, &prefs)?;
+        }
+        self.ports_now()
     }
 
     /// Record what the person chose for the project's ports since the run last said, and take it from here: the setup
@@ -2756,6 +2779,7 @@ mod tests {
         look.stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![jaynes_core::question::VerdictKind::Keep], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Look?".into(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new(),
+            offers: Default::default(),
         });
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![first, look], target: Default::default(), delivery: Default::default() };
         let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
@@ -3003,6 +3027,7 @@ mod tests {
             redo: None,
             rounds: None,
             answers: Default::default(), note: String::new(),
+            offers: Default::default(),
         });
         let manifest = Manifest { role: "greenfield".into(), version: "1".into(), protocol: 1, steps: vec![stack], target: Default::default(), delivery: Default::default() };
         let start = jaynes_core::decide(None, &Input::Start {

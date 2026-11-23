@@ -640,6 +640,7 @@ mod tests {
         r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers, note: String::new(),
+            offers: Default::default(),
         });
         let p = passed(&home, &r)[0].passed.clone().expect("it says the run went on");
         assert_eq!(p.still, "“No, it's something else” would do “reproduce” again. “Yes” changes nothing.");
@@ -759,6 +760,7 @@ mod tests {
         r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Is this the bug?".into(), choose: false, redo: None, rounds: None, answers: answers.clone(), note: String::new(),
+            offers: Default::default(),
         });
         let stop = waiting(&home, &r).expect("a stop");
         assert_eq!(stop.answers, answers);
@@ -778,6 +780,7 @@ mod tests {
             verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Default::default(), release: false, budget: None,
             audit_rate: jaynes_core::manifest::Rate(0.1), about: "Which colours and fonts do we keep?".into(), choose: false, redo: None, rounds: None,
             answers: BTreeMap::new(), note: "The layout of your screens comes later.".into(),
+            offers: Default::default(),
         });
         assert_eq!(waiting(&home, &r).expect("a stop").note, "The layout of your screens comes later.");
         r.questions.get_mut("q1").expect("asked").question.kind = QuestionKind::Permission;
