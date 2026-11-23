@@ -1865,10 +1865,15 @@ def _browser() -> Path | None:
 # the tallest a whole page is photographed: past it, the page is cut
 TALLEST = 12000
 
+# A page is photographed, and measured, in the light theme, whatever the system's appearance: a full Chrome without a
+# window may follow a Mac set to dark, and an agent shown a page dark would judge a design that is not the one drawn
+# (the Design Director, 23/11). Blink's preferred colour scheme: 0 is dark, 1 is light.
+LIGHT_THEME = "--blink-settings=preferredColorScheme=1"
+
 
 def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tuple[int, ...] = (), whole: bool = False) -> str | None:
     """Photograph ``target``, a page file or an address on a local port in ``ports``, into the PNG ``out``, with a
-    Chrome in the box: no internet, so a page shows only what it carries. ``whole``: a page file taller than the
+    Chrome in the box, in the light theme: no internet, so a page shows only what it carries. ``whole``: a page file taller than the
     window is photographed down to its last line. None when done, else why not."""
     program = chrome()
     if program is None:
@@ -1885,7 +1890,7 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
         shot = Path(tmp) / "shot.png"
         argv = [program, "--headless=new", "--no-sandbox", "--disable-gpu", "--use-mock-keychain", "--no-first-run",
                 "--no-default-browser-check", "--disable-crash-reporter", "--disable-breakpad", "--hide-scrollbars",
-                "--disable-extensions", "--disable-background-networking", "--disable-component-update",
+                "--disable-extensions", "--disable-background-networking", "--disable-component-update", LIGHT_THEME,
                 f"--user-data-dir={Path(tmp) / 'profile'}", f"--screenshot={shot}", f"--window-size={size[0]},{size[1]}",
                 page]
         script = " ".join(shlex.quote(a) for a in argv)
@@ -1922,7 +1927,7 @@ def _height(program: str, page: Path, size: tuple[int, int], ports: tuple[int, .
         copy.write_text(text)
         argv = [program, "--headless=new", "--no-sandbox", "--disable-gpu", "--use-mock-keychain", "--no-first-run",
                 "--no-default-browser-check", "--disable-crash-reporter", "--disable-breakpad", "--hide-scrollbars",
-                "--disable-extensions", "--disable-background-networking", "--disable-component-update",
+                "--disable-extensions", "--disable-background-networking", "--disable-component-update", LIGHT_THEME,
                 f"--user-data-dir={Path(tmp) / 'profile'}", f"--window-size={size[0]},{size[1]}",
                 "--virtual-time-budget=2000", "--dump-dom", copy.as_uri()]
         try:
