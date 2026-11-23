@@ -34,6 +34,9 @@ pub struct RoleProgram {
     /// Where to note a call's process group while it runs (a check may run the project's suite), so a process
     /// that takes the run after a crash stops it.
     pub pidfile: Option<PathBuf>,
+    /// The run's folder of waits for a port another run holds (`port_wait`), and the run's short name, which tells
+    /// the runs that wait for it which it is: a call's time limit leaves out what it waited.
+    pub waits: Option<(PathBuf, String)>,
 }
 
 type Shared = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
@@ -59,7 +62,7 @@ fn pump(mut from: impl Read + Send + 'static) -> (std::thread::JoinHandle<()>, S
 impl RoleProgram {
     pub fn new(dir: &Path, library: &Path) -> RoleProgram {
         let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        RoleProgram { dir: real(dir), library: real(library), timeout: Duration::from_secs(900), pidfile: None }
+        RoleProgram { dir: real(dir), library: real(library), timeout: Duration::from_secs(900), pidfile: None, waits: None }
     }
 
     fn command(&self) -> Result<Command, String> {
@@ -90,6 +93,9 @@ impl RoleProgram {
         if let Some(f) = &self.pidfile {
             c.env("JAYNES_BOX_GROUPS", f.with_file_name(crate::drive::BOX_GROUPS));
         }
+        if let Some((waits, who)) = &self.waits {
+            c.env("JAYNES_PORT_WAITS", waits).env("JAYNES_RUN_NAME", who);
+        }
         Ok(c)
     }
 
@@ -119,10 +125,17 @@ impl RoleProgram {
         let (reader, out_text) = pump(stdout);
         let (errors, err_text) = pump(stderr);
         let started = Instant::now();
+        // what the call's box waited for a port another run held: not the call's time
+        let (mut waited, mut last) = (Duration::ZERO, Instant::now());
         loop {
+            let now = Instant::now();
+            if self.waits.as_ref().is_some_and(|(w, _)| w.parent().is_some_and(|run| crate::port_wait::live(run).is_some())) {
+                waited += now - last;
+            }
+            last = now;
             match child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) if started.elapsed() > self.timeout => {
+                Ok(None) if started.elapsed().saturating_sub(waited) > self.timeout => {
                     // the whole group: a check's suite runs in the role's children
                     let _killed = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status();
                     let _waited = child.wait();
@@ -210,7 +223,7 @@ impl RoleProgram {
                 }
             }
         }
-        Ok(RoleProgram { dir, library: lib, timeout: self.timeout, pidfile: None })
+        Ok(RoleProgram { dir, library: lib, timeout: self.timeout, pidfile: None, waits: None })
     }
 }
 
@@ -300,5 +313,29 @@ mod tests {
         let said = RoleProgram::new(&dir, &dir).call(Call::Describe {});
         assert!(said.is_err(), "{said:?}");
         assert!(started.elapsed() < Duration::from_secs(15), "the call waited {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn what_a_call_waits_for_a_port_another_run_holds_is_not_its_time() {
+        // T10, 23/11: a check that waits its turn of a port never ends as a role that did not answer
+        let base = std::env::temp_dir().join(format!("jaynes-role-waits-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let (dir, run) = (base.join("role"), base.join("run"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("role"), concat!(
+            "#!/bin/sh\nread line\n",
+            "python3 -c 'import fcntl, json, os, time; d = os.environ[\"JAYNES_PORT_WAITS\"]; os.makedirs(d, exist_ok=True); ",
+            "f = open(d + \"/w.json\", \"w\"); fcntl.flock(f, fcntl.LOCK_EX); ",
+            "f.write(json.dumps({\"said\": os.environ[\"JAYNES_RUN_NAME\"], \"since\": 1})); f.flush(); time.sleep(2.5)'\n",
+            "echo '{}'\n")).expect("write");
+        std::fs::set_permissions(dir.join("role"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let mut role = RoleProgram::new(&dir, &dir);
+        role.timeout = Duration::from_secs(1);
+        role.waits = Some((crate::port_wait::folder(&run), "estoque · Fix login".into()));
+        let started = Instant::now();
+        let said = role.call(Call::Describe {});
+        assert!(started.elapsed() > Duration::from_secs(2), "{said:?}");
+        assert!(!format!("{said:?}").contains("did not answer"), "{said:?}");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 }

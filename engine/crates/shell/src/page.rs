@@ -3821,7 +3821,7 @@ mod tests {
         // a run delivered whose answers are still open, as the app's column says it
         let mut w = small_run(false);
         w.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
-        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, into: String::new(), gone: None, moved: None, stopped: false };
+        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, into: String::new(), gone: None, moved: None, stopped: false, waiting: None };
         assert!(phase_word(&w).contains("delivered · you can still correct it"), "{}", phase_word(&w));
     }
 

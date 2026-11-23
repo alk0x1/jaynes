@@ -55,6 +55,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import errno
+import fcntl
 import functools
 import hashlib
 import json
@@ -1533,6 +1534,161 @@ class _holding:
             s.close()
 
 
+# The ports' turns between runs on this machine (T10, 23/11): a box that holds the free ones of HELD_PORTS while its
+# commands run (`_holding`) takes a port's turn shared, and a box whose project the person let use one of them takes
+# it alone, so it never finds that port held by another run's box: it waits, and says which run holds it. Turns are
+# the system's locks (flock) on a file per port in one folder of this user's for the whole machine, as its ports are:
+# a box that dies lets its turns go with it, and nothing it wrote down can hold another. Every box takes its turns in
+# the ports' order, so two runs that each let a port the other holds never wait for each other.
+PORT_TURNS = Path("/tmp") / f"jaynes-ports-{os.getuid()}"
+WAITING_SAID = "Waiting for port {port}: another run holds it while its commands run"
+
+
+def _turns_dir() -> Path:
+    """The turns' folder, made for this user alone; never one of another's, nor a link."""
+    with contextlib.suppress(FileExistsError):
+        PORT_TURNS.mkdir(mode=0o700)
+    st = os.lstat(PORT_TURNS)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise OSError(f"{PORT_TURNS} is not a folder of this user's alone")
+    return PORT_TURNS
+
+
+def _live(path: Path) -> bool:
+    """Whether whoever wrote ``path`` still has it: it keeps the file locked while it lives."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _holders(port: int) -> list[str]:
+    """The short names of the runs whose boxes have ``port``'s turn now; what a dead one left names no one."""
+    names = []
+    for f in sorted(PORT_TURNS.glob(f"port-{port}.*.who")):
+        if _live(f):
+            with contextlib.suppress(OSError):
+                names.append(f.read_text()[:200])
+        else:
+            with contextlib.suppress(OSError):
+                f.unlink()
+    return sorted(set(n for n in names if n))
+
+
+def waiting_said(port: int) -> str:
+    """"Waiting for port 5432: another run holds it while its commands run (estoque · Fix login)"."""
+    names = _holders(port)
+    return WAITING_SAID.format(port=port) + (f" ({', '.join(names)})" if names else "")
+
+
+# what tells a check's box the run's name and folder of waits, from the engine: the project's commands never get it
+TURNS_ENV = ("JAYNES_RUN_NAME", "JAYNES_PORT_WAITS")
+
+
+def _without_turns(env: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in env.items() if k not in TURNS_ENV}
+
+
+def _turns_of(ports: Iterable[int]) -> tuple[int, ...]:
+    """The ports of HELD_PORTS a box's commands use as their own, on macOS, where another run's box may hold them:
+    their turn is this box's alone. Linux's box serves in a network of its own, which no other run's box shares."""
+    return tuple(int(p) for p in ports if int(p) in HELD_PORTS) if sys.platform == "darwin" else ()
+
+
+class _port_turns:
+    """The turns of ``shared`` (the ports a box holds) and ``exclusive`` (the ones its project was let use), taken in
+    the ports' order, waiting for each that another run has; ``who`` names this run to the ones that wait for it, and
+    ``waits`` is the run's folder of what it waits for, where the person looks (the page, the app, ``jaynes show``),
+    each live while it waits. ``waited``: the seconds it waited, which no time limit counts. Without the folder (another
+    user's in its place) it takes no turns, as before them."""
+
+    def __init__(self, shared: Iterable[int] = (), exclusive: Iterable[int] = (), who: str = "",
+                 waits: Path | str | None = None) -> None:
+        self.exclusive = {int(p) for p in exclusive}
+        self.ports = sorted({int(p) for p in shared} | self.exclusive)
+        self.who = who
+        self.waits = Path(waits) if waits else None
+        self.waited = 0.0
+        self.fds: list[int] = []
+        self.named: list[tuple[Path, int]] = []
+
+    def __enter__(self) -> "_port_turns":
+        try:
+            folder = _turns_dir()
+        except OSError as e:
+            print(f"Jaynes took no turns of the ports: {e}", file=sys.stderr)
+            return self
+        try:
+            for port in self.ports:
+                fd = os.open(folder / f"port-{port}.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                self.fds.append(fd)
+                mode = fcntl.LOCK_EX if port in self.exclusive else fcntl.LOCK_SH
+                try:
+                    fcntl.flock(fd, mode | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    said = waiting_said(port)
+                    print(said, file=sys.stderr, flush=True)
+                    mark = self._mark(said)
+                    started = time.monotonic()
+                    try:
+                        fcntl.flock(fd, mode)
+                    finally:
+                        self.waited += time.monotonic() - started
+                        self._unmark(mark)
+                self._name(folder, port)
+        except BaseException:
+            self.__exit__()
+            raise
+        return self
+
+    def _name(self, folder: Path, port: int) -> None:
+        if not self.who:
+            return
+        path = folder / f"port-{port}.{os.urandom(8).hex()}.who"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, self.who.encode())
+        self.named.append((path, fd))
+
+    def _mark(self, said: str) -> tuple[Path, int] | None:
+        if self.waits is None:
+            return None
+        try:
+            self.waits.mkdir(parents=True, exist_ok=True)
+            path = self.waits / f"{os.urandom(8).hex()}.json"
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            return None
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, json.dumps({"said": said, "since": int(time.time())}).encode())
+        return path, fd
+
+    @staticmethod
+    def _unmark(mark: tuple[Path, int] | None) -> None:
+        if mark is not None:
+            with contextlib.suppress(OSError):
+                mark[0].unlink()
+            os.close(mark[1])
+
+    def __exit__(self, *_) -> None:
+        for path, fd in self.named:
+            with contextlib.suppress(OSError):
+                path.unlink()
+            os.close(fd)
+        for fd in self.fds:
+            os.close(fd)
+        self.named, self.fds = [], []
+
+
 # How a failure says a port was taken: Go's and Node's name the port on that line; Python's names it in the
 # traceback's line of the bind, above.
 _IN_USE = ("address already in use", "eaddrinuse", "address in use")
@@ -1619,10 +1775,14 @@ def run(project: Path, command: str, *, source: Path | None = None, timeout: flo
         argv = command_in_box(command, box)
         given = {"JAYNES_PORTS": ",".join(map(str, ports))}
         holds = tuple(p for p in HELD_PORTS if p not in declared and p not in ports) if window else ()
-        with _holding(holds) if window else contextlib.nullcontext() as holding:
+        # the run's name and where it says what it waits for, from the engine's call; never the command's
+        turns = _port_turns(holds, _turns_of(declared), who=os.environ.get("JAYNES_RUN_NAME", ""),
+                            waits=os.environ.get("JAYNES_PORT_WAITS") or None)
+        env = {k: v for k, v in (env or {}).items() if k not in TURNS_ENV}
+        with turns, _holding(holds) if window else contextlib.nullcontext() as holding:
             said = scratch / "jaynes-refused.txt"
             said.unlink(missing_ok=True)
-            code, out, _, late = _wait_in_box(argv, cwd=work, env=listen_said({**inherited(), **suite_environment(work, scratch),
+            code, out, _, late = _wait_in_box(argv, cwd=work, env=listen_said({**_without_turns(inherited()), **suite_environment(work, scratch),
                                                                               **(env or {}), **given}, said),
                                               stdin=stdin, timeout=timeout, refused=said)
         if late:
@@ -2139,8 +2299,10 @@ def agent_run(spec_path: Path | str, command: str) -> int:
     said = refusals / "said.txt"
     env = listen_said({k: v for k, v in inherited().items() if k != "JAYNES_ENGINE_HOME"} | adds, said)
     holds = tuple(p for p in HELD_PORTS if p not in b.local_ports and p not in b.reserved) if b.window else ()
+    turns = _port_turns(holds, _turns_of(b.local_ports), who=str(spec.get("run_name") or ""),
+                        waits=spec.get("port_waits") or None)
     try:
-        with _holding(holds) if b.window else contextlib.nullcontext():
+        with turns, _holding(holds) if b.window else contextlib.nullcontext():
             code = _agent_wait(argv, start, env, said)
         # said again after the command, where a test runner that started the server swallowed its words
         for line in refusals_said(said):

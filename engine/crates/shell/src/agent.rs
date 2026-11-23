@@ -44,6 +44,9 @@ pub struct Spec<'a> {
     /// A file that exists while the turn waits for the person to answer a leave: that time is not the agent's, so
     /// it counts neither towards the deadline nor in the turn's time.
     pub paused: Option<PathBuf>,
+    /// The run's folder of waits for a port another run holds, and the run's short name (`RoleProgram::waits`): the
+    /// box of its shell commands takes the ports' turns with them, and what it waits is not the agent's time either.
+    pub waits: Option<(PathBuf, String)>,
     /// Told the session as soon as the agent program names it, so a turn cut off from outside can go on in it, with
     /// what the program says it runs with.
     pub on_session: OnSession,
@@ -345,6 +348,12 @@ pub fn stop_left(pidfile: &Path) -> bool {
     true
 }
 
+/// Whether the turn waits for what is not the agent's: the person's answer to a leave (`paused` exists), or a port
+/// another run holds, which a box of the run's waits for (`port_wait`, in the run's folder beside `paused`).
+fn held_up(paused: Option<&Path>) -> bool {
+    paused.is_some_and(|p| p.exists() || p.parent().is_some_and(|run| crate::port_wait::live(run).is_some()))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Duration, idle: Option<Duration>, started: Instant, paused: Option<&Path>, mut on_session: OnSession, live: Option<&Path>, budget: Option<u64>) -> Result<Watched, String> {
     if let Some(mut stdin) = child.stdin.take() {
@@ -424,7 +433,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
     let mut last = Instant::now();
     let code = loop {
         let now = Instant::now();
-        if paused.is_some_and(Path::exists) {
+        if held_up(paused) {
             waited += now - last;
         }
         last = now;
@@ -440,7 +449,7 @@ fn watch(child: &mut std::process::Child, pid: u32, input: &str, deadline: Durat
             }
             Ok(None) if idle.is_some_and(|limit| {
                 let (said, working) = life.lock().map(|b| *b).unwrap_or((Instant::now(), 0));
-                working <= 0 && !paused.is_some_and(Path::exists) && said.elapsed() > limit
+                working <= 0 && !held_up(paused) && said.elapsed() > limit
             }) =>
             {
                 stalled = true;
@@ -904,6 +913,8 @@ pub fn box_spec(spec: &Spec<'_>, python: &Path, library: &Path) -> Value {
         "local_ports": local_ports, "test_servers": servers && !any_port, "any_port": any_port,
         "pwd": cwd.join(crate::project::EXCHANGE).join("tmp").join(AGENT_PWD),
         "python": python, "box": library.join("jaynes_box.py"),
+        "run_name": spec.waits.as_ref().map(|w| w.1.clone()).unwrap_or_default(),
+        "port_waits": spec.waits.as_ref().map(|w| w.0.clone()),
         // the run's start environment, as the check's commands inherit it from the engine: Claude Code's shell gives
         // the agent's commands a PATH of its own, without the person's toolchains
         "env": crate::drive::started_env(),
@@ -1766,7 +1777,7 @@ mod tests {
         let reach = Reach { project: ProjectAccess::Write, write: vec!["**".into()], network: Network::None, commands: true, local_ports: vec![5432] };
         let freed = |reach: &Reach, servers, any_port, freed_ports: Vec<u16>| {
             box_spec(&Spec { cwd: &cwd, prompt: "", session: None, reach, deadline: Duration::from_secs(1), reads: &reads, env: vec![],
-                             transcript: None, pidfile: None, permit: None, servers, any_port, freed_ports, paused: None, on_session: None, budget: None, model: StepModel::Default, turns: None },
+                             transcript: None, pidfile: None, permit: None, servers, any_port, freed_ports, paused: None, waits: None, on_session: None, budget: None, model: StepModel::Default, turns: None },
                      Path::new("/py"), Path::new("/lib"))
         };
         let spec = |reach: &Reach, servers, any_port| freed(reach, servers, any_port, vec![]);

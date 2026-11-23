@@ -44,6 +44,10 @@ impl Setup {
         let dir = home.join("runs").join(run);
         let mut role = RoleProgram::new(&dir.join("role"), &dir.join("library"));
         role.pidfile = Some(dir.join("role.pid"));
+        // its name for the runs that wait for a port its checks hold, and where its checks say what they wait for
+        let request = store.state(run).ok().flatten().map(|r| r.request).unwrap_or_default();
+        let who = crate::listing::short_name(s["project"].as_str().unwrap_or_default(), s["title"].as_str(), &request);
+        role.waits = Some((crate::port_wait::folder(&dir), who));
         // a run started before targets names none: it works on a repository
         let target = match s.get("target") {
             Some(t) => serde_json::from_value(t.clone()).map_err(|e| format!("the run's target is not one this engine knows: {e}"))?,
@@ -1759,6 +1763,7 @@ impl<'a> Driver<'a> {
             transcript: Some(self.setup.dir.join("steps").join(&turn.step).join(format!("turn-{}-{}.jsonl", turn.attempt, turn.fix))),
             pidfile: Some(self.setup.dir.join("agent.pid")),
             paused: Some(crate::permit::waiting_mark(self.setup.dir.parent().and_then(Path::parent).unwrap_or(Path::new("/")), &self.setup.run)),
+            waits: self.setup.role.waits.clone(),
             on_session: {
                 let (home, run, step, attempt) = (self.setup.dir.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default(), self.setup.run.clone(), turn.step.clone(), turn.attempt);
                 Some(Box::new(move |session: String, confirmed: jaynes_core::event::Confirmed| {
@@ -1838,6 +1843,7 @@ impl<'a> Driver<'a> {
             transcript: Some(transcript),
             pidfile: Some(self.setup.dir.join("agent.pid")),
             paused: None,
+            waits: self.setup.role.waits.clone(),
             on_session: None,
             permit: None,
             servers: self.setup.servers || self.setup.any_port,

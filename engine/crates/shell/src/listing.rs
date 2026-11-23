@@ -111,6 +111,8 @@ pub struct Entry {
     /// Jaynes stopped while it ran: a signal stopped the process driving it, which halted it, or that process is gone
     /// and the run still says it runs (`drive::left_running`). The person resumes it.
     pub stopped: bool,
+    /// What a box of the run waits for now, in the box's words: a port another run holds (`port_wait`).
+    pub waiting: Option<String>,
 }
 
 /// Every run of the record, as `jaynes runs` lists them, in the list.
@@ -142,7 +144,8 @@ pub fn entry_of(home: &Path, run: Run) -> Entry {
     let gone = crate::stop::left_behind(home, &run, jaynes_core::ENGINE).then(|| engine_version(&run.engine).to_string());
     let moved = gone.as_ref().and_then(|_| crate::moved::when(&crate::moved::read(home).unwrap_or_default(), &run.id));
     let stopped = stopped_by_jaynes(&run) || crate::drive::left_running(home, &run);
-    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into, gone, moved, stopped }
+    let waiting = crate::port_wait::live(&home.join("runs").join(&run.id));
+    Entry { run, project: String::new(), title: None, started: 0, at: 0, merged, into, gone, moved, stopped, waiting }
 }
 
 /// An engine's version, without the build after its "+": "0.2.3" of "0.2.3+5a1c0de".
@@ -391,6 +394,17 @@ fn project_name(folder: &str, folders: &[&str]) -> String {
     }
 }
 
+/// A sentence after a comma: its first letter small.
+fn lowered(said: &str) -> String {
+    let mut c = said.chars();
+    c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// A run's short name, as another run that waits for it says it: "estoque · Fix login".
+pub fn short_name(project: &str, title: Option<&str>, request: &str) -> String {
+    format!("{} · {}", project_name(project, &[]), run_title(title, request))
+}
+
 /// The step a run is at: the first on its path whose output is not fresh, or its last.
 pub(crate) fn step_at(r: &Run) -> String {
     let path = r.path();
@@ -535,7 +549,11 @@ fn standing(e: &Entry) -> (Mark, String) {
         Phase::Blocked { step, fault, reason } => (Mark::Blocked, format!("{}, {}", where_in(r), blocked_words(step.as_deref(), *fault, reason))),
         Phase::Waiting { step: None, .. } => (Mark::Delivered, "delivered, answers open".into()),
         Phase::Waiting { why, .. } => (Mark::Working, format!("{}, {why}", where_in(r))),
-        Phase::Running => (Mark::Working, format!("{}, running", where_in(r))),
+        Phase::Running => match &e.waiting {
+            // a box of the run waits for a port another run holds: said where the person looks, never a fault
+            Some(w) => (Mark::Working, format!("{}, {}", where_in(r), lowered(w))),
+            None => (Mark::Working, format!("{}, running", where_in(r))),
+        },
     }
 }
 
@@ -2604,7 +2622,7 @@ mod tests {
     }
 
     fn entry(run: Run, project: &str, at: u64) -> Entry {
-        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new(), gone: None, moved: None, stopped: false }
+        Entry { run, project: project.into(), title: None, started: 0, at, merged: false, into: String::new(), gone: None, moved: None, stopped: false, waiting: None }
     }
 
     // The engineer lead and the tech-lead, 22/11 (row 28): a run whose engine left the Mac never waits for the person
@@ -2849,6 +2867,17 @@ mod tests {
         let listing = arrange(&[e]);
         assert!(listing.needs.is_empty(), "listed as blocked, not as its question");
         assert_eq!(said(&listing.projects[0].1[0]), format!("blocked · {line}"), "jaynes runs says the same");
+    }
+
+    #[test]
+    fn a_run_whose_box_waits_for_a_port_another_run_holds_says_so_in_its_line_and_still_works() {
+        // T10, 23/11: where the person looks (the page, the app, jaynes show), and never as a fault
+        let said = "Waiting for port 5432: another run holds it while its commands run (horta · Add a ping)";
+        let e = Entry { waiting: Some(said.into()), ..entry(run("r1", "Fix login"), "/w/estoque", 30) };
+        let (mark, line, _) = stands(&e);
+        assert_eq!(mark, Mark::Working);
+        assert!(line.ends_with(", waiting for port 5432: another run holds it while its commands run (horta · Add a ping)"), "{line}");
+        assert_eq!(short_name("/w/estoque", None, "Fix login. Then more."), "estoque · Fix login");
     }
 
     #[test]

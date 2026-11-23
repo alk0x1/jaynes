@@ -18,6 +18,7 @@ pub mod person;
 pub mod planted;
 pub mod presence;
 pub mod project;
+pub mod port_wait;
 pub mod project_prefs;
 pub mod protocol;
 pub mod refused;
