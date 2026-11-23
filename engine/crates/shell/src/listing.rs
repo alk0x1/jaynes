@@ -532,6 +532,14 @@ pub fn where_in(r: &Run) -> String {
     format!("step {at} of {}", path.len())
 }
 
+/// Where the step that asks is on the run's path: "step 3 of 4", the count of a question, at its stop and in the list
+/// of what waits, wherever the run is now; "step 0 of 4" for a step its risk does not take.
+pub fn asked_at(r: &Run, step: &str) -> String {
+    let path = r.path();
+    let at = r.manifest.index(step).and_then(|i| path.iter().position(|&j| j == i)).map(|n| n + 1).unwrap_or(0);
+    format!("step {at} of {}", path.len())
+}
+
 /// The branch run `run` merges into, the one checked out when it started; empty when its copy does not say.
 pub fn into_of(home: &Path, run: &str) -> String {
     crate::project::start_branch_of(&home.join("runs").join(run).join("project"))
@@ -2596,6 +2604,25 @@ mod tests {
         // once the person answers, the run goes on to the next step
         held.phase = Phase::Running;
         assert_eq!(where_in(&held), "step 2 of 2");
+    }
+
+    // The real-user's round 2026-11-22-01, after b336961b (identity): "Na lista ao lado, a pergunta aparece como
+    // "identity · step 4 of 4 · the run waits here", e a página da pergunta diz "STEP CRITIQUE · STEP 3 OF 4"". An item
+    // of Waiting for you is a question: it counts the step that asks, as the stop's head does, wherever the run is.
+    #[test]
+    fn asked_a_question_counts_the_step_that_asks_wherever_the_run_is() {
+        let mut on = run("r1", "Pick the colours");
+        on.steps[0].status = jaynes_core::run::Status::Done;
+        on.steps[0].done = Some(jaynes_core::run::Done { round: 1, output: jaynes_core::Digest("o".into()), items: vec![], reads: on.reads(0), changed: vec![] });
+        // plan's stop is open and the run went on: it is at the second step
+        on.phase = Phase::Running;
+        assert_eq!(where_in(&on), "step 2 of 2");
+        assert_eq!(asked_at(&on, "plan"), "step 1 of 2", "plan asks");
+        // held at the second step, waiting for plan's answer: plan still asks
+        on.phase = Phase::Waiting { step: Some("change".into()), on: vec!["q1".into()], why: "waits for your answer".into() };
+        assert_eq!(where_in(&on), "step 2 of 2");
+        assert_eq!(asked_at(&on, "plan"), "step 1 of 2");
+        assert_eq!(asked_at(&on, "change"), "step 2 of 2");
     }
 
     // The real-user's app, 22/11 (recibo, fix-bug): the run was blocked at "fix", and "Needs you" showed it as "Is

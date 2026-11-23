@@ -890,7 +890,7 @@ impl Page {
                         esc(&q.question.id),
                         head(run, q, list),
                         esc(&run.manifest.role),
-                        where_in(run),
+                        crate::listing::asked_at(run, &q.question.step),
                         status,
                         strip(run, false)
                     )
@@ -1593,8 +1593,6 @@ fn thread_story(s: &jaynes_core::run::StepState) -> String {
 fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str, gone: bool, blocked: Option<crate::listing::BlockedSaid>) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
-    let path = run.path();
-    let at = path.iter().position(|&j| j == i).map(|n| n + 1).unwrap_or(0);
     // rounds the person opens have no ceiling: the round and what the run spent so far, for the person to decide
     // when to stop
     let rounds = if question.pass > 0 {
@@ -1700,13 +1698,14 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     let answering = run.asking.values().any(|x| *x == question.id);
     let solo = question.choose && one;
     format!(
-        "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · step {at} of {n}</div><h1>{title}</h1>{note}{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
+        "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · {asked}</div><h1>{title}</h1>{note}{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
          {rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
-        n = path.len(),
+        // the same count as its item in Waiting for you: the step that asks
+        asked = crate::listing::asked_at(run, &question.step),
         title = ticks(&crate::listing::title_into(q, into)),
         // a leave says why it comes to the person, and what the agent wants to write comes before the answers
         why = if leave { format!("<p class=\"whyyou\">{}</p>", esc(crate::stop::WHY_YOU)) } else { String::new() },
