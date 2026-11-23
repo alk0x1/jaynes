@@ -85,6 +85,9 @@ pub struct Summary {
     pub risk: &'static str,
     /// What the run delivered, in the target's own words for it, as recorded; None: nothing.
     pub delivered: Option<String>,
+    /// How the merge it asked for went, when it did not land, in words and never git's: "Not merged: the change
+    /// conflicts with what “main” has now. It is still on the branch “jaynes/r1”." (the design-lead, T7)
+    pub landing: Option<String>,
     pub abandoned: bool,
     /// A person reverted what the run merged.
     pub undone: bool,
@@ -269,7 +272,8 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         engine: r.engine.clone(),
         prover: jaynes_core::ENGINE.to_string(),
         risk: r.risk.word(),
-        delivered: reference.map(str::to_string),
+        delivered: reference.map(|r| landing(r).0),
+        landing: reference.and_then(|r| landing(r).1),
         abandoned: *outcome == Outcome::Abandoned,
         undone: r.undone,
         never_merge: r.never_merge,
@@ -397,6 +401,9 @@ impl Summary {
         match (&self.delivered, self.abandoned) {
             (Some(what), false) => {
                 out.push_str(&format!("{what}, in {}.", self.target));
+                if let Some(landing) = &self.landing {
+                    out.push_str(&format!(" {landing}"));
+                }
                 if self.undone {
                     out.push_str(" A person then reverted the merge.");
                 }
@@ -643,6 +650,29 @@ pub fn promises(home: &Path, run: &str, wait: bool) -> Promises {
 
 /// The summary of a run of the record in `home`. With `wait` the role's promises are proved before it answers,
 /// however long that takes; without it, promises not proved yet are told as being proved.
+/// A delivery's reference split into what it delivered and how its merge went when it did not land, in words: git's
+/// own words stay on the run's card, under "▸ What git said".
+fn landing(reference: &str) -> (String, Option<String>) {
+    if let Some(kept) = reference.strip_suffix(crate::listing::NOTHING_NEW) {
+        return (kept.to_string(), Some("Nothing to merge: the branch it merges into already has this change.".into()));
+    }
+    let Some((kept, why)) = reference.rsplit_once("; not merged: ") else { return (reference.to_string(), None) };
+    let branch = kept.split_once(" at ").map_or(kept, |(b, _)| b);
+    let said = match crate::listing::not_landed(reference) {
+        Some(crate::listing::NotLanded::Conflict { .. }) => {
+            let into = why.strip_prefix("it conflicts with what ").and_then(|w| w.split_once(" has now")).map_or("your branch", |(i, _)| i);
+            format!("Not merged: the change conflicts with what “{into}” has now. It is still on the branch “{branch}”.")
+        }
+        Some(crate::listing::NotLanded::Dirty { .. }) => {
+            let into = why.strip_prefix("your checkout of ").and_then(|w| w.split_once(" has uncommitted")).map_or("your branch", |(i, _)| i);
+            format!("Not merged: the checkout of “{into}” had changes not committed.")
+        }
+        // another reason the engine gave, in its own words
+        None => format!("Not merged: {why}."),
+    };
+    (kept.to_string(), Some(said))
+}
+
 pub fn read(home: &Path, run: &str, wait: bool) -> Result<Summary, String> {
     let store = Store::open(&home.join("record.sqlite3"))?;
     let events: Vec<(u64, Event)> = store.history()?.into_iter().filter(|(_, of, _)| of == run).map(|(ts, _, e)| (ts, e)).collect();
@@ -654,7 +684,22 @@ pub fn read(home: &Path, run: &str, wait: bool) -> Result<Summary, String> {
     let looks = crate::presence::looks(home, run)?;
     summarize(&events, &looks, Promises::Unread)?;
     let told = summarize(&events, &looks, promises(home, run, wait))?;
-    Ok(Summary { refused: crate::refused::of_run(home, run).iter().map(crate::refused::Refusal::line_out).collect(), ..told })
+    // nothing to merge, named: "Nothing to merge: “main” in horta already has this change."
+    let landing = match told.landing {
+        Some(l) if l.starts_with("Nothing to merge") => {
+            let into = crate::listing::into_of(home, run);
+            let project = Store::open(&home.join("record.sqlite3"))
+                .and_then(|s| s.setup(run))
+                .ok()
+                .and_then(|s| s["project"].as_str().and_then(|p| Path::new(p).file_name()).map(|n| n.to_string_lossy().into_owned()));
+            match (into.is_empty(), project) {
+                (false, Some(project)) => Some(crate::listing::nothing_to_merge_said(&into, &project)),
+                _ => Some(l),
+            }
+        }
+        other => other,
+    };
+    Ok(Summary { refused: crate::refused::of_run(home, run).iter().map(crate::refused::Refusal::line_out).collect(), landing, ..told })
 }
 
 #[cfg(test)]
@@ -845,6 +890,30 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
         s.repository = false;
         let other = s.markdown();
         assert!(other.contains("\nOf these, 2 cannot be taken back or are obeyed later outside any box, which alone makes a change risky:\n\n- .github/workflows/ci.yml\n- Makefile\n"), "{other}");
+    }
+
+    // The design-lead, T7, 23/11: git's words never go in the sentence, here either (they stay under "▸ What git
+    // said" on the card); a merge that found nothing new says so, never that it merged.
+    #[test]
+    fn a_merge_that_did_not_land_is_said_in_words_without_git() {
+        let with = |reference: &str| {
+            let mut e = whole();
+            for (_, ev) in e.iter_mut() {
+                if let Event::Delivered { reference: r, .. } = ev {
+                    *r = reference.into();
+                }
+            }
+            summarize(&e, &[], Promises::Unread).expect("summary").markdown()
+        };
+        let conflict = with("jaynes/r1 at 87b9b5dc3549; not merged: it conflicts with what main has now: git merge -q --no-ff failed: Auto-merging a.txt\nCONFLICT (content): Merge conflict in a.txt");
+        assert!(conflict.contains("\njaynes/r1 at 87b9b5dc3549, in a repository. Not merged: the change conflicts with what “main” has now. It is still on the branch “jaynes/r1”."), "{conflict}");
+        assert!(!conflict.contains("CONFLICT") && !conflict.contains("git merge"), "{conflict}");
+        let dirty = with("jaynes/r1 at 87b9b5dc3549; not merged: your checkout of main has uncommitted changes");
+        assert!(dirty.contains("\njaynes/r1 at 87b9b5dc3549, in a repository. Not merged: the checkout of “main” had changes not committed."), "{dirty}");
+        let nothing = with("jaynes/r1 at 87b9b5dc3549; nothing new to merge");
+        assert!(nothing.contains("\njaynes/r1 at 87b9b5dc3549, in a repository. Nothing to merge: the branch it merges into already has this change."), "{nothing}");
+        let merged = with("jaynes/r1 at 87b9b5dc3549; merged as def");
+        assert!(merged.contains("\njaynes/r1 at 87b9b5dc3549; merged as def, in a repository."), "as before: {merged}");
     }
 
     #[test]

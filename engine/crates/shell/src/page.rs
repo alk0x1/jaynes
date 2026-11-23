@@ -1008,6 +1008,8 @@ impl Page {
                         showed,
                         into: crate::listing::into_of(&self.home, &r.id),
                         unmerged: crate::listing::unmerged(&self.home, r),
+                        already: crate::listing::already_in(&self.home, r)
+                            .then(|| store.setup(&r.id).ok().and_then(|s| s["branch"].as_str().map(str::to_string)).unwrap_or_default()),
                     };
                     run_html_of(r, &changes_html(&self.home, r, None), &format!("{}{}", refused_html(&self.home, r), summary_html(&self.home, r)), who.as_deref(), names.get(&r.id), extra)
                 }
@@ -1320,6 +1322,8 @@ struct RunExtra {
     into: String,
     /// Delivered on a branch and not merged: the branch with Copy, and Merge when the engine takes it (T7).
     unmerged: Option<crate::listing::Unmerged>,
+    /// The person's branch has the change already: the run's branch, for Copy, and neither Merge nor Undo.
+    already: Option<String>,
 }
 
 #[cfg(test)]
@@ -1372,7 +1376,7 @@ fn older_html(home: &std::path::Path, r: &Run, moved_at: Option<u64>) -> String 
 /// `blocked`: a blocked run's words as listing::blocked reads them from the engine's home, with the hidden cases that
 /// failed; None, its record's reason alone.
 fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, name: Option<&crate::listing::Row>, extra: RunExtra) -> String {
-    let RunExtra { older, blocked, showed, into, unmerged } = extra;
+    let RunExtra { older, blocked, showed, into, unmerged, already } = extra;
     let path = r.path();
     let gone = older.is_some();
     let steps = stage_list(r, gone);
@@ -1432,7 +1436,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         }
         tipped("abandon", "Abandon", "danger", r.delivered.is_some().then_some(crate::listing::ABANDON_DELIVERED_TIP));
     }
-    if (r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge || r.merged) && r.delivered.is_some() && !r.undone {
+    if (r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge || r.merged) && r.delivered.is_some() && !r.undone && already.is_none() {
         tipped("undo", "Undo the merge", "danger", None);
     }
     let correct = if r.delivered.is_some() {
@@ -1475,10 +1479,15 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         .collect();
     // how the change reaches the person's folder (T7): the branch it is on, with Copy and Merge, or where it merged
     let project_name = name.map(|n| n.project.clone()).filter(|p| !p.is_empty()).unwrap_or_else(|| "your project".into());
-    let reach = match &unmerged {
-        Some(u) => reach_html(u),
-        None if r.merged && !r.undone && !into.is_empty() => format!("<div class=\"reach\"><div>{}</div></div>", ticks(&crate::listing::merged_said(&into, &project_name))),
-        None => String::new(),
+    let reach = match (&unmerged, &already) {
+        (_, Some(branch)) => {
+            let copy = if branch.is_empty() { String::new() } else { format!(" <button class=\"copyplace\" data-copy=\"{}\">Copy</button>", esc(branch)) };
+            let said = crate::listing::nothing_to_merge_said(if into.is_empty() { "your branch" } else { &into }, &project_name);
+            format!("<div class=\"reach\"><div class=\"rline\">{}{copy}</div></div>", ticks(&said))
+        }
+        (Some(u), None) => reach_html(u),
+        (None, None) if r.merged && !r.undone && !into.is_empty() => format!("<div class=\"reach\"><div>{}</div></div>", ticks(&crate::listing::merged_said(&into, &project_name))),
+        (None, None) => String::new(),
     };
     let phase = format!("{phase}{reach}");
     let (phase, answers, buttons, passed, correct) = match older {
@@ -3866,6 +3875,13 @@ mod tests {
         assert!(!said.contains("CONFLICT") && conflict.contains(&format!("<summary>▸ What git said</summary><pre class=\"said\">{git}</pre>")), "{conflict}");
         let never = reach_html(&u(Some("the run was started never to merge"), None));
         assert!(never.contains(line) && !never.contains("data-act=\"merge\""), "{never}");
+        // the person's branch has it already: said in text, Copy of the branch, neither Merge nor Undo
+        let mut r = small_run(false);
+        r.phase = Phase::Finished { outcome: jaynes_core::event::Outcome::Delivered };
+        r.merged = true;
+        let page = run_html_of(&r, "", "", None, None, RunExtra { into: "main".into(), already: Some("jaynes/r17".into()), ..RunExtra::default() });
+        assert!(page.contains("<div class=\"reach\"><div class=\"rline\">Nothing to merge: “main” in your project already has this change. <button class=\"copyplace\" data-copy=\"jaynes/r17\">Copy</button></div></div>"), "{page}");
+        assert!(!page.contains("data-act=\"undo\"") && !page.contains("data-act=\"merge\"") && !page.contains("Merged into"), "{page}");
         // a delivery that said nothing of a merge, or one that landed, says no merge failed
         assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c; merged as 9f8e7d"), None);
         assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c"), None);
@@ -4206,7 +4222,7 @@ mod tests {
         // a run delivered whose answers are still open, as the app's column says it
         let mut w = small_run(false);
         w.phase = Phase::Waiting { step: None, on: vec![], why: String::new() };
-        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, into: String::new(), gone: None, moved: None, stopped: false };
+        let w = crate::listing::Entry { run: w, project: String::new(), title: None, started: 0, at: 0, merged: false, already: false, into: String::new(), gone: None, moved: None, stopped: false };
         assert!(phase_word(&w).contains("delivered · you can still correct it"), "{}", phase_word(&w));
     }
 

@@ -1568,7 +1568,7 @@ impl<'a> Driver<'a> {
                         landed = Some(true);
                     }
                     Ok(None) => {
-                        reference.push_str("; nothing new to merge");
+                        reference.push_str(crate::listing::NOTHING_NEW);
                         landed = Some(true);
                     }
                     Err(why) => reference.push_str(&format!("; not merged: {why}")),
