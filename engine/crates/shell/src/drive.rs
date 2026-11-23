@@ -1482,7 +1482,7 @@ impl<'a> Driver<'a> {
                 Some(self.role_step(run, step, round, attempt, given, previous, answers, key))
             }
             Command::RunChecks { step, attempt, fix, output, given, checks } => {
-                let results = self.checks(run, &step, &output, &given, &checks);
+                let results = self.checks(run, &step, &output, &given, &checks, None);
                 let results = self.keep_failed_cases(run, &step, attempt, results);
                 Some(Input::ChecksEnded { step, attempt, fix, results })
             }
@@ -1515,6 +1515,8 @@ impl<'a> Driver<'a> {
             .filter(|&j| run.manifest.steps[j].reach.project == ProjectAccess::Write)
             .map(|j| run.manifest.steps[j].name.clone())
             .collect();
+        // what is delivered, which leaves out what the role only shows: what the merge lands
+        let mut delivered: Option<String> = None;
         let (ok, reference) = match &self.setup.copy {
             // the copy is as its checks judged it, or something other than Jaynes changed it after them
             Some(copy) => match copy.drifted() {
@@ -1529,8 +1531,11 @@ impl<'a> Driver<'a> {
                     ))
                 }
                 Err(e) => (false, e),
-                Ok(_) => match copy.deliver(&self.changes(&writers)) {
-                    Ok(r) => (true, r),
+                Ok(_) => match copy.deliver(&self.changes(&writers), &|path| run.manifest.only_shown(path)) {
+                    Ok((r, head)) => {
+                        delivered = Some(head);
+                        (true, r)
+                    }
                     Err(e) => (false, e),
                 },
             },
@@ -1539,7 +1544,14 @@ impl<'a> Driver<'a> {
         let mut reference = reference;
         if ok && merge
             && let Some(copy) = &self.setup.copy {
-                let head = copy.head().unwrap_or_default();
+                let head = delivered.unwrap_or_default();
+                // what the role only shows is not in what is delivered: the checks that ran the project's tests
+                // judge that once more, and the merge waits on them
+                let left_out = copy.head().is_ok_and(|h| h != head);
+                if let Some(why) = left_out.then(|| self.judged_again(run, &head)).flatten() {
+                    reference.push_str(&format!("; not merged: {why}"));
+                    return (ok, reference);
+                }
                 let merged = copy.land(&head, &self.setup.run);
                 // For the tests of recovery: die where a kill can fall, once the merge landed.
                 if std::env::var("JAYNES_DIE_AFTER_MERGE").is_ok() && matches!(merged, Ok(Some(_))) {
@@ -1558,6 +1570,39 @@ impl<'a> Driver<'a> {
                 }
             }
         (ok, reference)
+    }
+
+    /// The checks of the delivered steps that run the project's tests, once more on `head`, what the run delivers
+    /// without what its role only shows. Why the merge may not go, when one does not pass; None when all do.
+    fn judged_again(&self, run: &Run, head: &str) -> Option<String> {
+        let started = std::time::Instant::now();
+        let (mut why, mut ran) = (Vec::new(), false);
+        for j in run.path() {
+            let decl = &run.manifest.steps[j];
+            let Some(done) = run.steps[j].done.as_ref().filter(|_| decl.delivered) else { continue };
+            let names: Vec<String> = decl.checks.iter().filter(|c| c.project_tests).map(|c| c.name.clone()).collect();
+            if names.is_empty() {
+                continue;
+            }
+            ran = true;
+            for r in self.checks(run, &decl.name, &done.output, &done.reads, &names, Some(head)) {
+                match r.verdict {
+                    CheckVerdict::Pass => {}
+                    CheckVerdict::Fail { reasons, .. } => why.push(format!(
+                        "the check {} of {} fails on what is delivered, without what the role only shows: {}",
+                        r.check, decl.name, reasons.join("; ")
+                    )),
+                    CheckVerdict::Blocked { reason } => why.push(format!(
+                        "the check {} of {} could not judge what is delivered, without what the role only shows: {reason}",
+                        r.check, decl.name
+                    )),
+                }
+            }
+        }
+        if ran {
+            say(&format!("  checked again on what is delivered in {:.1}s", started.elapsed().as_secs_f64()));
+        }
+        (!why.is_empty()).then(|| why.join(". "))
     }
 
     fn cwd(&self, run: &Run, i: usize, attempt: u32) -> PathBuf {
@@ -2141,10 +2186,12 @@ impl<'a> Driver<'a> {
         results
     }
 
-    fn checks(&self, run: &Run, step: &str, output: &Digest, given: &[Read], checks: &[String]) -> Vec<CheckResult> {
+    /// The checks of `step` on what its attempt made, measured as `output`; or, `on`, on that state of the copy
+    /// (what the run delivers) in its place.
+    fn checks(&self, run: &Run, step: &str, output: &Digest, given: &[Read], checks: &[String], on: Option<&str>) -> Vec<CheckResult> {
         let blocked = |check: &str, reason: String| CheckResult { check: check.to_string(), verdict: CheckVerdict::Blocked { reason }, tree: None };
         let (output, tree) = match self.store.get(output) {
-            Ok(v) => (v["output"].clone(), v["tree"].as_str().map(str::to_string)),
+            Ok(v) => (v["output"].clone(), on.map(str::to_string).or_else(|| v["tree"].as_str().map(str::to_string))),
             Err(e) => return checks.iter().map(|c| blocked(c, e.clone())).collect(),
         };
         let given = match self.given(given) {
@@ -2955,7 +3002,7 @@ mod tests {
         fn discard(&self) -> Result<(), String> {
             unreachable!()
         }
-        fn deliver(&self, _changes: &[(String, String)]) -> Result<String, String> {
+        fn deliver(&self, _changes: &[(String, String)], _shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String> {
             unreachable!()
         }
         fn land(&self, _head: &str, _run: &str) -> Result<Option<String>, String> {

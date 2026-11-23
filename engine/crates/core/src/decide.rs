@@ -548,7 +548,7 @@ impl Ctx {
         if !about.contains(risk::RISK_TOLD) {
             return about.to_string();
         }
-        let changed: Vec<Changed> = self.run.path().into_iter().filter_map(|j| self.run.steps[j].done.as_ref()).flat_map(|d| d.changed.iter().cloned()).collect();
+        let changed: Vec<Changed> = self.run.path().into_iter().filter_map(|j| self.run.steps[j].done.as_ref()).flat_map(|d| d.changed.iter().cloned()).filter(|c| !self.run.manifest.only_shown(&c.what)).collect();
         let told = risk::told(self.run.manifest.target, &changed);
         // no rule of the change holds: the risk the run is at, raised by the person or the role's own, said plainly
         let why = match (told.is_empty(), self.run.risk) {
@@ -1091,7 +1091,7 @@ impl Ctx {
         }
     }
 
-    /// Raise the run's risk when what its change touches says so. Never lowers it.
+    /// Raise the run's risk when what its change touches says so, of what the run delivers. Never lowers it.
     fn reassess(&mut self, i: usize, changed: &[Changed]) {
         let mut all: Vec<Changed> = Vec::new();
         for j in self.run.path() {
@@ -1103,6 +1103,8 @@ impl Ctx {
             }
         }
         all.extend(changed.iter().cloned());
+        // what the role only shows is never delivered: it raises nothing
+        all.retain(|c| !self.run.manifest.only_shown(&c.what));
         let (level, reasons) = risk::of_change(self.run.manifest.target, &all);
         if level > self.run.risk {
             let ceiling = higher(self.run.ceiling, self.run.ceilings.at(level));

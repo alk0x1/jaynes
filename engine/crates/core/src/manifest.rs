@@ -377,6 +377,13 @@ impl Manifest {
         }
     }
 
+    /// Whether `path` is only shown to the person and never delivered: a step with `delivered = false` writes it
+    /// (its `reach.write`, which names folders and never all). Whatever step changed it, it stays in the run's tree
+    /// and record and out of what the run delivers, what its risk counts and what its merge brings.
+    pub fn only_shown(&self, path: &str) -> bool {
+        self.steps.iter().filter(|s| !s.delivered).any(|s| s.reach.write.iter().any(|p| crate::glob::matches(path, p)))
+    }
+
     /// The steps a run at `risk` takes, in order.
     pub fn path(&self, risk: Risk) -> Vec<usize> {
         (0..self.steps.len()).filter(|&i| self.steps[i].from_risk <= risk).collect()

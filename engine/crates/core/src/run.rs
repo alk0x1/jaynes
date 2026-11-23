@@ -1015,12 +1015,13 @@ impl Run {
     }
 
     /// Every file the delivery brings, as the last step of the path that changed it left it, with that step's name:
-    /// what a merge lands on the person's branch, and what the stop before it shows.
+    /// what a merge lands on the person's branch, and what the stop before it shows. What the role only shows
+    /// ([`Manifest::only_shown`]) is never among them.
     pub fn delivered_files(&self) -> Vec<(Changed, String)> {
         let mut out: Vec<(Changed, String)> = Vec::new();
         for i in self.path() {
             let Some(done) = self.steps[i].done.as_ref() else { continue };
-            for c in &done.changed {
+            for c in done.changed.iter().filter(|c| !self.manifest.only_shown(&c.what)) {
                 out.retain(|(o, _)| o.what != c.what);
                 out.push((c.clone(), self.manifest.steps[i].name.clone()));
             }

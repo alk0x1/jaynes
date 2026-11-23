@@ -190,8 +190,9 @@ pub trait Workspace {
     fn head(&self) -> Result<String, String>;
     /// Throw away what an attempt left that is not kept.
     fn discard(&self) -> Result<(), String>;
-    /// Put the run's change where the person takes it, leaving their own thing as it was. What was made, in words.
-    fn deliver(&self, changes: &[(String, String)]) -> Result<String, String>;
+    /// Put the run's change where the person takes it, leaving their own thing as it was, without what the role only
+    /// shows (`shown`). What was made, in words, and the state delivered: what [`Workspace::land`] lands.
+    fn deliver(&self, changes: &[(String, String)], shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String>;
     /// Land the delivery `head` on the person's own thing. The id of what landed, or None when it was there already.
     fn land(&self, head: &str, run: &str) -> Result<Option<String>, String>;
     /// Undo what the run landed, the latest first, over what the person's thing has now.
@@ -299,8 +300,8 @@ impl Workspace for Copy {
     fn discard(&self) -> Result<(), String> {
         Copy::discard(self)
     }
-    fn deliver(&self, changes: &[(String, String)]) -> Result<String, String> {
-        Copy::deliver(self, changes)
+    fn deliver(&self, changes: &[(String, String)], shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String> {
+        Copy::deliver_without(self, changes, shown)
     }
     fn land(&self, head: &str, run: &str) -> Result<Option<String>, String> {
         self.merge(head, run)
@@ -609,10 +610,53 @@ impl Copy {
     /// Put the run's branch into the person's repository: every step's change over the base, in order. Their
     /// working tree is not touched.
     pub fn deliver(&self, commits: &[(String, String)]) -> Result<String, String> {
-        let head = self.compose(commits)?;
+        self.deliver_without(commits, &|_| false).map(|(words, _)| words)
+    }
+
+    /// [`Copy::deliver`], leaving out what the role only shows (`shown`): over every step's change, a commit of
+    /// Jaynes's puts each such path back as it was at the base, and a path the base did not have goes, so the run's
+    /// branch and its merge never bring them. The copy keeps them as the steps left them, for the steps after and
+    /// their checks. What was made, in words, and the commit delivered.
+    pub fn deliver_without(&self, commits: &[(String, String)], shown: &dyn Fn(&str) -> bool) -> Result<(String, String), String> {
+        let composed = self.compose(commits)?;
+        let head = self.without(&composed, shown)?;
         let refspec = format!("+{head}:refs/heads/{}", self.branch);
         git(&self.source, &["fetch", "-q", &self.git.display().to_string(), &refspec])?;
-        Ok(format!("{} at {}", self.branch, &head[..head.len().min(12)]))
+        Ok((format!("{} at {}", self.branch, &head[..head.len().min(12)]), head))
+    }
+
+    /// `head` with each path `shown` names as it was at the base, as a commit of its own on `head`; `head` itself
+    /// when it changes no such path. Made in an index of its own: the copy, its files and its index are untouched.
+    fn without(&self, head: &str, shown: &dyn Fn(&str) -> bool) -> Result<String, String> {
+        let base = self.base()?;
+        let paths: Vec<String> = self.g(&["diff", "--name-only", "--no-renames", &base, head])?.lines().filter(|p| !p.is_empty() && shown(p)).map(str::to_string).collect();
+        if paths.is_empty() {
+            return Ok(head.to_string());
+        }
+        let index = self.git.join(format!("jaynes-shown-index-{}", std::process::id()));
+        let _gone = std::fs::remove_file(&index);
+        let on = |args: &[&str]| git_on_index(&self.git, &self.dir, Some(&index), args);
+        let made = (|| {
+            on(&["read-tree", head])?;
+            for path in &paths {
+                // as the base had it: its mode and its content; a path the base did not have goes
+                match on(&["ls-tree", &base, "--", path])?.split_once('\t') {
+                    Some((meta, _)) => {
+                        let mut it = meta.split_whitespace();
+                        let (mode, _kind, blob) = (it.next().unwrap_or_default(), it.next(), it.next().unwrap_or_default());
+                        on(&["update-index", "--cacheinfo", &format!("{mode},{blob},{path}")])?;
+                    }
+                    None => {
+                        on(&["update-index", "--force-remove", "--", path])?;
+                    }
+                }
+            }
+            let tree = on(&["write-tree"])?;
+            let message = format!("Jaynes: what the role only shows, left out of the delivery: {}", paths.join(", "));
+            self.g(&["commit-tree", &tree, "-p", head, "-m", &message])
+        })();
+        let _gone = std::fs::remove_file(&index);
+        made
     }
 
     fn start_branch(&self) -> Result<String, String> {
@@ -1026,6 +1070,44 @@ mod git_tests {
         let merged = copy.merge(&head, "r").expect("merged").expect("a merge");
         assert_eq!(git(&source, &["rev-parse", "main"]).expect("main"), merged);
         assert!(!source.join("a.txt").exists(), "the checkout, on another branch, is untouched");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_delivery_leaves_out_what_the_role_only_shows_and_the_run_s_copy_keeps_it() {
+        let base = std::env::temp_dir().join(format!("jaynes-shown-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        std::fs::create_dir_all(source.join("design/identity")).expect("dir");
+        std::fs::write(source.join("design/identity/old.html"), "old\n").expect("write");
+        git(&source, &["add", "-A"]).expect("add");
+        git(&source, &["commit", "-q", "-m", "a board of before"]).expect("commit");
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        // a step changes the code, redraws a board that was there and draws a new one
+        std::fs::write(copy.dir.join("a.txt"), "b\n").expect("write");
+        std::fs::write(copy.dir.join("design/identity/old.html"), "drawn\n").expect("write");
+        std::fs::write(copy.dir.join("design/identity/new.html"), "new\n").expect("write");
+        let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
+        let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+        let shown = |p: &str| p.starts_with("design/identity/");
+        let (_, head) = copy.deliver_without(&[("change".to_string(), c.clone())], &shown).expect("delivered");
+        // the run's branch has the code and the boards as they were before the run
+        let at = |rev: &str, path: &str| git(&source, &["show", &format!("{rev}:{path}")]).ok();
+        assert_eq!(at("jaynes/r", "a.txt").as_deref(), Some("b"));
+        assert_eq!(at("jaynes/r", "design/identity/old.html").as_deref(), Some("old"));
+        assert_eq!(at("jaynes/r", "design/identity/new.html"), None, "a board the run drew went into the delivery");
+        assert_eq!(git(&source, &["rev-parse", "jaynes/r"]).expect("branch"), head);
+        // the run's copy keeps them, for the steps after and their checks
+        assert_eq!(std::fs::read_to_string(copy.dir.join("design/identity/new.html")).expect("read"), "new\n");
+        assert_eq!(std::fs::read_to_string(copy.dir.join("design/identity/old.html")).expect("read"), "drawn\n");
+        // the merge brings only what is delivered
+        copy.merge(&head, "r").expect("merged").expect("a merge");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "b\n");
+        assert_eq!(std::fs::read_to_string(source.join("design/identity/old.html")).expect("read"), "old\n");
+        assert!(!source.join("design/identity/new.html").exists(), "the merge brought a board in");
+        // nothing only shown: the delivery is the steps' change, as before
+        let (_, same) = copy.deliver_without(&[("change".to_string(), c.clone())], &|_| false).expect("delivered");
+        assert_eq!(same, copy.head().expect("head"));
         let _gone = std::fs::remove_dir_all(&base);
     }
 

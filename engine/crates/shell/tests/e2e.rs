@@ -3574,6 +3574,100 @@ fn a_repository_the_agent_s_commands_make_commits_with_the_identity_it_sets_and_
     );
 }
 
+/// A role that draws a board only for the person to choose from, then changes the greeting, judged by the project's
+/// tests (tests.sh, when the agent wrote one), and merges.
+fn boards_role(s: &Scratch) -> (PathBuf, PathBuf) {
+    let base = s.home.parent().expect("base");
+    let role = base.join("boards-role");
+    std::fs::create_dir_all(role.join("checks")).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "boards-role"
+version = "1.0.0"
+delivery = "merge"
+
+[[step]]
+name = "boards"
+delivered = false
+reach = { project = "write", write = ["design/**"] }
+instructions = "Draw a board for: {{request}}"
+
+[step.output]
+summary = "string"
+
+[[step]]
+name = "change"
+needs = ["boards"]
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Make the change: {{request}}"
+checks = [{ script = "checks/tests.sh", about = "the project's tests pass", project_tests = true }]
+
+[step.output]
+summary = "string"
+"#).expect("write");
+    std::fs::write(role.join("checks/tests.sh"), "[ -f tests.sh ] || exit 0\nsh tests.sh || { echo \"the project's tests fail\"; exit 1; }\n").expect("write");
+    // the agent draws the board; at the change, its tests read the board when the request says so
+    let agent = base.join("boards-agent.sh");
+    std::fs::write(&agent, r##"prompt=$(cat)
+case "$prompt" in
+  *"# Your step: boards"*)
+    mkdir -p design && echo board > design/board.html
+    printf '{"summary":"a board"}' > .jaynes/output.json ;;
+  *"# Your step: change"*)
+    perl -pi -e 's/hello/hi/' greeting.txt
+    case "$prompt" in
+      *"read the board"*) printf 'grep -q hi greeting.txt && test -f design/board.html\n' > tests.sh ;;
+      *) printf 'grep -q hi greeting.txt\n' > tests.sh ;;
+    esac
+    printf '{"summary":"hello becomes hi"}' > .jaynes/output.json ;;
+esac
+echo '{"tokens":100}'
+"##).expect("write");
+    (role, agent)
+}
+
+/// The tech-lead's item 2 (23/11): what a role draws only for the person to choose from is never merged, and the
+/// checks that ran the project's tests run once more on what is delivered, before the merge.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_board_drawn_only_to_choose_from_is_never_merged_and_the_tests_judge_what_is_merged() {
+    for (run, request, merges) in [("boards-ok", "say hi", true), ("boards-read", "say hi; the tests read the board", false)] {
+        let s = scratch(run);
+        let (role, agent) = boards_role(&s);
+        let out = jaynes()
+            .args(["start", "--run", run, "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+                "--request", request, "--agent", &format!("command:sh {}", agent.display())])
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .output().expect("start");
+        let started = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let (_, said) = merge_as_person(&s, run, |c: &mut Command| {
+            c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "");
+        });
+        let at = |rev: &str, path: &str| {
+            let o = Command::new("git").arg("-C").arg(&s.project).args(["show", &format!("{rev}:{path}")]).output().expect("git");
+            o.status.success().then(|| String::from_utf8_lossy(&o.stdout).to_string())
+        };
+        // the run's branch has the change and its tests, never the board
+        let branch = format!("jaynes/{run}");
+        assert_eq!(at(&branch, "greeting.txt").as_deref(), Some("hi\n"), "{started}\n{said}");
+        assert!(at(&branch, "tests.sh").is_some(), "{said}");
+        assert_eq!(at(&branch, "design/board.html"), None, "the board went into the delivery\n{said}");
+        assert!(said.contains("checked again on what is delivered in "), "{started}\n{said}");
+        let took = said.split("checked again on what is delivered in ").nth(1).and_then(|r| r.split('s').next()).unwrap_or("?");
+        println!("{run}: the checks ran again on what is delivered in {took}s");
+        if merges {
+            assert!(said.contains("merged as"), "{said}");
+            assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hi\n");
+            assert!(!s.project.join("design").exists(), "the merge brought the board in");
+        } else {
+            assert!(
+                said.contains("not merged: the check tests of change fails on what is delivered, without what the role only shows: the project's tests fail"),
+                "{started}\n{said}"
+            );
+            assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "merged though its tests fail without the board");
+        }
+    }
+}
+
 /// A role whose one step changes the greeting and whose check reads the history where it runs, failing when git
 /// reads another repository's.
 fn history_role(s: &Scratch) -> PathBuf {

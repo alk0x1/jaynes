@@ -173,6 +173,10 @@ fn role(rng: &mut Rng) -> Manifest {
             // hidden cases are often only from high risk, as fix-bug's, so a low run leaves out the checks reading them
             let from_risk = if hidden && from_risk == Risk::Low && rng.chance(50) { Risk::High } else { from_risk };
             let session = if executor == Executor::Agent && rng.chance(30) { SessionKind::Continue } else { SessionKind::Fresh };
+            // a step that only draws for the person to choose from, as identity's boards: never delivered. Drawn from
+            // a source beside `rng`, which it leaves as it was, so the random runs of before stay as they were
+            let shown = executor == Executor::Agent && reach.project == ProjectAccess::Write && Rng(rng.0 ^ 0x00B0_A2D5u64.wrapping_mul(i as u64 + 1)).chance(15);
+            let reach = if shown { Reach { write: vec!["design/**".to_string()], ..reach } } else { reach };
             steps.push(StepDecl {
                 name: format!("s{i}"),
                 needs,
@@ -188,7 +192,7 @@ fn role(rng: &mut Rng) -> Manifest {
                 hidden, idempotent: false,
                 about: String::new(),
                 model: Default::default(),
-                turns: None, delivered: true,
+                turns: None, delivered: !shown,
             });
         }
         let delivery = if rng.chance(30) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };
@@ -470,9 +474,10 @@ impl World {
             }
         }
         let Some(post) = state.as_ref() else { return };
-        // G7: the risk is never below what the rules say of the change.
+        // G7: the risk is never below what the rules say of the change the run delivers, which leaves out what the role
+        // only shows.
         let changed: Vec<Changed> =
-            post.path().into_iter().filter_map(|i| post.steps[i].done.as_ref()).flat_map(|d| d.changed.clone()).collect();
+            post.path().into_iter().filter_map(|i| post.steps[i].done.as_ref()).flat_map(|d| d.changed.clone()).filter(|c| !post.manifest.only_shown(&c.what)).collect();
         assert!(post.risk >= risk::of_change(post.manifest.target, &changed).0, "seed {seed}: G7 the risk is below its rules");
         // and whatever a measure marked: a change it put on the floor, or one on a repository's floor it did not mark
         let on_floor = changed.iter().any(|c| c.floor || !risk::floor([c.what.as_str()]).is_empty());
@@ -716,6 +721,12 @@ fn items_for(rng: &mut Rng, run: &Run, step: &str) -> Vec<Item> {
     items
 }
 
+/// What a step that only draws for the person changes: big boards, one of them on the floor; either alone would
+/// make the run's risk high if it were delivered.
+fn drawn() -> Vec<Changed> {
+    vec![Changed::file("design/board.html".to_string(), 400), Changed::file("design/.gitattributes".to_string(), 1)]
+}
+
 fn changed(rng: &mut Rng) -> Vec<Changed> {
     match rng.below(10) {
         // raw, as any measure may report it: the mark at random, also off a path the core knows is on the floor
@@ -785,7 +796,13 @@ impl World {
                     0..=71 => AttemptOutcome::Delivered {
                         output: digest_pool(&mut self.rng),
                         items: items_for(&mut self.rng, &run, &turn.step),
-                        changed: if turn.reach.project == ProjectAccess::Write { changed(&mut self.rng) } else { Vec::new() },
+                        changed: if turn.reach.project == ProjectAccess::Write {
+                            let c = changed(&mut self.rng);
+                            // a step that only draws: big boards, one of them on the floor
+                            if run.manifest.index(&turn.step).is_some_and(|i| !run.manifest.steps[i].delivered) { drawn() } else { c }
+                        } else {
+                            Vec::new()
+                        },
                         usage: usage(&mut self.rng),
                         session: Some(format!("session-{}", turn.step)),
                         tree: None,
@@ -1757,6 +1774,47 @@ fn g19_a_merge_that_brings_in_what_runs_later_waits_for_the_person_who_alone_ans
     assert_eq!(merge_asked(&c).map(|q| q.items.into_iter().map(|x| x.id).collect::<Vec<_>>()), Some(vec!["src/a.rs".to_string()]));
 }
 
+/// The run's first agent turn in `cmds`, once its probes pass.
+fn turn_of(run: &mut Run, cmds: Vec<Command>) -> u32 {
+    let c = probe_ok(run, cmds);
+    c.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.attempt) } else { None }).unwrap_or_else(|| panic!("no turn: {c:?}"))
+}
+
+fn ended(step: &str, attempt: u32, changed: Vec<Changed>) -> Input {
+    Input::AttemptEnded { step: step.to_string(), attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest(format!("o-{step}")), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None, reply: None } }
+}
+
+#[test]
+fn what_a_role_only_shows_is_never_delivered_and_counts_for_neither_the_risk_nor_the_merge() {
+    // "boards" draws three boards for the person to choose from, never delivered; "tokens", delivered, writes the
+    // chosen one's tokens and a board of its own in the same folder
+    let mut boards = step("boards", Executor::Agent);
+    boards.reach = Reach { project: ProjectAccess::Write, write: vec!["design/identity/**".to_string()], ..Reach::default() };
+    boards.delivered = false;
+    let mut tokens = step("tokens", Executor::Agent);
+    tokens.needs = vec!["boards".to_string()];
+    tokens.reach = Reach { project: ProjectAccess::Write, write: vec!["**".to_string()], ..Reach::default() };
+    let manifest = Manifest { role: "identity".to_string(), version: "1".to_string(), protocol: 1, steps: vec![boards, tokens], target: Default::default(), delivery: jaynes_core::manifest::DeliveryKind::Merge };
+    let out = decide(None, &Input::Start { run: "r".to_string(), request: "do it".to_string(), manifest, role_fingerprint: Digest("f".to_string()), agent: "claude:m1".to_string(), raise: None, attention: BTreeMap::new(), task: None, arm: None, never_merge: false, starter: None }).expect("start");
+    let mut run = Run::fold(&out.events).expect("run");
+    let attempt = turn_of(&mut run, out.commands);
+    // big boards, and one that git would obey: either alone would make the run's risk high if it were delivered
+    let drawn: Vec<Changed> = ["a", "b", "c"].iter().map(|n| Changed::file(format!("design/identity/{n}.html"), 400)).chain([Changed::file("design/identity/.gitattributes".to_string(), 1)]).collect();
+    assert!(drawn.last().is_some_and(|c| c.floor), "the stand-in board is on the floor");
+    let c = feed(&mut run, ended("boards", attempt, drawn));
+    assert_eq!(run.risk, Risk::Low, "what is only shown raised the risk");
+    let attempt = turn_of(&mut run, c);
+    let c = feed(&mut run, ended("tokens", attempt, vec![Changed::file("src/tokens.css".to_string(), 3), Changed::file("design/identity/d.html".to_string(), 400)]));
+    assert_eq!(run.risk, Risk::Low, "what a delivered step writes where boards are drawn raised the risk");
+    // the merge brings and shows only what is delivered, and holds on nothing only shown
+    let lands: Vec<String> = run.delivered_files().into_iter().map(|(c, _)| c.what).collect();
+    assert_eq!(lands, ["src/tokens.css"]);
+    assert!(run.merge_holds().is_empty(), "{:?}", run.merge_holds());
+    let q = merge_asked(&c).unwrap_or_else(|| panic!("the merge waits for the person: {c:?}"));
+    assert_eq!(q.items.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["src/tokens.css"]);
+    assert!(!q.about.contains(".gitattributes"), "{}", q.about);
+}
+
 #[test]
 fn g7_touching_ci_raises_the_risk_and_owes_the_full_path() {
     let mut review = step("review", Executor::Agent);
@@ -1959,6 +2017,10 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         if w.rechecked > 0 {
             hit("a change judged again on the person's continue");
         }
+        // delivered while a step changed what the role only shows: the delivery left it out
+        if run.delivered.is_some() && run.steps.iter().filter_map(|s| s.done.as_ref()).any(|d| d.changed.iter().any(|c| run.manifest.only_shown(&c.what))) {
+            hit("delivered without what the role only shows");
+        }
         if w.asked > 0 {
             hit("a stop's agent asked");
         }
@@ -2004,7 +2066,7 @@ fn the_random_runs_reach_what_the_guarantees_are_about() {
         "a choice kept alone", "sent back to its maker", "an act held, not done again", "an act kept as it acted", "a second act ordered", "a merge held for the person",
         "a change judged again on the person's continue", "continued by the agent that started the run", "set aside by the agent that started the run",
         "a stop's agent asked", "an ask answered in time", "an ask answered late", "an ask that got no answer",
-        "a check the run did not take",
+        "a check the run did not take", "delivered without what the role only shows",
     ] {
         assert!(seen.get(k).copied().unwrap_or(0) >= 5, "the random runs reached {k:?} only {:?} times", seen.get(k));
     }

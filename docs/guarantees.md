@@ -93,6 +93,8 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
 
 - **G19.** A delivery that lands on your branch never brings in, without your answer, a file that other programs run or obey later outside any box: agents' and editors' settings and instructions, git hooks and attributes, CI, new packages or packages from a new source, environment and package scripts, as the engine lists them. The run waits before the merge, names each such file and shows what changes in it; you merge it, or take the change as a branch only. No agent and no rule answers it, and an answer counts only for the files and the changes it was shown.
 
+- **G20.** Checks judge the run's tree. What a run delivers is that tree without the files its role names as shown only (by name, never everything); those stay in the run's record and on its page. Where the role's checks ran the project's tests, they run once more on what is delivered, before the merge.
+
 ## What this page does not promise
 
 - That Jaynes holds against a program that runs as you, outside any box, and rewrites Jaynes's own files.
