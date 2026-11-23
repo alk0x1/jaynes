@@ -44,6 +44,9 @@ fn run(mut c: Command, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The file in the engine's repository for a copy that says the project had no commit when the run started.
+const UNBORN: &str = "jaynes-unborn";
+
 /// git in the person's own repository, as they set it up.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut c = git_command();
@@ -382,7 +385,18 @@ impl Copy {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         copy.g(&["config", "core.bare", "false"])?;
         copy.g(&["checkout", "-q", "-b", branch])?;
-        let base = copy.g(&["rev-parse", "HEAD"])?;
+        let base = match copy.g(&["rev-parse", "-q", "--verify", "HEAD^{commit}"]) {
+            Ok(base) => base,
+            // a project with no commit yet, as `git init` leaves it: the run starts from the empty tree, in a commit of
+            // the engine's own that never reaches the person's branch (the merge is that branch's first commit)
+            Err(_) => {
+                let empty = copy.g(&["hash-object", "-t", "tree", "-w", "/dev/null"])?;
+                let root = copy.g(&["commit-tree", &empty, "-m", "Jaynes: the project before its first commit"])?;
+                copy.g(&["update-ref", &format!("refs/heads/{branch}"), &root])?;
+                std::fs::write(g.join(UNBORN), "").map_err(|e| e.to_string())?;
+                root
+            }
+        };
         std::fs::write(g.join("jaynes-base"), base).map_err(|e| e.to_string())?;
         // The branch the person had checked out: where a run that delivers by merge merges.
         let start = git(source, &["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default();
@@ -624,9 +638,34 @@ impl Copy {
         Ok(())
     }
 
+    /// The run started in a project with no commit yet.
+    fn from_nothing(&self) -> bool {
+        self.git.join(UNBORN).exists()
+    }
+
+    /// Merge into a branch with no commit yet, the start of a project that had none: the merge is the branch's first
+    /// commit, with the delivery's files and nothing under it. When the branch has it already (a process that died
+    /// after it landed), the one it has.
+    fn first_merge(&self, branch: &str, head: &str, message: &str) -> Result<Option<String>, String> {
+        if let Ok(tip) = git(&self.source, &["rev-parse", "-q", "--verify", &format!("refs/heads/{branch}")]) {
+            let found = git(&self.source, &["log", "-1", "--format=%H", "--fixed-strings", &format!("--grep={message}"), &tip])?;
+            return if found.is_empty() {
+                Err(format!("{branch} has commits now that the run started before; merge the branch {} by hand", self.branch))
+            } else {
+                Ok(Some(found))
+            };
+        }
+        let merged = self.g(&["commit-tree", &self.tree_of(head)?, "-m", message])?;
+        self.land(branch, "", &merged)?;
+        Ok(Some(merged))
+    }
+
     /// Merge the run's delivery into the branch it started from. The merge commit, or why there is none.
     pub fn merge(&self, head: &str, run: &str) -> Result<Option<String>, String> {
         let branch = self.start_branch()?;
+        if self.from_nothing() {
+            return self.first_merge(&branch, head, &format!("Jaynes: run {run}, merged"));
+        }
         let tip = git(&self.source, &["rev-parse", &format!("refs/heads/{branch}")])?;
         self.g(&["fetch", "-q", &self.source.display().to_string(), &format!("+refs/heads/{branch}:refs/jaynes/target")])?;
         if self.g(&["merge-base", "--is-ancestor", head, &tip]).is_ok() {
@@ -660,11 +699,14 @@ impl Copy {
         let blob = |rev: &str, path: &str| self.g(&["rev-parse", "--verify", "-q", &format!("{rev}:{path}")]).ok();
         // each file, as it was before the first merge that touched it and as the last one left it
         let mut touched: std::collections::BTreeMap<String, (Option<String>, Option<String>)> = Default::default();
+        // a project's first commit, the merge of a run that started with none, is over the empty tree
+        let empty = self.g(&["hash-object", "-t", "tree", "-w", "/dev/null"])?;
+        let under = |m: &str| if self.g(&["rev-parse", "-q", "--verify", &format!("{m}^1")]).is_ok() { format!("{m}^1") } else { empty.clone() };
         for m in merges {
-            let paths = self.g(&["diff", "--name-only", "--no-renames", &format!("{m}^1"), m])?;
+            let paths = self.g(&["diff", "--name-only", "--no-renames", &under(m), m])?;
             for path in paths.lines().filter(|p| !p.is_empty()) {
                 let left = blob(m, path);
-                touched.entry(path.to_string()).and_modify(|e| e.1 = left.clone()).or_insert_with(|| (blob(&format!("{m}^1"), path), left));
+                touched.entry(path.to_string()).and_modify(|e| e.1 = left.clone()).or_insert_with(|| (blob(&under(m), path), left));
             }
         }
         let undone = touched.iter().all(|(path, (before, _))| blob(&tip, path) == *before);
@@ -680,7 +722,8 @@ impl Copy {
         }
         self.g(&["checkout", "-q", "--detach", &tip])?;
         for m in merges.iter().rev() {
-            if let Err(e) = self.g(&["revert", "--no-edit", "-m", "1", m]) {
+            let parents = if under(m) == empty { vec!["revert", "--no-edit", m.as_str()] } else { vec!["revert", "--no-edit", "-m", "1", m.as_str()] };
+            if let Err(e) = self.g(&parents) {
                 let _abort = self.g(&["revert", "--abort"]);
                 return Err(format!("the merge {} does not revert over what {branch} has now: {e}", &m[..m.len().min(12)]));
             }

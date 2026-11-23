@@ -1671,6 +1671,45 @@ fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_revert
 }
 
 #[test]
+fn asked_jaynes_starts_in_a_project_with_no_commit_and_the_merge_makes_its_first_commit() {
+    // the real-user's start of 23/11 in a folder fresh from `git init`: "git rev-parse HEAD failed: fatal: ambiguous
+    // argument 'HEAD'", and an empty commit made by hand; Jaynes never asks for one (the tech-lead's T4)
+    let s = scratch("unborn");
+    let project = s.base.join("fresh");
+    std::fs::create_dir_all(&project).expect("dir");
+    assert!(Command::new("git").arg("-C").arg(&project).args(["init", "-q", "-b", "main"]).status().expect("git").success());
+    let role = s.base.join("first-role");
+    std::fs::create_dir_all(&role).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "first-role"
+version = "1.0.0"
+delivery = "merge"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"] }
+instructions = "Make the change: {{request}}"
+checks = [{ use = "field-required", field = "summary" }]
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+"#).expect("write");
+    let agent = r#"printf 'hello\n' > greeting.txt && printf '{"summary":"a greeting"}' > .jaynes/output.json"#;
+    let (ok, out) = engine(&s, &["start", "--run", "unborn", "--role", role.to_str().expect("path"), "--project", project.to_str().expect("path"),
+        "--request", "add a greeting", "--agent", &format!("command:{agent}")]);
+    assert!(ok, "{out}");
+    let (_, said) = merge_as_person(&s, "unborn", |c: &mut Command| { c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1"); });
+    assert!(said.contains("merged as"), "{out}\n{said}");
+    let git = |args: &[&str]| String::from_utf8_lossy(&Command::new("git").arg("-C").arg(&project).args(args).output().expect("git").stdout).trim().to_string();
+    assert_eq!(git(&["log", "--format=%s", "main"]), "Jaynes: run unborn, merged", "the project's first commit is the merge");
+    assert_eq!(std::fs::read_to_string(project.join("greeting.txt")).expect("the checkout has it"), "hello\n");
+    let undo = tty().args([BIN, "undo", "unborn", "--note", "not now"]).env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+        .output().expect("undo");
+    assert!(String::from_utf8_lossy(&undo.stdout).contains("undone"), "{}{}", String::from_utf8_lossy(&undo.stdout), String::from_utf8_lossy(&undo.stderr));
+    assert!(!project.join("greeting.txt").exists(), "undone");
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_merge_waits_for_a_clean_checkout_and_says_why() {
     let s = bug_project("dirty");
