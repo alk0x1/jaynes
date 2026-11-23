@@ -831,6 +831,9 @@ pub fn box_spec(spec: &Spec<'_>, python: &Path, library: &Path) -> Value {
         "local_ports": reach.local_ports, "test_servers": servers && !any_port, "any_port": any_port,
         "pwd": cwd.join(crate::project::EXCHANGE).join("tmp").join(AGENT_PWD),
         "python": python, "box": library.join("jaynes_box.py"),
+        // the run's start environment, as the check's commands inherit it from the engine: Claude Code's shell gives
+        // the agent's commands a PATH of its own, without the person's toolchains
+        "env": crate::drive::started_env(),
     });
     // a step that installs packages reaches their hosts through Jaynes's proxy, the only address its box reaches
     if reach.network == Network::Packages {
@@ -1699,6 +1702,10 @@ mod tests {
         assert_eq!(s["readable"], json!(["/deps/lib"]));
         assert_eq!((&s["local_ports"], &s["test_servers"], &s["any_port"]), (&json!([5432]), &json!(true), &json!(false)));
         assert_eq!((&s["python"], &s["box"]), (&json!("/py"), &json!("/lib/jaynes_box.py")));
+        // the agent's commands run with the PATH and the toolchains' places a check's commands run with (the
+        // real-user's runs of 22/11: "node" and "go" not found in the agent's session, found by the check)
+        assert_eq!(s["env"]["PATH"], json!(std::env::var("PATH").expect("PATH")));
+        assert_eq!(s["env"], Value::Object(crate::drive::started_env()));
         assert_eq!(s["pwd"], json!(cwd.join(crate::project::EXCHANGE).join("tmp").join(AGENT_PWD)));
         // the box hides the home itself; the engine's secrets and the other runs are hidden by name
         let hidden: Vec<&str> = s["hidden"].as_array().expect("hidden").iter().filter_map(Value::as_str).collect();
