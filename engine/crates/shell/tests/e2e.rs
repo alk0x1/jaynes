@@ -4837,6 +4837,11 @@ if b"hi" not in open("greeting.txt", "rb").read():
     assert!(said.contains(&format!("Only if nothing of yours runs on {held} while the tests run")) && said.contains("Done."), "{said}");
     let (_, ports) = engine(&s, &["project", "ports", &project]);
     assert!(ports.contains(&format!("its tests may also use port {held}")), "{ports}");
+    // when each port was let, apart from when the test servers were (T10, 23/11: the one date of the test servers
+    // was read as the port's, and a hold that was right looked like a fault), in the file and in what it says
+    let file = std::fs::read_to_string(jaynes_shell::project_prefs::path(&s.home, std::path::Path::new(&project))).expect("the project's file");
+    assert!(file.contains("[ports.freed_at]") && file.contains(&format!("{held} = ")), "{file}");
+    assert!(ports.contains(&format!("port {held}: let by you on 20")) && ports.contains(" UTC"), "{ports}");
     let said = at_terminal(&s, &["continue", "held"], None);
     let e = events(&s, "held");
     let chosen = e.iter().rev().find(|x| x["type"] == "PortsChosen").unwrap_or_else(|| panic!("{:?}\n{said}", types(&e)));

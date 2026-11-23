@@ -1288,7 +1288,7 @@ impl<'a> Driver<'a> {
         let was = prefs.ports.clone().unwrap_or_default();
         if !was.servers {
             let opened = if was.any { was.opened } else { crate::store::now() };
-            prefs.ports = Some(crate::project_prefs::Ports { any: was.any, servers: true, opened, freed_ports: Vec::new() });
+            prefs.ports = Some(crate::project_prefs::Ports { any: was.any, servers: true, opened, freed_ports: Vec::new(), freed_at: Default::default() });
             crate::project_prefs::save(&self.setup.home, &project, &prefs)?;
         }
         self.ports_now()

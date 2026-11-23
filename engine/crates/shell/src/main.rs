@@ -797,6 +797,15 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
                 Some(said) => println!("{said}"),
                 None => println!("this project's checks reach only the ports a run reserves for them (JAYNES_PORTS) and the ones a step declares"),
             }
+            // when each port was let, apart from when the test servers were
+            for p in prefs.ports.iter().filter(|p| p.servers) {
+                for port in &p.freed_ports {
+                    match p.freed_at.get(&port.to_string()) {
+                        Some(at) => println!("port {port}: let by you on {}", summary::utc(*at)),
+                        None => println!("port {port}: let by you before Jaynes kept the day"),
+                    }
+                }
+            }
             Ok(())
         }
         "test-servers" => {
@@ -827,6 +836,10 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
                     println!("Nothing changed.");
                     return Ok(());
                 }
+                let now = store::now();
+                for p in &ports {
+                    chosen.freed_at.entry(p.to_string()).or_insert(now);
+                }
                 let mut freed: std::collections::BTreeSet<u16> = chosen.freed_ports.iter().copied().collect();
                 freed.extend(ports);
                 chosen.freed_ports = freed.into_iter().collect();
@@ -851,8 +864,9 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
             let any = prefs.ports.as_ref().is_some_and(|p| p.any);
             let opened = prefs.ports.as_ref().filter(|p| p.any).map(|p| p.opened).unwrap_or_else(store::now);
             let freed_ports = prefs.ports.as_ref().filter(|p| p.servers).map(|p| p.freed_ports.clone()).unwrap_or_default();
+            let freed_at = prefs.ports.as_ref().filter(|p| p.servers).map(|p| p.freed_at.clone()).unwrap_or_default();
             let named: Vec<u16> = listing::held_named(&dir).into_iter().filter(|p| !freed_ports.contains(p)).collect();
-            prefs.ports = Some(project_prefs::Ports { any, servers: true, opened, freed_ports });
+            prefs.ports = Some(project_prefs::Ports { any, servers: true, opened, freed_ports, freed_at });
             project_prefs::save(&home(), &dir, &prefs)?;
             // known beforehand where the project's files name one (the tech-lead's, 22/11): tests that serve on a
             // port Jaynes holds fail at every check, and the run would stop at its start saying so; Continue comes
@@ -876,7 +890,8 @@ fn project_cmd(args: &[String]) -> Result<(), String> {
             // closing closes both choices, the open ports and the test servers: one way to close
             let servers = open && prefs.ports.as_ref().is_some_and(|p| p.servers);
             let freed_ports = if servers { prefs.ports.as_ref().map(|p| p.freed_ports.clone()).unwrap_or_default() } else { Vec::new() };
-            prefs.ports = Some(project_prefs::Ports { any: open, servers, opened: if open { store::now() } else { 0 }, freed_ports });
+            let freed_at = if servers { prefs.ports.as_ref().map(|p| p.freed_at.clone()).unwrap_or_default() } else { Default::default() };
+            prefs.ports = Some(project_prefs::Ports { any: open, servers, opened: if open { store::now() } else { 0 }, freed_ports, freed_at });
             project_prefs::save(&home(), &dir, &prefs)?;
             println!("{}", if open {
                 format!("{}; a run started from now on, and a blocked one when you continue it, lets its checks reach every service listening here, the Jaynes page's port among them. `jaynes project close-ports {}` closes them again", ports_sentence(store::now()), dir.display())

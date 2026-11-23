@@ -26,6 +26,11 @@ pub struct Ports {
     /// project test-servers DIR PORT`). The person's, never an agent's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub freed_ports: Vec<u16>,
+    /// When the person let each of `freed_ports`, in seconds since 1970, by the port's number: apart from `opened`,
+    /// which is when they let the test servers (T10, 23/11: that one date was read as the port's, and a hold that
+    /// was right looked like a fault). A port let before this was kept has none.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub freed_at: std::collections::BTreeMap<String, u64>,
 }
 
 impl Ports {
@@ -104,10 +109,10 @@ mod tests {
         std::fs::create_dir_all(home.join(FOLDER)).expect("dir");
         std::fs::write(path(&home, &project), "[delivery]\nsign = true\n").expect("write");
         let mut prefs = load(&home, &project).expect("read");
-        prefs.ports = Some(Ports { any: true, servers: false, opened: 1_795_000_000, freed_ports: Vec::new() });
+        prefs.ports = Some(Ports { any: true, servers: false, opened: 1_795_000_000, freed_ports: Vec::new(), freed_at: Default::default() });
         save(&home, &project, &prefs).expect("save");
         let again = load(&home, &project).expect("read");
-        assert_eq!(again.ports, Some(Ports { any: true, servers: false, opened: 1_795_000_000, freed_ports: Vec::new() }));
+        assert_eq!(again.ports, Some(Ports { any: true, servers: false, opened: 1_795_000_000, freed_ports: Vec::new(), freed_at: Default::default() }));
         assert_eq!(again.rest["delivery"]["sign"].as_bool(), Some(true));
         // the same project by another spelling of its path is the same file
         let other = base.join("home/../project");
