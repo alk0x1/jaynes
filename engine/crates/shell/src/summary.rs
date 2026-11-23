@@ -103,6 +103,9 @@ pub struct Summary {
     pub unproved: Vec<String>,
     /// What the page refused on the run, a line each (refused.rs): a trace, not evidence.
     pub refused: Vec<String>,
+    /// What Jaynes caught before the delivery, a line each in the order it happened: what a check refused, in an open
+    /// check's own words (a hidden check by its name only), and what came of it; a rule or a person raising the risk.
+    pub caught: Vec<String>,
     pub started: u64,
     pub ended: u64,
     pub steps: Vec<StepLine>,
@@ -259,6 +262,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
     floor.sort();
     let person = person(events, looks);
     let unproved = unproved(&r, &steps, &person, &promises);
+    let caught = caught(events);
     Ok(Summary {
         run: r.id.clone(),
         request: r.request.trim().to_string(),
@@ -279,6 +283,7 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         floor,
         unproved,
         refused: Vec::new(),
+        caught,
         started: events.first().map(|(ts, _)| *ts).unwrap_or(0),
         ended: events.last().map(|(ts, _)| *ts).unwrap_or(0),
         // the agents' own, counted as the page and the app count them: an attempt of a step Jaynes does itself is not
@@ -293,6 +298,49 @@ pub fn summarize(events: &[(u64, Event)], looks: &[crate::presence::Look], promi
         work: crate::listing::work(&r),
         person,
     })
+}
+
+/// What Jaynes caught before the delivery, read from the record: each attempt its checks sent back, with an open
+/// check's own words (what the agent was told), or a hidden check's name only, its words never pasted where a later
+/// agent may read them; and each time the run's risk went up, with the reasons of the rule or the person that raised it.
+fn caught(events: &[(u64, Event)]) -> Vec<String> {
+    let mut out = Vec::new();
+    // the last verdicts of each step's try, to say which hidden check failed an attempt
+    let mut judged: BTreeMap<&str, &[jaynes_core::event::CheckRecord]> = BTreeMap::new();
+    let quoted = |reasons: &[String]| reasons.iter().map(|r| format!("\"{}\"", one_line(r))).collect::<Vec<_>>().join("; ");
+    for (_, e) in events {
+        match e {
+            Event::ChecksJudged { step, checks, .. } => {
+                judged.insert(step, checks);
+            }
+            Event::FixAsked { step, attempt, reasons, .. } if !reasons.is_empty() => {
+                out.push(format!("**{step}**, attempt {attempt}: {}. Sent back, and the agent fixed it in the same session.", quoted(reasons)));
+            }
+            Event::AttemptFailed { step, attempt, reasons, spent: true, .. } => {
+                let failed: Vec<&jaynes_core::event::CheckRecord> = judged.get(step.as_str()).map(|c| c.iter().filter(|c| !c.passed && !c.blocked).collect()).unwrap_or_default();
+                let hidden: Vec<&str> = failed.iter().filter(|c| c.kind == CheckKind::Hidden).map(|c| c.check.as_str()).collect();
+                out.push(if !hidden.is_empty() {
+                    let (one, these) = if hidden.len() == 1 { ("check", "its words stay") } else { ("checks", "their words stay") };
+                    format!("**{step}**, attempt {attempt}: the hidden {one} {} failed; {these} with Jaynes, as the agent never saw them. A new attempt followed.", hidden.join(", "))
+                } else if !reasons.is_empty() {
+                    format!("**{step}**, attempt {attempt}: {}. A new attempt followed.", quoted(reasons))
+                } else {
+                    format!("**{step}**, attempt {attempt}: its checks sent it back. A new attempt followed.")
+                });
+            }
+            Event::RiskRaised { to, by, reasons, .. } => {
+                let who = match by {
+                    By::Person => "by the person".to_string(),
+                    By::Rule { rule } => format!("by the rule {rule}"),
+                    By::Agent { who } => format!("by {who}"),
+                };
+                let why = if reasons.is_empty() { String::new() } else { format!(": {}", quoted(reasons)) };
+                out.push(format!("The run's risk went up to {}, {who}{why}.", to.word()));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// What a finished run did not establish: an agent's output no check ran on, a stop that did not ask a person, the
@@ -451,6 +499,12 @@ impl Summary {
             .collect();
         if !self.abandoned && !proved.is_empty() {
             out.push_str(&format!("\n### Proved by\n\n{}", proved.concat()));
+        }
+        if !self.caught.is_empty() {
+            out.push_str(&format!(
+                "\n### Caught before the delivery\n\nWhat Jaynes refused on the way, in its checks' own words, and what came of it:\n\n{}",
+                self.caught.iter().map(|c| format!("- {c}\n")).collect::<String>()
+            ));
         }
         if !self.unproved.is_empty() {
             out.push_str(&format!("\n### Not proved\n\n{}", self.unproved.iter().map(|u| format!("- {u}\n")).collect::<String>()));
@@ -769,6 +823,12 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
 - **suite-passes**, on what change made
 - **cases-pass**, on what change made: a hidden check, which the agent that made it never saw
 
+### Caught before the delivery
+
+What Jaynes refused on the way, in its checks' own words, and what came of it:
+
+- **change**, attempt 1: the hidden check cases-pass failed; its words stay with Jaynes, as the agent never saw them. A new attempt followed.
+
 ### Not proved
 
 - What plan made: no check ran on it. A person kept it.
@@ -982,5 +1042,62 @@ jaynes/r1 at 87b9b5dc3549, in a repository. The files Jaynes measured:
         ]);
         let told = summarize(&acting, &[], Promises::Unread).expect("summary").markdown();
         assert!(told.contains("1. **plan** (agent): not done, may have acted"), "{told}");
+    }
+    /// What Jaynes caught before the delivery (the roles-engineer's queue, item 4, from a real run: the old suite held
+    /// port 5432, and conftest.py raised the risk): an open check's words, the agent fixing it in its session; a hidden
+    /// check by its name only, its words kept from a text pasted where later agents read; a rule that raised the risk.
+    fn caught() -> Vec<(u64, Event)> {
+        let mut e = whole();
+        let at = e.iter().position(|(_, x)| matches!(x, Event::AttemptFailed { .. })).expect("the failed attempt");
+        let t = e[at].0;
+        let judged = |fix: u32, suite: bool, cases: bool| Event::ChecksJudged {
+            step: "change".into(), attempt: 1, fix,
+            checks: vec![
+                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: suite, blocked: false, read: vec![], tree: None },
+                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed: cases, blocked: false, read: vec![], tree: None },
+            ],
+        };
+        // the attempt's first try: the suite could not start; the agent fixes it in its session, then a case fails
+        e[at - 1].1 = judged(0, false, true);
+        e.splice(at..at, [
+            (t, Event::FixAsked { step: "change".into(), attempt: 1, fix: 1, reasons: vec!["the suite failed: tests/conftest.py:12 could not bind 127.0.0.1:5432, which another program holds".into()] }),
+            (t, Event::AttemptStarted { step: "change".into(), round: 0, attempt: 1, fix: 1, session: None, deadline_seconds: 600, tokens_left: 1000, key: None }),
+            (t, Event::AttemptDelivered { step: "change".into(), attempt: 1, fix: 1, output: Digest("o".into()), items: vec![], changed: vec![], usage: Usage::default(), session: None, tree: None, reply: None }),
+            (t, judged(1, true, false)),
+        ]);
+        let raised = Event::RiskRaised {
+            to: jaynes_core::risk::Risk::High, by: By::Rule { rule: "floor".into() },
+            reasons: vec!["tests/conftest.py changed: the test runner obeys it outside any box".into()],
+            ceiling: jaynes_core::risk::Ceiling { seconds: 7200, tokens: 10_000_000 },
+        };
+        let done = e.iter().position(|(_, x)| matches!(x, Event::StepDone { step, .. } if step == "change")).expect("change done");
+        e.insert(done + 1, (e[done].0, raised));
+        e
+    }
+
+    #[test]
+    fn asked_the_summary_says_what_jaynes_caught_before_the_delivery_in_the_checks_own_words() {
+        let told = summarize(&caught(), &[], Promises::Unread).expect("summary").markdown();
+        let expected = "\
+### Caught before the delivery
+
+What Jaynes refused on the way, in its checks' own words, and what came of it:
+
+- **change**, attempt 1: \"the suite failed: tests/conftest.py:12 could not bind 127.0.0.1:5432, which another program holds\". Sent back, and the agent fixed it in the same session.
+- **change**, attempt 1: the hidden check cases-pass failed; its words stay with Jaynes, as the agent never saw them. A new attempt followed.
+- The run's risk went up to high, by the rule floor: \"tests/conftest.py changed: the test runner obeys it outside any box\".
+";
+        assert!(told.contains(expected), "{told}");
+        // between what proved the delivery and what was not proved
+        let (proved, caught, not) = (told.find("### Proved by"), told.find("### Caught"), told.find("### Not proved"));
+        assert!(proved < caught && caught < not, "{told}");
+    }
+
+    #[test]
+    fn asked_a_run_where_nothing_was_refused_says_nothing_was_caught_by_leaving_the_section_out() {
+        let mut quiet = whole();
+        quiet.retain(|(_, x)| !matches!(x, Event::AttemptFailed { .. }));
+        let told = summarize(&quiet, &[], Promises::Unread).expect("summary").markdown();
+        assert!(!told.contains("### Caught"), "{told}");
     }
 }
