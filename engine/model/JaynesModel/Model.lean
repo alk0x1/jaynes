@@ -93,6 +93,11 @@ structure Run where
   mergeAnswered : Bool
   /-- G19: a question about this very delivery waits for the person -/
   mergeAsked : Bool
+  /-- The person clicked Merge on the run once it had delivered on a branch, and no delivery went out since: what it
+      delivered is not merged yet, nor undone, nor started never to merge (`MergeCase`) -/
+  mergeLater : Bool
+  /-- What the merge would bring lands: the person kept it, or it brings nothing in -/
+  mergeKept : Bool
   deriving Repr, FromJson, ToJson, Inhabited
 
 inductive Move where
@@ -195,6 +200,9 @@ def moveAt (r : Run) (i : Nat) : Move :=
 def settled (r : Run) : Move :=
   if !r.deliveredCurrent then
     (if r.mergeHeld && !r.mergeAnswered then (if r.mergeAsked then .waitAnswers else .askMerge) else .deliver)
+  -- the person's Merge of what went out on a branch: asked at the merge's stop, then delivered merged once, when kept
+  else if r.mergeLater && !r.mergeKept && !r.mergeAnswered then (if r.mergeAsked then .waitAnswers else .askMerge)
+  else if r.mergeLater && r.mergeKept && (r.mergeAnswered || !r.mergeHeld) then .deliver
   else if r.anyOpenQuestion then .waitAnswers else .finish
 
 /-- A stop owed a question skips it only when its count is certified, it is not braked, and the coin falls outside
@@ -275,6 +283,31 @@ def AnswerCase.accepts (a : AnswerCase) : Bool :=
       a.braked || a.answered) then false
   else if a.answered && !a.revisable then false
   else true
+
+/-! ## The person's Merge of a finished run (`merge` in `decide.rs`) -/
+
+/-- A click on Merge, as the core judges it: who clicked, and what the run is when they do. -/
+structure MergeCase where
+  who : Who
+  /-- the merge's stop already waits for the person -/
+  mergeOpen : Bool
+  finished : Bool
+  /-- the run delivered something -/
+  delivered : Bool
+  /-- the person undid the run's merge -/
+  undone : Bool
+  /-- what it delivered is already merged -/
+  merged : Bool
+  /-- the run was started never to merge -/
+  neverMerge : Bool
+  /-- its delivery changes no file -/
+  changesNothing : Bool
+  deriving Repr, FromJson, ToJson, Inhabited
+
+/-- Merge is taken only from the person, of a run on a branch whose delivery is not merged yet. -/
+def MergeCase.accepts (c : MergeCase) : Bool :=
+  c.who == .person && !c.mergeOpen && c.finished && c.delivered && !c.undone && !c.merged && !c.neverMerge &&
+    !c.changesNothing
 
 /-! ## The gate of the checks (`checks_ended` in `decide.rs`) -/
 

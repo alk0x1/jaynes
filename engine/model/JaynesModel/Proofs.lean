@@ -442,7 +442,8 @@ theorem g19_merge_waits {r : Run} (h : r.next = .deliver) (hh : r.mergeHeld = tr
   · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
   · unfold Run.settled at he
     cases hd : r.deliveredCurrent <;> cases ha : r.mergeAnswered <;> cases hq : r.mergeAsked <;>
-      cases ho : r.anyOpenQuestion <;> simp [hd, ha, hq, ho, hh] at he ⊢
+      cases ho : r.anyOpenQuestion <;> cases hl : r.mergeLater <;> cases hk : r.mergeKept <;>
+      simp [hd, ha, hq, ho, hh, hl, hk] at he ⊢
   · exfalso
     rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
     · simp at he
@@ -465,6 +466,45 @@ theorem g19_merge_answer (a : AnswerCase) (hm : a.merge = true) (hx : a.acted = 
     nothing does. -/
 theorem g19_merge_answer_reruns_nothing (c : EffectCase) (h : c.merge = true) : c.said = [] ∧ c.did = [] := by
   simp [EffectCase.said, EffectCase.did, h]
+
+/-- **G19**, the person's Merge: a run that already delivered what holds now delivers again only to merge it,
+    once the person clicked Merge and the merge lands (kept, or nothing to bring in). Neither the run nor its risk
+    ever does it: nothing else delivers twice. -/
+theorem merge_later_delivers_only_what_the_person_asked {r : Run} (h : r.next = .deliver) (hd : r.deliveredCurrent = true) :
+    r.mergeLater = true ∧ r.mergeKept = true := by
+  obtain ⟨_, _, hc⟩ := next_cases h (by simp)
+  rcases hc with ⟨k0, _, he⟩ | ⟨_, ⟨_, he⟩ | ⟨k, _, he⟩⟩
+  · rcases owedMove_cases r k0 with h' | h' <;> rw [h'] at he <;> simp at he
+  · unfold Run.settled at he
+    cases ha : r.mergeAnswered <;> cases hq : r.mergeAsked <;> cases ho : r.anyOpenQuestion <;>
+      cases hl : r.mergeLater <;> cases hk : r.mergeKept <;> cases hh : r.mergeHeld <;>
+      simp [hd, ha, hq, ho, hh, hl, hk] at he ⊢
+  · exfalso
+    rcases moveAt_cases r k with ⟨_, hm⟩ | ⟨_, _, hm⟩ | ⟨_, hm⟩ | hm | ⟨_, hm | hm⟩ <;> rw [hm] at he
+    · simp at he
+    · simp at he
+    · rcases idleMove_cases r k with h' | h' | h' | h' | h' <;> rw [h'] at he <;> simp at he
+    · simp at he
+    · simp at he
+    · simp at he
+
+/-- The person's Merge, (1): only the person's click is taken; no agent and no rule merges. -/
+theorem merge_click_is_the_persons (c : MergeCase) (h : c.accepts = true) : c.who = .person := by
+  unfold MergeCase.accepts at h
+  cases hw : c.who <;> simp_all
+
+/-- The person's Merge, (2): only from a finished run that delivered on a branch, not merged yet, nor undone, nor
+    started never to merge, whose delivery brings something in and whose merge does not wait already. -/
+theorem merge_click_only_on_a_branch_not_merged_yet (c : MergeCase) (h : c.accepts = true) :
+    c.finished = true ∧ c.delivered = true ∧ c.merged = false ∧ c.undone = false ∧ c.neverMerge = false ∧
+      c.changesNothing = false ∧ c.mergeOpen = false := by
+  unfold MergeCase.accepts at h
+  simp_all
+
+/-- The person's Merge, (3): once merged, a second click does nothing. -/
+theorem merge_click_once (c : MergeCase) (hm : c.merged = true) : c.accepts = false := by
+  unfold MergeCase.accepts
+  simp [hm]
 
 /-! ## The merge's touch keeps the stops still open -/
 

@@ -2619,9 +2619,12 @@ fn model_case(run: &Run) -> String {
         "ceilingReached": run.spent.seconds >= run.ceiling.seconds || run.spent.tokens >= run.ceiling.tokens,
         "deliveredCurrent": run.delivered.as_ref() == Some(&run.delivery().0),
         "anyOpenQuestion": !run.open_questions().is_empty(),
-        "mergeHeld": run.manifest.lands() && !run.undone && !run.never_merge && !run.delivered_files().is_empty(),
+        // a role that merges, or a run whose branch delivery the person asked to merge (Input::Merge), as `lands`
+        "mergeHeld": (run.manifest.lands() || run.merge_asked.is_some()) && !run.undone && !run.never_merge && !run.delivered_files().is_empty(),
         "mergeAnswered": run.merge_answer(&run.delivery().0).is_some(),
         "mergeAsked": run.merge_open(&run.delivery().0).is_some(),
+        "mergeLater": run.merge_asked == Some(run.counts.deliveries) && !run.merged && !run.undone && !run.never_merge,
+        "mergeKept": run.delivered_files().is_empty() || run.merge_answer(&run.delivery().0) == Some(true),
     });
     // The core's first move from this state; a run waiting is put back to running, so its wait shows as a move.
     let mut fresh = run.clone();
@@ -2860,8 +2863,8 @@ fn the_lean_model_decides_as_the_core_does() {
         return;
     };
     let mut cases = Vec::new();
-    for seed in 1..=800u64 {
-        let seed = seed.wrapping_mul(0x2545_F491_4F6C_DD1D);
+    for n in 1..=800u64 {
+        let seed = n.wrapping_mul(0x2545_F491_4F6C_DD1D);
         let mut w = World::new(seed);
         w.cases = Some(Vec::new());
         start_random(&mut w, seed);
@@ -2869,6 +2872,26 @@ fn the_lean_model_decides_as_the_core_does() {
             w.act();
             if w.run().finished() {
                 break;
+            }
+        }
+        // one run in three, once finished, someone clicks Merge (Input::Merge): an agent, or the person, who then
+        // answers the merge's stop and the run goes on to its end again; a second click follows
+        if n % 3 == 0 && w.run().finished() {
+            let clicks = if n % 2 == 0 { vec![By::Agent { who: "a".into() }, By::Person, By::Person] } else { vec![By::Person, By::Person] };
+            for by in clicks {
+                let input = Input::Merge { by: by.clone() };
+                let taken = decide(Some(w.run()), &input).is_ok();
+                let click = merge_click_case(w.run(), &by, taken);
+                if let Some(c) = w.cases.as_mut() {
+                    c.push(click);
+                }
+                w.send(input);
+                for _ in 0..100 {
+                    w.act();
+                    if w.run().finished() {
+                        break;
+                    }
+                }
             }
         }
         cases.extend(w.cases.take().unwrap_or_default());
@@ -2885,11 +2908,23 @@ fn the_lean_model_decides_as_the_core_does() {
         assert!(from_records > 0, "no state was read from {real}");
         eprintln!("{from_records} states from real records");
     }
+    // the clicks on Merge reach both sides, and the delivery again merged
+    let clicks = |said: &str| cases.iter().filter(|c| c.contains("\"kind\":\"merge\"") && c.contains(said)).count();
+    let again = cases.iter().filter(|c| c.contains("\"mergeLater\":true") && c.contains("\"expected\":\"deliver\"")).count();
+    eprintln!("Merge clicked: {} taken, {} refused; delivered again to merge from {again} states", clicks("\"taken\""), clicks("\"refused\""));
+    assert!(clicks("\"taken\"") >= 20 && clicks("\"refused\"") >= 20 && again >= 5, "the random runs click Merge too rarely");
+    let (ok, said) = lean_decides(&lake, &cases);
+    eprintln!("{} states: {}", cases.len(), said.lines().find(|l| l.contains("agreed")).unwrap_or(""));
+    assert!(ok, "{said}");
+}
+
+/// What the Lean model's checker says of `cases`: whether it decided each as the core did, and what it printed.
+fn lean_decides(lake: &std::path::Path, cases: &[String]) -> (bool, String) {
     let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../model");
     // The proofs build with the model; JAYNES_MODEL_TARGET=check builds the checker alone, to try a model whose
     // proofs no longer hold against the core.
     let target = std::env::var("JAYNES_MODEL_TARGET").unwrap_or_default();
-    let mut build = std::process::Command::new(&lake);
+    let mut build = std::process::Command::new(lake);
     build.arg("build").current_dir(&model);
     if !target.is_empty() {
         build.arg(&target);
@@ -2909,8 +2944,73 @@ fn the_lean_model_decides_as_the_core_does() {
     let out = check.wait_with_output().expect("check");
     let _wrote = writer.join();
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    eprintln!("{} states: {}", cases.len(), said.lines().find(|l| l.contains("agreed")).unwrap_or(""));
-    assert!(out.status.success(), "{said}");
+    (out.status.success(), said)
+}
+
+/// The person asks to merge what a finished run delivered on a branch (Input::Merge): from each state on the way,
+/// and at each click, the Lean model decides as the core does. The end-to-end records showed it first (the CI of
+/// lote-w-b, 23/11): delivered, the merge kept, and the core delivering once more, merged, where the model finished.
+#[test]
+fn the_lean_model_decides_as_the_core_does_when_the_person_merges_a_branch_delivery_later() {
+    let Some(lake) = lake() else {
+        assert!(std::env::var("JAYNES_REQUIRE_LEAN").is_err(), "Lean is required here and is not installed");
+        eprintln!("skipped: Lean is not installed (elan); the model is in engine/model");
+        return;
+    };
+    let mut cases = Vec::new();
+    for kept in [true, false] {
+        let (mut run, cmds) = start(vec![step("change", Executor::Agent)]);
+        probe_ok(&mut run, cmds);
+        let attempt = run.steps[0].attempt;
+        let changed = vec![Changed { what: "public/index.html".into(), size: 1, removed: 0, floor: false, digest: Some("d".into()), holds: None, about: String::new() }];
+        let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: Vec::new(), changed, usage: Usage::default(), session: None, tree: None, reply: None };
+        let go = |run: &mut Run, input: Input, cases: &mut Vec<String>| -> Vec<Command> {
+            if let Input::Merge { by } = &input {
+                cases.push(merge_click_case(run, by, decide(Some(run), &input).is_ok()));
+            }
+            let Ok(out) = decide(Some(run), &input) else { return Vec::new() };
+            for e in &out.events {
+                run.apply(e);
+                cases.push(model_case(run));
+            }
+            out.commands
+        };
+        let cmds = go(&mut run, Input::AttemptEnded { step: "change".into(), attempt, fix: 0, outcome }, &mut cases);
+        let digest = cmds.iter().find_map(|c| if let Command::Deliver { digest, merge: false, .. } = c { Some(digest.clone()) } else { None }).expect("on a branch");
+        go(&mut run, Input::DeliveryEnded { digest: digest.clone(), ok: true, reference: "jaynes/r".into(), merged: None }, &mut cases);
+        assert!(run.finished(), "{:?}", run.phase);
+        // an agent's click is refused; the person's opens the merge
+        go(&mut run, Input::Merge { by: By::Agent { who: "a".into() } }, &mut cases);
+        go(&mut run, Input::Merge { by: By::Person }, &mut cases);
+        let q = run.open_questions().iter().find(|q| q.question.kind == QuestionKind::Merge).map(|q| q.question.clone()).expect("the merge waits");
+        let verdict = if kept { Verdict::Keep } else { Verdict::Drop };
+        let answer = Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: q.items.iter().map(|x| (x.id.clone(), verdict.clone())).collect(), by: By::Person, context: String::new() } };
+        let cmds = go(&mut run, answer, &mut cases);
+        if kept {
+            assert!(cmds.iter().any(|c| matches!(c, Command::Deliver { merge: true, .. })), "{cmds:?}");
+            go(&mut run, Input::DeliveryEnded { digest: digest.clone(), ok: true, reference: "jaynes/r; merged as abc".into(), merged: Some(true) }, &mut cases);
+            assert!(run.merged && run.finished(), "{:?}", run.phase);
+        }
+        // a second click after the merge does nothing
+        go(&mut run, Input::Merge { by: By::Person }, &mut cases);
+    }
+    let (ok, said) = lean_decides(&lake, &cases);
+    assert!(ok, "{said}");
+}
+
+/// The person's click on Merge of a finished run, as the Lean model reads it, and whether the core took it.
+fn merge_click_case(run: &Run, by: &By, taken: bool) -> String {
+    let case = serde_json::json!({
+        "who": match by { By::Person => "person", By::Rule { .. } => "rule", By::Agent { .. } => "agent" },
+        "mergeOpen": run.open_questions().iter().any(|q| q.question.kind == QuestionKind::Merge),
+        "finished": run.finished(),
+        "delivered": run.delivered.is_some(),
+        "undone": run.undone,
+        "merged": run.merged,
+        "neverMerge": run.never_merge,
+        "changesNothing": run.delivered_files().is_empty(),
+    });
+    serde_json::json!({"kind": "merge", "case": case, "expected": if taken { "taken" } else { "refused" }}).to_string()
 }
 
 

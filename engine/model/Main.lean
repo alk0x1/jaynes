@@ -29,6 +29,7 @@ def main : IO UInt32 := do
           | "holding" => do
               let h ← j.getObjValAs? Hold "hold"
               pure (toString h.holdsNow)
+          | "merge" => do pure (if (← j.getObjValAs? MergeCase "case").accepts then "taken" else "refused")
           | "touch" => do
               let t ← j.getObjValAs? TouchCase "case"
               pure (",".intercalate (t.kept.map toString))
