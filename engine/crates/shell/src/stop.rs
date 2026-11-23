@@ -57,6 +57,9 @@ pub struct Stop {
     pub into: String,
     /// What the merge lands, at the stop before it: every file with its lines, what runs later outside any box said.
     pub lands: Vec<Lands>,
+    /// At the stop before the merge, when what lands changes how the project's tests run, in a sentence of its own
+    /// (the files the [`Lands::tests`] of which says how), drawn with [`TESTS_RUN_WHY`] under it.
+    pub tests_run: Option<String>,
     /// When the run went on without the person's answer to this stop: where it is now and what an answer still
     /// changes. Such a stop never covers what holds the run now: it is answered from the line below.
     pub passed: Option<Passed>,
@@ -318,7 +321,19 @@ pub struct Lands {
     pub removed: u64,
     /// How it runs later outside any box, in plain words, when it does (G19: the merge names it with this).
     pub runs: Option<&'static str>,
+    /// What of it changes how the project's tests run, in plain words, when it does: "its pytest settings change".
+    pub tests: Option<String>,
 }
+
+/// What lands that changes how the project's tests run, in a sentence of its own at the merge: "It changes how your
+/// tests run: pyproject.toml (its pytest settings change)." None when nothing of it does.
+pub fn tests_run_said(lands: &[Lands]) -> Option<String> {
+    let said: Vec<String> = lands.iter().filter_map(|l| l.tests.as_ref().map(|t| format!("{} ({t})", l.path))).collect();
+    (!said.is_empty()).then(|| format!("It changes how your tests run: {}.", said.join(", ")))
+}
+
+/// Why a file that changes how the tests run is said apart at the merge, under [`Stop::tests_run`].
+pub const TESTS_RUN_WHY: &str = "A change there can make the tests pass by running fewer of them, or none. Read it before you merge.";
 
 /// The stop a run waits at: its first open question the run has not gone on without.
 pub fn waiting(home: &Path, run: &Run) -> Option<Stop> {
@@ -474,7 +489,8 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
             None => (None, None),
         },
     };
-    let lands = if merge {
+    let tests = if merge { crate::drive::tests_run(home, run) } else { BTreeMap::new() };
+    let lands: Vec<Lands> = if merge {
         run.delivered_files()
             .into_iter()
             .filter(|(c, _)| q.question.items.iter().any(|x| x.id == c.what))
@@ -482,6 +498,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
                 added: c.size - c.removed.min(c.size),
                 removed: c.removed.min(c.size),
                 runs: jaynes_core::risk::holds_merge(run.manifest.target, &c).then(|| jaynes_core::risk::runs_how(&c.what)),
+                tests: tests.get(&c.what).cloned(),
                 path: c.what,
             })
             .collect()
@@ -516,6 +533,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         ahead,
         touch,
         into,
+        tests_run: tests_run_said(&lands),
         lands,
         passed,
         answers,
@@ -838,9 +856,9 @@ mod tests {
         assert_eq!(
             stop.lands,
             [
-                Lands { path: "src/app.py".into(), added: 64, removed: 12, runs: None },
-                Lands { path: "tests/conftest.py".into(), added: 14, removed: 0, runs: Some("runs on its own whenever the tests run") },
-                Lands { path: "Makefile".into(), added: 3, removed: 1, runs: Some("runs when you run make") },
+                Lands { path: "src/app.py".into(), added: 64, removed: 12, runs: None, tests: None },
+                Lands { path: "tests/conftest.py".into(), added: 14, removed: 0, runs: Some("runs on its own whenever the tests run"), tests: None },
+                Lands { path: "Makefile".into(), added: 3, removed: 1, runs: Some("runs when you run make"), tests: None },
             ]
         );
         assert_eq!(stop.items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["src/app.py", "tests/conftest.py", "Makefile"]);

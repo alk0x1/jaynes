@@ -100,6 +100,11 @@ pub fn diff(copy: &Path, from: &str, to: &str) -> Option<String> {
     git_on(&git_dir(copy), copy, &["diff", "--no-color", "--no-ext-diff", "--no-textconv", from, to]).ok().map(|d| d + "\n")
 }
 
+/// The text of the file at `path` in the copy's state `rev`, through the engine's repository; None when it is not there.
+pub fn text_at(copy: &Path, rev: &str, path: &str) -> Option<String> {
+    git_on(&git_dir(copy), copy, &["show", &format!("{rev}:{path}")]).ok()
+}
+
 /// [`diff`] of only the files `paths`.
 pub fn diff_paths(copy: &Path, from: &str, to: &str, paths: &[&str]) -> Option<String> {
     let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", from, to, "--"];
@@ -184,10 +189,12 @@ pub trait Workspace {
     fn dir(&self) -> &Path;
     /// The person's own thing the copy was made from.
     fn source(&self) -> &Path;
-    /// What an attempt changed, measured by Jaynes, with the id of the state it left. Changes outside `write` are
-    /// refused: the copy goes back to where it was, and what was outside comes back.
+    /// What an attempt changed, measured by Jaynes, with the id of the state it left: against `since`, the state the
+    /// step started from (the copy as the steps before it left it), so a step made again on top of its own change
+    /// still counts all of it; against where the copy is when none. Changes outside `write` are refused: the copy goes
+    /// back to where it was, and what was outside comes back.
     #[allow(clippy::type_complexity)]
-    fn measure(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>>;
+    fn measure(&self, write: &[String], since: Option<&str>) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>>;
     /// Put the copy at the base with `changes` applied in order, each one step's own; the id of the state it is in.
     /// A change that does not apply over the ones before it is an error naming its step.
     fn compose(&self, changes: &[(String, String)]) -> Result<String, String>;
@@ -293,8 +300,8 @@ impl Workspace for Copy {
     fn source(&self) -> &Path {
         &self.source
     }
-    fn measure(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
-        self.stage(write)
+    fn measure(&self, write: &[String], since: Option<&str>) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
+        self.stage_from(write, since.unwrap_or("HEAD"))
     }
     fn compose(&self, changes: &[(String, String)]) -> Result<String, String> {
         Copy::compose(self, changes)
@@ -374,12 +381,12 @@ pub struct Copy {
 impl Copy {
     /// One staged file as G19 reads it: its lines, the fingerprint of its content in the index (`deleted` when it is
     /// gone), and, for a package manifest, whether its change holds a merge and what changes in it, judged against
-    /// the copy's starting point.
-    fn measured(&self, path: &str, lines: u64) -> Changed {
+    /// `from`, where the step started.
+    fn measured(&self, path: &str, lines: u64, from: &str) -> Changed {
         let mut c = Changed::file(path.to_string(), lines);
         c.digest = Some(self.g(&["rev-parse", "-q", "--verify", &format!(":{path}")]).map(|d| d.trim().to_string()).unwrap_or_else(|_| "deleted".to_string()));
         if jaynes_core::risk::manifest(path) {
-            let before = self.g(&["show", &format!("HEAD:{path}")]).ok();
+            let before = self.g(&["show", &format!("{from}:{path}")]).ok();
             let after = self.g(&["show", &format!(":{path}")]).ok();
             let judged = crate::manifests::judge(path, before.as_deref(), after.as_deref());
             c.holds = Some(judged.holds);
@@ -468,6 +475,11 @@ impl Copy {
     /// `write` does not let through are refused: the copy goes back to where it was, and the paths come back.
     /// Each file staged is measured as [`Copy::measured`] says.
     pub fn stage(&self, write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
+        self.stage_from(write, "HEAD")
+    }
+
+    /// [`Copy::stage`], measured against `from`, the state the step started from.
+    pub fn stage_from(&self, write: &[String], from: &str) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
         // before git looks at the tree: a repository nested in it is refused, and removed with the rest of the attempt
         let nested = nested_git(&self.dir);
         if !nested.is_empty() {
@@ -481,7 +493,7 @@ impl Copy {
         }
         self.g(&["add", "-A"]).map_err(Err)?;
         // and after: a repository that came in anyway, between the look and the add, is a gitlink in the index
-        let raw = self.g(&["diff", "--cached", "--raw", "--no-renames"]).map_err(Err)?;
+        let raw = self.g(&["diff", "--cached", "--raw", "--no-renames", from]).map_err(Err)?;
         let links: Vec<String> = raw
             .lines()
             .filter(|l| l.split_whitespace().nth(1) == Some("160000"))
@@ -496,13 +508,13 @@ impl Copy {
             self.discard().map_err(Err)?;
             return Err(Ok(links));
         }
-        let stat = self.g(&["diff", "--cached", "--numstat", "--no-renames"]).map_err(Err)?;
+        let stat = self.g(&["diff", "--cached", "--numstat", "--no-renames", from]).map_err(Err)?;
         let mut changed = Vec::new();
         for line in stat.lines() {
             let mut parts = line.splitn(3, '\t');
             let (a, d, path) = (parts.next().unwrap_or("0"), parts.next().unwrap_or("0"), parts.next().unwrap_or(""));
             let removed = d.parse::<u64>().unwrap_or(0);
-            let mut c = self.measured(path, a.parse::<u64>().unwrap_or(1) + removed);
+            let mut c = self.measured(path, a.parse::<u64>().unwrap_or(1) + removed, from);
             c.removed = removed;
             changed.push(c);
         }

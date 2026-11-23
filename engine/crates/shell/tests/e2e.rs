@@ -1884,6 +1884,65 @@ fn fix_bug_env(s: &Scratch) -> impl Fn(&mut Command) + '_ {
     }
 }
 
+// The real-user's contas, 23/11 (r1795460919-451 and -455): the card before the merge said "What lands on “main” ·
+// 1 file" and warned of the test alone, and main got three files: the source, pyproject.toml and the test. The fix
+// was made again on top of its own change and changed nothing more, so its files were measured as none. The card
+// lists every file that lands, as the merge lands them, and a file that changes how the tests run is said apart.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn the_merge_lists_every_file_that_lands_and_says_apart_a_file_that_changes_how_the_tests_run() {
+    let s = bug_project("lands");
+    std::fs::write(s.project.join("pyproject.toml"), "[project]\nname = \"greet\"\n").expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "pyproject"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    let env = |c: &mut Command| {
+        fix_bug_env(&s)(c);
+        c.env("TESTS_SETUP", "1");
+    };
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let mut c = jaynes();
+    c.args(["start", "--run", "lands", "--role", root().join("crates/shell/tests/roles/fix-bug").to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+            "--request", "greet should say hi with the name", "--agent", &format!("command:sh {}", root().join("crates/shell/tests/agents/fix-bug.sh").display())]);
+    env(&mut c);
+    let started = c.output().expect("start");
+    let mut said = format!("{}{}", String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
+    // the person sends the fix back, and it is made again on top of its own change, changing nothing more
+    let fix = events(&s, "lands").into_iter().find(|e| e["type"] == "QuestionOpened" && e["question"]["step"] == "fix").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let mut c = tty();
+    c.args([BIN, "answer", "lands", &fix, "fix=redo:keep it as it is", "--send"]);
+    env(&mut c);
+    let out = c.output().expect("answer");
+    said.push_str(&format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
+    let e = events(&s, "lands");
+    assert_eq!(e.iter().filter(|e| e["type"] == "StepDone" && e["step"] == "fix").count(), 2, "made again: {:?}\n{said}", types(&e));
+    // the merge asks about every file that lands, and the card shows each
+    let every = ["greet.sh", "pyproject.toml", "tests/test_hi.sh"];
+    let q = open_merge(&s, "lands").unwrap_or_else(|| panic!("the merge waits: {:?}\n{said}", types(&e)));
+    let asked = e.iter().find(|x| x["type"] == "QuestionOpened" && x["question"]["id"] == q.as_str()).expect("the merge");
+    let mut items: Vec<&str> = asked["question"]["items"].as_array().expect("items").iter().filter_map(|x| x["id"].as_str()).collect();
+    items.sort();
+    assert_eq!(items, every, "the merge asks about every file that lands\n{said}");
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("lands").expect("read").expect("the run");
+    let stop = jaynes_shell::stop::waiting(&s.home, &run).expect("the merge waits");
+    let mut lands: Vec<&str> = stop.lands.iter().map(|l| l.path.as_str()).collect();
+    lands.sort();
+    assert_eq!(lands, every, "the card shows every file");
+    let tests: Vec<(&str, Option<&str>)> = stop.lands.iter().map(|l| (l.path.as_str(), l.tests.as_deref())).filter(|(_, t)| t.is_some()).collect();
+    assert_eq!(tests, [("pyproject.toml", Some("its pytest settings change"))], "only the file that changes how the tests run is marked");
+    let warned = "It changes how your tests run: pyproject.toml (its pytest settings change).";
+    assert_eq!(stop.tests_run.as_deref(), Some(warned));
+    assert!(said.contains(warned) && said.contains(jaynes_shell::stop::TESTS_RUN_WHY), "a terminal says it too:\n{said}");
+    // and the merge lands exactly what the card showed
+    let (_, merged) = merge_as_person(&s, "lands", env);
+    assert!(merged.contains("merged as"), "{said}\n{merged}");
+    let landed = Command::new("git").arg("-C").arg(&s.project).args(["diff", "--name-only", "HEAD^1", "HEAD"]).output().expect("git");
+    let landed = String::from_utf8_lossy(&landed.stdout).to_string();
+    assert_eq!(landed.lines().collect::<Vec<_>>(), every, "what landed");
+}
+
 #[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn a_role_that_delivers_by_merge_merges_into_the_person_s_branch_and_undo_reverts_it() {

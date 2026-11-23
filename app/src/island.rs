@@ -1835,6 +1835,7 @@ mod tests {
             touch: None,
             into: String::new(),
             lands: vec![],
+            tests_run: None,
             passed: None,
             answers: Default::default(),
             note: String::new(),
@@ -2072,7 +2073,7 @@ mod tests {
         merge.title = "Merge into “main”?".into();
         merge.touch = Some("merge “fix-login” into main".into());
         merge.into = "main".into();
-        let lands = |path: &str, added, removed, runs| Lands { path: path.into(), added, removed, runs };
+        let lands = |path: &str, added, removed, runs| Lands { path: path.into(), added, removed, runs, tests: None };
         merge.lands = vec![
             lands("src/auth/login.go", 64, 12, None),
             lands("src/auth/login_test.go", 88, 0, None),

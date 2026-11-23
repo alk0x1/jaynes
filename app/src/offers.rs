@@ -126,6 +126,7 @@ mod tests {
             touch: None,
             into: String::new(),
             lands: vec![],
+            tests_run: None,
             passed: None,
             answers: Default::default(),
             note: String::new(),

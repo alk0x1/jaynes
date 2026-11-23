@@ -22,6 +22,8 @@ case "$prompt" in
       *"A check you cannot see"*|*"runs again on top"*) [ -n "$NEVER_RIGHT" ] && printf 'echo "hi"\n' > greet.sh || printf 'echo "hi $1"\n' > greet.sh ;;
       *) printf 'echo "hi"\n' > greet.sh ;;
     esac
+    # With TESTS_SETUP set, it also changes which files the project's tests are (the real-user's contas, 23/11)
+    [ -n "$TESTS_SETUP" ] && printf '[project]\nname = "greet"\n\n[tool.pytest.ini_options]\npython_files = ["test_*.py", "*_test.py"]\n' > pyproject.toml
     printf '{"summary":"the greeting says hi","files":["greet.sh"]}' > .jaynes/output.json ;;
 esac
 echo '{"tokens":100}'

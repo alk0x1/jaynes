@@ -851,6 +851,27 @@ pub fn delivery_diff(home: &Path, run: &Run) -> Option<String> {
     delivery_diff_of(home, &run.id, &lands)
 }
 
+/// What of each file the delivery lands changes how the project's tests run ([`crate::manifests::tests_run`]), by
+/// path: read from the run's copy, as the file was where the run started and as the last step that changed it left
+/// it. Empty when the run's copy is gone.
+pub fn tests_run(home: &Path, run: &Run) -> std::collections::BTreeMap<String, String> {
+    let dir = home.join("runs").join(&run.id);
+    let copy = dir.join("project");
+    let Some((_, base)) = crate::project::start_of(&copy) else { return Default::default() };
+    let steps: std::collections::BTreeMap<String, String> =
+        std::fs::read_to_string(dir.join("project-steps.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    run.delivered_files()
+        .into_iter()
+        .filter(|(c, _)| crate::manifests::may_change_tests(&c.what))
+        .filter_map(|(c, step)| {
+            let commit = steps.get(&step)?;
+            let before = crate::project::text_at(&copy, &base, &c.what);
+            let after = crate::project::text_at(&copy, commit, &c.what);
+            crate::manifests::tests_run(&c.what, before.as_deref(), after.as_deref()).map(|t| (c.what, t))
+        })
+        .collect()
+}
+
 /// [`delivery_diff`] for the files `lands`, each with the step that last changed it.
 pub fn delivery_diff_of(home: &Path, run: &str, lands: &[(String, String)]) -> Option<String> {
     let dir = home.join("runs").join(run);
@@ -1604,6 +1625,17 @@ impl<'a> Driver<'a> {
         if ok && merge
             && let Some(copy) = &self.setup.copy {
                 let head = delivered.unwrap_or_default();
+                // the merge lands only what the stop before it showed the person: a file of the delivery it did not
+                // show never lands (the real-user's contas, 23/11: it showed one file, and three landed)
+                let shown: std::collections::BTreeSet<String> = run.delivered_files().into_iter().map(|(c, _)| c.what).collect();
+                let unshown: Vec<String> = match copy.base().and_then(|base| copy.paths_between(&base, &head)) {
+                    Ok(paths) => paths.into_iter().filter(|p| !shown.contains(p)).collect(),
+                    Err(e) => vec![format!("(Jaynes could not list what lands: {e})")],
+                };
+                if !unshown.is_empty() {
+                    reference.push_str(&format!("; not merged: it would land files the merge did not show you: {}", unshown.join(", ")));
+                    return (ok, reference, landed);
+                }
                 // what the role only shows is not in what is delivered: the checks that ran the project's tests
                 // judge that once more, and the merge waits on them
                 let whole = copy.head().ok().filter(|h| *h != head);
@@ -1994,7 +2026,9 @@ impl<'a> Driver<'a> {
         let mut tree = Value::Null;
         if let (Some(copy), ProjectAccess::Write | ProjectAccess::Read) = (&self.setup.copy, decl.reach.project) {
             let write = if decl.reach.project == ProjectAccess::Write { decl.reach.write.clone() } else { Vec::new() };
-            match copy.measure(&write) {
+            // all the step changed since it started, its own earlier rounds too: what its delivery lands
+            let since = self.parents().get(&decl.name).cloned();
+            match copy.measure(&write, since.as_deref()) {
                 Ok((c, t)) => {
                     changed = c;
                     tree = Value::String(t);
@@ -2184,7 +2218,8 @@ impl<'a> Driver<'a> {
                 let mut tree = Value::Null;
                 if let (Some(copy), ProjectAccess::Write | ProjectAccess::Read) = (&self.setup.copy, decl.reach.project) {
                     let write = if decl.reach.project == ProjectAccess::Write { decl.reach.write.clone() } else { Vec::new() };
-                    match copy.measure(&write) {
+                    let since = self.parents().get(&decl.name).cloned();
+                    match copy.measure(&write, since.as_deref()) {
                         Ok((c, t)) => {
                             changed = c;
                             tree = Value::String(t);
@@ -2372,6 +2407,17 @@ impl<'a> Driver<'a> {
             say(&format!("  - {}", item_line(&item.id, &item.label, ": ")));
             for o in &item.options {
                 say(&format!("      option: {o}"));
+            }
+        }
+        if q.kind == jaynes_core::question::QuestionKind::Merge {
+            let tests = tests_run(&self.setup.home, run);
+            let lands: Vec<crate::stop::Lands> = q
+                .items
+                .iter()
+                .map(|x| crate::stop::Lands { path: x.id.clone(), added: 0, removed: 0, runs: None, tests: tests.get(&x.id).cloned() })
+                .collect();
+            if let Some(said) = crate::stop::tests_run_said(&lands) {
+                say(&format!("  {said} {}", crate::stop::TESTS_RUN_WHY));
             }
         }
         let offered: Vec<String> = q.offered.iter().map(|v| format!("{v:?}").to_lowercase()).collect();
@@ -3165,7 +3211,7 @@ mod tests {
         fn source(&self) -> &Path {
             &self.dir
         }
-        fn measure(&self, _write: &[String]) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
+        fn measure(&self, _write: &[String], _since: Option<&str>) -> Result<(Vec<Changed>, String), Result<Vec<String>, String>> {
             unreachable!("a question measures nothing")
         }
         fn compose(&self, _changes: &[(String, String)]) -> Result<String, String> {

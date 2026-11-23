@@ -193,8 +193,145 @@ fn cargo(text: &str) -> Result<Facts, String> {
     Ok(f)
 }
 
+/// The files that say only how a project's tests run, each with what runs them: a change to one changes how they
+/// run, whatever it is. Code that runs with the tests (`conftest.py`, a test setup file) is said as such.
+const TESTS_SETUP: &[(&[&str], &str)] = &[
+    (&["**/pytest.ini"], "pytest"),
+    (&["**/tox.ini"], "tox"),
+    (&["**/noxfile.py"], "nox"),
+    (&["**/jest.config.*"], "jest"),
+    (&["**/vitest.config.*", "**/vitest.workspace.*"], "vitest"),
+    (&["**/karma.conf.*"], "karma"),
+    (&["**/.mocharc*"], "mocha"),
+    (&["**/ava.config.*"], "ava"),
+    (&["**/playwright.config.*"], "playwright"),
+    (&["**/cypress.config.*"], "cypress"),
+    (&["**/phpunit.xml", "**/phpunit.xml.dist"], "phpunit"),
+    (&["**/.rspec"], "rspec"),
+    (&["**/.nycrc*"], "coverage"),
+];
+
+/// Code that runs on its own whenever the tests run.
+const RUNS_WITH_TESTS: &[&str] = &["**/conftest.py", "**/jest.setup.*", "**/vitest.setup.*"];
+
+/// The keys of a package.json that say how its tests run, beside its test scripts.
+const NPM_TESTS: &[&str] = &["jest", "mocha", "ava", "vitest", "c8", "nyc"];
+
+/// Whether `path` may change how the project's tests run, by its name: a file that says only that, or one that may
+/// say it among other things (pyproject.toml, setup.cfg, package.json), which [`tests_run`] reads.
+pub fn may_change_tests(path: &str) -> bool {
+    let p = path.to_lowercase();
+    let name = p.rsplit('/').next().unwrap_or(&p);
+    matches!(name, "pyproject.toml" | "setup.cfg" | "package.json")
+        || RUNS_WITH_TESTS.iter().chain(TESTS_SETUP.iter().flat_map(|(g, _)| g.iter())).any(|g| jaynes_core::glob::matches(&p, g))
+}
+
+/// What of the file at `path` changes how the project's tests run, from its text `before` (none when it is new) to
+/// `after` (none when it is gone), in plain words: "its pytest settings change". A file that says only how the tests
+/// run changes it whatever changed in it; in pyproject.toml, setup.cfg and package.json, only the part that says it
+/// does. None when nothing of it does; one that cannot be read says so, to be read whole.
+pub fn tests_run(path: &str, before: Option<&str>, after: Option<&str>) -> Option<String> {
+    let p = path.to_lowercase();
+    let name = p.rsplit('/').next().unwrap_or(&p).to_string();
+    if before == after {
+        return None;
+    }
+    if RUNS_WITH_TESTS.iter().any(|g| jaynes_core::glob::matches(&p, g)) {
+        return Some("it runs with your tests".to_string());
+    }
+    if let Some((_, tool)) = TESTS_SETUP.iter().find(|(globs, _)| globs.iter().any(|g| jaynes_core::glob::matches(&p, g))) {
+        return Some(format!("its {tool} settings change"));
+    }
+    let unread = || Some("it could not be read, so read it whole".to_string());
+    let differs = |part: &dyn Fn(&str) -> Result<String, String>| -> Result<bool, String> {
+        Ok(before.map(part).transpose()?.unwrap_or_default() != after.map(part).transpose()?.unwrap_or_default())
+    };
+    match name.as_str() {
+        "pyproject.toml" => {
+            let pytest = |t: &str| -> Result<String, String> {
+                let v: toml::Value = toml::from_str(t).map_err(|e| e.to_string())?;
+                Ok(v.get("tool").and_then(|x| x.get("pytest")).map(|x| x.to_string()).unwrap_or_default())
+            };
+            match differs(&pytest) {
+                Ok(true) => Some("its pytest settings change".to_string()),
+                Ok(false) => None,
+                Err(_) => unread(),
+            }
+        }
+        "setup.cfg" => {
+            // pytest reads its settings there from [tool:pytest]
+            let pytest = |t: &str| -> Result<String, String> {
+                let mut inside = false;
+                let mut out = String::new();
+                for line in t.lines() {
+                    let l = line.trim();
+                    if l.starts_with('[') && l.ends_with(']') {
+                        inside = l[1..l.len() - 1].trim().eq_ignore_ascii_case("tool:pytest");
+                    } else if inside && !l.is_empty() && !l.starts_with(['#', ';']) {
+                        out.push_str(l);
+                        out.push('\n');
+                    }
+                }
+                Ok(out)
+            };
+            differs(&pytest).ok().and_then(|d| d.then(|| "its pytest settings change".to_string()))
+        }
+        "package.json" => {
+            let read = |t: &str| -> Result<Value, String> { serde_json::from_str(t).map_err(|e| e.to_string()) };
+            let (b, a) = match (before.map(read).transpose(), after.map(read).transpose()) {
+                (Ok(b), Ok(a)) => (b.unwrap_or(Value::Null), a.unwrap_or(Value::Null)),
+                _ => return unread(),
+            };
+            let test_script = |k: &str| k == "test" || k == "pretest" || k == "posttest" || k.starts_with("test:") || k.starts_with("test-");
+            let scripts = |v: &Value| -> BTreeMap<String, String> {
+                v["scripts"].as_object().map(|s| s.iter().filter(|(k, _)| test_script(k)).map(|(k, v)| (k.clone(), v.to_string())).collect()).unwrap_or_default()
+            };
+            let mut said = Vec::new();
+            let (sb, sa) = (scripts(&b), scripts(&a));
+            let changed: Vec<&str> = sa.keys().chain(sb.keys()).filter(|k| sa.get(*k) != sb.get(*k)).map(String::as_str).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            match changed.as_slice() {
+                [] => {}
+                [one] => said.push(format!("its {one} script changes")),
+                many => said.push(format!("its scripts {} change", many.join(", "))),
+            }
+            for k in NPM_TESTS {
+                if a[*k] != b[*k] {
+                    said.push(format!("its {k} settings change"));
+                }
+            }
+            (!said.is_empty()).then(|| said.join("; "))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    // The real-user's contas, 23/11: the fix changed python_files under [tool.pytest.ini_options], which changes
+    // which files are tests, and the card before the merge never said so.
+    #[test]
+    fn a_file_that_changes_how_the_tests_run_is_told_by_what_of_it_does() {
+        use super::{may_change_tests, tests_run};
+        let was = "[project]\nname = \"contas\"\n";
+        let now = "[project]\nname = \"contas\"\n\n[tool.pytest.ini_options]\npython_files = [\"test_*.py\", \"*_test.py\"]\n";
+        assert_eq!(tests_run("pyproject.toml", Some(was), Some(now)).as_deref(), Some("its pytest settings change"));
+        assert_eq!(tests_run("pyproject.toml", None, Some(now)).as_deref(), Some("its pytest settings change"), "a new one");
+        assert_eq!(tests_run("pyproject.toml", Some(was), Some("[project]\nname = \"contas\"\nversion = \"2\"\n")), None, "its metadata only");
+        assert_eq!(tests_run("pyproject.toml", Some(was), Some("[project")).as_deref(), Some("it could not be read, so read it whole"));
+        assert_eq!(tests_run("setup.cfg", Some("[metadata]\nname = a\n"), Some("[metadata]\nname = a\n[tool:pytest]\naddopts = -k fast\n")).as_deref(), Some("its pytest settings change"));
+        assert_eq!(tests_run("setup.cfg", Some("[metadata]\nname = a\n"), Some("[metadata]\nname = b\n")), None);
+        let pkg = |s: &str| format!("{{\"name\":\"a\",\"scripts\":{{{s}}}}}");
+        assert_eq!(tests_run("web/package.json", Some(&pkg("\"test\":\"jest\"")), Some(&pkg("\"test\":\"jest --passWithNoTests\""))).as_deref(), Some("its test script changes"));
+        assert_eq!(tests_run("package.json", Some(&pkg("\"build\":\"tsc\"")), Some(&pkg("\"build\":\"tsc -b\""))), None, "a build script is not how the tests run");
+        assert_eq!(tests_run("package.json", Some("{}"), Some("{\"jest\":{\"testMatch\":[\"x\"]}}")).as_deref(), Some("its jest settings change"));
+        assert_eq!(tests_run("pytest.ini", Some("[pytest]\n"), Some("[pytest]\naddopts = -x\n")).as_deref(), Some("its pytest settings change"));
+        assert_eq!(tests_run("app/jest.config.js", None, Some("module.exports = {}\n")).as_deref(), Some("its jest settings change"));
+        assert_eq!(tests_run("tests/conftest.py", Some("a\n"), Some("b\n")).as_deref(), Some("it runs with your tests"));
+        assert_eq!(tests_run("pytest.ini", Some("x"), Some("x")), None, "unchanged");
+        assert!(may_change_tests("pyproject.toml") && may_change_tests("a/Setup.cfg") && may_change_tests("tox.ini") && may_change_tests(".mocharc.yml"));
+        assert!(!may_change_tests("contas/relatorio.py") && !may_change_tests("Cargo.toml"));
+    }
+
     use super::*;
 
     #[test]
