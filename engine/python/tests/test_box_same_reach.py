@@ -254,6 +254,33 @@ class TheAgentReachesWhatTheCheckReaches(unittest.TestCase):
             self.assertNotIn("LISTED ", said, f"{who}: {said}")
             self.assertEqual(said.count("rendered by the project's own browser"), len(installed), f"{who}: {said}")
 
+    def test_the_agent_s_git_reads_the_person_s_ignore_and_attributes_with_no_warning(self):
+        """Every git status of the real-user's agents said "warning: unable to access '~/.config/git/ignore':
+        Operation not permitted" (23/11): the engine names the person's ignore and attributes among the step's reads
+        and in the agent's git configuration (person_git_lists in drive.rs), and /dev/null where there are none."""
+        git_dir = self.home / ".config" / "git"
+        git_dir.mkdir(parents=True)
+        (git_dir / "ignore").write_text("*.log\n")
+        (git_dir / "attributes").write_text("*.bin binary\n")
+        (self.home / "my ignore").write_text("*.tmp\n")
+        work = self.copy()
+        for name in ("a.log", "b.tmp", "c.txt"):
+            (work / name).write_text("x\n")
+        config = work / ".jaynes" / "gitconfig"
+        self.outer.update({"HOME": str(self.home), "GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1"})
+        for excludes, says in ((self.home / "my ignore", "?? a.log"), (git_dir / "ignore", "?? b.tmp"), (None, "?? a.log")):
+            config.write_text("[user]\n\tname = Jaynes agent\n\temail = agent@jaynes.invalid\n[core]\n"
+                              f'\texcludesFile = "{excludes or "/dev/null"}"\n'
+                              f'\tattributesFile = "{git_dir / "attributes" if excludes else "/dev/null"}"\n')
+            self.reads = [r for r in self.reads if self.home / ".config" not in r.parents and r.name != "my ignore"]
+            self.reads += [excludes, git_dir / "attributes"] if excludes else []
+            code, said = self.agent_run(work, "git status --porcelain 2>&1; git check-attr diff x.bin")
+            self.assertEqual(code, 0, said)
+            self.assertNotIn("unable to access", said)
+            self.assertIn(says, said)
+            self.assertIn("?? c.txt", said)
+            self.assertIn("x.bin: diff: unset" if excludes else "x.bin: diff: unspecified", said)
+
     def test_the_git_that_comes_with_the_mac_works_in_the_agent_s_box_and_the_check_s(self):
         """/usr/bin/git, the git of a Mac without Homebrew, is a shim that finds the real one through xcrun, and
         xcrun keeps a cache in the user's temporary folder (getconf DARWIN_USER_TEMP_DIR), whatever TMPDIR says:

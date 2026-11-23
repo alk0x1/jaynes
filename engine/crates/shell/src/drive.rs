@@ -628,6 +628,55 @@ pub const AGENT_GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1")];
 /// settings, a repository that says its own identity (a project's tests that make one) commits with it.
 pub const AGENT_GITCONFIG: &str = "[user]\n\tname = Jaynes agent\n\temail = agent@jaynes.invalid\n";
 
+/// The person's own lists of what git ignores and how it reads files, for the agent's git to read as theirs does.
+#[derive(Default)]
+pub struct PersonGitLists {
+    /// The files, where they are named and where they lead, for the agent's box to read.
+    pub reads: Vec<PathBuf>,
+    /// The lines of the agent's git configuration that name them, after [`AGENT_GITCONFIG`].
+    pub config: String,
+}
+
+/// What git ignores and how it reads files, as the person set it: the files their global configuration names
+/// (core.excludesFile, core.attributesFile) or else git's own places for them (`$XDG_CONFIG_HOME/git` or
+/// ~/.config/git, ignore and attributes). Each is named in the agent's configuration, which takes the place of the
+/// person's: a plain file that is there, and never one of credentials nor in a place secrets live; else /dev/null, so
+/// the agent's git looks for none in the home its box hides ("warning: unable to access '~/.config/git/ignore':
+/// Operation not permitted" at every git status of the real-user's agents, 23/11). Filters, diff and merge drivers the
+/// attributes name run only with the configuration that defines them, which the agent's git never reads.
+pub fn person_git_lists(home: &Path, var: impl Fn(&str) -> Option<String>) -> PersonGitLists {
+    let own = var("XDG_CONFIG_HOME").map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".config")).join("git");
+    let configured = |key: &str| -> Option<PathBuf> {
+        let out = crate::project::git_command().env("HOME", home).env_remove("GIT_CONFIG_GLOBAL").env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(["config", "--global", "--type=path", "--get", key]).output().ok().filter(|o| o.status.success())?;
+        let named = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        Some(if named.is_absolute() { named } else { home.join(named) })
+    };
+    let secret = |p: &Path| p.components().any(|c| {
+        let c = c.as_os_str().to_string_lossy().to_lowercase();
+        c.contains("credential") || [".ssh", ".aws", ".gnupg", ".netrc", ".kube", ".docker"].contains(&c.as_str())
+    });
+    let mut lists = PersonGitLists { reads: Vec::new(), config: "[core]\n".into() };
+    for (key, place) in [("core.excludesFile", "ignore"), ("core.attributesFile", "attributes")] {
+        let file = configured(key).unwrap_or_else(|| own.join(place));
+        let real = std::fs::canonicalize(&file).ok().filter(|r| r.is_file() && !secret(&file) && !secret(r));
+        let named = match real {
+            Some(real) => {
+                for p in [file.clone(), real] {
+                    if !lists.reads.contains(&p) {
+                        lists.reads.push(p);
+                    }
+                }
+                file
+            }
+            None => PathBuf::from("/dev/null"),
+        };
+        let quoted = named.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+        lists.config.push_str(&format!("\t{} = \"{quoted}\"\n", key.trim_start_matches("core.")));
+    }
+    lists
+}
+
 /// The most Jaynes reads of a file an agent left in its folder.
 const MOST_READ: u64 = 1 << 20;
 
@@ -1587,9 +1636,12 @@ impl<'a> Driver<'a> {
         };
         say(&format!("· {} attempt {}{}", turn.step, turn.attempt, if turn.fix > 0 { format!(", fix {}", turn.fix) } else { String::new() }));
         let mut reads = self.setup.copy.as_ref().map(|c| c.reads()).unwrap_or_default();
+        let mut git_lists = PersonGitLists::default();
         if let Ok(home) = std::env::var("HOME").map(PathBuf::from).and_then(|h| std::fs::canonicalize(h).map_err(|_| std::env::VarError::NotPresent)) {
             reads.extend(crate::project::toolchains(&std::env::var("PATH").unwrap_or_default(), &home));
             reads.extend(crate::project::browsers(&home, |k| std::env::var(k).ok()));
+            git_lists = person_git_lists(&home, |k| std::env::var(k).ok());
+            reads.extend(git_lists.reads.iter().cloned());
         }
         let mut env: Vec<(String, String)> = vec![("JAYNES_OUTPUT".into(), exchange.join("output.json").display().to_string())];
         // the toolchains' caches inside the box's own folder, offline
@@ -1603,7 +1655,7 @@ impl<'a> Driver<'a> {
         // box hides anyway, and commits in the copy as Jaynes's agent where a repository says no identity of its own:
         // what it commits there is never what is delivered
         let gitconfig = exchange.join("gitconfig");
-        if let Err(e) = std::fs::write(&gitconfig, AGENT_GITCONFIG) {
+        if let Err(e) = std::fs::write(&gitconfig, format!("{AGENT_GITCONFIG}{}", git_lists.config)) {
             return fault(format!("Jaynes could not write the agent's git configuration: {e}"));
         }
         env.push(("GIT_CONFIG_GLOBAL".into(), gitconfig.display().to_string()));
@@ -2368,6 +2420,40 @@ pub fn item_line(id: &str, label: &str, between: &str) -> String {
         label.to_string()
     } else {
         format!("{id}{between}{label}")
+    }
+}
+
+#[cfg(test)]
+mod git_lists_tests {
+    use super::*;
+
+    #[test]
+    fn the_agent_s_git_reads_the_person_s_ignore_and_attributes_and_never_a_credential() {
+        let base = std::env::temp_dir().join(format!("jaynes-git-lists-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("home/.config/git")).expect("dir");
+        let home = std::fs::canonicalize(base.join("home")).expect("home");
+        std::fs::write(home.join(".config/git/attributes"), "*.bin binary\n").expect("write");
+        std::fs::write(home.join(".config/git/ignore"), "*.log\n").expect("write");
+        std::fs::write(home.join(".config/git/credentials"), "https://u:secret@example.invalid\n").expect("write");
+        std::fs::write(home.join("my ignore"), "*.tmp\n").expect("write");
+        // git's own places, when the person's configuration names none
+        let lists = person_git_lists(&home, |_| None);
+        assert_eq!(lists.reads, [home.join(".config/git/ignore"), home.join(".config/git/attributes")]);
+        assert_eq!(lists.config, format!("[core]\n\texcludesFile = \"{}\"\n\tattributesFile = \"{}\"\n",
+            home.join(".config/git/ignore").display(), home.join(".config/git/attributes").display()));
+        // the file the person's ~/.gitconfig names, through ~ and with a space; never the credentials, even named
+        std::fs::write(home.join(".gitconfig"), "[core]\n\texcludesFile = ~/my ignore\n\tattributesFile = ~/.config/git/credentials\n").expect("write");
+        let lists = person_git_lists(&home, |_| None);
+        assert_eq!(lists.reads, [home.join("my ignore")]);
+        assert_eq!(lists.config, format!("[core]\n\texcludesFile = \"{}\"\n\tattributesFile = \"/dev/null\"\n", home.join("my ignore").display()));
+        // nothing there: git looks for none in the hidden home
+        std::fs::remove_dir_all(home.join(".config")).expect("gone");
+        std::fs::remove_file(home.join(".gitconfig")).expect("gone");
+        let lists = person_git_lists(&home, |_| None);
+        assert!(lists.reads.is_empty());
+        assert_eq!(lists.config, "[core]\n\texcludesFile = \"/dev/null\"\n\tattributesFile = \"/dev/null\"\n");
+        let _gone = std::fs::remove_dir_all(&base);
     }
 }
 
