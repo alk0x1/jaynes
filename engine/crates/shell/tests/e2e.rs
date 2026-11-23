@@ -4695,7 +4695,12 @@ fn free_everywhere(ports: &[u16]) -> u16 {
     *ports.iter().find(|&&p| {
         [Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into(), Ipv4Addr::UNSPECIFIED.into(), Ipv6Addr::UNSPECIFIED.into()]
             .iter().all(|a: &std::net::IpAddr| TcpListener::bind((*a, p)).is_ok())
-    }).expect("one of the ports is free")
+    }).unwrap_or_else(|| {
+        // a Jaynes box elsewhere on this machine (another run's agent or check with its test servers) holds them all
+        let who: String = ports.iter().map(|p| Command::new("lsof").args(["-nP", &format!("-iTCP:{p}"), "-sTCP:LISTEN"]).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()).collect();
+        panic!("none of the ports {ports:?} is free on this machine now; who holds them:\n{who}")
+    })
 }
 
 /// Databases and caches a test machine may run, whose ports Jaynes holds: the first free one is the test's.
@@ -4836,7 +4841,22 @@ if b"hi" not in open("greeting.txt", "rb").read():
     let e = events(&s, "held");
     let chosen = e.iter().rev().find(|x| x["type"] == "PortsChosen").unwrap_or_else(|| panic!("{:?}\n{said}", types(&e)));
     assert_eq!(chosen["freed_ports"], serde_json::json!([held]), "{chosen}");
-    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+    // it failed once under load (fcf92301) with no Delivered and no cause: say what the checks after the continue
+    // said, and who holds the port now, so the next failure names it
+    if !types(&e).iter().any(|t| t == "Delivered") {
+        let after = e.iter().rposition(|x| x["type"] == "Continued").unwrap_or(0);
+        let said_then: Vec<String> = e[after..]
+            .iter()
+            .filter_map(|x| match x["type"].as_str()? {
+                "ChecksJudged" => Some(format!("ChecksJudged: {}", x["checks"].as_array()?.iter()
+                    .filter(|c| c["passed"] != true).map(|c| c.to_string()).collect::<Vec<_>>().join("; "))),
+                "ChecksUnjudged" | "Blocked" | "AttemptFailed" | "FixAsked" => Some(format!("{}: {}", x["type"], x)),
+                _ => None,
+            })
+            .collect();
+        let holder = Command::new("lsof").args(["-nP", &format!("-iTCP:{held}")]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        panic!("no Delivered after the continue: {:?}\nafter the continue:\n{}\nwho has port {held} now:\n{holder}\nthe continue said:\n{said}", types(&e), said_then.join("\n"));
+    }
     assert_eq!(e.iter().filter(|x| x["type"] == "AttemptStarted").count(), 1, "the agent did not work again: {:?}", types(&e));
     // closing the ports closes this too
     at_terminal(&s, &["project", "close-ports", &project], None);
