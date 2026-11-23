@@ -167,7 +167,15 @@ pub struct Landing {
     /// Each file that runs later outside any box, and how, in plain words, as the card draws them: the amber part,
     /// empty when none does.
     pub later: Vec<(String, String)>,
+    /// The amber sentence over what lands when a file of it changes how the tests run ("It changes how your tests run:
+    /// pyproject.toml (its pytest settings change)."), and the dim one beneath it (`stop::TESTS_RUN_WHY`).
+    pub tests_run: Option<(String, String)>,
+    /// The files shown that change how the tests run, each labelled so in its own row.
+    pub marked: Vec<String>,
 }
+
+/// The label at the end of a row whose file changes how the project's tests run.
+pub const TESTS_RUN_MARK: &str = "changes how your tests run";
 
 /// A file's lines, as the merge's stop says them: what it adds, what it removes, and only what is there.
 fn lines_said(added: u64, removed: u64) -> String {
@@ -188,6 +196,8 @@ pub fn landing(stop: &Stop) -> Landing {
         rows: stop.lands.iter().take(LANDS_SHOWN).map(|l| (l.path.clone(), lines_said(l.added, l.removed), l.runs.is_some())).collect(),
         more: (n > LANDS_SHOWN).then(|| format!("… and {} more", n - LANDS_SHOWN)),
         later: stop.lands.iter().filter_map(|l| l.runs.map(|r| (l.path.clone(), format!("{r}.")))).collect(),
+        tests_run: stop.tests_run.clone().map(|said| (said, jaynes_shell::stop::TESTS_RUN_WHY.to_string())),
+        marked: stop.lands.iter().take(LANDS_SHOWN).filter(|l| l.tests.is_some()).map(|l| l.path.clone()).collect(),
     }
 }
 
@@ -973,12 +983,14 @@ impl Island {
         let diff_stop = stop.clone();
         let mut rows = div().flex().flex_col().gap(px(3.)).font_family(look::MONO_FONT).text_size(px(12.));
         for (path, lines, later) in &l.rows {
+            let marked = l.marked.contains(path);
             rows = rows.child(
                 div()
                     .flex()
                     .gap(px(12.))
                     .child(div().flex_1().min_w_0().truncate().text_color(rgb(look::text())).child(path.clone()))
                     .child(div().flex_none().text_color(rgb(look::dim())).child(lines.clone()))
+                    .when(marked, |d| d.child(div().flex_none().font_family(look::UI_FONT).text_color(rgb(look::amber())).child(TESTS_RUN_MARK)))
                     .when(*later, |d| d.child(div().flex_none().font_family(look::UI_FONT).text_color(rgb(look::amber())).child(RUNS_LATER))),
             );
         }
@@ -1022,6 +1034,9 @@ impl Island {
                     .child(div().flex_1().min_w_0().text_size(px(12.5)).text_color(rgb(look::dim())).child(l.goes_in.clone()))
                     .child(button("changes".into(), "See the changes", false, look::blue()).on_click(cx.listener(move |this, _, window, cx| this.diff(&diff_stop, window, cx)))),
             )
+            .when_some(l.tests_run.clone(), |d, (said, why)| {
+                d.child(div().flex().flex_col().gap(px(2.)).child(div().text_size(px(12.5)).text_color(rgb(look::amber())).child(said)).child(div().text_size(px(12.)).text_color(rgb(look::dim())).child(why)))
+            })
             .child(rows.when_some(l.more.clone(), |d, m| d.child(div().font_family(look::UI_FONT).text_color(rgb(look::faint())).child(m))));
         if !l.later.is_empty() {
             let mut later = div().flex().flex_col().gap(px(4.)).px(px(12.)).py(px(10.)).rounded(px(8.)).border_1().border_color(rgba((look::amber() << 8) | 0x73)).child(
@@ -1808,7 +1823,7 @@ impl Render for Island {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said, diff_shown, one_touch, rides_part, RIDE_OPEN};
+    use super::{TESTS_RUN_MARK, diff_button, leave_rows, question_title, wants_view, DELIVERED, LATER_HEAD, ONE_TOUCH, READ_THESE, RUNS_LATER, SENT, Sent, Shows, WORDS_HINT, ahead_line, landing, send_label, asks, card_cap, caret, card_head, comes_into_view, diff_title, fades_below, field_look, words_offset, enters_card, esc_chip, foot_line, gone_head, gone_invite, may_send, takes_answers, not_judged, pill, GONE_HOW, reads_on, said_lines, shows, tab_goes_round, takes_esc, next_after, sent_said, diff_shown, one_touch, rides_part, RIDE_OPEN};
     use jaynes_core::question::{QuestionKind, VerdictKind};
     use jaynes_shell::stop::{Item, Stop, label_for};
     use std::collections::BTreeMap;
@@ -2122,6 +2137,30 @@ mod tests {
         let l = landing(&many);
         assert_eq!((l.rows.len(), l.more.as_deref(), l.later.len()), (8, Some("… and 3 more"), 0));
         assert_eq!(l.goes_in, "What goes in · 11 files · +22 −0 lines");
+    }
+
+    // The real-user, 23/11 (the tech-lead's trava): the merge card said "1 FILE" while three landed, one of them
+    // pyproject.toml, which changes how the tests run. The card lists every file that lands and says, in amber above
+    // them, that one changes how the tests run, the file marked in its own row, the why dim beneath.
+    #[test]
+    fn asked_the_merge_card_lists_every_file_that_lands_and_marks_the_one_that_changes_how_the_tests_run() {
+        use jaynes_shell::stop::Lands;
+        let mut merge = judging(&["a"]);
+        merge.kind = QuestionKind::Merge;
+        let file = |path: &str, tests: Option<&str>| Lands { path: path.into(), added: 3, removed: 1, runs: None, tests: tests.map(str::to_string) };
+        merge.lands = vec![file("app/main.py", None), file("tests/test_main.py", None), file("pyproject.toml", Some("its pytest settings change"))];
+        merge.tests_run = jaynes_shell::stop::tests_run_said(&merge.lands);
+        let l = landing(&merge);
+        assert_eq!(l.goes_in, "What goes in · 3 files · +9 −3 lines");
+        assert_eq!(l.rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["app/main.py", "tests/test_main.py", "pyproject.toml"]);
+        assert_eq!(l.tests_run, Some(("It changes how your tests run: pyproject.toml (its pytest settings change).".to_string(), jaynes_shell::stop::TESTS_RUN_WHY.to_string())));
+        assert_eq!(l.marked, ["pyproject.toml"]);
+        assert_eq!(TESTS_RUN_MARK, "changes how your tests run");
+        // nothing that changes how the tests run: nothing said, nothing marked
+        merge.lands = vec![file("app/main.py", None)];
+        merge.tests_run = None;
+        let l = landing(&merge);
+        assert_eq!((l.tests_run, l.marked.len()), (None, 0));
     }
 
     // Alan, 20/11: "o cursor no your words nao aparece quando quero escrever ai nao sei se o input ta com foco"
