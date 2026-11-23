@@ -149,7 +149,7 @@ fn head(d: &Detail, place: Place, tabs: &Entity<Tabs>) -> impl IntoElement {
                 .gap(px(8.))
                 .items_center()
                 .child(look::chip(d.mark))
-                .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(format!("{} · {} min", d.role, d.minutes))),
+                .child(div().text_size(px(12.)).text_color(rgb(look::faint())).child(said(d))),
         )
         .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(look::text())).child(d.title.clone()))
         .child(div().text_size(px(12.5)).text_color(rgb(look::dim())).child(d.project.clone()))
@@ -219,9 +219,14 @@ impl Render for Rail {
     }
 }
 
+/// The rail's line under the mark: the role and what the run spent of its ceiling, in the page's words.
+fn said(d: &Detail) -> String {
+    format!("{} · {}", d.role, jaynes_shell::listing::spent(d.spent, d.ceiling))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cards, shows_run, waits_words, Card};
+    use super::{cards, said, shows_run, waits_words, Card};
     use crate::model::Detail;
     use crate::tabs::{Middle, Place};
     use jaynes_shell::listing::{Mark, Stage};
@@ -231,7 +236,16 @@ mod tests {
     }
 
     fn run(mark: Mark, stages: Vec<Stage>) -> Detail {
-        Detail { id: "r1".into(), title: "Tighten the copy".into(), role: "review".into(), project: "app".into(), mark, line: "Which goes in?".into(), minutes: 3, stages, now: Some("editing".into()), delivered: false, gone: None }
+        Detail { id: "r1".into(), title: "Tighten the copy".into(), role: "review".into(), project: "app".into(), mark, line: "Which goes in?".into(), spent: 180, ceiling: 1200, stages, now: Some("editing".into()), delivered: false, gone: None }
+    }
+
+    /// The real user's finding, 0.2.5, in the design-lead's words: "\"Spent 58 s of 20 min\" abaixo de um minuto, \"N
+    /// min\" a partir de um, nunca \"Spent 0\"". The rail says it as the page does, from the record's count.
+    #[test]
+    fn asked_the_rail_says_what_a_run_spent_in_seconds_under_a_minute_as_the_page_does() {
+        let d = Detail { spent: 58, ..run(Mark::Working, vec![]) };
+        assert_eq!(said(&d), "review · Spent 58 s of 20 min");
+        assert_eq!(said(&Detail { spent: 200, ..d }), "review · Spent 3 of 20 min");
     }
 
     // Alan, 17/11 (option 1 of the steps panel, as the session that built it in ab48af1 wrote what he chose): every

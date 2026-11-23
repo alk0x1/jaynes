@@ -18,8 +18,10 @@ pub struct Detail {
     pub project: String,
     pub mark: Mark,
     pub line: String,
-    /// Minutes since it started: until now while it goes on, until it last changed once it stopped.
-    pub minutes: u64,
+    /// Seconds it spent of its ceiling, as the record counts them, and the ceiling: the rail says them as the page does
+    /// (listing::spent).
+    pub spent: u64,
+    pub ceiling: u64,
     pub stages: Vec<Stage>,
     /// What its agent does now, while it works.
     pub now: Option<String>,
@@ -157,10 +159,6 @@ fn first(l: &Listing) -> Option<&Row> {
     l.needs.first().or_else(|| l.projects.first().and_then(|(_, rows)| rows.first()))
 }
 
-fn now_seconds() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
 /// A row's line in plain words: the backticks around a name are for the card, which sets it in mono.
 fn plain_lines(listing: &mut Listing) {
     for r in listing.needs.iter_mut().chain(listing.projects.iter_mut().flat_map(|(_, rows)| rows.iter_mut())) {
@@ -219,8 +217,6 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
             stops.insert(e.run.id.clone(), s);
         }
         let Some(row) = rows.get(e.run.id.as_str()) else { continue };
-        let going = !e.run.finished() && !e.run.halted;
-        let until = if going { now_seconds() } else { e.at };
         let project = Path::new(&e.project).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         details.insert(
             e.run.id.clone(),
@@ -231,7 +227,8 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
                 project,
                 mark: row.mark,
                 line: row.line.clone(),
-                minutes: until.saturating_sub(e.started) / 60,
+                spent: e.run.spent.seconds,
+                ceiling: e.run.ceiling.seconds,
                 // a run whose engine left: where it stopped in grey, and what never ran, as the page says it
                 stages: if matches!(row.mark, Mark::Older | Mark::Moved) { listing::cannot_go_on(listing::stages(&e.run)) } else { listing::stages(&e.run) },
                 now: if row.mark == Mark::Working { listing::now(home, &e.run.id) } else { None },
