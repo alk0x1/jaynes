@@ -45,7 +45,7 @@ pub fn reckon(body: &Value) -> Reckoned {
     if jaynes_shell::stop::gone(&home, &run).is_some() {
         return Reckoned::default();
     }
-    let sentences = match jaynes_shell::drive::effects(&home, &run, &q.question, &answer) {
+    let sentences = match jaynes_shell::page::effects_of(&home, &run, &q.question, &answer, body) {
         // before it goes: a choice is being made, not made yet ("Choosing “Harbor”: …")
         Ok(fx) => fx.sentences.iter().map(|s| jaynes_core::decide::before_sending(s)).collect(),
         Err(e) => vec![format!("Jaynes cannot say what this does: {e}")],
@@ -144,9 +144,10 @@ pub async fn send(key: Option<Arc<Key>>, touch: Option<String>, grants: Vec<Offe
     for offer in grants {
         jaynes_shell::page::act_in(&home, &engine_program(), &grant_body(&body, offer), By::Person)?;
     }
-    let (run, _, answer) = jaynes_shell::page::answer_in(&home, &body, By::Agent { who: "the Jaynes app, before it is signed".into() })?;
-    // the person's leave to change how the tests are defined goes first, signed over their words (T1)
-    if let Some(words) = jaynes_shell::page::leave_in(&run, &body) {
+    let (run, q, answer) = jaynes_shell::page::answer_in(&home, &body, By::Agent { who: "the Jaynes app, before it is signed".into() })?;
+    // the person's leave to change how the tests are defined goes first, signed over their words, with an answer that
+    // sets an agent to work (T1)
+    if let Some(words) = jaynes_shell::page::leave_in(&home, &run, &q.question, &answer, &body) {
         let signed = key.sign(&jaynes_shell::person::leave_message(&run.id, &words));
         jaynes_shell::person::submit_leave(&home, &engine_program(), &run, &words, &key.public(), &signed)?;
     }

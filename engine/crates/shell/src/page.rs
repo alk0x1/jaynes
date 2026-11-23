@@ -520,7 +520,7 @@ impl Page {
 
     fn effects(&self, body: &Value, by: By) -> Result<Value, String> {
         let (run, q, answer) = self.answer_from(body, by)?;
-        let fx = drive::effects(&self.home, &run, &q.question, &answer)?;
+        let fx = effects_of(&self.home, &run, &q.question, &answer, body)?;
         let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
         Ok(json!({"ok": refused.is_none(), "sentences": fx.sentences, "refused": refused}))
     }
@@ -570,10 +570,76 @@ fn reply_json(stream: &TcpStream, until: std::time::Instant, status: &str, said:
 /// What a leave to change how the project's tests are defined does, in Jaynes's words, before it goes (G11, T1).
 pub const LEAVE_SAYS: &str = "You let this run change how the project's tests are defined: from here its checks run the suite as the agent leaves it, and the merge and the claims name the files changed.";
 
-/// The leave to change the tests a body carries, when the run has none yet: the person's words.
-pub fn leave_in(run: &Run, body: &Value) -> Option<String> {
-    let words = body["tests_leave"].as_str().map(str::trim).filter(|w| !w.is_empty())?;
-    run.tests_leave.is_none().then(|| words.to_string())
+/// What an answer that sets no agent to work says of words that let the run change how its tests are defined: no
+/// attempt would use the leave, so it is neither given nor recorded (T1; the real-user's contas, 23/11: the leave
+/// came with a keep and at the merge, and the agent never acted on it).
+pub const NO_LEAVE_SAYS: &str = "Nothing will run again, so this can't change the tests.";
+
+/// Where a run keeps the words the reader read as the person's leave to change the tests, at any of its stops.
+fn read_leaves_path(home: &std::path::Path, run: &str) -> PathBuf {
+    home.join("runs").join(run).join("leave-read.json")
+}
+
+fn read_leaves(home: &std::path::Path, run: &str) -> Vec<String> {
+    std::fs::read_to_string(read_leaves_path(home, run)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Keep `words`, which the reader read as the person's leave: a button sent with the same words then carries the
+/// leave as the reading did, since no model reads while the person picks (what an answer does is said at every key).
+fn keep_read_leave(home: &std::path::Path, run: &str, words: &str) -> Result<(), String> {
+    let mut all = read_leaves(home, run);
+    if all.iter().any(|w| w == words) {
+        return Ok(());
+    }
+    all.push(words.to_string());
+    let path = read_leaves_path(home, run);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot keep your words: {e}"))?;
+    }
+    let part = path.with_extension("json.part");
+    std::fs::write(&part, serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| format!("cannot keep your words: {e}"))?;
+    std::fs::rename(&part, &path).map_err(|e| format!("cannot keep your words: {e}"))
+}
+
+/// Whether the answer sets an agent to work after it: a step runs again, or the step that asked goes on with it.
+fn works_again(run: &Run, q: &jaynes_core::question::Question, fx: &jaynes_core::event::Effects) -> bool {
+    !fx.reruns.is_empty() || run.manifest.index(&q.step).is_some_and(|i| run.steps[i].inputs.contains(&q.id))
+}
+
+/// The person's words in an answer that let the run change how its tests are defined, when it has no such leave
+/// yet: the reading's (`tests_leave`), or words the reader read so at this run, in the answer's words or its fields.
+fn leave_words(home: &std::path::Path, run: &Run, answer: &Answer, body: &Value) -> Option<String> {
+    if run.tests_leave.is_some() {
+        return None;
+    }
+    if let Some(words) = body["tests_leave"].as_str().map(str::trim).filter(|w| !w.is_empty()) {
+        return Some(words.to_string());
+    }
+    let read = read_leaves(home, &run.id);
+    let fields = answer.verdicts.values().filter_map(|v| match v {
+        Verdict::Change { text } => Some(text.as_str()),
+        Verdict::Redo { note } => Some(note.as_str()),
+        _ => None,
+    });
+    std::iter::once(answer.context.as_str()).chain(fields).map(str::trim).find(|w| !w.is_empty() && read.iter().any(|r| r == w)).map(str::to_string)
+}
+
+/// The leave to change the tests an answer gives: the person's words, only with an answer that sets an agent to work,
+/// so it is recorded before that agent's next attempt (T1). None at a keep and at the merge, where nothing runs again.
+pub fn leave_in(home: &std::path::Path, run: &Run, q: &jaynes_core::question::Question, answer: &Answer, body: &Value) -> Option<String> {
+    let words = leave_words(home, run, answer, body)?;
+    let fx = drive::effects(home, run, q, answer).ok()?;
+    works_again(run, q, &fx).then_some(words)
+}
+
+/// What the answer does as the person sends it from the page or the app, with what it does with their leave to change
+/// the tests: it gives it with work done again (`LEAVE_SAYS`), and says it changes nothing where no work is.
+pub fn effects_of(home: &std::path::Path, run: &Run, q: &jaynes_core::question::Question, answer: &Answer, body: &Value) -> Result<jaynes_core::event::Effects, String> {
+    let mut fx = drive::effects(home, run, q, answer)?;
+    if leave_words(home, run, answer, body).is_some() {
+        fx.sentences.push(if works_again(run, q, &fx) { LEAVE_SAYS } else { NO_LEAVE_SAYS }.to_string());
+    }
+    Ok(fx)
 }
 
 /// The person's words read into the answer they mean, with what Jaynes says it will do: a proposal, never an answer.
@@ -596,18 +662,18 @@ pub fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Val
     let prompt = crate::understand::prompt(&run, &q.question, &detail, &text, body["pressed"].as_str());
     let read = crate::understand::read(&run.agent, &prompt)?;
     let proposal = crate::understand::proposal(&q.question, &read, &text);
+    if let Some(words) = proposal.get("tests_leave").and_then(Value::as_str) {
+        keep_read_leave(home, run_id, words)?;
+    }
     let mut sent = proposal.clone();
     for k in ["run", "question", "shown"] {
         sent[k] = body[k].clone();
     }
     let (run, q, answer) = answer_in(home, &sent, by)?;
-    let mut fx = drive::effects(home, &run, &q.question, &answer)?;
-    if sent.get("tests_leave").is_some() {
-        if run.tests_leave.is_some() {
-            sent.as_object_mut().map(|m| m.remove("tests_leave"));
-        } else {
-            fx.sentences.push(LEAVE_SAYS.to_string());
-        }
+    let fx = effects_of(home, &run, &q.question, &answer, &sent)?;
+    // the leave goes only with an answer that sets an agent to work, and only while the run has none
+    if leave_in(home, &run, &q.question, &answer, &sent).is_none() {
+        sent.as_object_mut().map(|m| m.remove("tests_leave"));
     }
     let refused = decide(Some(&run), &Input::Answer { answer }).err().map(|r| r.0);
     Ok(json!({"ok": refused.is_none(), "body": sent, "sentences": fx.sentences, "refused": refused, "unsure": proposal["unsure"], "repeats": proposal["repeats"]}))
@@ -615,9 +681,9 @@ pub fn understand_in(home: &std::path::Path, body: &Value, by: By) -> Result<Val
 
 impl Page {
     fn answer(&self, body: &Value, by: By) -> Result<Value, String> {
-        let (run, _, answer) = self.answer_from(body, by.clone())?;
-        // the leave first, so the checks the answer sets going judge with it; refused, nothing goes
-        if let Some(words) = leave_in(&run, body) {
+        let (run, q, answer) = self.answer_from(body, by.clone())?;
+        // the leave first, so the attempt the answer sets going, and its checks, have it; refused, nothing goes
+        if let Some(words) = leave_in(&self.home, &run, &q.question, &answer, body) {
             self.submit(&run, Input::LeaveTests { words, by })?;
         }
         self.submit(&run, Input::Answer { answer })

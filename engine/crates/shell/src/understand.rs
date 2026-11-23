@@ -57,6 +57,7 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
         .filter_map(|v| match v {
             VerdictKind::Keep => Some("keep (as it is)"),
             VerdictKind::Change => Some("change (they want it different)"),
+            VerdictKind::Redo => Some("redo (they send it back to be made again; their words say what is wrong)"),
             VerdictKind::Drop => Some("drop (it leaves; it comes back only if the person brings it back)"),
             _ => None,
         })
@@ -70,6 +71,8 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
          - Verdicts for an item now: {}. An item you leave out is kept as it is.\n\
          - To bring back something dropped earlier, name it in back: \"as it was\", or \"changed\" when they want it \
          different.\n\
+         - Words that send the work back to be made again, or ask for more of it, are redo where redo is offered, \
+         never keep.\n\
          - Only reject what they reject. When they say they liked a part of an option, it is not dropped: change it.\n\
          - Their words go with a change as they wrote them: you write no note and no summary of them.\n\
          - If they ask again for something they asked in an earlier round, quote it in repeats.\n\
@@ -79,7 +82,7 @@ pub fn prompt(run: &Run, q: &Question, detail: &dyn Fn(&Item) -> String, text: &
          test setup, its fixtures, the suite's configuration), such as \"you may change the test\": then the checks \
          judge the suite as the agent leaves it. Never for a guess, and never for words that only ask for a fix.\n\n\
          Answer with this JSON only:\n\
-         {{\"verdicts\": {{\"<id>\": \"keep|change|drop\"}}, \"back\": {{\"<id>\": \"as it was|changed\"}},\"unsure\": \"\", \"repeats\": [], \"tests\": false}}\n",
+         {{\"verdicts\": {{\"<id>\": \"keep|change|redo|drop\"}}, \"back\": {{\"<id>\": \"as it was|changed\"}},\"unsure\": \"\", \"repeats\": [], \"tests\": false}}\n",
         offered.join(", ")
     ));
     p
@@ -102,7 +105,7 @@ fn said_before(run: &Run, q: &Question) -> Vec<String> {
 }
 
 /// What the reader proposed, kept only where it fits the question: items and verdicts it offers, things that were
-/// dropped. Of the reader only the verdicts are kept: a change, and a thing brought back changed, carry the person's
+/// dropped. Of the reader only the verdicts are kept: a change, a redo, and a thing brought back changed, carry the person's
 /// words as they wrote them, and the words always go as context. Nothing the reader wrote is kept as theirs (the
 /// real-user, 22/11: "do jeito que você fez. entrega assim." came back as "you wrote: … A 5432 continua ocupada", which
 /// the person never said).
@@ -115,6 +118,7 @@ pub fn proposal(q: &Question, read: &Value, text: &str) -> Value {
         let kind = match v {
             "keep" => VerdictKind::Keep,
             "change" => VerdictKind::Change,
+            "redo" => VerdictKind::Redo,
             "drop" => VerdictKind::Drop,
             _ => continue,
         };
@@ -126,7 +130,8 @@ pub fn proposal(q: &Question, read: &Value, text: &str) -> Value {
             continue;
         }
         verdicts.insert(id.clone(), json!(v));
-        if kind == VerdictKind::Change {
+        // a change and a redo carry the person's words as they wrote them: what to change, what is wrong
+        if matches!(kind, VerdictKind::Change | VerdictKind::Redo) {
             notes.insert(id.clone(), json!(words));
         }
     }
@@ -314,6 +319,25 @@ mod tests {
         assert!(prompt(&run, &one, &|_| String::new(), words, None).contains(sentence));
         // two or more: nothing changes
         assert!(!prompt(&run, &question(), &|_| String::new(), words, None).contains("With one option"));
+    }
+
+    // the real-user's contas (23/11): at a fix that offers keep and redo, "refaz fazendo o teste antigo rodar na suíte"
+    // could only be read as keep, where nothing runs again; a redo is read where it is offered, with the person's words
+    #[test]
+    fn asked_words_that_send_the_work_back_are_a_redo_where_it_is_offered_with_the_person_s_words() {
+        let fix = Question { items: vec![item("fix")], back: vec![], choose: false, offered: vec![VerdictKind::Keep, VerdictKind::Redo], ..question() };
+        let words = "refaz fazendo o teste antigo rodar na suíte; pode mudar o pyproject";
+        let p = proposal(&fix, &json!({"verdicts": {"fix": "redo"}, "tests": true}), words);
+        assert_eq!((&p["verdicts"], &p["notes"]), (&json!({"fix": "redo"}), &json!({"fix": words})));
+        assert_eq!(p["tests_leave"], words);
+        // where redo is not offered it is left out, as any verdict the stop does not offer
+        assert_eq!(proposal(&question(), &json!({"verdicts": {"Prumo": "redo"}}), words)["verdicts"], json!({}));
+        let manifest: jaynes_core::manifest::Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "pick", "executor": "agent"}]})).expect("manifest");
+        let start = jaynes_core::Input::Start { run: "r".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let run = Run::fold(&jaynes_core::decide(None, &start).expect("start").events).expect("run");
+        let asked = prompt(&run, &fix, &|_| String::new(), words, None);
+        assert!(asked.contains("Verdicts for an item now: keep (as it is), redo (they send it back to be made again"), "{asked}");
+        assert!(!prompt(&run, &question(), &|_| String::new(), words, None).contains("redo (they send"), "not where it is not offered");
     }
 
     // T1, the real-user's estoque: "pode mudar o teste, usa uma porta livre" lets the run change how the tests are
