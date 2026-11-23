@@ -1901,15 +1901,16 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     };
     let items: Vec<&str> = question.items.iter().map(|x| x.id.as_str()).collect();
     let earlier: Vec<&str> = question.back.iter().map(|x| x.id.as_str()).collect();
-    let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "items": items, "earlier": earlier}).to_string();
+    let data = json!({"run": run.id, "question": question.id, "shown": question.shown().0, "choose": question.choose, "merge": question.kind == QuestionKind::Merge, "items": items, "earlier": earlier}).to_string();
     // a stop about what an agent's step made may be asked about, while it is open; the agent's answer joins the thread
     let can_ask = question.kind == QuestionKind::Decision && q.open() && run.manifest.steps.get(i).is_some_and(|d| d.executor == jaynes_core::manifest::Executor::Agent);
+    let merge = question.kind == QuestionKind::Merge && !question.choose;
     let answering = run.asking.values().any(|x| *x == question.id);
     let solo = question.choose && one;
     format!(
         "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · {asked}</div><h1>{title}</h1>{note}{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
-         {over}{rides}{rows}{under}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
+         {over}{rides}{mid}{rows}{under}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
@@ -1928,7 +1929,9 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             n => format!("<p class=\"stop-note\">{}</p>", esc(&n)),
         },
         lead = if leave { changes } else { "" },
-        tail = if leave { "" } else { changes },
+        // at the merge what lands comes first, then the pair (the design-lead, 23/11, as the app's card)
+        mid = if merge { changes } else { "" },
+        tail = if leave || merge { "" } else { changes },
         strip = strip(run, gone),
         thread = thread_html(run, q),
         // with one option its own field is the stop's words: a second field above it left the person unsure where to
@@ -2817,12 +2820,20 @@ async function post(path) {
   return r.json();
 }
 let timer = null;
+let tried = false;
+document.addEventListener("click", e => { if (e.target.closest && e.target.closest("button[data-v], #send, .bringt")) tried = true; }, true);
+document.addEventListener("input", e => { if (e.target.matches && e.target.matches(".note, .adjust, #ctx")) tried = true; }, true);
 function refresh() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
     const r = await post("/api/effects");
     document.getElementById("fx").innerHTML = (r.sentences || []).map(s => `<li>${s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</li>`).join("");
-    document.getElementById("refused").textContent = r.ok ? "" : (r.refused || "");
+    // before the person tried anything there is no error: no refusal in red. At the merge one faint line says what
+    // to do (the design-lead, 23/11); red only for a refusal after a try
+    const f = document.getElementById("refused");
+    const hint = !r.ok && base.merge && (!tried || r.refused === "keep or drop each file it shows");
+    f.classList.toggle("hint", hint);
+    f.textContent = r.ok ? "" : hint ? "Merge, or keep it on the branch only." : tried ? (r.refused || "") : "";
     document.getElementById("send").disabled = !r.ok;
   }, 150);
 }
@@ -2855,7 +2866,7 @@ document.addEventListener("click", async e => {
     b.disabled = true;
     const r = await answerWith(body());
     if (r.ok) { b.textContent = r.recorded === "inbox" ? "Sent; the run takes it after the work under way" : "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
-    else { document.getElementById("refused").textContent = r.refused; b.disabled = false; }
+    else { const f = document.getElementById("refused"); f.classList.remove("hint"); f.textContent = r.refused; b.disabled = false; }
   }
 });
 document.addEventListener("input", e => {
@@ -3102,13 +3113,14 @@ h1 code, .q code, .passed code, .wh code { font-family:var(--mono); font-size:.8
 details.wants { margin:0 0 16px; } details.wants > summary { cursor:pointer; color:var(--blue); font-size:13px; } details.wants .wh { margin:10px 0 8px; font-size:12.5px; color:var(--dim); }
 .seg.says { flex-direction:column; align-items:flex-start; gap:8px; } .seg.says .opt { display:flex; align-items:baseline; gap:12px; } .seg.says button { min-width:84px; } .seg.says .says { font-size:12px; color:var(--faint); }
 pre.diff { margin:0; padding:10px 0; border:1px solid var(--line); border-radius:6px; overflow-x:auto; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--dim); white-space:pre; }
-.diff > span { display:block; padding:0 14px; min-width:max-content; }
-.diff > span > i { font-style:normal; display:inline-block; width:2ch; color:var(--faint); user-select:none; }
-.diff > .add, .diff > .del { color:var(--ink); }
-.diff > .add { background:var(--green-soft); } .diff > .add > i { color:var(--green); }
-.diff > .del { background:var(--red-soft); } .diff > .del > i { color:var(--red); }
-.diff > .hunk { color:var(--blue); }
-.diff > .file { color:var(--ink); font-weight:600; margin-top:12px; } .diff > .file:first-child { margin-top:0; }
+/* each line, also inside a file's block (See them shows only some files): a block of its own, never glued to the next */
+:where(.diff, .diff .fb) > span:not(.fb) { display:block; padding:0 14px; min-width:max-content; }
+:where(.diff, .diff .fb) > span > i { font-style:normal; display:inline-block; width:2ch; color:var(--faint); user-select:none; }
+:where(.diff, .diff .fb) > .add, :where(.diff, .diff .fb) > .del { color:var(--ink); }
+:where(.diff, .diff .fb) > .add { background:var(--green-soft); } :where(.diff, .diff .fb) > .add > i { color:var(--green); }
+:where(.diff, .diff .fb) > .del { background:var(--red-soft); } :where(.diff, .diff .fb) > .del > i { color:var(--red); }
+:where(.diff, .diff .fb) > .hunk { color:var(--blue); }
+:where(.diff, .diff .fb) > .file { color:var(--ink); font-weight:600; margin-top:12px; } .diff > .file:first-child, .diff > .fb:first-child > .file { margin-top:0; }
 .part { margin-top:26px; } .part h2 { font-size:15px; font-weight:600; margin:0; } .part .sub { margin:2px 0 10px; font-size:13px; }
 .part.remind { margin:0 0 34px; }
 .rows { border:1px solid var(--line); border-radius:8px; overflow:hidden; } .none { color:var(--faint); font-size:13px; }
@@ -3153,7 +3165,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px; font:inherit; font-size:13px; }
 .effects { position:fixed; left:280px; right:0; bottom:0; background:rgba(14,18,24,.97); border-top:1px solid var(--line-2); padding:14px 32px; display:flex; gap:24px; align-items:flex-start; }
 .effects.hide { display:none; } .effects .what { flex:1; max-width:700px; } .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
-.effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; }
+.effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; } .refused.hint { color:var(--faint); }
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
 <div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a><a href="/setup">Setup</a></nav></div>
@@ -3812,8 +3824,26 @@ mod tests {
         assert_eq!(folded.matches("data-v=\"keep\"").count(), 8, "each file, only when asked");
         // the whole merge's button judges every file, and a file judged alone clears it
         assert!(SCRIPT.contains("b.dataset.all"), "the script judges every file at once");
-        // a merge of one file keeps its one pair, with nothing to fold
+        // what lands comes first, then the pair (the design-lead, 23/11: the person reads what goes in before deciding)
+        let run = jaynes_core::run::Run::fold(&events).expect("the run");
+        let q = run.questions.get("merge-1").expect("the merge");
+        let html = question_html(&run, q, &|_| String::new(), "<div class=\"changes\">LANDS</div>", "main", "", false, None, &[]);
+        assert!(html.find("LANDS").expect("what lands") < html.find("data-all").expect("the pair"), "{html}");
+        // before any try, no refusal in red: at the merge one faint line says what to do (the design-lead's words)
+        assert!(asked.contains("\"merge\":true"), "the script knows it is the merge");
+        assert!(SCRIPT.contains("Merge, or keep it on the branch only."), "the merge's hint");
+        assert!(PAGE.contains(".refused.hint { color:var(--faint); }"), "the hint is faint, not red");
         let _gone = std::fs::remove_dir_all(&home);
+    }
+
+    // What lands, each file in a block of its own (See them shows only some): each line stays on a line of its own
+    // inside the block; "src/f1.rs@@ -0,0 +1 @@+pub fn f1() {}" glued on one line was what the merge showed (23/11)
+    #[test]
+    fn the_lines_of_what_lands_stay_one_per_line_inside_each_file_s_block() {
+        let html = diff_html("diff --git a/src/f1.rs b/src/f1.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/f1.rs\n@@ -0,0 +1 @@\n+pub fn f1() {}\n");
+        assert_eq!(html, "<span class=\"fb\" data-f=\"src/f1.rs\"><span class=\"file\">src/f1.rs</span><span class=\"hunk\">@@ -0,0 +1 @@</span><span class=\"add\"><i>+</i>pub fn f1() {}</span></span>");
+        assert!(PAGE.contains(":where(.diff, .diff .fb) > span:not(.fb) { display:block;"), "each line a block, inside a file's block too");
+        assert!(!PAGE.contains(".diff > .add"), "no line's look only for lines outside a file's block");
     }
 
     #[test]
