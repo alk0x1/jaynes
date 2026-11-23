@@ -14,6 +14,10 @@ pub enum Act {
     RaiseRisk,
     RaiseCeiling,
     Abandon,
+    /// What a run delivered on a branch goes into the person's (the card at the top of its tab, branch_card.rs).
+    Merge,
+    /// That merge taken back.
+    Undo,
 }
 
 impl Act {
@@ -26,6 +30,8 @@ impl Act {
             Act::RaiseRisk => "raise-risk",
             Act::RaiseCeiling => "raise-ceiling",
             Act::Abandon => "abandon",
+            Act::Merge => "merge",
+            Act::Undo => "undo",
         }
     }
 
@@ -38,6 +44,8 @@ impl Act {
             Act::RaiseRisk => jaynes_shell::listing::ASK_AT_MORE_STEPS,
             Act::RaiseCeiling => "Raise the ceiling by 30 min",
             Act::Abandon => "Abandon",
+            Act::Merge => "Merge",
+            Act::Undo => "Undo the merge",
         }
     }
 
@@ -55,7 +63,7 @@ impl Act {
 
     /// What cannot be taken back is pressed twice, as on the page.
     pub fn asks_twice(self) -> bool {
-        self == Act::Abandon
+        matches!(self, Act::Abandon | Act::Undo)
     }
 }
 
