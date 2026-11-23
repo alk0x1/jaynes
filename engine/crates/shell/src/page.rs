@@ -1862,6 +1862,22 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
             )
         })
         .collect() };
+    // the merge: one touch merges every file at once, its files and their changes shown above; file by file only when
+    // the person opens it (the tech-lead's S4: in a project where every file is new, never 8 buttons)
+    let rows = if question.kind == QuestionKind::Merge && !question.choose {
+        let all: String = question
+            .offered
+            .iter()
+            .map(|v| {
+                let key = format!("{v:?}").to_lowercase();
+                format!("<button class=\"{key}\" data-all=\"1\" data-v=\"{key}\">{}</button>", label_for(*v, question.kind))
+            })
+            .collect();
+        let all = format!("<div class=\"row all\"><div class=\"seg\">{all}</div></div>");
+        if question.items.len() > 1 { format!("{all}<details class=\"each\"><summary>File by file</summary>{rows}</details>") } else { all }
+    } else {
+        rows
+    };
     // what the person dropped in earlier rounds stays in view, folded: only they bring it back
     let rows = if question.back.is_empty() { rows } else {
         let earlier: String = question
@@ -2818,7 +2834,14 @@ document.addEventListener("click", async e => {
     if (id in back) delete back[id]; else back[id] = (document.querySelector(`.bring[data-b="${CSS.escape(id)}"]`) || {}).value || "";
     b.classList.toggle("on", id in back); refresh(); return;
   }
+  if (b.dataset.all) {
+    // the whole merge at once: every file takes it, and each file's own pair shows it
+    for (const i of base.items) verdicts[i] = b.dataset.v;
+    document.querySelectorAll(".seg button[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === b.dataset.v));
+    refresh(); return;
+  }
   if (b.dataset.v) {
+    document.querySelectorAll(".row.all button").forEach(x => x.classList.remove("on"));
     const i = b.dataset.i; verdicts[i] = b.dataset.v;
     const row = b.closest(".row");
     row.querySelectorAll(".seg button").forEach(x => x.classList.toggle("on", x === b));
@@ -3027,7 +3050,7 @@ small.older { color:var(--dim); } button.linkish { background:none; border:0; pa
 .understood .btns { display:flex; gap:8px; margin-top:8px; } .understood .btns button { border-radius:8px; padding:7px 14px; font:inherit; font-size:13px; cursor:pointer; border:1px solid var(--line-2); background:var(--panel-2); color:var(--ink); }
 .understood .btns .go { background:var(--blue); color:#06101c; border-color:var(--blue); font-weight:600; } .understood .btns .go:disabled { opacity:.4; cursor:default; }
 .row { padding:16px 0; border-top:1px solid var(--line); } .row h3 { margin:0 0 4px; font-size:16px; font-weight:600; }
-.seg { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.seg { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; } details.each { margin:10px 0 0; } details.each > summary { cursor:pointer; font-size:13px; color:var(--dim); } details.each .row { margin-top:10px; }
 .pick { display:flex; gap:8px; margin-top:10px; } .pick .adjust { flex:1; background:var(--panel); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:8px 11px; font:inherit; font-size:13.5px; }
 .pick .fin { background:var(--panel); color:var(--dim); border:1px solid var(--line-2); border-radius:8px; padding:8px 14px; } .pick .fin.on { border-color:var(--amber); color:var(--amber); background:var(--amber-soft); }
 .finsay { flex:1; align-self:center; font-size:13.5px; color:var(--dim); }
@@ -3750,6 +3773,47 @@ mod tests {
         assert_eq!(waits_sentence(2, &[]), "2 questions wait for you, in the list beside.");
         assert_eq!(waits_sentence(0, &[]), "Nothing waits for you.");
         let _gone = std::fs::remove_dir_all(&page.home);
+    }
+
+    // The tech-lead (S4): the merge's one touch merges everything at once; file by file only when the person asks. In
+    // a project where every file is new, never 8 buttons (the real-user saw a pair per file in a scaffold).
+    #[test]
+    fn asked_a_merge_of_eight_new_files_the_page_shows_one_merge_and_file_by_file_folded() {
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-merge-one-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("runs/m/project/.git")).expect("copy");
+        std::fs::write(home.join("runs/m/project/.git/jaynes-start"), "main\n").expect("start");
+        let manifest: Manifest = serde_json::from_value(json!({
+            "role": "r", "version": "1", "protocol": 1,
+            "steps": [{"name": "scaffold", "executor": "agent"}],
+        }))
+        .expect("manifest");
+        let start = Input::Start { run: "m".into(), request: "A new app".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
+        let mut events = decide(None, &start).expect("start").events;
+        let items: Vec<Item> = (0..8).map(|i| Item { named: None, id: format!("src/f{i}.rs"), label: format!("src/f{i}.rs: new"), digest: Digest(format!("d{i}")) }).collect();
+        events.push(Event::QuestionOpened {
+            question: Question { rides: Vec::new(),
+                id: "merge-1".into(), step: "scaffold".into(), round: 0, kind: QuestionKind::Merge, items, offered: vec![VerdictKind::Keep, VerdictKind::Drop],
+                holds: true, about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![],
+            },
+        });
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("m", &events).expect("append");
+        store.put_setup("m", &json!({})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let asked = page.render(View::Question("m".into(), "merge-1".into()), crate::store::now()).expect("the question");
+        let (open, folded) = asked.split_once("<details class=\"each\">").expect("file by file, folded");
+        assert_eq!(open.matches("data-v=\"keep\"").count(), 1, "one Merge: {open}");
+        assert_eq!(open.matches("data-v=\"drop\"").count(), 1, "one Branch only: {open}");
+        assert!(open.contains("<button class=\"keep\" data-all=\"1\" data-v=\"keep\">Merge</button><button class=\"drop\" data-all=\"1\" data-v=\"drop\">Branch only</button>"), "{open}");
+        assert!(folded.starts_with("<summary>File by file</summary>"), "{folded}");
+        assert_eq!(folded.matches("data-v=\"keep\"").count(), 8, "each file, only when asked");
+        // the whole merge's button judges every file, and a file judged alone clears it
+        assert!(SCRIPT.contains("b.dataset.all"), "the script judges every file at once");
+        // a merge of one file keeps its one pair, with nothing to fold
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     #[test]
