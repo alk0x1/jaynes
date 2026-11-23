@@ -1121,7 +1121,7 @@ impl Ctx {
                     tree: tree.clone(),
                     reply: reply.clone(),
                 });
-                self.reassess(i, changed);
+                // what the change touches raises the risk only once its checks accepted it (checks_ended)
                 let checks: Vec<String> = self.run.checks_taken(i).iter().map(|c| c.name.clone()).collect();
                 if checks.is_empty() {
                     self.checks_ended(step, attempt, fix, &[])?;
@@ -1252,7 +1252,8 @@ impl Ctx {
         }
     }
 
-    /// Raise the run's risk when what its change touches says so, of what the run delivers. Never lowers it.
+    /// Raise the run's risk when what its change touches says so, of what the run delivers, from an attempt of step `i`
+    /// its checks accepted. Never lowers it.
     fn reassess(&mut self, i: usize, changed: &[Changed]) {
         let mut all: Vec<Changed> = Vec::new();
         for j in self.run.path() {
@@ -1363,6 +1364,9 @@ impl Ctx {
             return refuse(format!("{step} has no output to check"));
         };
         if shape.is_empty() && behaviour.is_empty() {
+            // only an attempt its checks accepted raises the risk from what its change touches: a refused one lands
+            // nothing, and its files come back to the next attempt, which is measured again (the tech-lead, 22/11)
+            self.reassess(i, &pending.changed);
             let round = self.run.steps[i].round;
             let reads = self.run.reads(i);
             self.emit(Event::StepDone {

@@ -157,12 +157,14 @@ fn a_run_whose_risk_goes_up_under_the_fix_takes_the_cases_and_fixes_again_judged
     let (mut run, cmds) = started(None);
     let t = turn(&cmds);
     assert_eq!(t.step, "fix");
-    // the fix turns out large: the run is now at high risk, and the cases are on its path, not yet written
+    // the fix turns out large: once its checks accept it the run is at high risk, and the cases are on its path,
+    // not yet written
     let cmds = deliver(&mut run, &t, "fix-1", vec![Changed::file("src/big.rs".into(), 80)]);
-    assert_eq!(run.risk, Risk::High);
+    assert_eq!(run.risk, Risk::Low, "what the change touches raises the risk only once its checks accepted it");
     let (checks, _) = asked_checks(&cmds);
     assert_eq!(checks, ["tests-pass"], "no case is written yet, so the proof has nothing to read");
     let cmds = pass(&mut run, "fix", t.attempt, &checks);
+    assert_eq!(run.risk, Risk::High);
     let t = turn(&cmds);
     assert_eq!(t.step, "cases", "the run takes the cases now that it is at high risk");
     let cmds = deliver(&mut run, &t, "cases-1", Vec::new());

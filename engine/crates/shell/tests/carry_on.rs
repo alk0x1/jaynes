@@ -130,16 +130,20 @@ leak=no; grep -rq SECRETCASE . && leak=yes
 rejected=no; grep -q '^# Why the last attempt was rejected' "$p" && rejected=yes
 left=no; grep -q '^# Your last attempt' "$p" && left=yes
 echo "turn=$n session=${JAYNES_SESSION:-none} note=$note greeting=$(cat greeting.txt) leak=$leak rejected=$rejected left=$left" >> "$BASE/seen"
+[ -e pyproject.toml ] && echo "turn=$n" >> "$BASE/py"
 case "$(sed -n "${n}p" "$BASE/mode")" in
   fail) echo "from turn $n" > note.txt; perl -pi -e 's/hello/hi/' greeting.txt; exit 1 ;;
   deliver) [ -e note.txt ] || echo "from turn $n" > note.txt; perl -pi -e 's/hello/hi/' greeting.txt ;;
+  py) printf '[tool.pytest.ini_options]\naddopts = "-q"\n' > pyproject.toml ;;
+  unpy) rm -f pyproject.toml; [ -e note.txt ] || echo "from turn $n" > note.txt; perl -pi -e 's/hello/hi/' greeting.txt ;;
 esac
 printf '{"summary":"hello becomes hi"}' > .jaynes/output.json
 echo "{\"tokens\":$(( n == 1 ? 30000 : 2000 )),\"session\":\"s$n\"}"
 "#;
 
 /// What each turn of the change step does, one line each: `fail` leaves a note and fails, `deliver` leaves a note
-/// unless one is there and delivers.
+/// unless one is there and delivers, `py` writes a pyproject.toml and delivers with the greeting as it was (its checks
+/// refuse it), `unpy` takes the pyproject.toml out and delivers as `deliver` does.
 fn scratch(name: &str, mode: &[&str]) -> Scratch {
     let base = std::env::temp_dir().join(format!("jaynes-carry-{name}-{}", std::process::id()));
     let _gone = std::fs::remove_dir_all(&base);
@@ -280,4 +284,54 @@ fn an_attempt_that_failed_in_a_round_sent_back_with_words_leaves_its_files_to_th
     assert_eq!(seen.len(), 3, "{said}\n{seen:?}");
     assert_eq!(seen[1], "turn=2 session=s1 note=from turn 1 greeting=hi leak=no rejected=no left=no", "{seen:?}");
     assert_eq!(seen[2], "turn=3 session=s2 note=from turn 2 greeting=hi leak=no rejected=yes left=yes", "{seen:?}");
+}
+
+/// What a change touches raises the run's risk only from an attempt its checks accepted (the roles-engineer's reading
+/// of the contas, 23/11: the risk went up as the fix delivered, before its checks judged it). A refused attempt that
+/// wrote pyproject.toml raises nothing; its files come back to the next attempt (the tech-lead, 22/11), which is
+/// measured again: kept and accepted, the risk goes up after its checks; taken out, it stays low and the file is not
+/// in what lands.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn a_refused_attempt_raises_no_risk_and_its_files_raise_it_only_from_a_next_attempt_the_checks_accept() {
+    for (run, second, raised) in [("risk-kept", "deliver", true), ("risk-out", "unpy", false)] {
+        let s = scratch(run, &["py", second]);
+        let out = s.start(run);
+        assert!(out.contains("waiting"), "{out}");
+        // the second attempt started from the files the refused one left
+        assert_eq!(std::fs::read_to_string(s.base.join("py")).unwrap_or_default(), "turn=2\n", "{run}: {:?}", s.seen());
+        let e = s.events(run);
+        let told: Vec<String> = e
+            .iter()
+            .filter(|e| ["AttemptDelivered", "ChecksJudged", "AttemptFailed", "StepDone"].contains(&e["type"].as_str().unwrap_or("")) && e["step"] == "change" || e["type"] == "RiskRaised")
+            .map(|e| format!("{} {}", e["type"].as_str().unwrap_or(""), e["attempt"].as_u64().map(|a| a.to_string()).unwrap_or_default()).trim().to_string())
+            .collect();
+        let mut expected = vec!["AttemptDelivered 1", "ChecksJudged 1", "AttemptFailed 1", "AttemptDelivered 2", "ChecksJudged 2", "StepDone"];
+        if raised {
+            expected.insert(5, "RiskRaised");
+        }
+        assert_eq!(told, expected, "{run}");
+        let done = e.iter().rfind(|e| e["type"] == "StepDone" && e["step"] == "change").expect("done");
+        let changed: Vec<&str> = done["changed"].as_array().expect("changed").iter().filter_map(|c| c["what"].as_str()).collect();
+        if raised {
+            let up = e.iter().find(|e| e["type"] == "RiskRaised").expect("raised");
+            assert_eq!(up["to"], "high", "{up}");
+            assert!(up["reasons"].to_string().contains("pyproject.toml"), "{up}");
+            assert!(changed.contains(&"pyproject.toml"), "{changed:?}");
+            continue;
+        }
+        assert_eq!(changed, ["greeting.txt", "note.txt"], "the file taken out is not in what the step changed");
+        // kept by the person, the run's branch carries the greeting and the note, and no pyproject.toml
+        let q = s.question(run, 0);
+        let said = s.person(&["answer", run, &q, "change=keep", "--send"]);
+        for _ in 0..150 {
+            if s.events(run).iter().any(|e| e["type"] == "Delivered") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let lands = Command::new("git").arg("-C").arg(&s.project).args(["diff", "--name-only", "main", &format!("jaynes/{run}")]).output().expect("git");
+        assert_eq!(String::from_utf8_lossy(&lands.stdout), "greeting.txt\nnote.txt\n", "{said}");
+        assert!(!s.events(run).iter().any(|e| e["type"] == "RiskRaised"), "{run}");
+    }
 }
