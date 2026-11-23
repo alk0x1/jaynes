@@ -2246,9 +2246,37 @@ impl TomlRole {
             .collect()
     }
 
-    /// The role's claims that `run` did not prove: [`TomlRole::claims_told`] over the run as it ended.
-    pub fn claims_not_proved(&self, run: &jaynes_core::Run) -> Vec<String> {
-        self.claims_told(run.risk, &|c| c.holds(run))
+    /// The role's claims that `run` did not prove: [`TomlRole::claims_told`] over the run as it ended, then
+    /// [`TomlRole::cases_removed_told`], with `written` the number of cases each step of the run wrote.
+    pub fn claims_not_proved(&self, run: &jaynes_core::Run, written: &dyn Fn(&str) -> usize) -> Vec<String> {
+        let out = |step: &str| run.manifest.index(step).map(|i| run.cases_out(i)).unwrap_or_default();
+        let mut told = self.claims_told(run.risk, &|c| c.holds(run));
+        told.extend(self.cases_removed_told(&|c| c.holds(run), &out, written));
+        told
+    }
+
+    /// The claims proved by a hidden check that passed once the person took cases out of it, a sentence each:
+    /// "held on N of M cases; you removed: “X”", M the cases the steps the check reads wrote (`written`), `out` the
+    /// cases taken out at a step. A claim whose check is untested is told by [`TomlRole::claims_told`] alone.
+    pub fn cases_removed_told(&self, holds: &dyn Fn(&Condition) -> bool, out: &dyn Fn(&str) -> Vec<String>, written: &dyn Fn(&str) -> usize) -> Vec<String> {
+        let untested = self.untested();
+        self.claims
+            .iter()
+            .filter_map(|c| {
+                let ClaimBy::Condition(cond @ Condition::CheckPassed { check, step }) = &c.by else { return None };
+                if !holds(cond) || untested.contains(&format!("check {check} of {step}")) {
+                    return None;
+                }
+                let decl = self.manifest.steps.iter().find(|s| &s.name == step)?.checks.iter().find(|d| &d.name == check && d.kind == CheckKind::Hidden)?;
+                let removed = out(step);
+                if removed.is_empty() {
+                    return None;
+                }
+                let all: usize = decl.reads.iter().map(|r| written(r)).sum();
+                let named = removed.iter().map(|x| format!("“{x}”")).collect::<Vec<_>>().join(", ");
+                Some(format!("{:?}: held on {} of {all} cases; you removed: {named}", c.says, all.saturating_sub(removed.len())))
+            })
+            .collect()
     }
 
     /// Whether the project has all the role needs, each judged by `judge`: Ok, or why no run starts. One need Jaynes
@@ -2739,7 +2767,7 @@ impl TomlRole {
                     }
                 }
             },
-            Call::Check { step, check, request, output, given, project, source, start, any_port, test_servers, freed_ports, tests_leave } => match step_of(&step) {
+            Call::Check { step, check, request, output, given, project, source, start, any_port, test_servers, freed_ports, tests_leave, without } => match step_of(&step) {
                 Err(b) => b,
                 Ok((_, x)) => {
                     // where the project stood when the run began, as the engine gives it: a check of the menu compares
@@ -2747,7 +2775,7 @@ impl TomlRole {
                     let start = start.map(|s| json!({"git": s.git, "commit": s.commit}));
                     let call = json!({"step": step, "check": check, "request": request, "output": output, "given": given,
                                       "project": project, "source": source, "reach": check_reach(x, &check), "any_port": any_port,
-                                      "test_servers": test_servers, "freed_ports": freed_ports, "start": start, "tests_leave": tests_leave});
+                                      "test_servers": test_servers, "freed_ports": freed_ports, "start": start, "tests_leave": tests_leave, "without": without});
                     match x.checks.get(&check) {
                         None => Body::Error { message: format!("{step} has no check {check}") },
                         Some(CheckImpl::Menu { uses, with }) => menu(library, &self.dir, json!({"kind": "check", "use": uses, "with": with, "call": call})),
@@ -4004,6 +4032,18 @@ unchecked = "only the person can say, and the role asks them only whether it is 
     /// Both the promise and the claim that rest on the cases say it.
     fn saying_not_taken(text: String) -> String {
         promise_not_taken(text).replacen("proved_by = \"check proof of fix passed\"\n", &format!("proved_by = \"check proof of fix passed\"\nnot_taken = \"{NOT_TAKEN}\"\n"), 1)
+    }
+
+    #[test]
+    fn asked_a_claim_resting_on_cases_the_person_took_out_says_on_how_many_it_held() {
+        // the tech-lead's T3 (23/11): the claim says it held without the case, and which one the person removed
+        let r = TomlRole::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles/fix-bug")).expect("reads");
+        let out = |step: &str| if step == "fix" { vec!["greet says hi with the name".to_string()] } else { Vec::new() };
+        let written = |step: &str| if step == "cases" { 4 } else { 0 };
+        assert_eq!(r.cases_removed_told(&|_| true, &out, &written), [format!("{ON_THE_CASES:?}: held on 3 of 4 cases; you removed: “greet says hi with the name”")]);
+        // none removed, or the check did not pass: nothing more is said than before
+        assert!(r.cases_removed_told(&|_| true, &|_| Vec::new(), &written).is_empty());
+        assert!(r.cases_removed_told(&|_| false, &out, &written).is_empty());
     }
 
     #[test]

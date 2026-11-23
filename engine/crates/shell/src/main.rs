@@ -291,6 +291,26 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("{}", drive::act_here(&home(), &exe, id, &act));
             Ok(())
         }
+        // the person takes out a hidden case they saw fail on the card of a run it blocked, and the run is judged
+        // again without it (the tech-lead's T3, 23/11): only at a terminal, never an agent's shell
+        "drop-case" => {
+            let id = rest.first().ok_or("which run?")?;
+            if let By::Agent { who } = who() {
+                return Err(format!("only you take a hidden case out of a run, at a terminal; {who} may not"));
+            }
+            let (Some(step), Some(case)) = (flag(rest, "--step"), flag(rest, "--case")) else {
+                return Err("jaynes drop-case RUN --step STEP --case \"the case as its card says it\"".into());
+            };
+            let mut s = store()?;
+            let setup = Setup::load(&s, &home(), id)?;
+            let state = s.state(id)?.ok_or("no such run")?;
+            let input = listing::case_to_drop(&home(), &state, &step, &case)?;
+            let mut d = Driver::take(&mut s, setup)?;
+            d.drive(Input::Recovered)?;
+            let end = d.drive(input)?;
+            print_state(&end);
+            Ok(())
+        }
         "continue" => {
             let id = rest.first().ok_or("which run?")?;
             let mut s = store()?;

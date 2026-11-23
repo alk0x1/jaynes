@@ -1204,6 +1204,65 @@ fn asked_a_run_blocked_by_a_hidden_case_shows_the_person_the_case_and_never_the_
     assert!(told >= 2, "the fixes after the first were told the case's sentence");
 }
 
+// The tech-lead's T3 (29b, 23/11): on the card of a run blocked by a hidden case, the person takes that case out.
+// Only the person, at a terminal, and only a case the card shows; the last attempt is judged again without it and
+// without the agent, and the run goes on to the merge, which says it; the run's story keeps it.
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
+fn asked_the_person_takes_out_a_hidden_case_they_saw_fail_and_the_run_goes_on_judged_without_it() {
+    const CASE: &str = "greet says hi with the name";
+    let s = bug_project("dropcase");
+    let prompts = s.home.join("prompts");
+    std::fs::create_dir_all(&prompts).expect("dir");
+    let agent = root().join("crates/shell/tests/agents/fix-bug.sh");
+    let role = root().join("crates/shell/tests/roles/fix-bug");
+    let env = |c: &mut Command| {
+        c.env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+            .env("PROMPTS", &prompts).env("NEVER_RIGHT", "1");
+    };
+    let mut start = jaynes();
+    start.args(["start", "--run", "dropcase", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        "--request", "greet should say hi with the name, not hello", "--agent", &format!("command:sh {}", agent.display())]);
+    env(&mut start);
+    let out = start.output().expect("start");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(said.contains("blocked"), "{said}");
+    let attempts = |s: &Scratch| events(s, "dropcase").iter().filter(|e| e["type"] == "AttemptStarted").count();
+    let before = attempts(&s);
+    // an agent's shell: refused, nothing recorded
+    let (_, refused) = engine(&s, &["drop-case", "dropcase", "--step", "fix", "--case", CASE]);
+    assert!(refused.contains("only you take a hidden case out"), "{refused}");
+    // a case the card does not show: refused by the shell, before the core
+    let mut c = tty();
+    c.args([BIN, "drop-case", "dropcase", "--step", "fix", "--case", "greet says nothing"]);
+    env(&mut c);
+    let other = c.output().expect("drop");
+    let other = format!("{}{}", String::from_utf8_lossy(&other.stdout), String::from_utf8_lossy(&other.stderr));
+    assert!(other.contains("the card of “fix” shows no case “greet says nothing”"), "{other}");
+    assert!(!types(&events(&s, "dropcase")).contains(&"CaseDropped".to_string()), "{other}");
+    // the person, at a terminal, with the case as the card shows it, quotes and all
+    let mut c = tty();
+    c.args([BIN, "drop-case", "dropcase", "--step", "fix", "--case", &format!("“{CASE}”")]);
+    env(&mut c);
+    let out = c.output().expect("drop");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let e = events(&s, "dropcase");
+    let dropped: Vec<&Value> = e.iter().filter(|e| e["type"] == "CaseDropped").collect();
+    assert_eq!(dropped.len(), 1, "{said}\n{:?}", types(&e));
+    assert_eq!((dropped[0]["by"]["by"].as_str(), dropped[0]["case"].as_str()), (Some("person"), Some(CASE)));
+    // judged again without the agent: no attempt started since
+    assert_eq!(attempts(&s), before, "an agent worked again\n{said}");
+    // the merge says it, before the person merges
+    let q = open_merge(&s, "dropcase").unwrap_or_else(|| panic!("the run goes on to the merge: {:?}\n{said}", types(&e)));
+    let asked = e.iter().find(|x| x["type"] == "QuestionOpened" && x["question"]["id"] == q.as_str()).expect("asked");
+    let about = asked["question"]["about"].as_str().unwrap_or_default();
+    assert!(about.contains(&format!("You took out a hidden case after seeing it fail, so the change was judged without it: “{CASE}” (fix).")), "{about}");
+    // the run's story keeps it, at its step
+    let story = jaynes_shell::listing::story(&s.home, "dropcase");
+    let fix = story.iter().find(|(step, _)| step == "fix").map(|(_, said)| said.clone()).unwrap_or_default();
+    assert!(fix.iter().any(|l| l == &format!("you took out the hidden case “{CASE}”, after seeing it fail: judged again without it")), "{fix:?}");
+}
+
 // The real-user, 22/11 (r1795330821-771): "o Continue devolve as tentativas e bate no mesmo caso de novo". The person
 // continues a run blocked at a hidden case with their words: the attempts come back and the agent's next attempt
 // reads them. Only the person, at a terminal: a program without one is refused, and the record keeps the words.

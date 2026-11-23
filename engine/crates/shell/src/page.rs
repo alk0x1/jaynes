@@ -788,6 +788,13 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
                 offer: serde_json::from_value(body["offer"].clone()).map_err(|_| format!("no offer {}", body["offer"]))?,
                 by,
             },
+            // a hidden case the person saw fail on the card, taken out of the run: theirs alone (the tech-lead's T3)
+            "drop-case" => {
+                if by != By::Person {
+                    return Err("only you take a hidden case out of a run, after seeing it fail: an agent never does".into());
+                }
+                crate::listing::case_to_drop(home, &run, body["step"].as_str().ok_or("which step?")?, body["case"].as_str().ok_or("which case?")?)?
+            }
             "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
             "raise-ceiling" => Input::RaiseCeiling { ceiling: crate::listing::ceiling_raise(&run).0, by },
             // the person merges what the run delivered on a branch: the stop every merge waits at opens (G19), and the
@@ -4305,6 +4312,8 @@ mod tests {
             (json!({"run": "r1", "action": "halt"}), By::Person),
             (json!({"run": "r1", "action": "raise-risk"}), By::Person),
             (json!({"run": "r1", "action": "raise-ceiling"}), By::Person),
+            (json!({"run": "r1", "action": "drop-case", "step": "plan", "case": "x"}), agent()),
+            (json!({"run": "r1", "action": "drop-case", "step": "plan", "case": "x"}), By::Person),
             (json!({"run": "r1", "action": "correct", "note": "the plan forgot the tests", "step": "plan"}), By::Person),
             (json!({"run": "r1", "action": "undo", "note": "back"}), By::Person),
             (json!({"run": "r1", "action": "resume"}), By::Person),

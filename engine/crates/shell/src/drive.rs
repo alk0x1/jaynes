@@ -2212,6 +2212,8 @@ impl<'a> Driver<'a> {
     /// The checks of `step` on what its attempt made, measured as `output`; or, `on`, on that state of the copy
     /// (what the run delivers) in its place.
     fn checks(&self, run: &Run, step: &str, output: &Digest, given: &[Read], checks: &[String], on: Option<&str>) -> Vec<CheckResult> {
+        // the hidden cases the person took out of the run at this step, after seeing them fail: judged without
+        let without = run.manifest.index(step).map(|i| run.cases_out(i)).unwrap_or_default();
         let blocked = |check: &str, reason: String| CheckResult { check: check.to_string(), verdict: CheckVerdict::Blocked { reason }, tree: None, tests_changed: Vec::new() };
         let (output, tree) = match self.store.get(output) {
             Ok(v) => (v["output"].clone(), on.map(str::to_string).or_else(|| v["tree"].as_str().map(str::to_string))),
@@ -2290,6 +2292,7 @@ impl<'a> Driver<'a> {
                     test_servers: self.setup.servers,
                     freed_ports: self.setup.freed_ports.clone(),
                     tests_leave: run.tests_leave.clone(),
+                    without: without.clone(),
                 }) {
                     Ok(Body::Verdict { verdict, tests_changed }) => CheckResult { check: name.clone(), verdict: told(name, verdict), tree: judged.clone(), tests_changed },
                     Ok(other) => CheckResult { tree: judged.clone(), ..blocked(name, format!("the role answered a check with {other:?}")) },

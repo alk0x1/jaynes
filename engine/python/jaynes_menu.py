@@ -883,11 +883,16 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
     the maker only the case's sentence; the person sees each case's result, and each case that failed in full: what
     it says, what it ran, the code it exited with and the end of what it printed."""
     cases = (_given(call).get(str(params.get("cases_step") or "")) or {}).get("cases") or []
+    # the cases the person took out of this run after seeing them fail: not run, and said to the person
+    out = {str(c) for c in call.get("without") or []}
     failed: list[str] = []
     detail: list[str] = []
     shown: list[dict[str, Any]] = []
     for case in cases:
         says, command = str(case.get("says", "")), str(case.get("run", ""))
+        if says in out:
+            detail.append(f"Taken out by you: {says}")
+            continue
         if expands(command, URL):
             detail.append(f"Not run, the run serves no app: {says}")
             continue
@@ -900,7 +905,7 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
             shown.append({"says": says, "run": command, "code": ran.code, "printed": ran.output})
     if failed:
         return Fail(*failed, detail="\n".join(detail), cases=shown)
-    if cases and not any(d.startswith(("Passes", "Fails")) for d in detail):
+    if any(str(c.get("says", "")) not in out for c in cases) and not any(d.startswith(("Passes", "Fails")) for d in detail):
         # cases written and none run: nothing was checked, and nothing checked is not passing
         return Fail(f"A check you cannot see could run none of its cases: each needs the app at {URL}, and this run "
                     "serves no app", detail="\n".join(detail))
@@ -2418,7 +2423,7 @@ def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
             target.write_text(text)
         start = case.get("start")
         call = {"output": case.get("output"), "given": case.get("given") or [], "request": case.get("request") or "",
-                "project": folder if files else None, "source": None,
+                "project": folder if files else None, "source": None, "without": case.get("without") or [],
                 "start": {"files": start} if isinstance(start, dict) else None}
         if use == "script":
             return script(call, params)

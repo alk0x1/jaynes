@@ -1106,8 +1106,10 @@ pub fn story_of(home: &Path, run: &str, state: Option<&Run>) -> Vec<(String, Vec
                 .flat_map(|text| text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).flat_map(|v| actions(&v, &project)).collect::<Vec<_>>())
                 .collect();
             if let Some(r) = state {
-                if let Some(s) = r.manifest.index(&name).map(|i| &r.steps[i]) {
-                    said.extend(talk(s));
+                if let Some(i) = r.manifest.index(&name) {
+                    said.extend(talk(&r.steps[i]));
+                    // the hidden cases the person took out there, after seeing them fail (the tech-lead's T3)
+                    said.extend(r.cases_out(i).iter().map(|c| format!("you took out the hidden case “{c}”, after seeing it fail: judged again without it")));
                 }
                 said.extend(r.questions.values().filter(|q| q.question.step == name && !q.superseded).filter_map(|q| settled_line(r, q)));
             }
@@ -2840,6 +2842,17 @@ mod blocked_tests {
         assert!(b.cases.is_empty(), "{:?}", b.cases);
         assert_eq!(b.why, "“change” used its 3 attempts. The agent exited with code 1.");
     }
+}
+
+/// What the person takes out of a run blocked by a hidden case: the case as its card at `step` shows it (curly
+/// quotes or none), or why not. The shell asks this before the core, which judges it again from the record.
+pub fn case_to_drop(home: &Path, r: &Run, step: &str, case: &str) -> Result<jaynes_core::Input, String> {
+    let case = case.trim().trim_start_matches('“').trim_end_matches('”').trim();
+    let shown = blocked(home, r).filter(|b| b.step.as_deref() == Some(step)).map(|b| b.cases).unwrap_or_default();
+    if !shown.iter().any(|c| c.says.trim_start_matches('“').trim_end_matches('”') == case) {
+        return Err(format!("the card of “{step}” shows no case “{case}”: a case comes out only from the card that shows it failed"));
+    }
+    Ok(jaynes_core::Input::DropCase { by: jaynes_core::question::By::Person, step: step.to_string(), case: case.to_string() })
 }
 
 /// Halted by Jaynes's own rule: the process driving it was stopped while it ran, by nobody's halt.

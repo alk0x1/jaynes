@@ -1018,6 +1018,13 @@
                 "string",
                 "null"
               ]
+            },
+            "without": {
+              "description": "The hidden cases the person took out of this run after seeing them fail, by the sentence each says: a\ncheck of the cases judges without them. Left out when none.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": [

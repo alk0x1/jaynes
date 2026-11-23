@@ -149,6 +149,18 @@ class AHiddenCaseThatFails(unittest.TestCase):
                             "case": {"given": [{"step": "cases", "output": {"cases": cases}}], "output": {}, "project": {"greeting.txt": "hello\n"}}})
         self.assertEqual(said["verdict"]["cases"][0]["run"], "echo looking; grep -q hi greeting.txt")
 
+    def test_a_case_the_person_took_out_is_not_run(self):
+        # the tech-lead's T3 (23/11): the person took out a case they saw fail; the cases are judged without it
+        cases = [{"says": "there is a greeting", "run": "test -f greeting.txt"},
+                 {"says": "the greeting says hi", "run": "grep -q hi greeting.txt"}]
+        case = {"with": {"cases_step": "cases"}, "given": [{"step": "cases", "output": {"cases": cases}}],
+                "output": {}, "project": {"greeting.txt": "hello\n"}, "without": ["the greeting says hi"]}
+        got = menu.judge_case("hidden-cases-pass", {}, case)
+        self.assertIsInstance(got, Pass)
+        # every case taken out: the person's choice, which the merge shows before their touch; nothing runs
+        got = menu.judge_case("hidden-cases-pass", {}, {**case, "without": ["the greeting says hi", "there is a greeting"]})
+        self.assertIsInstance(got, Pass)
+
     def test_a_check_that_passes_shows_no_case(self):
         got = menu.judge_case("hidden-cases-pass", {}, {"with": {"cases_step": "cases"}, "given": [{"step": "cases", "output": {"cases": [{"says": "x", "run": "true"}]}}],
                                                          "output": {}, "project": {"a.txt": ""}})

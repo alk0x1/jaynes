@@ -121,6 +121,10 @@ pub enum Call {
         /// the suite with the one the run began with judges it as the agent left it. Left out when they gave none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tests_leave: Option<String>,
+        /// The hidden cases the person took out of this run after seeing them fail, by the sentence each says: a
+        /// check of the cases judges without them. Left out when none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        without: Vec<String>,
     },
     /// What the person is shown of an output: one item per thing they may judge.
     Items { step: String, output: Value },
