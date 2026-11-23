@@ -1986,11 +1986,8 @@ impl<'a> Driver<'a> {
                     // the same page keeps the same photograph, so an option kept as it was stays as it was
                     let source = std::fs::read(&real).map_err(|e| e.to_string())?;
                     let page = Digest::of_bytes(&source).0;
-                    // and the same page photographed in another window is another photograph
-                    let taken = match x.photo {
-                        Some(p) => format!("{page} {}x{}{}", p.width, p.height, if p.whole { " whole" } else { "" }),
-                        None => page.clone(),
-                    };
+                    // and the same page photographed in another window, or in another theme, is another photograph
+                    let taken = photo_mark(&page, x.photo);
                     let name = format!("{page}.html");
                     std::fs::create_dir_all(&shelf).map_err(|e| e.to_string())?;
                     std::fs::write(shelf.join(&name), &source).map_err(|e| e.to_string())?;
@@ -2530,9 +2527,31 @@ mod git_lists_tests {
     }
 }
 
+/// What a photograph is, written beside it in the copy (`.png.of`): the page's fingerprint, the window, and the theme
+/// Jaynes photographs in (jaynes_box's LIGHT_THEME). A mark that differs, one written before the theme was said among
+/// them, has the page photographed again.
+fn photo_mark(page: &str, photo: Option<crate::protocol::Photo>) -> String {
+    match photo {
+        Some(p) => format!("{page} {}x{}{} light", p.width, p.height, if p.whole { " whole" } else { "" }),
+        None => format!("{page} light"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // the engineer lead, 23/11: a run open before photographs were taken in the light theme kept a dark one of a page
+    // that did not change, shown to the very person who saw the problem
+    #[test]
+    fn asked_a_photograph_s_mark_says_its_theme_and_one_without_it_is_taken_again() {
+        let window = Some(crate::protocol::Photo { width: 390, height: 844, whole: true });
+        assert_eq!(photo_mark("abc", window), "abc 390x844 whole light");
+        assert_eq!(photo_mark("abc", None), "abc light");
+        // the marks written before: the same page in the same window, without a theme, is not this photograph
+        assert_ne!(photo_mark("abc", window), "abc 390x844 whole");
+        assert_ne!(photo_mark("abc", None), "abc");
+    }
 
     // the real-user, 22/11: "A parada 1 ofereceu uma opção só, com o nome repetido: \"Go com biblioteca padrão: Go com
     // biblioteca padrão:\"", and at kickoff "Marcar como visto — Marcar como visto: Ao ler um recado..."
