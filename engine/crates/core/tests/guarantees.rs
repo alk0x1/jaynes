@@ -2076,6 +2076,36 @@ fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() 
     assert!(c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "{c:?}");
 }
 
+// G9's last sentence, which no test held on its own (the engineer lead's check of docs/guarantees.md, 23/11): what an
+// agent let through, the person may still send back on the same question, and the step that made it runs again.
+#[test]
+fn g9_the_person_sends_back_what_an_agent_let_through() {
+    let mut change = step("change", Executor::Agent);
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    let mut tests = step("tests", Executor::Agent);
+    tests.needs = vec!["change".to_string()];
+    let mut push = step("push", Executor::Role);
+    push.needs = vec!["tests".to_string()];
+    push.effect = Effect::Irreversible { idempotent: true };
+    let (mut run, cmds) = start(vec![change, tests, push]);
+    probe_ok(&mut run, cmds);
+    let asked = deliver(&mut run, "change", 1, "c", Vec::new());
+    let q = asked.iter().find_map(|c| if let Command::Ask { question } = c { Some(question.clone()) } else { None }).expect("asked");
+    // an agent lets it go on, and tests runs on it
+    let c = feed(&mut run, Input::Answer { answer: Answer { back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: BTreeMap::new(), by: By::Agent { who: "claude".to_string() }, context: String::new() } });
+    let c = probe_ok(&mut run, c);
+    assert!(c.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "tests")), "{c:?}");
+    deliver(&mut run, "tests", 1, "t", Vec::new());
+    // the person sends it back on the same question: change runs again, and push never ran
+    let back = Answer { back: Default::default(), context: String::new(), question: q.id.clone(), shown: q.shown(), verdicts: [("change".to_string(), Verdict::Redo { note: "not this".to_string() })].into_iter().collect(), by: By::Person };
+    let c = feed(&mut run, Input::Answer { answer: back });
+    let c = probe_ok(&mut run, c);
+    assert!(c.iter().any(|c| matches!(c, Command::RunAgent(t) if t.step == "change")), "the step the agent let through runs again: {c:?}");
+    assert!(!c.iter().any(|c| matches!(c, Command::RunRole { step, .. } if step == "push")), "{c:?}");
+    let answers: Vec<&By> = run.questions[&q.id].answer.iter().map(|a| &a.by).collect();
+    assert_eq!(answers, [&By::Person], "the person's answer is the one that stands");
+}
+
 // --- G17: a stop stops asking only on evidence ----------------------------------------------------------------
 
 /// G17: if a stop's true error rate is at its budget, the chance it is ever made sampled is at most δ, however
