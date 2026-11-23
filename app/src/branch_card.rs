@@ -152,17 +152,6 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
             )
         })
         .when_some(shown.nothing, |d, (said, _)| d.child(div().flex().items_center().gap(px(12.)).child(div().flex_1().min_w_0().child(text(said))).child(copy_button(&mut copy))))
-        .when_some(shown.button, |d, (label, says)| {
-            d.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_wrap()
-                    .gap(px(12.))
-                    .child(island::primary("branch-merge", label, true).on_click(merge))
-                    .child(div().flex_1().min_w(px(160.)).text_size(px(12.5)).text_color(rgb(look::dim())).child(says)),
-            )
-        })
         .when_some(shown.not_landed, |d, amber| d.child(div().text_size(px(12.5)).text_color(rgb(look::amber())).child(amber)))
         .when_some(shown.left_out, |d, said| d.child(div().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::dim())).child(said)))
         .when_some(shown.git, |d, words| {
@@ -184,6 +173,17 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
                             .on_click(git),
                     )
                     .when(open, |d| d.child(div().pl(px(12.)).font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(18.)).text_color(rgb(look::faint())).child(words))),
+            )
+        })
+        .when_some(shown.button, |d, (label, says)| {
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap(px(12.))
+                    .child(island::primary("branch-merge", label, true).on_click(merge))
+                    .child(div().flex_1().min_w(px(160.)).text_size(px(12.5)).text_color(rgb(look::dim())).child(says)),
             )
         })
         .when_some(shown.merged, |d, said| {
