@@ -879,8 +879,9 @@ impl Page {
             for q in run.questions.values() {
                 if crate::stop::went_on(&run, q).is_some() {
                     still.push((run.clone(), q.clone()));
-                } else if q.open() && !run.blocked() {
-                    // a blocked run waits as blocked (listing::stands): its open questions stay inside it
+                } else if q.open() && !run.blocked() && run.set_aside.is_none() {
+                    // a blocked run waits as blocked (listing::stands): its open questions stay inside it; a run its
+                    // agent set aside waits for no one, not even at an open stop (quatro-itens.md, item 7)
                     waiting.push((run.clone(), q.clone()));
                 } else if !q.superseded && q.answer.as_ref().is_some_and(|a| matches!(a.by, By::Agent { .. })) {
                     let i = run.manifest.index(&q.question.step).unwrap_or(0);
@@ -1420,9 +1421,13 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
     let steps = stage_list(r, gone);
     let phase = match &r.phase {
         // set aside by the agent that started it: the person brings it back or ends it, whatever it was at
+        // no amber: it waits for no one; at no step under way (an open stop past its steps) it names none, as the app
         _ if r.set_aside.is_some() && !r.finished() => format!(
-            "<div class=\"notice\">{}</div>",
-            esc(&format!("Set aside by the agent that started it, at “{}”. Its work is kept: Resume brings it back, Abandon ends it.", crate::listing::halted_step(r).unwrap_or_default()))
+            "<div class=\"notice aside\">{}</div>",
+            esc(&format!(
+                "Set aside by the agent that started it{}. Its work is kept: Resume brings it back, Abandon ends it.",
+                crate::listing::halted_step(r).map(|s| format!(", at “{s}”")).unwrap_or_default()
+            ))
         ),
         // in the app's words: where, why, and what Continue does
         Phase::Blocked { step, reason, fault } => blocked_notice(&blocked.unwrap_or_else(|| crate::listing::blocked_said(step.as_deref(), *fault, reason))),
@@ -2363,7 +2368,8 @@ fn ago(seconds: u64) -> String {
 /// The runs not finished that wait for the person, who alone continues or abandons them: the halted and the
 /// blocked, newest first. The app counts them as waiting too ("9 waiting"), and the page says the same.
 fn runs_waiting(runs: &[Run]) -> Vec<&Run> {
-    runs.iter().rev().filter(|r| !r.finished() && (r.halted || matches!(r.phase, Phase::Blocked { .. }))).collect()
+    // a run its agent set aside waits for no one (quatro-itens.md, item 7): Resume and Abandon stay on its page
+    runs.iter().rev().filter(|r| !r.finished() && r.set_aside.is_none() && (r.halted || matches!(r.phase, Phase::Blocked { .. }))).collect()
 }
 
 /// The home's line under its title: what waits for the person, the questions, the blocked runs and the halted ones.
@@ -3156,6 +3162,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 .req .clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; } .req[open] .clamp { display:block; -webkit-line-clamp:unset; }
 .req .more { color:var(--blue); font-size:13px; } .req[open] .more { display:none; }
 .notice.passed-q { background:var(--panel); color:var(--dim); }
+.notice.aside { background:var(--panel); color:var(--dim); }
 .passed { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0 6px; padding:8px 0; font-size:13px; color:var(--dim); border-top:1px solid var(--line); }
 .passed.settled small { display:block; margin-top:3px; font-size:12px; color:var(--faint); }
 .rides { margin:14px 0 10px; } .rides .ride { display:flex; align-items:baseline; gap:12px; padding:6px 0; font-size:13.5px; border-top:1px solid var(--line); }
@@ -3796,6 +3803,45 @@ mod tests {
         assert_eq!(waits_sentence(2, &[]), "2 questions wait for you, in the list beside.");
         assert_eq!(waits_sentence(0, &[]), "Nothing waits for you.");
         let _gone = std::fs::remove_dir_all(&page.home);
+    }
+
+    // The design-lead's quatro-itens.md, item 7: a run its agent set aside "sai de Waiting for you", even at an open
+    // stop, and its card is no amber; the page counted it twice (the run and its merge stop, 23/11) and opened home on
+    // its stop. Where no step is under way, the card names none, as the app's ("Set aside by the agent that started it").
+    #[test]
+    fn asked_a_run_its_agent_set_aside_at_an_open_stop_it_waits_for_no_one_on_the_page() {
+        use jaynes_core::question::{Item, Question, VerdictKind};
+        use jaynes_core::{Digest, Event, Manifest};
+        let home = std::env::temp_dir().join(format!("jaynes-page-aside-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+        let manifest: Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "change", "executor": "agent"}]})).expect("manifest");
+        let start = Input::Start { run: "a".into(), request: "Plant the beans first".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: Some("claude 7".into()) };
+        let mut events = decide(None, &start).expect("start").events;
+        let items = vec![Item { named: None, id: "greeting.txt".into(), label: "greeting.txt: 1 line".into(), digest: Digest("d".into()) }];
+        events.push(Event::QuestionOpened {
+            question: Question { rides: Vec::new(), id: "merge-1".into(), step: "change".into(), round: 0, kind: QuestionKind::Merge, items, offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![] },
+        });
+        let run = Run::fold(&events).expect("the run");
+        events.extend(decide(Some(&run), &Input::Abandon { by: By::Agent { who: "claude:1@x".into() }, starter: Some("claude 7".into()) }).expect("set aside").events);
+        let mut store = Store::open(&home.join("record.sqlite3")).expect("store");
+        store.append("a", &events).expect("append");
+        store.put_setup("a", &json!({"project": "/w/horta"})).expect("setup");
+        let page = Page { home: home.clone(), port: 8750, key: "k3y".into(), exe: PathBuf::from("/usr/bin/true") };
+        let now = crate::store::now();
+        let shown = page.render(View::Run("a".into()), now).expect("the run");
+        assert!(shown.contains("<div class=\"qh\">Waiting for you · 0</div>"), "{shown}");
+        assert!(!shown.contains("href=\"/q/a/merge-1\"><span class=\"nm\">"), "its stop is not in Waiting for you: {shown}");
+        assert!(shown.contains("<div class=\"notice aside\">Set aside by the agent that started it, at “change”. Its work is kept: Resume brings it back, Abandon ends it.</div>"), "{shown}");
+        // every step done, at the merge's stop: no step to name, never "at “”"
+        let mut done = Run::fold(&events).expect("the run");
+        done.steps[0].status = jaynes_core::run::Status::Done;
+        let said = run_html(&done, "", "", None, None);
+        assert!(said.contains("<div class=\"notice aside\">Set aside by the agent that started it. Its work is kept: Resume brings it back, Abandon ends it.</div>"), "{said}");
+        assert!(PAGE.contains(".notice.aside { background:var(--panel); color:var(--dim); }"), "no amber");
+        let home_page = page.render(View::Overview, now).expect("home");
+        assert!(home_page.contains("Waiting for you · 0") && !home_page.contains("halted run"), "{home_page}");
+        let _gone = std::fs::remove_dir_all(&home);
     }
 
     // The tech-lead (S4): the merge's one touch merges everything at once; file by file only when the person asks. In
