@@ -120,9 +120,7 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   They cannot read the engine's folder, the other runs, your secrets or the temporary folder your
   Claude Code sessions share, open no app and start none of your browsers: Chrome, Chromium,
   Firefox, Edge, Brave, Arc, Opera, Vivaldi, Zen, Orion, LibreWolf, Waterfox, Floorp, Thorium and
-  Safari. Neither the agent's box nor a check's box reads a browser profile of yours: the cookies,
-  saved logins and history of any browser or browser tool, Playwright and Puppeteer among them.
-  It is the box a check's commands run in: they send no UDP, cannot use your clipboard or
+  Safari. It is the box a check's commands run in: they send no UDP, cannot use your clipboard or
   keychain and write to no terminal. They start with the environment the run started with, its
   PATH and toolchains among them. Other services of macOS reached by name still answer them.
   Inside another sandbox, Jaynes runs none of them.
