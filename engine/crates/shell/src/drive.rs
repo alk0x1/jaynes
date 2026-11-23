@@ -2311,7 +2311,14 @@ mod tests {
         std::fs::write(dir.join("role.pid"), role.id().to_string()).expect("write");
         // a group that does not descend from it, started apart, and notes that name no group of the run's
         let mut stranger = std::process::Command::new("sleep").arg("30").process_group(0).spawn().expect("stranger");
-        std::thread::sleep(Duration::from_millis(300));
+        // the shell says the command's number before the command has made its group: wait until it leads one, or
+        // a slow machine finds no group of the run's to stop (CI of 027bf9b8)
+        let leads = |pid: u32| std::process::Command::new("ps").args(["-o", "pgid=", "-p", &pid.to_string()]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == pid.to_string());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !leads(boxed) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(leads(boxed), "the role's command made no group of its own");
         for note in [boxed.to_string(), stranger.id().to_string(), "1".into(), "not-a-number".into()] {
             std::fs::write(dir.join(BOX_GROUPS).join(note), "").expect("note");
         }
