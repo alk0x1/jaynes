@@ -157,6 +157,80 @@ class TheRunStopsBeforeAnyAgent(unittest.TestCase):
             self.assertEqual(run.call_count, 0, call)
 
 
+# Go's httptest in a box that lets no test server (the real-user's vazio-x, 23/11): the port is one the system picks
+HTTPTEST_REFUSED = """--- FAIL: TestRecados (0.00s)
+panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered]
+FAIL\trecados\t0.012s
+FAIL
+"""
+
+# a Go module whose tests start their own server, as a scaffold of an HTTP service writes them
+RECADOS = {
+    "go.mod": "module recados\n\ngo 1.22\n",
+    "recados_test.go": "package recados\n\nimport (\n\t\"net/http/httptest\"\n\t\"testing\"\n)\n\n"
+                       "func TestRecados(t *testing.T) {\n\ts := httptest.NewServer(Handler())\n\tdefer s.Close()\n}\n",
+}
+
+
+class TheRunStopsBeforeAnyAgentForTestServersNotLet(unittest.TestCase):
+    """The tech-lead's T5 (23/11): tests that start a server of their own fail at every check while the person has
+    not let the project's test servers, whatever the change, so the run stops at its first step, never in the middle."""
+
+    def suite_of(self, root: Path, printed: str, code: int = 1, **call: object) -> tuple[object, mock.Mock]:
+        refused = box.Ran(code, printed[-box.TAIL:], printed, reserved=(52000, 52001))
+        with mock.patch.object(menu.box, "run", return_value=refused) as run, \
+                mock.patch.object(menu.box, "missing", return_value=None), \
+                mock.patch.object(menu, "SERVERS_NEED_LETTING", True):
+            return menu.find_suite({"project": str(root), "source": str(root), **call}, {}), run
+
+    def test_a_server_of_the_tests_own_blocks_the_first_step_with_the_line_that_lets_it(self):
+        root = project(RECADOS)
+        found, run = self.suite_of(root, HTTPTEST_REFUSED)
+        self.assertIsInstance(found, Blocked)
+        self.assertTrue(found.reason.startswith("the box refused what the command tried"), found.reason)
+        self.assertIn(" It tried local port 0, a port of its own choosing.", found.reason)
+        self.assertIn("listen tcp6 [::1]:0: bind: operation not permitted", found.reason)
+        self.assertEqual(run.call_count, 1)
+        self.assertFalse(run.call_args.kwargs["test_servers"])
+
+    def test_the_project_s_files_that_start_a_server_are_found(self):
+        for name, text in [("main_test.go", "s := httptest.NewServer(h)\n"), ("srv.go", "ln, err := net.Listen(\"tcp\", addr)\n"),
+                           ("main.go", "log.Fatal(http.ListenAndServe(\":8080\", nil))\n"),
+                           ("tests/conftest.py", "srv.bind((host, 0))\n"), ("app.js", "app.listen(0)\n"),
+                           ("server.test.ts", "const server = http.createServer(app)\n"),
+                           ("src/lib.rs", "let l = TcpListener::bind(\"127.0.0.1:0\")?;\n"),
+                           ("Test.java", "new ServerSocket(0)\n")]:
+            self.assertTrue(menu.serves(project({name: text})), name)
+        for files in [{"a.py": "print('hello')\n"}, {"node_modules/express/index.js": "app.listen(3000)\n"},
+                      {"README.md": "Run it.\n"}]:
+            self.assertFalse(menu.serves(project(files)), files)
+
+    def test_tests_that_pass_or_fail_on_their_own_go_on_with_the_suite_found(self):
+        for printed, code in [("ok  \trecados\t0.01s\n", 0), ("--- FAIL: TestRecados\n    want 201, got 404\nFAIL\n", 1)]:
+            found, run = self.suite_of(project(RECADOS), printed, code)
+            self.assertIsInstance(found, dict, printed)
+            self.assertTrue(found["suite"])
+            self.assertEqual(run.call_count, 1)
+
+    def test_nothing_runs_first_with_the_test_servers_let_with_the_ports_open_or_with_no_server_in_the_files(self):
+        for root, call in [(project(RECADOS), {"test_servers": True}),
+                           (project(RECADOS), {"any_port": True}),
+                           (project({"go.mod": "module x\n", "x_test.go": "package x\n"}), {})]:
+            found, run = self.suite_of(root, HTTPTEST_REFUSED, **call)
+            self.assertIsInstance(found, dict, call)
+            self.assertEqual(run.call_count, 0, call)
+
+    def test_nothing_runs_first_where_the_box_lets_tests_serve(self):
+        refused = box.Ran(1, HTTPTEST_REFUSED, HTTPTEST_REFUSED)
+        with mock.patch.object(menu.box, "run", return_value=refused) as run, \
+                mock.patch.object(menu.box, "missing", return_value=None), \
+                mock.patch.object(menu, "SERVERS_NEED_LETTING", False):
+            root = project(RECADOS)
+            found = menu.find_suite({"project": str(root), "source": str(root)}, {})
+        self.assertIsInstance(found, dict)
+        self.assertEqual(run.call_count, 0)
+
+
 class AChecksTestsThatNameNoPort(unittest.TestCase):
     def test_a_check_finds_the_held_port_in_the_project_s_files(self):
         root = project(ESTOQUE)

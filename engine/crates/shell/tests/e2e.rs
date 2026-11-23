@@ -4640,6 +4640,46 @@ fn tests_that_serve_on_a_port_jaynes_holds_stop_the_run_at_its_start_before_any_
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box has a network of its own)")]
+fn tests_that_start_their_own_test_server_without_the_person_s_yes_stop_the_run_at_its_start_with_the_line_that_lets_them() {
+    // the tech-lead's T5, 23/11 (the real-user's vazio-x): a suite whose test server takes a port the system picks, as
+    // Go's httptest does, in a project whose test servers the person never let. Every check would fail for it, so the
+    // run stops before any agent works, with the one line that lets them, and never in the middle
+    let _one = holding_alone();
+    let s = scratch("serves-start");
+    let project = s.project.to_str().expect("path").to_string();
+    std::fs::write(s.project.join("serve.py"), "import socket\nserver = socket.socket()\nserver.bind((\"127.0.0.1\", 0))\nserver.listen()\n").expect("write");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tpython3 serve.py\n\tgrep -q hi greeting.txt\n").expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a test server"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success(), "git {args:?}");
+    }
+    let agent = format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}");
+    start(&s, "serves-start", &agent);
+    let e = events(&s, "serves-start");
+    let blocked = e.iter().rev().find(|x| x["type"] == "Blocked").unwrap_or_else(|| panic!("{:?}", types(&e)));
+    assert_eq!((&blocked["step"], &blocked["fault"]), (&serde_json::json!("runner"), &serde_json::json!("jaynes")), "{blocked}");
+    let agent_worked = |e: &[Value]| e.iter().filter(|x| x["type"] == "AttemptStarted" && x["step"] == "change").count();
+    assert_eq!(agent_worked(&e), 0, "no agent worked: {:?}", types(&e));
+    let real = std::fs::canonicalize(&project).expect("real path").display().to_string();
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("serves-start").expect("state").expect("run");
+    let b = jaynes_shell::listing::blocked(&s.home, &run).unwrap_or_else(|| panic!("not blocked: {:?}", run.phase));
+    assert_eq!(b.what, "The run stopped before any agent worked.", "{blocked}");
+    assert!(b.why.starts_with("This project's tests start a test server on a port the system picks"), "{}", b.why);
+    assert_eq!(b.continue_does, "Continue: Jaynes runs the project's tests again. If they start, the run goes on to “change”.");
+    let way = b.ways.first().expect("a way");
+    assert_eq!(way.command.as_deref(), Some(format!("jaynes project test-servers {real}").as_str()));
+    drop(store);
+    // the one line the card gives, then Continue: the tests run again, and the run goes on to its delivery
+    let said = typed_at_terminal(&s, &["project", "test-servers", &project], None, "y\n");
+    assert!(said.contains("Done."), "{said}");
+    let said = at_terminal(&s, &["continue", "serves-start"], None);
+    let e = events(&s, "serves-start");
+    assert!(types(&e).iter().any(|t| t == "Delivered"), "{:?}\n{said}", types(&e));
+    assert_eq!(agent_worked(&e), 1, "{:?}", types(&e));
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "the box for project commands with local ports is macOS's sandbox-exec")]
 fn continue_after_the_person_opens_the_ports_checks_the_same_change_again_and_the_agent_does_not_work_again() {
     let s = scratch("reopen");
