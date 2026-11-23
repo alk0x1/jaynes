@@ -37,8 +37,10 @@ checks = ["suite-passes"]
 summary = { type = "string", about = "what changed" }
 "#;
 
-/// The estoque's test as the project had it: a fake database on 5432, which the box does not let a check take.
-const OLD_TEST: &str = "import socket\ns = socket.socket()\ns.bind((\"127.0.0.1\", 5432))\nprint(\"banco falso na 5432\")\n";
+/// The estoque's test as the project had it: it reaches its database on 5432, which the box does not let a check
+/// reach. It only reaches it: a test that brings a server up of its own stops the run at its start since T5
+/// (949c8475), before any agent, and the person's way out there is the test servers, not a leave in words.
+const OLD_TEST: &str = "import socket\nsocket.create_connection((\"127.0.0.1\", 5432), timeout=3)\nprint(\"banco na 5432\")\n";
 
 /// The agent: its first turn says the suite as it began cannot pass in the box, and asks to change the test; the next,
 /// after the person's words, moves the fake database off 5432 (into memory: a port of the system's choosing is a
