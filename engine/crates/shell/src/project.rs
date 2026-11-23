@@ -39,7 +39,9 @@ pub(crate) fn git_command() -> Command {
 fn run(mut c: Command, args: &[&str]) -> Result<String, String> {
     let out = c.args(args).output().map_err(|e| format!("git did not start: {e}"))?;
     if !out.status.success() {
-        return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+        // git says some failures on its standard output (a merge's CONFLICT lines), so both are git's words
+        let said: Vec<String> = [&out.stderr, &out.stdout].iter().map(|b| String::from_utf8_lossy(b).trim().to_string()).filter(|t| !t.is_empty()).collect();
+        return Err(format!("git {} failed: {}", args.join(" "), said.join("\n")));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -1108,6 +1110,26 @@ mod git_tests {
         // nothing only shown: the delivery is the steps' change, as before
         let (_, same) = copy.deliver_without(&[("change".to_string(), c.clone())], &|_| false).expect("delivered");
         assert_eq!(same, copy.head().expect("head"));
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    // The run's page shows git's own words under "▸ What git said" when a merge conflicts (T7, 23/11): git says the
+    // conflict on its standard output, not its errors, and a photo of the page showed "failed: ," with nothing after.
+    #[test]
+    fn a_merge_that_conflicts_says_what_git_said() {
+        let base = std::env::temp_dir().join(format!("jaynes-conflict-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = repo(&base);
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        std::fs::write(copy.dir.join("a.txt"), "b\n").expect("write");
+        let (_, tree) = copy.stage(&["**".to_string()]).expect("staged");
+        let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+        copy.deliver(&[("change".to_string(), c)]).expect("delivered");
+        std::fs::write(source.join("a.txt"), "c\n").expect("write");
+        git(&source, &["commit", "-q", "-am", "the person's"]).expect("commit");
+        let e = copy.merge(&copy.head().expect("head"), "r").expect_err("a conflict");
+        assert!(e.starts_with("it conflicts with what main has now: ") && e.contains("CONFLICT (content): Merge conflict in a.txt"), "{e}");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "c\n", "the folder as it was");
         let _gone = std::fs::remove_dir_all(&base);
     }
 
