@@ -911,6 +911,81 @@ mod git_tests {
         (base, copy, m)
     }
 
+    /// A project as `git init` leaves it, with no commit yet: its branch, main, born by no commit.
+    fn unborn(name: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("jaynes-unborn-{name}-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let source = base.join("source");
+        std::fs::create_dir_all(&source).expect("dir");
+        git(&source, &["init", "-q", "-b", "main"]).expect("init");
+        (base, source)
+    }
+
+    /// The run's change in a project with no commit: a.txt, written in the copy and delivered.
+    fn delivered_over_nothing(copy: &Copy) -> String {
+        std::fs::write(copy.dir.join("a.txt"), "a\n").expect("write");
+        let (changed, tree) = copy.stage(&["**".to_string()]).expect("staged");
+        assert_eq!(changed.iter().map(|c| c.what.as_str()).collect::<Vec<_>>(), ["a.txt"]);
+        let c = copy.commit_tree(&tree, &copy.base().expect("base"), "change").expect("commit").expect("a change");
+        copy.deliver(&[("change".to_string(), c)]).expect("delivered");
+        copy.head().expect("head")
+    }
+
+    #[test]
+    fn asked_a_run_starts_in_a_project_with_no_commit_and_its_merge_is_the_project_s_first_commit() {
+        let (base, source) = unborn("merge");
+        // the real-user's start of 23/11: "git rev-parse HEAD failed: fatal: ambiguous argument 'HEAD'"
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("a copy of a project with no commit");
+        assert_eq!(copy.tree_of(&copy.base().expect("base")).expect("tree"), git(&source, &["hash-object", "-t", "tree", "/dev/null"]).expect("empty"),
+                   "the run starts from the empty tree");
+        assert_eq!(git(&copy.dir, &["status", "--porcelain"]).expect("the agent's git status works"), "");
+        let head = delivered_over_nothing(&copy);
+        let merged = copy.merge(&head, "r").expect("merged").expect("a merge");
+        // the merge is main's first commit, with the run's files and no commit of Jaynes's under it
+        assert_eq!(git(&source, &["rev-parse", "main"]).expect("main"), merged);
+        assert_eq!(git(&source, &["log", "--format=%s", "main"]).expect("log"), "Jaynes: run r, merged");
+        assert_eq!(git(&source, &["ls-tree", "--name-only", "main"]).expect("files"), "a.txt");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("the checkout has it"), "a\n");
+        assert_eq!(git(&source, &["status", "--porcelain"]).expect("status"), "");
+        // merged again, as a process that died after landing does: the same merge, no second commit
+        assert_eq!(copy.merge(&head, "r").expect("again"), Some(merged.clone()));
+        assert_eq!(git(&source, &["rev-list", "--count", "main"]).expect("count"), "1");
+        // and Undo takes the files away again
+        Workspace::undo(&copy, std::slice::from_ref(&merged), "r").expect("undone");
+        assert!(!source.join("a.txt").exists(), "undone");
+        assert_eq!(git(&source, &["ls-tree", "--name-only", "main"]).expect("files"), "");
+        let again = Workspace::undo(&copy, std::slice::from_ref(&merged), "r").expect("again");
+        assert!(again.contains("already undone"), "{again}");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_first_merge_never_writes_over_a_file_the_person_has_and_never_committed() {
+        let (base, source) = unborn("untracked");
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        std::fs::write(source.join("a.txt"), "mine\n").expect("write");
+        let head = delivered_over_nothing(&copy);
+        let refused = copy.merge(&head, "r");
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(std::fs::read_to_string(source.join("a.txt")).expect("read"), "mine\n", "the person's file is untouched");
+        assert!(git(&source, &["rev-parse", "-q", "--verify", "refs/heads/main"]).is_err(), "main is still unborn");
+        // the branch is delivered all the same
+        assert_eq!(git(&source, &["show", "jaynes/r:a.txt"]).expect("the branch"), "a");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_first_merge_lands_on_a_branch_not_checked_out() {
+        let (base, source) = unborn("elsewhere");
+        let copy = Copy::make(&source, &base.join("run/project"), "jaynes/r").expect("made");
+        let head = delivered_over_nothing(&copy);
+        git(&source, &["symbolic-ref", "HEAD", "refs/heads/other"]).expect("on another unborn branch");
+        let merged = copy.merge(&head, "r").expect("merged").expect("a merge");
+        assert_eq!(git(&source, &["rev-parse", "main"]).expect("main"), merged);
+        assert!(!source.join("a.txt").exists(), "the checkout, on another branch, is untouched");
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn undo_refuses_when_what_it_would_touch_changed_since_the_run_merged() {
         let (base, copy, m) = merged("changed");
