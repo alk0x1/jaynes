@@ -1930,7 +1930,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         },
         lead = if leave { changes } else { "" },
         // at the merge what lands comes first, then the pair (the design-lead, 23/11, as the app's card)
-        mid = if merge { changes } else { "" },
+        mid = if merge && !changes.is_empty() { format!("<div class=\"lands\" id=\"lands\">{changes}</div>") } else { String::new() },
         tail = if leave || merge { "" } else { changes },
         strip = strip(run, gone),
         thread = thread_html(run, q),
@@ -2820,6 +2820,11 @@ async function post(path) {
   return r.json();
 }
 let timer = null;
+// the fade under what lands shows while more is below its ceiling
+const lands = document.getElementById("lands");
+const landsPre = lands && lands.querySelector("pre.diff");
+function landsMore() { if (landsPre) lands.classList.toggle("more", landsPre.scrollTop + landsPre.clientHeight < landsPre.scrollHeight - 2); }
+if (landsPre) { landsPre.addEventListener("scroll", landsMore); addEventListener("resize", landsMore); landsMore(); }
 let tried = false;
 document.addEventListener("click", e => { if (e.target.closest && e.target.closest("button[data-v], #send, .bringt")) tried = true; }, true);
 document.addEventListener("input", e => { if (e.target.matches && e.target.matches(".note, .adjust, #ctx")) tried = true; }, true);
@@ -3166,6 +3171,10 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 .effects { position:fixed; left:280px; right:0; bottom:0; background:rgba(14,18,24,.97); border-top:1px solid var(--line-2); padding:14px 32px; display:flex; gap:24px; align-items:flex-start; }
 .effects.hide { display:none; } .effects .what { flex:1; max-width:700px; } .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
 .effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; } .refused.hint { color:var(--faint); }
+/* at the merge, what lands has a ceiling and scrolls inside, its bottom edge faded while more is below, so the pair
+   and File by file show without scrolling the page (the design-lead, 23/11) */
+.lands pre.diff { max-height:max(180px, 36vh); overflow:auto; } .lands .changes { position:relative; }
+.lands.more .changes::after { content:""; position:absolute; left:1px; right:1px; bottom:1px; height:40px; border-radius:0 0 6px 6px; background:linear-gradient(rgba(7,9,13,0), var(--bg)); pointer-events:none; }
 .send { background:var(--blue); color:#04121f; border:0; border-radius:10px; padding:10px 22px; font-weight:600; } .send:disabled { background:var(--line-2); color:var(--faint); cursor:default; }
 </style></head><body>
 <div class="top"><b>Jaynes</b><span style="color:var(--dim);font-size:13px">the new engine</span><nav class="nav"><a href="/home">Home</a><a href="/new">New run</a><a href="/setup">Setup</a></nav></div>
@@ -3829,6 +3838,11 @@ mod tests {
         let q = run.questions.get("merge-1").expect("the merge");
         let html = question_html(&run, q, &|_| String::new(), "<div class=\"changes\">LANDS</div>", "main", "", false, None, &[]);
         assert!(html.find("LANDS").expect("what lands") < html.find("data-all").expect("the pair"), "{html}");
+        // what lands has a ceiling and scrolls inside, so the pair and File by file show without scrolling the page
+        // (the design-lead, 23/11: ~36vh, never under 180 px, its bottom edge faded while more is below)
+        assert!(html.contains("<div class=\"lands\" id=\"lands\"><div class=\"changes\">LANDS</div></div>"), "{html}");
+        assert!(PAGE.contains(".lands pre.diff { max-height:max(180px, 36vh); overflow:auto; }"), "the ceiling");
+        assert!(SCRIPT.contains("lands.classList.toggle(\"more\""), "the fade while more is below");
         // before any try, no refusal in red: at the merge one faint line says what to do (the design-lead's words)
         assert!(asked.contains("\"merge\":true"), "the script knows it is the merge");
         assert!(SCRIPT.contains("Merge, or keep it on the branch only."), "the merge's hint");
