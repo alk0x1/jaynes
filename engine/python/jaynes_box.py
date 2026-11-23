@@ -172,6 +172,7 @@ class Box:
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
     browser: Path | None = None  # the one browser it may start, with its bundle's helpers: a photograph's Chrome
     hide_home: bool = False  # the whole home hidden but for its readable and writable folders: an agent's commands
+    jaynes_chrome: str = ""  # the Chrome Jaynes photographs with, when the box's own environment does not name it
     # places its commands only look up, such as the folders of its PATH: their own metadata and that of every folder
     # and link on the way to them, never what they hold
     looked_up: tuple[Path, ...] = ()
@@ -287,26 +288,31 @@ def _chrome_socket() -> list[str]:
 
 def _browsers_denied(box: Box) -> list[str]:
     """No command starts the person's browsers, nor what their bundles hold (Chrome starts its helpers from inside
-    its own). Let again: the browser the box was made for, with its bundle (a photograph's, a role's own script's:
-    the Chrome Jaynes photographs with), and a headless Chrome named in ``JAYNES_CHROME`` that is in no browser's
-    bundle, as the tests' own is; one named inside a browser's bundle starts only as the box's browser. A box that
-    starts only its agent program lets nothing again."""
+    its own). Let again only in the box made for a browser (a photograph's, a role's own script's): that browser,
+    with its bundle, and a headless Chrome named in ``JAYNES_CHROME`` that is in no browser's bundle. The Chrome
+    Jaynes photographs with (``JAYNES_CHROME``) starts in no other box (A4, the tech-lead's, 23/11), where an agent's
+    or a project's commands run, unless a browser tool installed it in its cache: then it is the project's own browser
+    as well, which every box starts and whose cache's profiles none reads. A box that starts only its agent program
+    lets nothing again."""
     held = browsers(box.home)
     lines = [f"(deny process-exec {_subpaths(held)})"]
     if box.runs:
+        return lines
+    headless = box.jaynes_chrome or os.environ.get("JAYNES_CHROME", "")
+    if box.browser is None:
+        installs = [os.path.realpath(i) for i in browser_installs(box.home)]
+        if headless and not any(Path(os.path.realpath(headless)).is_relative_to(i) for i in installs):
+            lines.append(f"(deny process-exec {_literals(dict.fromkeys((headless, os.path.realpath(headless))))})")
         return lines
     def bundle(named: str) -> Path | None:
         real = Path(os.path.realpath(named))
         return next((Path(os.path.realpath(b)) for b in held if real.is_relative_to(os.path.realpath(b))), None)
     let = []
-    headless = os.environ.get("JAYNES_CHROME", "")
     if headless and bundle(headless) is None:
         let.append(Path(os.path.realpath(headless)))
-    if box.browser is not None:
-        let.append(bundle(str(box.browser)) or Path(os.path.realpath(box.browser)))
-    if let:
-        lines.append("(allow process-exec " + " ".join(f"(subpath {_lit(p)})" if p.is_dir() else f"(literal {_lit(p)})"
-                                                       for p in let) + ")")
+    let.append(bundle(str(box.browser)) or Path(os.path.realpath(box.browser)))
+    lines.append("(allow process-exec " + " ".join(f"(subpath {_lit(p)})" if p.is_dir() else f"(literal {_lit(p)})"
+                                                   for p in let) + ")")
     return lines
 
 
@@ -2272,7 +2278,8 @@ def agent_box(spec: dict[str, Any]) -> tuple[Box, Path, Path, dict[str, str]]:
     b = Box(writable, hidden=tuple(Path(p) for p in spec.get("hidden") or ()), hide_home=True, local=True,
             readable=(work, *(Path(p) for p in spec.get("readable") or ()), LISTEN_PRELOAD), reserved=ports,
             local_ports=local_ports,
-            any_port=anyone, window=servers_window() if own else (), home=home, looked_up=_places(started))
+            any_port=anyone, window=servers_window() if own else (), home=home, looked_up=_places(started),
+            jaynes_chrome=str(spec.get("jaynes_chrome") or ""))
     return b, _agent_start(work, pwd), pwd, {**started, "JAYNES_PORTS": ",".join(map(str, ports))}
 
 

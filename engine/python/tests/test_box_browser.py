@@ -71,14 +71,33 @@ class TheBoxStartsNoBrowserOfThePerson(unittest.TestCase):
         code, said = self.run_in(b, self.other / "Contents/MacOS/browser")
         self.assertNotEqual(code, 0, said)
 
-    def test_a_headless_chrome_outside_every_browser_starts_in_every_box_and_a_browser_named_inside_one_does_not(self):
+    def test_jaynes_chrome_starts_only_in_a_photograph_s_box_and_a_role_s_script_s_and_a_browser_named_inside_one_in_none_else(self):
+        # A4 (the tech-lead's, 23/11): the Chrome Jaynes photographs with never runs where an agent's or a project's
+        # commands run, only in the box made for it
         headless = self.tmp / "headless" / "chrome-headless-shell"
         headless.parent.mkdir()
         headless.write_text("#!/bin/sh\necho 'headless ran'\n")
         headless.chmod(0o755)
-        # the tests' own headless shell, outside any browser's bundle
-        code, said = self.run_in(box.Box((self.work,), local=True), headless, {"JAYNES_CHROME": str(headless)})
-        self.assertEqual(code, 0, said)
+        named = {"JAYNES_CHROME": str(headless)}
+        for b in (box.Box((self.work,)), box.Box((self.work,), local=True), box.Box((self.work,), local=True, any_port=True),
+                  box.Box((self.work,), local=True, hide_home=True, home=self.tmp / "home")):
+            code, said = self.run_in(b, headless, named)
+            self.assertNotEqual(code, 0, f"{headless} ran in {b}: {said}")
+            self.assertNotIn("ran", said)
+        self.assertEqual(self.run_in(box.Box((self.work,), browser=headless), headless, named), (0, "headless ran\n"))
+        with mock.patch.dict(os.environ, named):
+            ran = box.run(self.work, shlex.quote(str(headless)), browser=True)
+            self.assertEqual((ran.code, ran.printed), (0, "headless ran\n"))
+            self.assertNotEqual(box.run(self.work, shlex.quote(str(headless))).code, 0)
+        # the agent's box, from the spec agent.rs writes: denied by the name the engine gives, though the environment
+        # of Claude Code's shell does not carry JAYNES_CHROME
+        env = {k: v for k, v in os.environ.items() if k != "JAYNES_CHROME"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            b, _, _, _ = box.agent_box({"work": str(self.work), "writable": [str(self.work)], "pwd": str(self.tmp / "pwd"),
+                                        "home": str(self.tmp / "home"), "jaynes_chrome": str(headless)})
+            code, said = self.run_in(b, headless)
+        self.assertNotEqual(code, 0, said)
+        self.assertNotIn("ran", said)
         # the person's browser named in JAYNES_CHROME: a project's suite and a check's commands still start none of it
         named = {"JAYNES_CHROME": str(self.mine / "Contents/MacOS/browser")}
         for b in (box.Box((self.work,), local=True), box.Box((self.work,), local=True, any_port=True)):
@@ -86,6 +105,17 @@ class TheBoxStartsNoBrowserOfThePerson(unittest.TestCase):
                 code, said = self.run_in(b, program, named)
                 self.assertNotEqual(code, 0, f"{program}: {said}")
                 self.assertNotIn("ran", said)
+
+    def test_jaynes_chrome_installed_by_playwright_is_also_the_project_s_browser_and_starts_where_the_project_s_do(self):
+        # the headless shell a browser tool installed, as the board's rule 9 names it: the same program is the
+        # project's own browser, which both boxes start (they read no profile of the tool's cache)
+        home = self.tmp / "home"
+        shell = home / "Library/Caches/ms-playwright/chromium_headless_shell-1255/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+        shell.parent.mkdir(parents=True)
+        shell.write_text("#!/bin/sh\necho 'headless ran'\n")
+        shell.chmod(0o755)
+        for b in (box.Box((self.work,), local=True, home=home), box.Box((self.work,), local=True, hide_home=True, home=home)):
+            self.assertEqual(self.run_in(b, shell, {"JAYNES_CHROME": str(shell)}), (0, "headless ran\n"), b)
 
     def test_a_role_s_own_scripts_start_the_chrome_jaynes_photographs_with_and_a_suite_starts_none(self):
         # a Mac without JAYNES_CHROME, its Chrome where macOS keeps apps (a stand-in here): a role's script check

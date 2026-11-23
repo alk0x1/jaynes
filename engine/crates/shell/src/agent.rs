@@ -918,6 +918,9 @@ pub fn box_spec(spec: &Spec<'_>, python: &Path, library: &Path) -> Value {
         // the run's start environment, as the check's commands inherit it from the engine: Claude Code's shell gives
         // the agent's commands a PATH of its own, without the person's toolchains
         "env": crate::drive::started_env(),
+        // the Chrome Jaynes photographs with, which the agent's commands never start (A4): its box denies it by name,
+        // since the environment of Claude Code's shell may not carry JAYNES_CHROME, and never hands it to a command
+        "jaynes_chrome": std::env::var("JAYNES_CHROME").unwrap_or_default(),
     });
     // a step that installs packages reaches their hosts through Jaynes's proxy, the only address its box reaches
     if reach.network == Network::Packages {
@@ -1787,6 +1790,9 @@ mod tests {
         assert_eq!(s["readable"], json!(["/deps/lib"]));
         assert_eq!((&s["local_ports"], &s["test_servers"], &s["any_port"]), (&json!([5432]), &json!(true), &json!(false)));
         assert_eq!((&s["python"], &s["box"]), (&json!("/py"), &json!("/lib/jaynes_box.py")));
+        // the Chrome Jaynes photographs with, by name, for the box to deny it (A4), never in the commands' env
+        assert_eq!(s["jaynes_chrome"], json!(std::env::var("JAYNES_CHROME").unwrap_or_default()));
+        assert!(s["env"].get("JAYNES_CHROME").is_none(), "{s}");
         // the agent's commands run with the PATH and the toolchains' places a check's commands run with (the
         // real-user's runs of 22/11: "node" and "go" not found in the agent's session, found by the check)
         assert_eq!(s["env"]["PATH"], json!(std::env::var("PATH").expect("PATH")));
