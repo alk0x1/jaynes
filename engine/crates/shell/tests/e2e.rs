@@ -2621,16 +2621,28 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
     std::fs::create_dir_all(&prompts).expect("dir");
     // first turn: it cannot be done as asked; second turn, in the same session: it does what the person said
     let agent = format!(
-        "cat > {p}/turn-${{JAYNES_SESSION:-1}}; if [ -n \"$JAYNES_SESSION\" ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else echo 'the request asks for hi and for hello at once' > .jaynes/impossible.txt; echo '{{\"session\":\"s1\"}}'; fi",
+        "cat > {p}/turn-${{JAYNES_SESSION:-1}}; if [ -n \"$JAYNES_SESSION\" ]; then perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}; else echo 'the request asks for hi and for hello at once' > .jaynes/impossible.txt; printf -- '- only hi\\n- only hello\\n' > .jaynes/options.txt; echo '{{\"session\":\"s1\"}}'; fi",
         p = prompts.display()
     );
     let out = start(&s, "impossible", &agent);
     assert!(out.contains("cannot be done as asked"), "{out}");
+    assert!(out.contains("option: only hi") && out.contains("option: only hello"), "a terminal shows the ways the agent offers: {out}");
     let first = std::fs::read_to_string(prompts.join("turn-1")).expect("prompt");
     assert!(first.contains(".jaynes/impossible.txt"), "the agent is told the way out: {first}");
+    assert!(first.contains(".jaynes/options.txt"), "and where it writes the ways it asks the person to choose from: {first}");
     let e = events(&s, "impossible");
     assert!(e.iter().any(|e| e["type"] == "AttemptImpossible"), "{:?}", types(&e));
-    let q = e.iter().rfind(|e| e["type"] == "InputNeeded").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let asked = &e.iter().rfind(|e| e["type"] == "InputNeeded").expect("asked")["question"];
+    assert_eq!(asked["items"][0]["options"], serde_json::json!(["only hi", "only hello"]), "the agent's options reach the stop: {asked}");
+    let q = asked["id"].as_str().expect("id").to_string();
+    // the real user at estoque (22/11): a Send with nothing marked never keeps the agent's own words as the person's
+    let nothing = tty()
+        .args([BIN, "answer", "impossible", &q, "--send"])
+        .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
+        .output().expect("answer");
+    let said = format!("{}{}", String::from_utf8_lossy(&nothing.stdout), String::from_utf8_lossy(&nothing.stderr));
+    assert!(!nothing.status.success() && said.contains("waits for your answer: take one of the agent's options"), "{said}");
+    assert!(!events(&s, "impossible").iter().any(|e| e["type"] == "AnswerRecorded"), "nothing is recorded");
     let answered = tty()
         .args([BIN, "answer", "impossible", &q, "impossible=change:only hi", "--send"])
         .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "")
@@ -2646,6 +2658,9 @@ fn an_agent_that_says_it_cannot_be_done_waits_for_the_person_and_goes_on_from_th
     }
     let e = events(&s, "impossible");
     assert!(finished, "{:?}", types(&e));
+    let took = e.iter().find(|e| e["type"] == "AnswerRecorded").expect("answered");
+    assert_eq!(took["answer"]["by"]["by"], "person", "{took}");
+    assert!(took["effects"]["sentences"][0].as_str().is_some_and(|x| x.ends_with("goes on with the agent's option you took: “only hi”.")), "{took}");
     let second = std::fs::read_to_string(prompts.join("turn-s1")).expect("the second turn resumed the session");
     assert!(second.contains("only hi"), "{second}");
     let spent: u64 = e.iter().filter(|e| e["type"] == "AttemptFailed" && e["spent"] == true).count() as u64;

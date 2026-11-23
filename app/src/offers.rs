@@ -106,7 +106,7 @@ mod tests {
     }
 
     fn stack(offers: Vec<Offered>) -> Stop {
-        let item = |id: &str| Item { id: id.into(), label: format!("The {id}"), detail: String::new(), aspects: vec![], pictures: vec![], page: None };
+        let item = |id: &str| Item { id: id.into(), label: format!("The {id}"), detail: String::new(), aspects: vec![], pictures: vec![], page: None, options: vec![] };
         Stop {
             run: "r".into(),
             question: "q1".into(),

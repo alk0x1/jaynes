@@ -67,6 +67,11 @@ pub struct Item {
     /// the run for it when the role's check vouched for them ([`crate::manifest::StopDecl::holds_unless`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub named: Option<Named>,
+    /// What the agent offers the person to answer this item with, each a sentence they may take by a click as their
+    /// own words (a Change with it): at a stop where it says the step cannot be done as asked, the ways it asks them
+    /// to choose from. Empty when it offers none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 /// Where an option was named before it was made: the words, copied from the request or the brief.

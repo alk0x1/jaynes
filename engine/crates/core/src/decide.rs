@@ -916,6 +916,7 @@ impl Ctx {
             .iter()
             .map(|(c, _)| Item {
                 named: None,
+                options: Vec::new(),
                 id: c.what.clone(),
                 label: if c.about.is_empty() { c.what.clone() } else { format!("{}: {}", c.what, c.about) },
                 digest: c.digest.clone().map(Digest).unwrap_or_else(|| Digest::of_json(c)),
@@ -1195,7 +1196,7 @@ impl Ctx {
                 self.command(Command::Ask { question });
                 self.wait(Some(step.to_string()), on, "the role asks you something before it goes on".to_string());
             }
-            AttemptOutcome::Impossible { reason, usage, session } => {
+            AttemptOutcome::Impossible { reason, usage, session, options } => {
                 if role {
                     return refuse("only an agent says a step cannot be done; a role step refuses");
                 }
@@ -1205,7 +1206,7 @@ impl Ctx {
                     step: step.to_string(),
                     round: self.run.steps[i].round,
                     kind: QuestionKind::Decision,
-                    items: vec![Item { named: None, id: "impossible".to_string(), label: reason.clone(), digest: Digest::of_json(reason) }],
+                    items: vec![Item { named: None, options: options.clone(), id: "impossible".to_string(), label: reason.clone(), digest: Digest::of_json(reason) }],
                     offered: vec![VerdictKind::Change, VerdictKind::Redo],
                     holds: true,
                     about: format!("{step} says it cannot be done as asked"),
@@ -1578,7 +1579,7 @@ impl Ctx {
             step: step.to_string(),
             round: self.run.steps[i].round,
             kind: QuestionKind::Permission,
-            items: vec![Item { named: None, id: "leave".to_string(), label: about.clone(), digest: Digest::of_json(ask) }],
+            items: vec![Item { named: None, options: Vec::new(), id: "leave".to_string(), label: about.clone(), digest: Digest::of_json(ask) }],
             offered: vec![VerdictKind::Keep, VerdictKind::Drop],
             holds: true,
             about,
@@ -1659,10 +1660,17 @@ impl Ctx {
             if !q.question.offered.contains(&v.kind()) {
                 return refuse(format!("the verdict {:?} is not offered here", v.kind()));
             }
-            match v {
-                Verdict::Change { text } if text.trim().is_empty() => return refuse("say what to change"),
-                _ => {}
+            if let Verdict::Change { text } = v
+                && text.trim().is_empty()
+                && let Some(item) = q.question.items.iter().find(|x| &x.id == id)
+            {
+                return refuse(wordless(&q.question, answer, item));
             }
+        }
+        // an item left out is kept, which only stands for the person's answer where keeping is offered: never the
+        // agent's own words at a stop that asks how to go on (the real user at estoque, 22/11)
+        if let Some(item) = q.question.items.iter().find(|x| !answer.verdicts.contains_key(&x.id) && !q.question.offered.contains(&VerdictKind::Keep)) {
+            return refuse(unanswered(&q.question, item));
         }
         if q.question.kind == QuestionKind::Decision && answer.by.person() && answer.sends_back() {
             let redo = self.run.manifest.index(&q.question.step).and_then(|i| self.run.manifest.steps[i].stop.as_ref()).is_some_and(|s| s.redo.is_some());
@@ -1783,7 +1791,7 @@ impl Ctx {
             step: name.clone(),
             round: self.run.steps[i].round,
             kind: QuestionKind::Acted,
-            items: vec![Item { named: None, id: name.clone(), label: format!("what {name} did"), digest: output }],
+            items: vec![Item { named: None, options: Vec::new(), id: name.clone(), label: format!("what {name} did"), digest: output }],
             // an act whose checks did not pass cannot be kept as done: only a second act, or the person stops the run
             offered: if self.run.steps[i].status == Status::Done { vec![VerdictKind::Keep, VerdictKind::Redo] } else { vec![VerdictKind::Redo] },
             holds: true,
@@ -1930,7 +1938,7 @@ fn maker(run: &Run, i: usize) -> Option<usize> {
 
 /// An item that stands for a step's whole output.
 fn whole(step: &str, output: Option<&Digest>) -> Item {
-    Item { named: None, id: step.to_string(), label: format!("what {step} made"), digest: output.cloned().unwrap_or_default() }
+    Item { named: None, options: Vec::new(), id: step.to_string(), label: format!("what {step} made"), digest: output.cloned().unwrap_or_default() }
 }
 
 fn describe_ask(ask: &Ask) -> String {
@@ -2037,6 +2045,32 @@ pub const SHORTLISTED: &str = "Shortlisted: develop it further, keeping what it 
 /// The same note before the word was "shortlisted": answers recorded then, and the page, still carry it.
 const FINALIST_NOTE: &str = "A finalist: develop it further, keeping what it is.";
 
+/// What a Change with no words says, and why it is refused: the same sentence the person read before sending.
+fn wordless(q: &Question, answer: &Answer, item: &Item) -> String {
+    let not_yet = q.one_option() && answer.choice(q) == Some(Choice::One);
+    let label = if q.one_option() { item.name() } else { item.label.as_str() };
+    if not_yet {
+        format!("“{label}” is not chosen yet: write what to ask or change.")
+    } else if q.choose {
+        format!("“{label}” is chosen and adjusted: say how in its field.")
+    } else {
+        format!("“{label}” is changed: say how in its field.")
+    }
+}
+
+/// What an item left out says where keeping it is not offered, and why such an answer is refused: nothing stands for
+/// the person's answer there, least of all the agent's own words.
+fn unanswered(q: &Question, item: &Item) -> String {
+    let label = if q.one_option() { item.name() } else { item.label.as_str() };
+    if !item.options.is_empty() {
+        format!("“{label}” waits for your answer: take one of the agent's options, or say how to go on in its field.")
+    } else if q.offered.contains(&VerdictKind::Change) {
+        format!("“{label}” waits for your answer: say how to go on in its field.")
+    } else {
+        format!("“{label}” waits for your answer: keeping it as it is is not offered here.")
+    }
+}
+
 /// What a shortlisted option does, in one sentence: "“Harbor” is shortlisted: the agent develops it further, keeping
 /// what it is. Its palette stays."; a note of the person's own goes in as they wrote it, never as a quote in a quote.
 fn shortlisted(label: &str, text: &str) -> String {
@@ -2115,11 +2149,11 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
         // one option is asked by its name, as its title asks "Go with “name”?": what an answer does names it so too
         let label = if q.one_option() { item.name() } else { item.label.as_str() };
         sentences.push(match (&v, person) {
+            (Verdict::Keep, _) if !q.offered.contains(&VerdictKind::Keep) => unanswered(q, item),
             (Verdict::Keep, _) if q.choose => format!("“{label}” is chosen: no later round of {} may change it.", q.step),
             (Verdict::Change { text }, _) if q.choose && answer.choice(q) == Some(Choice::Finalists) => shortlisted(label, text),
-            (Verdict::Change { text }, _) if not_yet && text.trim().is_empty() => format!("“{label}” is not chosen yet: write what to ask or change."),
+            (Verdict::Change { text }, _) if text.trim().is_empty() => wordless(q, answer, item),
             (Verdict::Change { text }, _) if not_yet => format!("“{label}” is not chosen yet: your words go to the agent at “{by}”: “{text}”."),
-            (Verdict::Change { text }, _) if q.choose && text.trim().is_empty() => format!("“{label}” is chosen and adjusted: say how in its field."),
             (Verdict::Change { text }, _) if q.choose => format!("“{label}” is chosen, and is adjusted as you wrote: “{text}”."),
             (Verdict::Drop, _) if q.choose => format!("“{label}” leaves the running: it does not come back as an option unless you bring it back."),
             (Verdict::Keep, false) if answer.by.person() => format!("“{label}” is kept: no later round of {} may change it.", q.step),
@@ -2127,7 +2161,7 @@ pub fn effects(run: &Run, q: &Question, answer: &Answer) -> Effects {
             (Verdict::Keep, true) => format!("“{label}” is accepted."),
             (Verdict::Skip, _) => format!("“{label}” stays as it was made, and is not judged."),
             (Verdict::Drop, _) => format!("“{label}” is dropped: it does not come back in this run unless you bring it back."),
-            (Verdict::Change { text }, _) if text.trim().is_empty() => format!("“{label}” is changed: say how in its field."),
+            (Verdict::Change { text }, _) if item.options.iter().any(|o| o.trim() == text.trim()) => format!("“{label}” goes on with the agent's option you took: “{}”.", text.trim()),
             (Verdict::Change { text }, _) => format!("“{label}” is changed as you wrote: “{text}”."),
             (Verdict::Redo { .. }, _) => format!("“{label}” is done again, with your note."),
         });

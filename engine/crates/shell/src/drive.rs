@@ -948,6 +948,12 @@ fn remove_all(dir: &Path) -> std::io::Result<()> {
 
 /// Where an agent writes why a step cannot be done as asked, in its exchange folder.
 const IMPOSSIBLE: &str = "impossible.txt";
+/// Where an agent that says a step cannot be done as asked writes the ways it asks the person to choose from, one a
+/// line: each becomes theirs to take at the stop, as a button beside the field for their own words.
+const OPTIONS: &str = "options.txt";
+/// The most ways an agent offers at a stop, and the most characters of each.
+const OPTIONS_MOST: usize = 4;
+const OPTION_MOST: usize = 300;
 /// Where the agent writes its words to the person: beside the work a stop shows, never inside it, and a question's
 /// answer.
 const REPLY: &str = "reply.md";
@@ -986,6 +992,41 @@ pub fn reply_text(raw: &str) -> Option<String> {
     let mut cut: String = out.chars().take(REPLY_MOST - 1).collect::<String>().trim_end().to_string();
     cut.push('…');
     Some(cut)
+}
+
+/// The ways an agent offers the person, as they see them: one a line, a list's mark taken off ("- ", "* ", "• ",
+/// "1. ", "1) "), tabs as spaces, control characters and invisible marks taken out, blank lines and repeats left out,
+/// at most OPTIONS_MOST, each cut at OPTION_MOST with "…".
+pub fn options_of(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in raw.split(['\n', '\r']) {
+        let Some(line) = reply_text(line) else { continue };
+        let line = line.trim();
+        let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        // a mark is followed by a space or by nothing: "-5 °C" and "1.5 s" are words
+        let marked = |r: &'_ str| r.is_empty() || r.starts_with(' ');
+        let line = ["-", "*", "•"].iter().find_map(|m| line.strip_prefix(m).filter(|r| marked(r))).unwrap_or_else(|| {
+            (digits > 0).then(|| &line[digits..]).and_then(|r| r.strip_prefix('.').or_else(|| r.strip_prefix(')'))).filter(|r| marked(r)).unwrap_or(line)
+        });
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let line = if line.chars().count() <= OPTION_MOST {
+            line.to_string()
+        } else {
+            let mut cut: String = line.chars().take(OPTION_MOST - 1).collect::<String>().trim_end().to_string();
+            cut.push('…');
+            cut
+        };
+        if !out.contains(&line) {
+            out.push(line);
+        }
+        if out.len() == OPTIONS_MOST {
+            break;
+        }
+    }
+    out
 }
 
 /// What the agent wrote to the person in this turn's exchange, as words for them.
@@ -1735,6 +1776,7 @@ impl<'a> Driver<'a> {
         } else {
             let _gone = std::fs::remove_file(exchange.join("output.json"));
             let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
+            let _gone = std::fs::remove_file(exchange.join(OPTIONS));
             fix_prompt(&turn)
         };
         say(&format!("· {} attempt {}{}", turn.step, turn.attempt, if turn.fix > 0 { format!(", fix {}", turn.fix) } else { String::new() }));
@@ -1921,7 +1963,9 @@ impl<'a> Driver<'a> {
         {
             let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
             let reason: String = why.trim().chars().take(2000).collect();
-            return AttemptOutcome::Impossible { reason, usage, session };
+            let options = read_inside(root, &exchange.join(OPTIONS)).map(|t| options_of(&t)).unwrap_or_default();
+            let _gone = std::fs::remove_file(exchange.join(OPTIONS));
+            return AttemptOutcome::Impossible { reason, usage, session, options };
         }
         let text = match read_inside(root, &exchange.join("output.json")) {
             Ok(t) => t,
@@ -2317,9 +2361,13 @@ impl<'a> Driver<'a> {
         }
         for item in &q.items {
             say(&format!("  - {}", item_line(&item.id, &item.label, ": ")));
+            for o in &item.options {
+                say(&format!("      option: {o}"));
+            }
         }
         let offered: Vec<String> = q.offered.iter().map(|v| format!("{v:?}").to_lowercase()).collect();
-        say(&format!("  answer: jaynes answer {} {} [item=verdict] ({})", run.id, q.id, offered.join(", ")));
+        let take = if q.items.iter().any(|x| !x.options.is_empty()) { "; an option is taken as a change with its words" } else { "" };
+        say(&format!("  answer: jaynes answer {} {} [item=verdict] ({}{take})", run.id, q.id, offered.join(", ")));
     }
 }
 
@@ -2327,6 +2375,7 @@ fn write_exchange(exchange: &Path, given: &[Given], previous: Option<&Value>) ->
     let _gone = std::fs::remove_dir_all(exchange.join("inputs"));
     let _gone = std::fs::remove_file(exchange.join("output.json"));
     let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
+    let _gone = std::fs::remove_file(exchange.join(OPTIONS));
     let _gone = std::fs::remove_file(exchange.join("previous.json"));
     let _gone = std::fs::remove_file(exchange.join(REPLY));
     std::fs::create_dir_all(exchange.join("inputs")).map_err(|e| format!("Jaynes cannot write {}: {e}", exchange.display()))?;
@@ -2433,7 +2482,9 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
     p.push_str(
         "# If it cannot be done as asked\n\nIf the request contradicts itself, needs something you cannot reach, or could pass \
          the checks only by gaming them, do not write an output. Write why, in a few plain sentences, to \
-         .jaynes/impossible.txt. The person reads it and tells you how to go on; it costs you no attempt. Never write \
+         .jaynes/impossible.txt. The person reads it and tells you how to go on; it costs you no attempt. If you ask them \
+         to choose how to go on, write each way to .jaynes/options.txt, one a line, at most four, each a short sentence \
+         in their language that they can take as their answer as it stands: they see each as a button. Never write \
          an output you know is wrong to get past the checks.\n\nA command that fails with \"Operation not permitted\", \
          \"Permission denied\" or EPERM was most likely refused by Jaynes's box, not by the project: never change the \
          project's tests or code to get around it (another port, a test removed, skipped or rewritten to need less); write \
@@ -3258,6 +3309,18 @@ mod tests {
         let cut = reply_text(&long).expect("cut");
         assert_eq!(cut.chars().count(), REPLY_MOST);
         assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn the_ways_an_agent_offers_read_one_a_line_without_their_list_marks() {
+        let raw = "- Keep the fake database on a free port\r\n\n* Leave 5432 free\n1. Ask me again later\n2) Ask me again later\n• \u{202e}Drop it\n12 tests pass\nOne more\n";
+        assert_eq!(options_of(raw), vec!["Keep the fake database on a free port", "Leave 5432 free", "Ask me again later", "Drop it"], "blank lines and repeats left out, at most four");
+        assert_eq!(options_of("12 tests pass, as they do now"), vec!["12 tests pass, as they do now"], "a number that is no list mark stays");
+        assert_eq!(options_of(" \n- \n"), Vec::<String>::new());
+        assert_eq!(options_of("-5 °C at night\n1.5 s is enough"), vec!["-5 °C at night", "1.5 s is enough"], "a sign or a decimal is no mark");
+        let long = options_of(&"é".repeat(OPTION_MOST + 10));
+        assert_eq!(long[0].chars().count(), OPTION_MOST);
+        assert!(long[0].ends_with('…'));
     }
 
     #[test]

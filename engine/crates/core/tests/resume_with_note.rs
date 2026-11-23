@@ -82,7 +82,7 @@ fn turn(cmds: &[Command]) -> AgentTurn {
 }
 
 fn items() -> Vec<Item> {
-    ["go", "next"].iter().map(|id| Item { named: None, id: id.to_string(), label: id.to_string(), digest: Digest(format!("{id}-d")) }).collect()
+    ["go", "next"].iter().map(|id| Item { named: None, options: Vec::new(), id: id.to_string(), label: id.to_string(), digest: Digest(format!("{id}-d")) }).collect()
 }
 
 /// The turn delivers in `session`, having used `tokens`, and its checks pass: the person is asked.

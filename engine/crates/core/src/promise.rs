@@ -336,13 +336,13 @@ struct Move {
 /// deliver the same kind of change deliver the same output, so their runs meet again.
 fn output(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     let d = Digest(format!("{step}.{round}.{what}"));
-    (d.clone(), vec![Item { named: None, id: "output".into(), label: format!("what {step} made"), digest: d }])
+    (d.clone(), vec![Item { named: None, options: Vec::new(), id: "output".into(), label: format!("what {step} made"), digest: d }])
 }
 
 /// An output of options, for a stop that chooses: two of them, so a choice leaves one.
 fn options(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     let d = Digest(format!("{step}.{round}.{what}"));
-    let item = |id: &str| Item { named: None, id: id.into(), label: format!("option {id} of {step}"), digest: Digest(format!("{step}.{round}.{what}.{id}")) };
+    let item = |id: &str| Item { named: None, options: Vec::new(), id: id.into(), label: format!("option {id} of {step}"), digest: Digest(format!("{step}.{round}.{what}.{id}")) };
     (d, vec![item("a"), item("b")])
 }
 
@@ -351,7 +351,7 @@ fn options(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
 fn named_one(step: &str, round: u32, what: &str) -> (Digest, Vec<Item>) {
     let d = Digest(format!("{step}.{round}.{what}.named"));
     let named = Some(crate::question::Named { words: "the request's words".into(), from: "request".into() });
-    (d.clone(), vec![Item { named, id: "named".into(), label: format!("the option of {step} the request named"), digest: d }])
+    (d.clone(), vec![Item { options: Vec::new(), named, id: "named".into(), label: format!("the option of {step} the request named"), digest: d }])
 }
 
 /// Whether the step's stop lets the run go on when the request named its one option.
@@ -395,7 +395,7 @@ fn agent_moves(turn: &AgentTurn, round: u32, risk: Risk, k: usize, r: &Run) -> V
         out.push(mv(ended(outcome), format!("{step} delivers the one option your request named"), false));
     }
     out.push(mv(ended(AttemptOutcome::Failed { reasons: vec!["no output".into()], usage: Usage::default() }), format!("{step}'s attempt fails"), false));
-    out.push(mv(ended(AttemptOutcome::Impossible { reason: "it cannot be done".into(), usage: Usage::default(), session: None }), format!("{step}'s agent says it cannot be done"), true));
+    out.push(mv(ended(AttemptOutcome::Impossible { reason: "it cannot be done".into(), usage: Usage::default(), session: None, options: Vec::new() }), format!("{step}'s agent says it cannot be done"), true));
     out.push(mv(ended(AttemptOutcome::Interrupted { usage: Default::default(), reason: "cut off".into() }), format!("{step}'s agent is cut off"), true));
     out.push(mv(ended(AttemptOutcome::Fault { usage: Default::default(), reason: "the agent did not start".into() }), format!("{step}'s agent does not start"), true));
     out

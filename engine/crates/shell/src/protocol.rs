@@ -244,7 +244,7 @@ impl ShownItem {
         } else {
             jaynes_core::Digest::of_json(&serde_json::json!({"content": self.content, "pictures": pictures}))
         };
-        jaynes_core::question::Item { named: self.named.clone(), id: self.id.clone(), label: self.label.clone(), digest }
+        jaynes_core::question::Item { named: self.named.clone(), options: Vec::new(), id: self.id.clone(), label: self.label.clone(), digest }
     }
 }
 

@@ -277,6 +277,9 @@ pub enum AttemptOutcome {
         usage: Usage,
         #[serde(default)]
         session: Option<String>,
+        /// The ways the agent asks the person to choose from, if it asks them to choose: each one theirs to take.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
     },
 }
 

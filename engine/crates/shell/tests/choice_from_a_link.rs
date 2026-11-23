@@ -70,7 +70,7 @@ fn choosing(home: &Path) -> String {
         let input = match c {
             Do::Probe { step, .. } => Input::ProbeEnded { step, ok: true, reason: String::new() },
             Do::RunAgent(t) => {
-                let items = ["Ink", "Sun", "Moss"].map(|n| Item { named: None, id: n.to_lowercase(), label: n.into(), digest: Digest(n.into()) }).to_vec();
+                let items = ["Ink", "Sun", "Moss"].map(|n| Item { named: None, options: Vec::new(), id: n.to_lowercase(), label: n.into(), digest: Digest(n.into()) }).to_vec();
                 Input::AttemptEnded { step: t.step, attempt: t.attempt, fix: 0, outcome: AttemptOutcome::Delivered { output: Digest("o".into()), items, changed: vec![], usage: Default::default(), session: None, tree: None, reply: None } }
             }
             Do::RunChecks { step, attempt, fix, checks, .. } => {

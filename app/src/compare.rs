@@ -1903,7 +1903,7 @@ mod tests {
     use jaynes_shell::stop::{Item, Stop};
 
     fn item(id: &str, label: &str) -> Item {
-        Item { id: id.into(), label: label.into(), detail: String::new(), aspects: vec![("Palette".into(), "cream, ink".into()), ("Fonts".into(), "a serif".into())], pictures: vec![], page: None }
+        Item { id: id.into(), label: label.into(), detail: String::new(), aspects: vec![("Palette".into(), "cream, ink".into()), ("Fonts".into(), "a serif".into())], pictures: vec![], page: None, options: vec![] }
     }
 
     /// A stop that chooses among `names`, invented.

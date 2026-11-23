@@ -82,7 +82,7 @@ fn settle(run: &mut Run, mut events: Vec<Event>, mut cmds: Vec<Command>) -> (Vec
 }
 
 fn item(id: &str, d: &str) -> Item {
-    Item { named: None, id: id.into(), label: id.into(), digest: Digest(d.into()) }
+    Item { named: None, options: Vec::new(), id: id.into(), label: id.into(), digest: Digest(d.into()) }
 }
 
 fn turn(cmds: &[Command]) -> AgentTurn {

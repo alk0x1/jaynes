@@ -19,6 +19,9 @@ pub struct Item {
     pub pictures: Vec<PathBuf>,
     /// The page the role kept of it, by name, served sandboxed by the page at `/page/<name>`.
     pub page: Option<String>,
+    /// What the agent offers the person to answer it with, each theirs to take by a click as their own words: a
+    /// Change with it ([`jaynes_core::question::Item::options`]). Drawn as buttons beside the field for their words.
+    pub options: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -454,7 +457,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
             .collect();
         let page = names.iter().find_map(|n| d["pages"][n.as_str()].as_str()).filter(|p| kept_page(p)).map(str::to_string);
         let pictures = names.iter().map(|name| home.join("pictures").join(name)).filter(|p| p.exists()).collect();
-        Item { id: it.id.clone(), label: it.label.clone(), detail: d["detail"].as_str().unwrap_or("").to_string(), aspects, pictures, page }
+        Item { id: it.id.clone(), label: it.label.clone(), detail: d["detail"].as_str().unwrap_or("").to_string(), aspects, pictures, page, options: it.options.clone() }
     };
     let items = q.question.items.iter().map(&shown).collect();
     let back = q.question.back.iter().map(&shown).collect();
@@ -628,7 +631,7 @@ mod tests {
     }
 
     fn asking(mut r: Run) -> Run {
-        let item = |id: &str, label: &str| QItem { named: None, id: id.into(), label: label.into(), digest: jaynes_core::Digest(format!("d-{id}")) };
+        let item = |id: &str, label: &str| QItem { named: None, options: Vec::new(), id: id.into(), label: label.into(), digest: jaynes_core::Digest(format!("d-{id}")) };
         let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![item("a", "Plan A"), item("b", "Plan B")],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo, VerdictKind::Drop], holds: true, about: "Which plan goes on?".into(),
@@ -707,7 +710,7 @@ mod tests {
     /// the run, which went on without the answer.
     fn went_on_from_reproduce(holds: bool) -> Run {
         let mut r = run(&[("reproduce", false), ("found", false), ("fix", false)], DeliveryKind::Branch);
-        let item = QItem { named: None, id: "examples".into(), label: "The examples".into(), digest: jaynes_core::Digest("d-examples".into()) };
+        let item = QItem { named: None, options: Vec::new(), id: "examples".into(), label: "The examples".into(), digest: jaynes_core::Digest("d-examples".into()) };
         let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision, items: vec![item],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds, about: "Is this the bug?".into(),
@@ -908,7 +911,7 @@ mod tests {
     fn leave(mut r: Run, about: &str) -> Run {
         let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Permission,
-            items: vec![QItem { named: None, id: "leave".into(), label: about.into(), digest: jaynes_core::Digest("d-leave".into()) }],
+            items: vec![QItem { named: None, options: Vec::new(), id: "leave".into(), label: about.into(), digest: jaynes_core::Digest("d-leave".into()) }],
             offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: about.into(),
             choose: false, pass: 0, passes: 0, back: vec![],
         };

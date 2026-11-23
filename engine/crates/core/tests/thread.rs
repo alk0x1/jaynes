@@ -82,7 +82,7 @@ fn deliver(run: &mut Run, t: &AgentTurn, output: &str, reply: Option<&str>) -> V
         fix: t.fix,
         outcome: AttemptOutcome::Delivered {
             output: Digest(output.into()),
-            items: vec![Item { named: None, id: "go".into(), label: "Go".into(), digest: Digest(format!("{output}-go")) }],
+            items: vec![Item { named: None, options: Vec::new(), id: "go".into(), label: "Go".into(), digest: Digest(format!("{output}-go")) }],
             changed: Vec::new(),
             usage: Usage::default(),
             session: Some("s1".into()),
@@ -121,7 +121,7 @@ fn asked_with(executor: Executor) -> (Run, Question) {
         _ if role_attempt.is_none() => {
             let (_, cmds) = feed(&mut run, Input::ProbeEnded { step: "look".into(), ok: true, reason: String::new() });
             let attempt = cmds.iter().find_map(|c| if let Command::RunRole { attempt, .. } = c { Some(*attempt) } else { None }).unwrap_or_else(|| panic!("no role turn: {cmds:?}"));
-            let item = Item { named: None, id: "go".into(), label: "Go".into(), digest: Digest("one-go".into()) };
+            let item = Item { named: None, options: Vec::new(), id: "go".into(), label: "Go".into(), digest: Digest("one-go".into()) };
             let outcome = AttemptOutcome::Delivered { output: Digest("one".into()), items: vec![item], changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None };
             feed(&mut run, Input::AttemptEnded { step: "look".into(), attempt, fix: 0, outcome });
             let results = vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }];
@@ -129,7 +129,7 @@ fn asked_with(executor: Executor) -> (Run, Question) {
         }
         _ => {
             let attempt = role_attempt.unwrap_or_else(|| panic!("no role turn: {:?}", out.commands));
-            let item = Item { named: None, id: "go".into(), label: "Go".into(), digest: Digest("one-go".into()) };
+            let item = Item { named: None, options: Vec::new(), id: "go".into(), label: "Go".into(), digest: Digest("one-go".into()) };
             let outcome = AttemptOutcome::Delivered { output: Digest("one".into()), items: vec![item], changed: Vec::new(), usage: Usage::default(), session: None, tree: None, reply: None };
             feed(&mut run, Input::AttemptEnded { step: "look".into(), attempt, fix: 0, outcome });
             let results = vec![CheckResult { check: "shape".into(), verdict: CheckVerdict::Pass, tree: None, tests_changed: Vec::new() }];

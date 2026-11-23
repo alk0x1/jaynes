@@ -776,7 +776,7 @@ fn items_for(rng: &mut Rng, run: &Run, step: &str) -> Vec<Item> {
             continue;
         }
         let named = rng.chance(40).then(|| jaynes_core::question::Named { words: id.clone(), from: if rng.chance(50) { "request" } else { "brief" }.to_string() });
-        items.push(Item { named, id: id.clone(), label: format!("item {id}"), digest });
+        items.push(Item { options: Vec::new(), named, id: id.clone(), label: format!("item {id}"), digest });
     }
     items
 }
@@ -869,7 +869,7 @@ impl World {
                         reply: None,
                     },
                     72..=85 => AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: usage(&mut self.rng) },
-                    86..=88 => AttemptOutcome::Impossible { reason: "the request contradicts itself".to_string(), usage: usage(&mut self.rng), session: Some(format!("session-{}", turn.step)) },
+                    86..=88 => AttemptOutcome::Impossible { reason: "the request contradicts itself".to_string(), usage: usage(&mut self.rng), session: Some(format!("session-{}", turn.step)), options: Vec::new() },
                     89..=94 => AttemptOutcome::Fault { usage: Default::default(), reason: "claude did not start".to_string() },
                     _ => AttemptOutcome::Interrupted { usage: Default::default(), reason: "quota".to_string() },
                 };
@@ -887,7 +887,7 @@ impl World {
                         reply: None,
                     },
                     80..=91 => AttemptOutcome::NeedsInput {
-                        items: vec![Item { named: None, id: "which".to_string(), label: "which test".to_string(), digest: Digest("w".to_string()) }],
+                        items: vec![Item { named: None, options: Vec::new(), id: "which".to_string(), label: "which test".to_string(), digest: Digest("w".to_string()) }],
                         offered: vec![VerdictKind::Keep, VerdictKind::Change],
                         about: String::new(),
                     },
@@ -1430,7 +1430,7 @@ fn deliver(run: &mut Run, step: &str, attempt: u32, output: &str, items: Vec<Ite
 }
 
 fn item(id: &str, d: &str) -> Item {
-    Item { named: None, id: id.to_string(), label: id.to_string(), digest: Digest(d.to_string()) }
+    Item { named: None, options: Vec::new(), id: id.to_string(), label: id.to_string(), digest: Digest(d.to_string()) }
 }
 
 #[test]
@@ -2002,6 +2002,7 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
             reason: "the tests ask for two answers that contradict each other".to_string(),
             usage: Usage { seconds: 30, tokens: 900, cached: 0, ..Default::default() },
             session: Some("s1".to_string()),
+            options: Vec::new(),
         },
     });
     let q = c.iter().find_map(|c| match c { Command::Ask { question } => Some(question.clone()), _ => None }).expect("the person is asked");
@@ -2025,6 +2026,50 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
     assert_eq!((turn.attempt, turn.session.as_deref()), (2, Some("s1")));
     assert_eq!(run.counts.sent_back, 0, "answering the agent's question is not work sent back");
     assert!(turn.notes.iter().any(|n| n.contains("keep the first answer")), "{:?}", turn.notes);
+}
+
+// The real user at estoque (22/11, uso-real/achados/2026-11-22-01.md): the stop where the agent said it cannot be done
+// offered Change and Redo only, and a Send with nothing marked would have kept the agent's own words as the person's
+// decision ("is kept: no later round of change may change it"); the two ways the agent asked them to choose from were
+// no buttons. A Change says how, in words or by an option the agent offered, and the option taken is the person's.
+#[test]
+fn a_stop_the_agent_says_cannot_be_done_is_never_answered_by_nothing_and_its_options_are_the_person_s_to_take() {
+    let (mut run, cmds) = start(vec![step("change", Executor::Agent)]);
+    probe_ok(&mut run, cmds);
+    let options = vec!["Keep the fake database on a free port, as it is now".to_string(), "Leave 5432 free for this project's tests".to_string()];
+    let c = feed(&mut run, Input::AttemptEnded {
+        step: "change".to_string(),
+        attempt: 1,
+        fix: 0,
+        outcome: AttemptOutcome::Impossible {
+            reason: "the old test brings its fake database up on 5432, which the check holds".to_string(),
+            usage: Usage::default(),
+            session: Some("s1".to_string()),
+            options: options.clone(),
+        },
+    });
+    let q = c.iter().find_map(|c| match c { Command::Ask { question } => Some(question.clone()), _ => None }).expect("the person is asked");
+    assert_eq!(q.items[0].options, options, "the agent's options reach the stop, for the page and the app to draw as buttons");
+    let answer = |verdicts: Vec<(&str, Verdict)>| Answer {
+        back: Default::default(), question: q.id.clone(), shown: q.shown(), verdicts: verdicts.into_iter().map(|(k, v)| (k.to_string(), v)).collect(), by: By::Person, context: String::new(),
+    };
+    // nothing marked: keeping is not offered here, so nothing stands for the person's answer, and nothing is recorded
+    let nothing = decide(Some(&run), &Input::Answer { answer: answer(vec![]) }).expect_err("an answer with nothing marked is refused");
+    assert_eq!(nothing.0, "“the old test brings its fake database up on 5432, which the check holds” waits for your answer: take one of the agent's options, or say how to go on in its field.");
+    let said = jaynes_core::decide::effects(&run, &q, &answer(vec![])).sentences;
+    assert_eq!(said[0], nothing.0, "what the person reads before sending says the same, never that the agent's words are kept: {said:?}");
+    // a Change with no words: refused with the sentence the person read before sending
+    let wordless = decide(Some(&run), &Input::Answer { answer: answer(vec![("impossible", Verdict::Change { text: "  ".into() })]) }).expect_err("a Change says how");
+    assert_eq!(wordless.0, "“the old test brings its fake database up on 5432, which the check holds” is changed: say how in its field.");
+    // the option taken: recorded as the person's, said as the option they took, and the agent goes on from it
+    let took = Input::Answer { answer: answer(vec![("impossible", Verdict::Change { text: options[1].clone() })]) };
+    let out = decide(Some(&run), &took).expect("the option taken is an answer");
+    let (by, said) = out.events.iter().find_map(|e| match e { Event::AnswerRecorded { answer, effects } => Some((answer.by.clone(), effects.sentences.clone())), _ => None }).expect("recorded");
+    assert_eq!(by, By::Person);
+    assert_eq!(said[0], "“the old test brings its fake database up on 5432, which the check holds” goes on with the agent's option you took: “Leave 5432 free for this project's tests”.");
+    let c = feed(&mut run, took);
+    let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("tried again");
+    assert!(turn.notes.iter().any(|n| n.contains("Leave 5432 free for this project's tests")), "{:?}", turn.notes);
 }
 
 #[test]
@@ -2819,7 +2864,7 @@ fn answer_case(run: &Run, answer: &Answer, taken: bool) -> String {
         q.question.items.iter().any(|x| &x.id == id)
             && q.question.offered.contains(&v.kind())
             && !matches!(v, Verdict::Change { text } if text.trim().is_empty())
-    }) };
+    }) && q.question.items.iter().all(|x| answer.verdicts.contains_key(&x.id) || q.question.offered.contains(&VerdictKind::Keep)) };
     let case = serde_json::json!({
         "who": match answer.by { By::Person => "person", By::Rule { .. } => "rule", By::Agent { .. } => "agent" },
         "decision": q.question.kind == QuestionKind::Decision,

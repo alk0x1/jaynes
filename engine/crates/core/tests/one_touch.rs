@@ -209,7 +209,7 @@ fn reproduce_then_fix(starter: Option<String>, holds: bool) -> (Run, Vec<Command
             Command::Probe { step, .. } => todo.extend(feed(&mut run, Input::ProbeEnded { step: step.clone(), ok: true, reason: String::new() })),
             Command::RunAgent(t) => {
                 let (items, changed) = if t.step == "reproduce" {
-                    (vec![jaynes_core::question::Item { named: None, id: "bug".to_string(), label: "A note with a comma breaks the CSV".to_string(), digest: Digest("b".to_string()) }], vec![file("tests/test_comma.py", 9, 0, "t")])
+                    (vec![jaynes_core::question::Item { named: None, options: Vec::new(), id: "bug".to_string(), label: "A note with a comma breaks the CSV".to_string(), digest: Digest("b".to_string()) }], vec![file("tests/test_comma.py", 9, 0, "t")])
                 } else {
                     (Vec::new(), vec![file("src/export.py", 3, 1, "e")])
                 };
@@ -314,7 +314,7 @@ fn stack_then_build(options: &[(&str, Option<(&str, &str)>)], vouch: bool, brake
                 let (items, changed) = if t.step == "stacks" {
                     let items = options
                         .iter()
-                        .map(|(name, named)| Item { id: name.to_string(), label: format!("{name}: small"), digest: Digest(name.to_string()), named: named.map(|(words, from)| Named { words: words.to_string(), from: from.to_string() }) })
+                        .map(|(name, named)| Item { options: Vec::new(), id: name.to_string(), label: format!("{name}: small"), digest: Digest(name.to_string()), named: named.map(|(words, from)| Named { words: words.to_string(), from: from.to_string() }) })
                         .collect();
                     (items, vec![file("design/architecture/go.html", 9, 0, "s")])
                 } else {

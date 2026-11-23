@@ -1815,7 +1815,7 @@ mod tests {
 
     /// A verdict stop with `ids` for items, one dropped in an earlier round, invented.
     fn judging(ids: &[&str]) -> Stop {
-        let item = |id: &str| Item { id: id.into(), label: format!("The {id}"), detail: String::new(), aspects: vec![], pictures: vec![], page: None };
+        let item = |id: &str| Item { id: id.into(), label: format!("The {id}"), detail: String::new(), aspects: vec![], pictures: vec![], page: None, options: vec![] };
         Stop {
             run: "r".into(),
             question: "q".into(),

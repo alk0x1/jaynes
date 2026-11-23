@@ -3420,7 +3420,7 @@ mod tests {
         let start = Input::Start { run: "r1".into(), request: "x".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
         let question = Question { rides: Vec::new(),
-            id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+            id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, options: Vec::new(), id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
             offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
         };
         events.push(Event::QuestionOpened { question });
@@ -3449,7 +3449,7 @@ mod tests {
             let start = Input::Start { run: run.into(), request: format!("the request of {run}"), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
             let mut events = decide(None, &start).expect("start").events;
             let question = Question { rides: Vec::new(),
-                id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+                id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, options: Vec::new(), id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
                 offered: vec![VerdictKind::Keep], holds: true, about: "Is the plan right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
             };
             events.push(Event::QuestionOpened { question });
@@ -3486,7 +3486,7 @@ mod tests {
         };
         let cmds = feed(&mut r, Input::ProbeEnded { step: "stack".into(), ok: true, reason: String::new() });
         let t = cmds.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.clone()) } else { None }).expect("a turn");
-        let items = labels.iter().enumerate().map(|(n, l)| Item { named: None, id: format!("o{n}"), label: (*l).into(), digest: Digest(format!("d{n}")) }).collect();
+        let items = labels.iter().enumerate().map(|(n, l)| Item { named: None, options: Vec::new(), id: format!("o{n}"), label: (*l).into(), digest: Digest(format!("d{n}")) }).collect();
         let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items, changed: vec![], usage: Default::default(), session: Some("s1".into()), tree: None, reply: None };
         let cmds = feed(&mut r, Input::AttemptEnded { step: "stack".into(), attempt: t.attempt, fix: t.fix, outcome });
         if cmds.iter().any(|c| matches!(c, Command::RunChecks { .. })) {
@@ -3568,7 +3568,7 @@ mod tests {
         };
         let cmds = feed(&mut run, Input::ProbeEnded { step: "plan".into(), ok: true, reason: String::new() });
         let t = cmds.iter().find_map(|c| if let Command::RunAgent(t) = c { Some(t.clone()) } else { None }).expect("a turn");
-        let item = Item { named: None, id: "a".into(), label: "Python, Postgres and Qdrant".into(), digest: Digest("d-a".into()) };
+        let item = Item { named: None, options: Vec::new(), id: "a".into(), label: "Python, Postgres and Qdrant".into(), digest: Digest("d-a".into()) };
         let outcome = AttemptOutcome::Delivered { output: Digest("o".into()), items: vec![item], changed: vec![], usage: Default::default(), session: Some("s1".into()), tree: None, reply: Some("One Python package over Postgres and Qdrant.".into()) };
         let cmds = feed(&mut run, Input::AttemptEnded { step: "plan".into(), attempt: t.attempt, fix: t.fix, outcome });
         if cmds.iter().any(|c| matches!(c, Command::RunChecks { .. })) {
@@ -3682,7 +3682,7 @@ mod tests {
             events.push(Event::QuestionOpened {
                 question: Question { rides: Vec::new(),
                     id: "q1".into(), step: "build".into(), round: 1, kind: QuestionKind::Permission,
-                    items: vec![Item { named: None, id: "leave".into(), label: about.into(), digest: Digest(format!("d-{run}")) }],
+                    items: vec![Item { named: None, options: Vec::new(), id: "leave".into(), label: about.into(), digest: Digest(format!("d-{run}")) }],
                     offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: about.into(), choose: false, pass: 0, passes: 0, back: vec![],
                 },
             });
@@ -3770,7 +3770,7 @@ mod tests {
             events.push(match run {
                 "asks" => Event::QuestionOpened {
                     question: Question { rides: Vec::new(),
-                        id: "q1".into(), step: "change".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+                        id: "q1".into(), step: "change".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, options: Vec::new(), id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
                         offered: vec![VerdictKind::Keep], holds: true, about: "Is the change right?".into(), choose: false, pass: 0, passes: 0, back: vec![],
                     },
                 },
@@ -3966,7 +3966,7 @@ mod tests {
         let mut events = decide(None, &start).expect("start").events;
         let bug = Question { rides: Vec::new(),
             id: "q-bug".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
-            items: vec![Item { named: None, id: "bug".into(), label: "Exporting a note with a comma breaks the CSV".into(), digest: Digest("d-bug".into()) }],
+            items: vec![Item { named: None, options: Vec::new(), id: "bug".into(), label: "Exporting a note with a comma breaks the CSV".into(), digest: Digest("d-bug".into()) }],
             offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
         events.push(Event::QuestionOpened { question: bug });
@@ -4024,7 +4024,7 @@ mod tests {
                 events.push(Event::QuestionOpened {
                     question: Question { rides: Vec::new(),
                         id: "q-slice".into(), step: "slice".into(), round: 1, kind: QuestionKind::Decision,
-                        items: vec![Item { named: None, id: "slice".into(), label: "The slice".into(), digest: Digest("d".into()) }],
+                        items: vec![Item { named: None, options: Vec::new(), id: "slice".into(), label: "The slice".into(), digest: Digest("d".into()) }],
                         offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, about: "Is this the first slice?".into(), choose: false, pass: 0, passes: 0, back: vec![],
                     },
                 });
@@ -4098,7 +4098,7 @@ mod tests {
         events.push(Event::QuestionOpened {
             question: Question { rides: Vec::new(),
                 id: "q-repro".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
-                items: vec![Item { named: None, id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
+                items: vec![Item { named: None, options: Vec::new(), id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
                 offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: false, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
             },
         });
@@ -4325,7 +4325,7 @@ mod tests {
         events.push(Event::QuestionOpened {
             question: Question { rides: Vec::new(),
                 id: "q-repro".into(), step: "reproduce".into(), round: 1, kind: QuestionKind::Decision,
-                items: vec![Item { named: None, id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
+                items: vec![Item { named: None, options: Vec::new(), id: "examples".into(), label: "The examples".into(), digest: Digest("d".into()) }],
                 offered: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, about: "Is this the bug?".into(), choose: false, pass: 0, passes: 0, back: vec![],
             },
         });
@@ -4641,7 +4641,7 @@ mod tests {
             }
         }
         let question = Question { rides: Vec::new(),
-            id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
+            id: "q1".into(), step: "plan".into(), round: 0, kind: QuestionKind::Decision, items: vec![Item { named: None, options: Vec::new(), id: "a".into(), label: "a".into(), digest: Digest("d".into()) }],
             offered: vec![VerdictKind::Keep], holds: true, about: String::new(), choose: false, pass: 0, passes: 0, back: vec![],
         };
         let events: Vec<Event> = events.into_iter().filter(|e| matches!(e, Event::RunStarted { .. })).chain([Event::QuestionOpened { question }]).collect();
