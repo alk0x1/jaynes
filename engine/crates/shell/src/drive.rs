@@ -2502,7 +2502,7 @@ pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, give
     }
     p.push_str(&format!(
         "# Your output\n\nWhen you are done, write your output as JSON to .jaynes/output.json, following this schema:\n\n{}\n",
-        serde_json::to_string_pretty(schema).unwrap_or_default()
+        schema
     ));
     p
 }
@@ -3366,6 +3366,43 @@ mod tests {
             "Wherever you tell of it, say \"Jaynes's box refused\" and what it refused, then the error as the command printed it, \
              never \"this environment's protection\" nor a sandbox of your own."
         ), "{unread}");
+    }
+
+    fn bare_turn() -> AgentTurn {
+        AgentTurn {
+            step: "fix".into(),
+            round: 0,
+            attempt: 1,
+            fix: 0,
+            session: None,
+            reach: Reach::default(),
+            given: Vec::new(),
+            previous: None,
+            notes: Vec::new(),
+            context: Vec::new(),
+            failure: Vec::new(),
+            checks: Vec::new(),
+            locked: Vec::new(),
+            dropped: Vec::new(),
+            keep: None,
+            review: None,
+            earlier: Vec::new(),
+            back: Vec::new(),
+            asked: Vec::new(),
+            deadline_seconds: 60,
+            tokens_left: 1000,
+        }
+    }
+
+    /// The schema reaches the agent as compact JSON: the pretty form spent its prompt on spaces and line breaks the
+    /// agent does not need (the tech-lead's cost lever, 0.2.5).
+    #[test]
+    fn the_output_schema_is_written_compact() {
+        let schema = json!({"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}});
+        let p = compose("r", "make it", &schema, &bare_turn(), &[], false);
+        let said = p.split("following this schema:\n\n").nth(1).expect("the schema").trim_end();
+        assert_eq!(said, schema.to_string(), "{p}");
+        assert!(!said.contains('\n'), "{said}");
     }
 
     #[test]
