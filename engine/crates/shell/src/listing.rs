@@ -2760,7 +2760,7 @@ mod tests {
     fn asked_one_moment_at_the_merge_the_story_says_what_a_stop_that_did_not_wait_holds() {
         use jaynes_core::question::{Answer, By, Item, Ride, Verdict};
         let mut r = run("one-moment", "the CSV breaks on a comma");
-        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: Some("the bug".into()), holds_unless: None, vouched_by: None, verdicts: vec![], holds: false, from_risk: Default::default(), release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+        r.manifest.steps[0].stop = Some(jaynes_core::manifest::StopDecl { settled: Some("the bug".into()), holds_unless: None, vouched_by: None, offers: Default::default(), verdicts: vec![], holds: false, from_risk: Default::default(), release: false, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
         let bug = Question { rides: Vec::new(),
             id: "q-bug".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision,
             items: vec![Item { named: None, id: "bug".into(), label: "A note with a comma breaks the CSV".into(), digest: jaynes_core::Digest("b".into()) }],
@@ -3105,7 +3105,7 @@ mod tests {
     fn asked_a_run_set_aside_says_so_and_waits_for_no_one() {
         use jaynes_core::question::By;
         let mut r = run("aside", "x");
-        let question = Question {
+        let question = Question { rides: Vec::new(),
             id: "q1".into(), step: "plan".into(), round: 1, kind: QuestionKind::Decision, items: vec![], offered: vec![], holds: true,
             about: "Which plan goes on?".into(), choose: false, pass: 0, passes: 0, back: vec![],
         };
