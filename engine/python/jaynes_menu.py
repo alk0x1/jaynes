@@ -61,6 +61,7 @@ def _freed(call: Call) -> tuple[int, ...]:
 
 
 # The words of a command whose test server hit a port Jaynes held (the card reads them, listing.rs HELD_KEPT).
+BOX_REFUSED = "the box refused what the command tried, so its failure says nothing about the project: "
 HELD_KEPT = "Jaynes held a port the command tried to serve on, so its failure says nothing about the project: "
 
 # What is never read for the held ports a project names: what git keeps, Jaynes's own, installed dependencies and
@@ -71,9 +72,8 @@ _LOCKS = {"uv.lock", "poetry.lock", "Pipfile.lock", "package-lock.json", "yarn.l
 _READ_AT_MOST = (2000, 256 * 1024)  # files, and bytes of one
 
 
-def held_named(project: Path) -> tuple[int, ...]:
-    """The ports Jaynes holds while the checks run (``box.HELD_PORTS``) that ``project``'s own files write as a
-    number of their own ("PORT = 5432", "localhost:6379"), in the box's order: where its tests may serve on one."""
+def _project_text(project: Path) -> str:
+    """``project``'s own files, as text: never its dependencies, git, locks, links, or a file too big."""
     texts: list[str] = []
     for top, dirs, files in os.walk(project):
         dirs[:] = sorted(d for d in dirs if d not in _NOT_READ_DIRS)
@@ -86,8 +86,31 @@ def held_named(project: Path) -> tuple[int, ...]:
                     texts.append(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError):
                 continue
-    text = "\n".join(texts)
+    return "\n".join(texts)
+
+
+def held_named(project: Path) -> tuple[int, ...]:
+    """The ports Jaynes holds while the checks run (``box.HELD_PORTS``) that ``project``'s own files write as a
+    number of their own ("PORT = 5432", "localhost:6379"), in the box's order: where its tests may serve on one."""
+    text = _project_text(project)
     return tuple(p for p in box.HELD_PORTS if re.search(rf"(?<![\w.]){p}(?![\w]|\.\d)", text))
+
+
+# What starts a server in a project's own code, as Go, Python, Node, Rust, the JVM and Ruby write it: where its tests
+# may serve on a port of their own.
+_SERVES = re.compile(r"httptest\.New|\bnet\.Listen\w*\(|\bListenAndServe\w*\(|\.bind\(\(|\b\w*HTTPServer\(|"
+                     r"\b\w*TCPServer\(|\bserve_forever\(|\buvicorn\.run\(|\.listen\(|\bcreateServer\(|\bsupertest\b|"
+                     r"\bTcpListener::bind\(|\bServerSocket\(|\bRANDOM_PORT\b|\bMockWebServer\b|\bWEBrick\b|\bTCPServer\.new\b")
+
+
+def serves(project: Path) -> bool:
+    """Whether ``project``'s own files start a server, where its tests may serve on a port of their own."""
+    return bool(_SERVES.search(_project_text(project)))
+
+
+# Only macOS's box keeps the tests from serving until the person lets the project's test servers; Linux's has a
+# network of its own, where they serve.
+SERVERS_NEED_LETTING = sys.platform == "darwin"
 
 
 # A number in a line that says a port was in use, beside the error's own and an address's: a port it names.
@@ -133,7 +156,7 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
         past = box.past_window(ran)
         if past:
             # its own test server, on a port macOS gave after the window: never a service of the person's
-            return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
+            return Blocked(BOX_REFUSED
                            + "; ".join(box.refused(ran)[:3])
                            + f" It tried port {', '.join(map(str, past))}, which macOS gave after the {box.SERVERS_WINDOW:,} the box"
                            f" let the tests reach ({ran.window[0]} to {ran.window[-1]})."
@@ -142,7 +165,7 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
         started = box.browsers_refused(ran)
         if started and not ports:
             # a browser of the person's, which no port the person opens lets start
-            return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
+            return Blocked(BOX_REFUSED
                            + "; ".join(box.refused(ran)[:3])
                            + f" It tried to start a browser of this Mac, which no check's command starts: {', '.join(started)}.")
         tried = (f" It tried local port {', '.join('0, a port of its own choosing' if p == '0' else p for p in ports)}.")\
@@ -157,7 +180,7 @@ def _box(call: Call, command: str, timeout: float = 600.0, stdin: str | None = N
                 " test servers' ports from JAYNES_PORTS, and the box stays closed; (2) the person opens this project"
                 f" with `jaynes project open-ports {_source(call) or call['project']}`, and its checks then reach every"
                 " service listening on this machine, the Jaynes page among them.")
-        return Blocked("the box refused what the command tried, so its failure says nothing about the project: "
+        return Blocked(BOX_REFUSED
                        + "; ".join(box.refused(ran)[:3]) + tried + ways)
     hit, lines = box.held_hit(ran)
     if not hit and call.get("project"):
@@ -208,6 +231,15 @@ def find_suite(call: Call, params: Params) -> Any:
             and any(p not in _freed(call) for p in held_named(Path(project))):
         ran = _box(call, found.suite)
         if isinstance(ran, Blocked) and ran.reason.startswith(HELD_KEPT):
+            return ran
+    # tests that start a server of their own fail at every check while the person has not let the project's test
+    # servers, whatever the change: when the project's files start one, the suite runs once now, before any agent
+    # works, and a bind the box refused stops the run here, with the line that lets them, never in the middle (the
+    # tech-lead's T5, 23/11)
+    elif SERVERS_NEED_LETTING and call.get("test_servers") is not True and call.get("any_port") is not True \
+            and serves(Path(project)):
+        ran = _box(call, found.suite)
+        if isinstance(ran, Blocked) and ran.reason.startswith(BOX_REFUSED) and " It tried local port " in ran.reason:
             return ran
     return found.to_dict()
 

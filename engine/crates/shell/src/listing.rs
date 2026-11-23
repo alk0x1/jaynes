@@ -488,7 +488,28 @@ pub fn blocked_words(step: Option<&str>, fault: jaynes_core::event::Fault, reaso
     if let Some(h) = held_at_start_of(step, fault, reason) {
         return format!("blocked: its tests need {}", ports_named(&h.ports));
     }
+    if let Some(b) = served_at_start_of(step, fault, reason) {
+        let fixed = fixed_ports(&b);
+        return if fixed.is_empty() { "blocked: its tests start a test server".into() } else { format!("blocked: its tests need {}", ports_named(&fixed)) };
+    }
     format!("blocked: {}", in_words(reason))
+}
+
+/// What the box refused a run stopped at its start: a fault of Jaynes at a menu step whose reason is the box's
+/// refusal of a local port, as the runner's find-suite says it when the project's tests serve and the person has not
+/// let them (the tech-lead's T5, 23/11).
+fn served_at_start_of<'a>(step: Option<&str>, fault: jaynes_core::event::Fault, reason: &'a str) -> Option<Boxed<'a>> {
+    if fault != jaynes_core::event::Fault::Jaynes {
+        return None;
+    }
+    let inner = reason.strip_prefix(&format!("a fault of Jaynes or of the machine stopped {}: ", step?))?;
+    let inner = inner.strip_prefix("the role program could not answer: ").unwrap_or(inner);
+    boxed(inner).filter(|b| !b.ports.is_empty() && !b.open_did_not_help && !b.servers_did_not_help)
+}
+
+/// The ports a refusal names but the one the system picks.
+fn fixed_ports(b: &Boxed<'_>) -> Vec<u16> {
+    b.ports.iter().copied().filter(|&p| p != 0).collect()
 }
 
 /// The held port of a run stopped at its start: a fault of Jaynes at a menu step whose reason is the box's held port.
@@ -1610,6 +1631,32 @@ fn held_at_start(said: &mut BlockedSaid, h: &Held<'_>) {
     said.details = details;
 }
 
+/// A step of Jaynes's own that ran the project's tests before any agent worked and found the box kept them from the
+/// port they serve on (the tech-lead's T5, 23/11): every check would fail for that, whatever the change, so the run
+/// stopped there; the way out is the one line that serves what they tried, and Continue runs the tests again.
+fn served_at_start(said: &mut BlockedSaid, b: &Boxed<'_>) {
+    let fixed = fixed_ports(b);
+    // one way out, as a check's card gives it: a port the system picks gets the project's test servers
+    let own = fixed.is_empty() && cfg!(target_os = "macos") && TEST_SERVERS;
+    said.what = "The run stopped before any agent worked.".into();
+    said.why = if fixed.is_empty() {
+        "This project's tests start a test server on a port the system picks, and the box Jaynes checks in allows only its own ports. Every check would fail, whatever the change.".into()
+    } else {
+        format!("This project's tests reach {} on {}, and the box Jaynes checks in allows only its own ports. Every check would fail, whatever the change.", ports_named(&fixed), this_machine())
+    };
+    said.continue_does = HELD_GOES_ON.into();
+    // what already says no agent worked
+    said.holds = None;
+    if let Some(project) = b.project {
+        said.ways.push(port_way(project, own));
+    }
+    said.ways.push(Way { says: "Or abandon: the run ends. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() });
+    let mut details = once(b.refused.iter().map(|l| go_annotation_off(l)));
+    let tried: Vec<String> = b.ports.iter().map(|&p| if p == 0 { OWN_CHOOSING.to_string() } else { p.to_string() }).collect();
+    details.push(format!("It tried port{} {}.", if tried.len() == 1 { "" } else { "s" }, tried.join(", ")));
+    said.details = details;
+}
+
 /// A check that could not judge: the change is done and Jaynes could not check it. When the box kept the check's
 /// command from a local port, why in the person's words and the way out that serves what it tried; the box's own
 /// terms and the raw error go under Details.
@@ -1778,6 +1825,8 @@ pub fn blocked_said(step: Option<&str>, fault: jaynes_core::event::Fault, reason
                 said.what = format!("Jaynes or {} stopped {at}. It is not the agent's fault.", this_machine());
                 if let Some(h) = held_at_start_of(step, fault, reason) {
                     held_at_start(&mut said, &h);
+                } else if let Some(b) = served_at_start_of(step, fault, reason) {
+                    served_at_start(&mut said, &b);
                 } else if let Some(why) = after(step.map(|s| format!("a fault of Jaynes or of the machine stopped {s}: "))) {
                     said.why = why;
                 }
@@ -2114,6 +2163,41 @@ mod blocked_tests {
         // any other fault of Jaynes at a step of its own keeps its words
         let other = blocked_said(Some("runner"), Fault::Jaynes, "a fault of Jaynes or of the machine stopped runner: the disk is full. No attempt was spent");
         assert_eq!(other.why, "The disk is full.");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn tests_that_start_their_own_test_server_without_the_person_s_yes_stop_the_run_before_any_agent_with_the_line_that_lets_them() {
+        // the tech-lead's T5, 23/11 (the real-user's vazio-x): the suite of the start serves on a port the system
+        // picks and the person has not let the project's test servers, so every check would fail for it; the run
+        // stops at its first step with the one line that lets them, never in the middle
+        let bind = "panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered]";
+        let inner = format!("the role program could not answer: {BOX_REFUSED}{bind} It tried local port 0, a port of its own choosing. A check's commands bind and reach only the ports in JAYNES_PORTS (52000, 52001) and the ones the check names in its local_ports, never its step's. Two ways out, the first the better: (1) the suite takes its test servers' ports from JAYNES_PORTS, and the box stays closed; (2) the person opens this project with `jaynes project open-ports /Users/x/Projects/recados`, and its checks then reach every service listening on this machine, the Jaynes page among them.");
+        let reason = format!("a fault of Jaynes or of the machine stopped runner: {inner}. No attempt was spent");
+        let b = blocked_said(Some("runner"), Fault::Jaynes, &reason);
+        assert_eq!(b.what, "The run stopped before any agent worked.");
+        assert_eq!(b.why, "This project's tests start a test server on a port the system picks, and the box Jaynes checks in allows only its own ports. Every check would fail, whatever the change.");
+        assert_eq!(b.ways, [
+            port_way("/Users/x/Projects/recados", true),
+            Way { says: "Or abandon: the run ends. Your project stays as it was.".into(), then: None, command: None, still_open: Vec::new() },
+        ]);
+        assert_eq!(b.ways[0].command.as_deref(), Some("jaynes project test-servers /Users/x/Projects/recados"));
+        assert_eq!(b.continue_does, HELD_GOES_ON);
+        assert_eq!(b.holds, None, "what already says no agent worked");
+        assert_eq!(b.details.first().map(String::as_str), Some("panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted"));
+        assert_eq!(blocked_words(Some("runner"), Fault::Jaynes, &reason), "blocked: its tests start a test server");
+        // with the run, Continue names the step it goes on to
+        let mut r = super::tests::run("r1", "Say hi");
+        r.phase = Phase::Blocked { step: Some("runner".into()), fault: Fault::Jaynes, reason: reason.clone() };
+        r.manifest.steps.insert(0, jaynes_core::manifest::StepDecl { name: "runner".into(), ..r.manifest.steps[0].clone() });
+        let next = r.manifest.steps[1].name.clone();
+        let home = std::env::temp_dir().join(format!("jaynes-serves-start-{}", std::process::id()));
+        let carded = blocked(&home, &r).expect("blocked");
+        let _gone = std::fs::remove_dir_all(&home);
+        assert_eq!(carded.continue_does, format!("Continue: Jaynes runs the project's tests again. If they start, the run goes on to “{next}”."));
+        // a check's own refusal, later in a run, keeps its card
+        let later = blocked_said(Some("change"), Fault::Jaynes, &format!("the check suite-passes could not judge: {}", inner.trim_start_matches("the role program could not answer: ")));
+        assert_eq!(later.what, "The change is done. Jaynes could not check it.");
     }
 
     #[test]
