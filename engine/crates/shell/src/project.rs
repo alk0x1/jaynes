@@ -220,6 +220,10 @@ pub trait Workspace {
     /// dependencies and the folder Jaynes and the agent exchange files in aside), a folder all of whose files it
     /// ignores as the folder.
     fn left_out(&self) -> Vec<String>;
+    /// The paths that differ between commits `a` and `b` (what a delivery leaves out of the copy's head).
+    fn paths_between(&self, _a: &str, _b: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
     /// What in the copy is not as Jaynes last measured it or put it there: changed since by something other than
     /// Jaynes. Empty when it is as it was.
     fn drifted(&self) -> Result<Vec<String>, String>;
@@ -337,6 +341,9 @@ impl Workspace for Copy {
     fn left_out(&self) -> Vec<String> {
         Copy::left_out(self)
     }
+    fn paths_between(&self, a: &str, b: &str) -> Result<Vec<String>, String> {
+        Copy::paths_between(self, a, b)
+    }
     fn drifted(&self) -> Result<Vec<String>, String> {
         Copy::drifted(self)
     }
@@ -446,6 +453,11 @@ impl Copy {
     /// git on the copy, through the engine's repository for it.
     fn g(&self, args: &[&str]) -> Result<String, String> {
         git_on(&self.git, &self.dir, args)
+    }
+
+    /// The paths that differ between commits `a` and `b` of the copy.
+    pub fn paths_between(&self, a: &str, b: &str) -> Result<Vec<String>, String> {
+        Ok(self.g(&["diff", "--name-only", "--no-renames", a, b])?.lines().filter(|p| !p.is_empty()).map(str::to_string).collect())
     }
 
     pub fn head(&self) -> Result<String, String> {

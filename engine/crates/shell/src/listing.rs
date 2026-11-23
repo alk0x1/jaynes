@@ -219,6 +219,48 @@ pub enum NotLanded {
     Dirty { git: String },
     /// The change conflicts with what the branch has now: merged by hand, from the branch, which still has it.
     Conflict { git: String },
+    /// A check that ran the project's tests, run again on what would land (without the files only shown to the
+    /// person), failed or could not judge it (drive.rs's judged_again).
+    Judged(JudgedAgain),
+}
+
+/// What a check said, run again on what would land, without what the role only shows: the engine keeps it beside the
+/// run (JUDGED_AGAIN) and the delivery names only the check, never its reasons (the design-lead's quatro-itens.md,
+/// judged_again, 23/11).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JudgedAgain {
+    pub check: String,
+    pub step: String,
+    /// It failed, so a merge fails the same way; false when it could not judge, so a merge may pass.
+    pub fails: bool,
+    pub reasons: Vec<String>,
+    /// The files only shown to the person, which a merge leaves out.
+    pub left_out: Vec<String>,
+}
+
+/// The file beside a run that keeps what its last check run again said.
+pub const JUDGED_AGAIN: &str = "judged-again.json";
+
+impl JudgedAgain {
+    /// What the delivery says after "; not merged: ".
+    pub fn reference(&self) -> String {
+        let said = if self.fails { "fails on" } else { "could not judge" };
+        format!("the check “{}” of “{}” {said} what would land", self.check, self.step)
+    }
+
+    /// The summary's sentence; the reasons never go into it.
+    pub fn summary(&self) -> String {
+        if self.fails {
+            format!("Not merged: the check “{}” fails on what would land, without the files only shown to you.", self.check)
+        } else {
+            format!("Not merged: the check “{}” could not judge what would land.", self.check)
+        }
+    }
+}
+
+/// What run `run` of `home` last judged again, when a merge did not go for it.
+pub fn judged_again(home: &Path, run: &str) -> Option<JudgedAgain> {
+    serde_json::from_str(&std::fs::read_to_string(home.join("runs").join(run).join(JUDGED_AGAIN)).ok()?).ok()
 }
 
 impl Unmerged {
@@ -229,11 +271,16 @@ impl Unmerged {
 
     /// The button, primary, never amber: only when the engine takes a Merge and the last did not conflict.
     pub fn button(&self) -> Option<String> {
-        (self.refused.is_none() && !matches!(self.failed, Some(NotLanded::Conflict { .. }))).then(|| format!("Merge into “{}”", self.into))
+        // a conflict, or a check that fails on what would land, fails the same way again: no Merge
+        let again = matches!(&self.failed, Some(NotLanded::Conflict { .. })) || matches!(&self.failed, Some(NotLanded::Judged(j)) if j.fails);
+        (self.refused.is_none() && !again).then(|| format!("Merge into “{}”", self.into))
     }
 
     /// Dim, beside the button.
     pub fn says(&self) -> String {
+        if matches!(&self.failed, Some(NotLanded::Judged(j)) if !j.fails) {
+            return "Merging checks it again first.".into();
+        }
         format!("It lands on “{}” in {}. Nothing is pushed, and Undo takes it back.", self.into, self.project)
     }
 
@@ -248,13 +295,36 @@ impl Unmerged {
                 format!("Not merged: the change conflicts with what “{}” has now. The branch “{}” still has it, so you can merge it by hand.", self.into, self.branch),
                 git.clone(),
             )),
+            Some(NotLanded::Judged(j)) if j.fails => Some((
+                format!("Not merged: the check “{}” fails on what would land in “{}”. A merge leaves out the files that were only for you to look at, and the change seems to need them.", j.check, self.into),
+                j.reasons.join("\n"),
+            )),
+            Some(NotLanded::Judged(j)) => Some((format!("Not merged: the check “{}” could not judge what would land in “{}”.", j.check, self.into), j.reasons.join("\n"))),
             None => None,
         }
+    }
+
+    /// The heading of what `not_landed` keeps closed: git's words, or the check's.
+    pub fn said_label(&self) -> &'static str {
+        if matches!(self.failed, Some(NotLanded::Judged(_))) { WHAT_THE_CHECK_SAID } else { WHAT_GIT_SAID }
+    }
+
+    /// Dim, in mono, under the amber line of a check that fails on what would land: the files a merge leaves out,
+    /// three, then how many more: "Left out: design/a.html, design/b.html, design/c.html and 2 more."
+    pub fn left_out(&self) -> Option<String> {
+        let Some(NotLanded::Judged(j)) = &self.failed else { return None };
+        if !j.fails || j.left_out.is_empty() {
+            return None;
+        }
+        let more = if j.left_out.len() > 3 { format!(" and {} more", j.left_out.len() - 3) } else { String::new() };
+        Some(format!("Left out: {}{more}.", j.left_out.iter().take(3).cloned().collect::<Vec<_>>().join(", ")))
     }
 }
 
 /// Under git's words, closed.
 pub const WHAT_GIT_SAID: &str = "What git said";
+/// Under a check's words, closed.
+pub const WHAT_THE_CHECK_SAID: &str = "What the check said";
 
 /// Once merged, in place of the branch's line: "Merged into “main” in horta. Nothing was pushed."
 pub fn merged_said(into: &str, project: &str) -> String {
@@ -269,6 +339,16 @@ pub fn not_landed(reference: &str) -> Option<NotLanded> {
         Some(NotLanded::Dirty { git: String::new() })
     } else if let Some((_, git)) = why.split_once(" has now: ").filter(|_| why.contains("it conflicts with what")) {
         Some(NotLanded::Conflict { git: git.to_string() })
+    } else if let Some(rest) = why.strip_prefix("the check “") {
+        // drive.rs's judged_again, as JudgedAgain::reference says it; its reasons and files are beside the run
+        let (check, rest) = rest.split_once("” of “")?;
+        let (step, rest) = rest.split_once("” ")?;
+        let fails = match rest {
+            "fails on what would land" => true,
+            "could not judge what would land" => false,
+            _ => return None,
+        };
+        Some(NotLanded::Judged(JudgedAgain { check: check.into(), step: step.into(), fails, ..Default::default() }))
     } else {
         None
     }
@@ -288,12 +368,20 @@ pub fn unmerged(home: &Path, r: &Run) -> Option<Unmerged> {
     let project = setup["project"].as_str().and_then(|p| Path::new(p).file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "your project".into());
     let refused = jaynes_core::decide(Some(r), &jaynes_core::Input::Merge { by: jaynes_core::question::By::Person }).err().map(|e| e.0);
     // the last delivery, when it came after the person asked to merge
-    let failed = r.merge_asked.and_then(|_| {
+    // (or the run's own, when its role merges)
+    let failed = (r.merge_asked.is_some() || r.manifest.lands()).then_some(()).and_then(|_| {
         let events = store.events(&r.id).ok()?;
-        let asked = events.iter().rposition(|e| matches!(e, jaynes_core::Event::MergeAsked { .. }))?;
+        let asked = events.iter().rposition(|e| matches!(e, jaynes_core::Event::MergeAsked { .. })).unwrap_or(0);
         events[asked..].iter().rev().find_map(|e| if let jaynes_core::Event::Delivered { reference, .. } = e { Some(reference.clone()) } else { None })
     });
-    Some(Unmerged { branch, into: if into.is_empty() { "your branch".into() } else { into }, project, refused, failed: failed.as_deref().and_then(not_landed) })
+    let mut failed = failed.as_deref().and_then(not_landed);
+    // what the check said and what a merge leaves out, kept beside the run
+    if let Some(NotLanded::Judged(j)) = &mut failed
+        && let Some(kept) = judged_again(home, &r.id).filter(|k| k.check == j.check && k.step == j.step && k.fails == j.fails)
+    {
+        *j = kept;
+    }
+    Some(Unmerged { branch, into: if into.is_empty() { "your branch".into() } else { into }, project, refused, failed })
 }
 
 /// Whether the person's branch has every change run `r` delivered already, so that merging it changes nothing: the

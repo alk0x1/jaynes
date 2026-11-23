@@ -733,6 +733,7 @@ fn landing(reference: &str) -> (String, Option<String>) {
             let into = why.strip_prefix("your checkout of ").and_then(|w| w.split_once(" has uncommitted")).map_or("your branch", |(i, _)| i);
             format!("Not merged: the checkout of “{into}” had changes not committed.")
         }
+        Some(crate::listing::NotLanded::Judged(j)) => j.summary(),
         // another reason the engine gave, in its own words
         None => format!("Not merged: {why}."),
     };

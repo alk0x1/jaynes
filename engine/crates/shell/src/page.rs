@@ -1384,8 +1384,9 @@ fn reach_html(u: &crate::listing::Unmerged) -> String {
     let failed = u
         .not_landed()
         .map(|(said, git)| {
-            let under = if git.trim().is_empty() { String::new() } else { format!("<details class=\"git\"><summary>▸ {}</summary><pre class=\"said\">{}</pre></details>", crate::listing::WHAT_GIT_SAID, esc(&git)) };
-            format!("<div class=\"rfail\">{}</div>{under}", ticks(&said))
+            let under = if git.trim().is_empty() { String::new() } else { format!("<details class=\"git\"><summary>▸ {}</summary><pre class=\"said\">{}</pre></details>", u.said_label(), esc(&git)) };
+            let left = u.left_out().map(|l| format!("<div class=\"rleft\">{}</div>", esc(&l))).unwrap_or_default();
+            format!("<div class=\"rfail\">{}</div>{left}{under}", ticks(&said))
         })
         .unwrap_or_default();
     format!("<div class=\"reach\">{line}{failed}{button}</div>")
@@ -3170,7 +3171,7 @@ table.kv td:first-child { font-family:var(--mono); font-size:11.5px; color:var(-
 select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:6px; padding:5px; font:inherit; font-size:13px; }
 .effects { position:fixed; left:280px; right:0; bottom:0; background:rgba(14,18,24,.97); border-top:1px solid var(--line-2); padding:14px 32px; display:flex; gap:24px; align-items:flex-start; }
 .effects.hide { display:none; } .effects .what { flex:1; max-width:700px; } .label { font-family:var(--mono); font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
-.effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; } .refused.hint { color:var(--faint); }
+.effects ul { margin:0; padding-left:18px; font-size:13.5px; } .refused { color:var(--red); font-size:13px; margin-top:6px; } .refused.hint { color:var(--faint); } .rleft { margin-top:4px; font-family:var(--mono); font-size:12px; color:var(--dim); }
 /* at the merge, what lands has a ceiling and scrolls inside, its bottom edge faded while more is below, so the pair
    and File by file show without scrolling the page (the design-lead, 23/11) */
 .lands pre.diff { max-height:max(180px, 36vh); overflow:auto; } .lands .changes { position:relative; }
@@ -4114,6 +4115,27 @@ mod tests {
         // a delivery that said nothing of a merge, or one that landed, says no merge failed
         assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c; merged as 9f8e7d"), None);
         assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c"), None);
+    }
+
+    // The design-lead's words for a merge a check run again refused (quatro-itens.md, judged_again, 23/11), both amber:
+    // it fails, so Merge goes and the files left out are named; it could not judge, so Merge stays and says it checks
+    // again first. The reasons go only under "▸ What the check said", never in the sentence.
+    #[test]
+    fn asked_a_merge_a_check_run_again_refused_the_card_says_which_check_and_what_was_left_out() {
+        use crate::listing::{JudgedAgain, NotLanded, Unmerged};
+        let j = |fails| JudgedAgain { check: "tests".into(), step: "change".into(), fails, reasons: vec!["2 tests fail".into(), "see test_board".into()], left_out: (1..=5).map(|i| format!("design/b{i}.html")).collect() };
+        assert_eq!(crate::listing::not_landed(&format!("jaynes/r17 at 1a2b3c; not merged: {}", j(true).reference())), Some(NotLanded::Judged(JudgedAgain { reasons: vec![], left_out: vec![], ..j(true) })));
+        assert_eq!(crate::listing::not_landed(&format!("jaynes/r17 at 1a2b3c; not merged: {}", j(false).reference())), Some(NotLanded::Judged(JudgedAgain { reasons: vec![], left_out: vec![], ..j(false) })));
+        let u = |fails| Unmerged { branch: "jaynes/r17".into(), into: "main".into(), project: "horta".into(), refused: None, failed: Some(NotLanded::Judged(j(fails))) };
+        let fails = reach_html(&u(true));
+        assert!(fails.contains("<div class=\"rfail\">Not merged: the check “tests” fails on what would land in “main”. A merge leaves out the files that were only for you to look at, and the change seems to need them.</div><div class=\"rleft\">Left out: design/b1.html, design/b2.html, design/b3.html and 2 more.</div><details class=\"git\"><summary>▸ What the check said</summary><pre class=\"said\">2 tests fail\nsee test_board</pre></details>"), "{fails}");
+        assert!(!fails.contains("data-act=\"merge\"") && fails.contains("data-copy=\"jaynes/r17\""), "Merge goes, the branch's Copy stays: {fails}");
+        let blocked = reach_html(&u(false));
+        assert!(blocked.contains("<div class=\"rfail\">Not merged: the check “tests” could not judge what would land in “main”.</div><details class=\"git\"><summary>▸ What the check said</summary>"), "{blocked}");
+        assert!(blocked.contains("<button class=\"act primary\" data-act=\"merge\">Merge into “main”</button><span class=\"odim\">Merging checks it again first.</span>"), "{blocked}");
+        assert!(!blocked.contains("Left out"), "{blocked}");
+        assert_eq!(j(false).summary(), "Not merged: the check “tests” could not judge what would land.");
+        assert_eq!(j(true).summary(), "Not merged: the check “tests” fails on what would land, without the files only shown to you.");
     }
 
     #[test]

@@ -3800,11 +3800,25 @@ fn a_board_drawn_only_to_choose_from_is_never_merged_and_the_tests_judge_what_is
             assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hi\n");
             assert!(!s.project.join("design").exists(), "the merge brought the board in");
         } else {
-            assert!(
-                said.contains("not merged: the check tests of change fails on what is delivered, without what the role only shows: the project's tests fail"),
-                "{started}\n{said}"
-            );
             assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "merged though its tests fail without the board");
+            // the design-lead's words (quatro-itens.md, judged_again, 23/11): the delivery says which check, never its
+            // reasons; the engine keeps the shape beside the run, which the card, the app and the summary say
+            let delivered = events(&s, run).iter().rev().find(|e| e["type"] == "Delivered").expect("delivered")["reference"].as_str().unwrap_or_default().to_string();
+            assert!(delivered.ends_with("; not merged: the check “tests” of “change” fails on what would land"), "{delivered}");
+            let shape: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.home.join("runs").join(run).join("judged-again.json")).expect("the shape")).expect("json");
+            assert_eq!(shape, serde_json::json!({"check": "tests", "step": "change", "fails": true, "reasons": ["the project's tests fail"], "left_out": ["design/board.html"]}));
+            let (_, told) = engine(&s, &["summary", run]);
+            assert!(told.contains("Not merged: the check “tests” fails on what would land, without the files only shown to you."), "{told}");
+            assert!(!told.contains("the project's tests fail"), "the reasons never go into the sentence: {told}");
+            let (_page, port) = page_on_any_port(
+                jaynes().arg("page").env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", python()).env("PYTHONPATH", "").env("JAYNES_PAGE_KEY", "k3y"),
+            );
+            let card = http(port, &format!("GET /run/{run} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
+            assert!(card.contains("Not merged: the check <q>tests</q> fails on what would land in <q>main</q>. A merge leaves out the files that were only for you to look at, and the change seems to need them.")
+                || card.contains("Not merged: the check “tests” fails on what would land in “main”. A merge leaves out the files that were only for you to look at, and the change seems to need them."), "{card}");
+            assert!(card.contains("<div class=\"rleft\">Left out: design/board.html.</div>"), "{card}");
+            assert!(card.contains("<summary>▸ What the check said</summary><pre class=\"said\">the project&#39;s tests fail</pre>"), "{card}");
+            assert!(!card.contains("data-act=\"merge\""), "the same check fails again: no Merge: {card}");
         }
     }
 }

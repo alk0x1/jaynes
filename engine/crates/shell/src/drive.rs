@@ -1565,9 +1565,17 @@ impl<'a> Driver<'a> {
                 let head = delivered.unwrap_or_default();
                 // what the role only shows is not in what is delivered: the checks that ran the project's tests
                 // judge that once more, and the merge waits on them
-                let left_out = copy.head().is_ok_and(|h| h != head);
-                if let Some(why) = left_out.then(|| self.judged_again(run, &head)).flatten() {
-                    reference.push_str(&format!("; not merged: {why}"));
+                let whole = copy.head().ok().filter(|h| *h != head);
+                let kept = self.setup.dir.join(crate::listing::JUDGED_AGAIN);
+                let _gone = std::fs::remove_file(&kept);
+                if let Some(whole) = whole
+                    && let Some(mut judged) = self.judged_again(run, &head)
+                {
+                    // the delivery names the check, never its reasons; the shape stays beside the run for the card,
+                    // the app and the summary (the design-lead's quatro-itens.md, judged_again, 23/11)
+                    judged.left_out = copy.paths_between(&head, &whole).unwrap_or_default();
+                    let _kept = std::fs::write(&kept, serde_json::to_string(&judged).unwrap_or_default());
+                    reference.push_str(&format!("; not merged: {}", judged.reference()));
                     return (ok, reference, landed);
                 }
                 let tests = run.tests_changed();
@@ -1597,10 +1605,11 @@ impl<'a> Driver<'a> {
     }
 
     /// The checks of the delivered steps that run the project's tests, once more on `head`, what the run delivers
-    /// without what its role only shows. Why the merge may not go, when one does not pass; None when all do.
-    fn judged_again(&self, run: &Run, head: &str) -> Option<String> {
+    /// without what its role only shows. The first that fails, or else the first that could not judge, with what it
+    /// said; None when all pass.
+    fn judged_again(&self, run: &Run, head: &str) -> Option<crate::listing::JudgedAgain> {
         let started = std::time::Instant::now();
-        let (mut why, mut ran) = (Vec::new(), false);
+        let (mut fails, mut blocked, mut ran) = (None, None, false);
         for j in run.path() {
             let decl = &run.manifest.steps[j];
             let Some(done) = run.steps[j].done.as_ref().filter(|_| decl.delivered) else { continue };
@@ -1610,23 +1619,22 @@ impl<'a> Driver<'a> {
             }
             ran = true;
             for r in self.checks(run, &decl.name, &done.output, &done.reads, &names, Some(head)) {
+                let said = |fails, reasons| crate::listing::JudgedAgain { check: r.check.clone(), step: decl.name.clone(), fails, reasons, left_out: Vec::new() };
                 match r.verdict {
                     CheckVerdict::Pass => {}
-                    CheckVerdict::Fail { reasons, .. } => why.push(format!(
-                        "the check {} of {} fails on what is delivered, without what the role only shows: {}",
-                        r.check, decl.name, reasons.join("; ")
-                    )),
-                    CheckVerdict::Blocked { reason } => why.push(format!(
-                        "the check {} of {} could not judge what is delivered, without what the role only shows: {reason}",
-                        r.check, decl.name
-                    )),
+                    CheckVerdict::Fail { reasons, .. } => {
+                        fails.get_or_insert_with(|| said(true, reasons));
+                    }
+                    CheckVerdict::Blocked { reason } => {
+                        blocked.get_or_insert_with(|| said(false, vec![reason]));
+                    }
                 }
             }
         }
         if ran {
             say(&format!("  checked again on what is delivered in {:.1}s", started.elapsed().as_secs_f64()));
         }
-        (!why.is_empty()).then(|| why.join(". "))
+        fails.or(blocked)
     }
 
     fn cwd(&self, run: &Run, i: usize, attempt: u32) -> PathBuf {
