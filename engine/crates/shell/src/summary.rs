@@ -1151,8 +1151,8 @@ What Jaynes refused on the way, in its checks' own words, and what came of it:
         let judged = |fix: u32, suite: bool, cases: bool| Event::ChecksJudged {
             step: "change".into(), attempt: 1, fix,
             checks: vec![
-                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: suite, blocked: false, read: vec![], tree: None },
-                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed: cases, blocked: false, read: vec![], tree: None },
+                CheckRecord { check: "suite-passes".into(), kind: CheckKind::Open, passed: suite, blocked: false, read: vec![], tree: None, tests_changed: vec![] },
+                CheckRecord { check: "cases-pass".into(), kind: CheckKind::Hidden, passed: cases, blocked: false, read: vec![], tree: None, tests_changed: vec![] },
             ],
         };
         // the attempt's first try: the suite could not start; the agent fixes it in its session, then a case fails
