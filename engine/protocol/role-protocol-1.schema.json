@@ -1164,6 +1164,10 @@
           },
           "type": "array"
         },
+        "delivered": {
+          "description": "Whether what the step writes is part of what the run delivers. false: the step draws only for the person to\nchoose from (identity's boards); its paths, the step's `reach.write`, stay in the run's tree, where later steps\nand their checks read them, and in the run's record and on its page, and never go into the delivery.",
+          "type": "boolean"
+        },
         "effect": {
           "$ref": "#/$defs/Effect",
           "default": {
