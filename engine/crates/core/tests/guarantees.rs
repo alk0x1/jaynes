@@ -271,15 +271,16 @@ impl World {
     /// The person, the agent that started the run, or another agent.
     /// Someone takes a hidden case out of the blocked run: mostly the person, mostly a case a hidden check named.
     fn drop_case(&mut self, run: &Run) {
-        let by = if self.rng.chance(80) { By::Person } else { By::Agent { who: "claude".to_string() } };
+        let mut rng = Rng(self.rng.0 ^ 0x00D2_0BCBu64 ^ (self.log.len() as u64) << 32);
+        let by = if rng.chance(80) { By::Person } else { By::Agent { who: "claude".to_string() } };
         let at = match &run.phase {
-            Phase::Blocked { step: Some(s), .. } if self.rng.chance(90) => s.clone(),
-            _ => run.manifest.steps[self.rng.below(run.manifest.steps.len())].name.clone(),
+            Phase::Blocked { step: Some(s), .. } if rng.chance(90) => s.clone(),
+            _ => run.manifest.steps[rng.below(run.manifest.steps.len())].name.clone(),
         };
         let named: Vec<String> = run.manifest.index(&at).map(|i| run.steps[i].failure.iter().filter_map(|r| r.strip_prefix(HIDDEN_SAID).map(str::to_string)).collect()).unwrap_or_default();
-        let case = match self.rng.pick(&named) {
-            Some(c) if self.rng.chance(80) => c.clone(),
-            _ => format!("case {}", self.rng.below(3)),
+        let case = match rng.pick(&named) {
+            Some(c) if rng.chance(80) => c.clone(),
+            _ => format!("case {}", rng.below(3)),
         };
         let input = Input::DropCase { by: by.clone(), step: at.clone(), case: case.clone() };
         let before = self.log.len();
@@ -1115,7 +1116,8 @@ impl World {
                 assert!(self.log.len() <= before + 1, "seed {}: G6 a late report did more than being recorded", self.seed);
             }
         } else if roll < 86 {
-            if run.blocked() && self.rng.chance(35) {
+            // drawn from a source beside `rng`, which it leaves as it was, so the random runs of before stay as they were
+            if run.blocked() && Rng(self.rng.0 ^ 0x00D2_0BCAu64).chance(35) {
                 self.drop_case(&run);
             } else if run.blocked() {
                 let (by, starter) = self.who();
