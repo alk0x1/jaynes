@@ -128,9 +128,24 @@ pub fn coin(run: &str, step: &str, round: u32) -> f64 {
 // --- the count of a stop -------------------------------------------------------------------------------------
 
 /// Which stop an outcome belongs to: the role, the step as declared, and the role's content. Any change to the
-/// step or to the role starts a new count.
+/// step or to the role starts a new count. A check's project_tests is left out: it is what Jaynes knows of its own
+/// menu, not what the role wrote, and a script check that says it changes the role's content anyway; the digest
+/// is canonical, so a step without it keys as it always did.
 pub fn stop_key(manifest: &Manifest, role_fingerprint: &Digest, step: usize) -> Digest {
-    Digest::of_json(&(&manifest.role, &manifest.steps[step], role_fingerprint))
+    Digest::of_json(&(&manifest.role, &as_written(&manifest.steps[step]), role_fingerprint))
+}
+
+/// A step as its role wrote it: without what the engine says of its checks on its own.
+pub fn as_written(step: &crate::manifest::StepDecl) -> serde_json::Value {
+    let mut v = serde_json::to_value(step).unwrap_or_default();
+    if let Some(checks) = v.get_mut("checks").and_then(serde_json::Value::as_array_mut) {
+        for c in checks {
+            if let Some(c) = c.as_object_mut() {
+                c.remove("project_tests");
+            }
+        }
+    }
+    v
 }
 
 /// Which stop an error belongs to across versions: the role and the step by their names. An error found under one
@@ -367,6 +382,26 @@ pub fn status(count: &Count, budget: Option<f64>, delta: f64) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A check's project_tests is what Jaynes knows of its own menu (suite-passes runs the project's tests), not
+    /// what the role wrote: an engine that learns it must not start every stop of such a step counting anew.
+    #[test]
+    fn a_check_that_says_it_runs_the_project_s_tests_keeps_its_stop_s_count() {
+        use crate::manifest::{CheckDecl, CheckKind, StepDecl};
+        let step: StepDecl = serde_json::from_value(serde_json::json!({
+            "name": "change", "executor": "agent", "reach": {"project": "write", "write": ["**"], "commands": true},
+            "checks": [{"name": "suite-passes", "kind": "open"}]
+        }))
+        .expect("a step");
+        let m = |checks: Vec<CheckDecl>| Manifest {
+            role: "r".into(), version: "1".into(), protocol: 1, steps: vec![StepDecl { checks, ..step.clone() }],
+            target: Default::default(), delivery: Default::default(),
+        };
+        let check = |project_tests| CheckDecl { name: "suite-passes".into(), kind: CheckKind::Open, about: String::new(), reads: Vec::new(), project_tests };
+        let f = Digest::of_json("role");
+        assert_eq!(stop_key(&m(vec![check(true)]), &f, 0), stop_key(&m(vec![check(false)]), &f, 0));
+        assert_ne!(stop_key(&m(vec![check(true)]), &f, 0), stop_key(&m(Vec::new()), &f, 0), "the checks still count");
+    }
 
     #[test]
     fn labels_needed_with_no_error_match_the_python_engine() {

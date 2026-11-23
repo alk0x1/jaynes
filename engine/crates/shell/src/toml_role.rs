@@ -4188,7 +4188,12 @@ script = "requires/changelog.sh"
         for (name, was) in BEFORE {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/roles").join(name);
             let r = TomlRole::load(&dir).unwrap_or_else(|e| panic!("{name} no longer reads:\n{}", e.join("\n")));
-            let now = jaynes_core::Digest::of_json(&r.manifest).0;
+            // the steps as written: a check's project_tests is Jaynes's word of its own menu, and the key of a stop's
+            // earned record leaves it out (attention::as_written)
+            let steps: Vec<_> = r.manifest.steps.iter().map(jaynes_core::attention::as_written).collect();
+            let mut written = serde_json::to_value(&r.manifest).expect("json");
+            written["steps"] = serde_json::Value::Array(steps);
+            let now = jaynes_core::Digest::of_json(&written).0;
             if now != *was {
                 other.push(format!("{name}: {now}"));
             }
