@@ -1478,6 +1478,11 @@ esac
     let stop = jaynes_shell::stop::waiting(&s.home, &store.state("grant").expect("state").expect("run")).expect("waits");
     assert!(stop.offers.len() == 1 && stop.offers[0].marked && stop.offers[0].marked_for.is_empty(), "{:?}", stop.offers);
     drop(store);
+    // the stop's page shows the box, marked, with the core's words and what it still keeps under them; the page's
+    // script grants each marked box before it sends the answer (the engineer lead's T5, 23/11, as the app does)
+    let html = http(port, &format!("GET /q/grant/{id} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
+    assert!(html.contains(r#"<input type="checkbox" class="offer" data-offer="test_servers" checked>"#), "{html}");
+    assert!(html.contains(&jaynes_shell::stop::TEST_SERVERS_SAYS.replace('\'', "&#39;")) && html.contains(jaynes_shell::stop::TEST_SERVERS_THEN), "{html}");
     let grant = format!(r#"{{"run":"grant","action":"grant","question":"{id}","offer":"test_servers"}}"#);
     // without the key it is an agent's, and refused
     let r = post(port, "/api/act", &grant, "");
@@ -1486,6 +1491,15 @@ esac
     // with the key, the person's: then their answer
     let r = post(port, "/api/act", &grant, "jaynes_key=k3y");
     assert_eq!(r["ok"], true, "{r}");
+    // granted, the box is gone from the stop: a second Send never grants it again (once the run took the grant)
+    for _ in 0..50 {
+        if events(&s, "grant").iter().any(|e| e["type"] == "Granted") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let html = http(port, &format!("GET /q/grant/{id} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
+    assert!(html.contains("Which stack?") && !html.contains(r#"class="offer""#), "{html}");
     let keep = format!(r#"{{"run":"grant","question":"{id}","shown":"{shown}","verdicts":{{}}}}"#);
     let r = post(port, "/api/answer", &keep, "jaynes_key=k3y");
     assert_eq!(r["ok"], true, "{r}");

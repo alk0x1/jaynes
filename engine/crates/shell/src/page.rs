@@ -1103,7 +1103,7 @@ impl Page {
                     _ => changes_html(&self.home, run, i),
                 };
                 let project = names.get(&run.id).map(|n| format!("{} · ", esc(&n.project))).unwrap_or_default();
-                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project, gone(run), crate::listing::blocked(&self.home, run))
+                remind.clone() + &question_html(run, q, &shown, &changes, &crate::listing::into_of(&self.home, &run.id), &project, gone(run), crate::listing::blocked(&self.home, run), &crate::stop::offered(Store::open(&self.home.join("record.sqlite3")).ok().as_ref(), run, q))
             }
         };
         // whether the person holds the key, the page's script asks, and says so here when they do not
@@ -1783,7 +1783,7 @@ fn thread_story(s: &jaynes_core::run::StepState) -> String {
 
 /// `project`: the stop's project and its separator, ready to show, or "" when the run has no name yet.
 #[allow(clippy::too_many_arguments)]
-fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str, gone: bool, blocked: Option<crate::listing::BlockedSaid>) -> String {
+fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::question::Item) -> String, changes: &str, into: &str, project: &str, gone: bool, blocked: Option<crate::listing::BlockedSaid>, offers: &[crate::stop::Offered]) -> String {
     let question = &q.question;
     let i = run.manifest.index(&question.step).unwrap_or(0);
     // rounds the person opens have no ceiling: the round and what the run spent so far, for the person to decide
@@ -1893,7 +1893,7 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
     format!(
         "<div class=\"where\">{project}<a href=\"/run/{run_id}\">{role} · run {run_id}</a> · step {step} · {asked}</div><h1>{title}</h1>{note}{why}{strip}<p class=\"sub\">{rounds}{badge}</p>{phase}{thread}{lead}\
          {say}{askline}<div class=\"understood\" id=\"understood\" hidden></div>\
-         {rides}{rows}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
+         {over}{rides}{rows}{under}{tail}<details class=\"way\"><summary>Steps</summary>{stages}</details><script id=\"data\" type=\"application/json\">{data}</script>",
         role = esc(&run.manifest.role),
         run_id = esc(&run.id),
         step = esc(&question.step),
@@ -1932,7 +1932,35 @@ fn question_html(run: &Run, q: &QuestionState, shown: &dyn Fn(&jaynes_core::ques
         stages = stage_list(run, gone),
         data = data.replace('<', "\\u003c"),
         rides = rides_html(&run.id, question),
+        // the box goes over the options at a stop that chooses, each option's button sending the answer; elsewhere
+        // under the items, before Send
+        over = if question.choose { offers_html(offers) } else { String::new() },
+        under = if question.choose { String::new() } else { offers_html(offers) },
     )
+}
+
+/// What a stop offers the person to grant beside their answer (crate::stop::offered), as a box each: the core's words,
+/// and dim under them what granting it does; marked as the step said, and at a stop that chooses, as each option says
+/// (data-for), until the person sets it. The page's script grants each marked box before it sends the answer.
+fn offers_html(offers: &[crate::stop::Offered]) -> String {
+    if offers.is_empty() {
+        return String::new();
+    }
+    let rows: String = offers
+        .iter()
+        .map(|o| {
+            let offer = serde_json::to_value(o.offer).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+            let follows = if o.marked_for.is_empty() { String::new() } else { format!(" data-for=\"{}\"", esc(&json!(o.marked_for).to_string()).replace('"', "&quot;")) };
+            format!(
+                "<label class=\"offer-row\"><input type=\"checkbox\" class=\"offer\" data-offer=\"{}\"{follows}{}><span><span class=\"says\">{}</span><span class=\"then\">{}</span></span></label>",
+                esc(&offer),
+                if o.marked { " checked" } else { "" },
+                esc(&o.says),
+                esc(&o.then)
+            )
+        })
+        .collect();
+    format!("<div class=\"offers\">{rows}</div>")
 }
 
 /// The stops a merge's touch keeps as the request settled them, each with its step, what it holds in Jaynes's words
@@ -2598,6 +2626,25 @@ document.addEventListener("click", e => {
 });
 const el = document.getElementById("data");
 const base = el ? JSON.parse(el.textContent) : null;
+// what the stop offers beside the answer (the engineer lead's T5, 23/11, as the app does): a box the person set stays
+// as they set it; one they did not follows the option they point at or choose, as that option says
+function follow(id) {
+  document.querySelectorAll("input.offer").forEach(x => { if (!id || x.dataset.set || !x.dataset.for) return; const f = JSON.parse(x.dataset.for); if (id in f) x.checked = f[id]; });
+}
+document.addEventListener("change", e => { if (e.target.matches && e.target.matches("input.offer")) e.target.dataset.set = "1"; });
+for (const ev of ["mouseover", "focusin"]) document.addEventListener(ev, e => { const r = e.target.closest && e.target.closest(".row"); const c = r && r.querySelector("[data-choose]"); if (c) follow(c.dataset.choose); });
+// every answer goes here: each marked box first, as the act "grant", the person's alone; a grant refused sends no
+// answer, and a box granted leaves the stop, so a second Send never grants it again
+async function answerWith(body) {
+  await window.jaynesKey;
+  for (const x of document.querySelectorAll("input.offer")) {
+    if (!x.checked) continue;
+    const g = await (await fetch("/api/act", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: base.run, action: "grant", question: base.question, offer: x.dataset.offer }) })).json();
+    if (!g.ok) return g;
+    x.closest(".offer-row").remove();
+  }
+  return (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
+}
 if (!el || base.choose) document.getElementById("fxbar").classList.add("hide");
 // a stop that chooses: the answer one click on an option sends, and what it will do, written under each option
 const noteOf = id => ((document.querySelector(`.adjust[data-i="${CSS.escape(id)}"]`) || {}).value || "").trim();
@@ -2661,7 +2708,7 @@ document.addEventListener("click", async e => {
   if (b.id === "sendread" || b.id === "sendpressed") {
     const body = b.id === "sendread" ? JSON.stringify({ ...base, ...readBody }) : pressedBody;
     b.disabled = true;
-    const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
+    const r = await answerWith(body);
     if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
     else { b.disabled = false; document.getElementById("understood").insertAdjacentHTML("beforeend", `<div class="refused">${esc(r.refused || "")}</div>`); }
   }
@@ -2741,7 +2788,8 @@ if (base && base.choose) {
     }
     const body = b.id === "develop" ? finalists() : b.id === "none" ? none() : b.dataset.back ? bringBack(b.dataset.back) : b.dataset.keep ? keepWith(b.dataset.keep) : choice(b.dataset.choose);
     document.querySelectorAll("button.choose").forEach(x => x.disabled = true);
-    const r = await (await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
+    follow(b.dataset.choose || b.dataset.keep);
+    const r = await answerWith(body);
     if (r.ok) { b.textContent = "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
     else { const ul = b.closest(".row").querySelector(".fx-row"); if (ul) ul.innerHTML = `<li class="bad">${esc(r.refused || "")}</li>`; document.querySelectorAll("button.choose").forEach(x => x.disabled = false); }
   });
@@ -2782,7 +2830,7 @@ document.addEventListener("click", async e => {
   }
   if (b.id === "send" && !b.disabled) {
     b.disabled = true;
-    const r = await post("/api/answer");
+    const r = await answerWith(body());
     if (r.ok) { b.textContent = r.recorded === "inbox" ? "Sent; the run takes it after the work under way" : "Sent"; setTimeout(() => location.href = "/?sent=" + encodeURIComponent(base.run), 900); }
     else { document.getElementById("refused").textContent = r.refused; b.disabled = false; }
   }
@@ -2943,6 +2991,7 @@ main { padding:22px 32px 240px; max-width:900px; }
 h1 { font-size:24px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; } .sub { margin:0 0 20px; }
 h1 .proj { color:var(--dim); font-weight:500; }
 .sent { margin:0 0 16px; padding:9px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--ink); }
+.offers { margin:4px 0 14px; display:flex; flex-direction:column; gap:8px; } .offer-row { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; cursor:pointer; } .offer-row input { margin-top:3px; accent-color:var(--blue); width:16px; height:16px; flex:none; } .offer-row .says { display:block; font-size:14px; } .offer-row .then { display:block; margin-top:3px; font-size:12.5px; color:var(--dim); }
 .reach { margin:0 0 14px; padding:12px 14px; background:var(--panel); border:1px solid var(--line-2); border-radius:10px; font-size:14px; } .reach code { font-family:var(--mono); font-size:.92em; } .reach .rmerge { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px; } .reach .act.primary { background:var(--blue); color:#04121f; border:0; font-weight:600; } .reach .rfail { margin-top:8px; color:var(--amber); } .reach details.git { margin-top:4px; color:var(--dim); font-size:12.5px; } .reach details.git summary { list-style:none; cursor:pointer; } .reach details.git summary::-webkit-details-marker { display:none; }
 .sent .proj { color:var(--dim); }
 .tests-changed { margin:14px 0 10px; font-size:13.5px; } .tests-changed .r { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
@@ -3092,6 +3141,41 @@ select { background:var(--panel-2); color:var(--ink); border:1px solid var(--lin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The engineer lead's T5 (23/11): what a stop offers beside the answer is a box on its page, as in the app, with
+    // the core's words and, dim under them, what granting it does; marked as the step said, and at a stop that
+    // chooses, as each option says (data-for), until the person sets it. Each marked box goes as the act "grant"
+    // before the answer, the person's alone.
+    #[test]
+    fn asked_a_stop_s_page_shows_what_it_offers_as_a_box_granted_before_the_answer() {
+        use crate::stop::{Offered, TEST_SERVERS_SAYS, TEST_SERVERS_THEN};
+        assert_eq!(offers_html(&[]), "", "nothing offered, no box");
+        let o = |marked: bool, marked_for: &[(&str, bool)]| Offered {
+            offer: jaynes_core::manifest::Offer::TestServers,
+            says: TEST_SERVERS_SAYS.into(),
+            then: TEST_SERVERS_THEN.into(),
+            marked,
+            marked_for: marked_for.iter().map(|(i, m)| (i.to_string(), *m)).collect(),
+        };
+        let on = offers_html(&[o(true, &[])]);
+        assert_eq!(
+            on,
+            format!(
+                "<div class=\"offers\"><label class=\"offer-row\"><input type=\"checkbox\" class=\"offer\" data-offer=\"test_servers\" checked>\
+                 <span><span class=\"says\">{}</span><span class=\"then\">{}</span></span></label></div>",
+                esc(TEST_SERVERS_SAYS),
+                esc(TEST_SERVERS_THEN)
+            )
+        );
+        let off = offers_html(&[o(false, &[("go", true), ("node", false)])]);
+        assert!(off.contains(r#"data-offer="test_servers" data-for="{&quot;go&quot;:true,&quot;node&quot;:false}">"#), "{off}");
+        assert!(!off.contains("checked"), "unmarked: {off}");
+        // the script grants each marked box first, then the answer; a refused grant stops the answer
+        assert!(SCRIPT.contains("async function answerWith(body)"), "one way to send an answer");
+        assert_eq!(SCRIPT.matches("fetch(\"/api/answer\"").count(), 1, "every answer goes through answerWith");
+        assert!(!SCRIPT.contains("post(\"/api/answer\")"), "the Send too");
+        assert!(SCRIPT.contains("action: \"grant\""), "the act");
+    }
     use jaynes_core::question::QuestionKind;
 
     /// The reason the core keeps for a check the box kept from a local port, as listing's tests build it.
