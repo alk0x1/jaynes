@@ -32,6 +32,9 @@ pub struct Side {
     show_cleared: bool,
     /// Whether the column is the rail (bars.rs): the window says so, as the person drags its edge.
     pub rail: bool,
+    /// The column's width as the window draws it, and the window's text, to measure a run's name against the room it has.
+    pub width: f32,
+    text: Option<std::sync::Arc<WindowTextSystem>>,
     /// The person's key, that signs a move to Finished; whether "Move all to Finished" stands open, asking; and what
     /// came of the last move, when it did not go.
     key: Option<std::sync::Arc<crate::key::Key>>,
@@ -194,37 +197,59 @@ fn finished_tag(row: &Row, files: Option<usize>) -> Option<String> {
     files.map(|n| format!("{word} · {n} {}", if n == 1 { "file" } else { "files" }))
 }
 
-/// The least a run's name takes in the column, in pixels at 13: its project and what tells it apart whole, its
-/// title down to its floor. Measured by letters, a little wide, so the name is never cut to less.
-fn name_floor(project: &str, title: &str, apart: Option<&str>) -> f32 {
-    let wide = |t: &str| t.chars().count() as f32 * 7.5;
-    wide(project) + title_floor(title) + apart.map(wide).unwrap_or(0.)
+/// The least a run's name takes in the column, in pixels at 13: its project whole, its title down to its floor.
+/// Measured by letters, a little wide, so the name is never cut to less.
+fn name_floor(project: &str, title: &str) -> f32 {
+    project.chars().count() as f32 * 7.5 + title_floor(title)
+}
+
+/// The room a run's first line has, in pixels: the column's width less the row's margins, its mark and, when it has
+/// one, the control at its end (the "×" of a finished run).
+fn line_room(width: f32, end: bool) -> f32 {
+    width - 16. - 20. - 12. - 10. - if end { 26. } else { 0. }
+}
+
+/// Whether the short word at a run's right stays there: only when the whole name fits beside it (the design-lead,
+/// 23/11): a name cut to give it room loses more than the word going under.
+fn tag_stays(name: f32, tag: f32, room: f32) -> bool {
+    name + 8. + tag <= room
+}
+
+/// A run's two lines in the column, as the design-lead set them (23/11): the first, its project and title alone;
+/// the word at its right when it stays there; the line under, faint, in this order: what tells the run apart
+/// ("started 02:47"), what the run says under its name, and the word that did not fit at its right, so a cut at
+/// the end takes that word first.
+fn two_lines(apart: Option<&str>, tag: Option<Said>, below: Option<Said>, stays: bool) -> (Option<Said>, Option<Said>) {
+    let (right, fallen) = if stays { (tag, None) } else { (None, tag) };
+    let colour = below.as_ref().or(fallen.as_ref()).map_or(look::faint(), |(_, c)| *c);
+    let words: Vec<String> = apart.map(str::to_string).into_iter().chain(below.map(|(l, _)| l)).chain(fallen.map(|(t, _)| t)).filter(|w| !w.is_empty()).collect();
+    (right, (!words.is_empty()).then(|| (words.join(" · "), colour)))
 }
 
 /// Words in the column, with their colour.
 type Said = (String, u32);
 
 /// What a run at work says at the right of its name, and its colour, and the line under it: where it is; a run its
-/// agent set aside says only "set aside" there, faint, and its whole sentence under its name, as in Needs (the
-/// design-lead, 23/11).
+/// agent set aside says only "set aside" there, faint, and under its name the rest of its sentence, never "set aside"
+/// twice (the design-lead, 23/11).
 fn at_work_parts(row: &Row) -> (Said, Option<Said>) {
     match row.mark {
-        Mark::SetAside => (("set aside".into(), look::faint()), Some((row.line.clone(), look::dim()))),
+        Mark::SetAside => {
+            let rest = row.line.strip_prefix("set aside ").unwrap_or(&row.line);
+            (("set aside".into(), look::faint()), Some((rest.to_string(), look::dim())))
+        }
         Mark::Working => ((at_work_tag(row), look::blue()), None),
         _ => ((at_work_tag(row), look::faint()), None),
     }
 }
 
 /// A finished run as its row shows it, what it says at the right of its name and the line under it: what it
-/// delivered at the right; with another run of its title in its project, what tells them apart goes under, with what
-/// it delivered, so two faint words never fight beside its name (the design-lead, 23/11).
+/// delivered at the right, nothing under; the others, their line under (two_lines adds what tells it apart).
 fn finished_parts(row: &Row, files: Option<usize>) -> (Row, Option<Said>, Option<Said>) {
-    let tag = finished_tag(row, files);
     let shown = Row { line: older_line(row), ..row.clone() };
-    match (tag, &row.apart) {
-        (Some(t), Some(apart)) => (Row { apart: None, ..shown }, None, Some((format!("{apart} · {t}"), look::faint()))),
-        (Some(t), None) => (shown, Some((t, look::faint())), None),
-        (None, _) => {
+    match finished_tag(row, files) {
+        Some(t) => (shown, Some((t, look::faint())), None),
+        None => {
             let below = (shown.line.clone(), look::dim());
             (shown, None, Some(below))
         }
@@ -350,7 +375,7 @@ impl Side {
         .detach();
         cx.observe(&agents, |_, _, cx| cx.notify()).detach();
         cx.observe(&tabs, |_, _, cx| cx.notify()).detach();
-        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), seen: None, seen_kept: seen, show_cleared: false, rail: false, key, moving_all: false, move_said: None }
+        Side { runs, agents, tabs, folded: HashSet::new(), show_finished: false, cleared: cleared.into_iter().collect(), seen: None, seen_kept: seen, show_cleared: false, rail: false, width: 292., text: None, key, moving_all: false, move_said: None }
     }
 
     /// Whether "Move all to Finished" stands open, asking: Esc cancels it (main.rs).
@@ -647,9 +672,24 @@ impl Side {
             )
     }
 
+    /// How wide words are in the column's font, in pixels; by letters, a little wide, before the window is drawn.
+    fn wide(&self, words: &str, size: f32) -> f32 {
+        match &self.text {
+            Some(ts) => {
+                let run = TextRun { len: words.len(), font: font(look::UI_FONT), color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
+                f32::from(ts.shape_line(words.to_string().into(), px(size), &[run], None).width())
+            }
+            None => words.chars().count() as f32 * 7.5 * size / 13.,
+        }
+    }
+
     /// A run: its mark and its name, with a word at the right (`tag`) and a line under it (`below`), each with its
-    /// colour. Nothing draws over the name: the word at the right gives way, and the name never goes to nothing.
+    /// colour. Nothing draws over the name: the word at the right stays only when the whole name fits beside it,
+    /// else it goes under (two_lines), and the name never goes to nothing.
     fn row(&self, row: &Row, on: bool, tag: Option<(String, u32)>, below: Option<(String, u32)>, end: Option<AnyElement>, cx: &mut Context<Self>) -> impl IntoElement {
+        let (project, title, _) = name_parts(&Row { apart: None, ..row.clone() });
+        let stays = tag.as_ref().is_some_and(|(t, _)| tag_stays(self.wide(&format!("{project}{title}"), 13.), self.wide(t, 11.5), line_room(self.width, end.is_some())));
+        let (tag, below) = two_lines(row.apart.as_deref(), tag, below, stays);
         let id = row.id.clone();
         let tabs = self.tabs.clone();
         div()
@@ -677,12 +717,10 @@ impl Side {
                             .flex()
                             .gap(px(8.))
                             .child({
-                                // the project and what tells the run apart stay whole; the title gives way, down to
-                                // eight letters and its "…"; the name never below those (name_floor), and what is at
-                                // its right gives way instead
-                                let (project, title, apart) = name_parts(row);
+                                // the project stays whole; the title gives way, down to eight letters and its "…";
+                                // the name never below those (name_floor)
                                 let floor = title_floor(&title);
-                                let least = name_floor(&project, &title, apart.as_deref());
+                                let least = name_floor(&project, &title);
                                 div()
                                     .flex_1()
                                     .min_w(px(least))
@@ -690,7 +728,6 @@ impl Side {
                                     .text_size(px(13.))
                                     .when(!project.is_empty(), |d| d.child(div().flex_none().whitespace_nowrap().text_color(rgb(look::dim())).child(project)))
                                     .child(div().min_w(px(floor)).truncate().text_color(rgb(look::text())).child(title))
-                                    .children(apart.map(|a| div().flex_none().whitespace_nowrap().text_color(rgb(look::dim())).child(a)))
                             })
                             .children(tag.map(|(t, c)| div().min_w_0().truncate().text_size(px(11.5)).text_color(rgb(c)).child(t))),
                     )
@@ -905,7 +942,8 @@ impl Side {
 }
 
 impl Render for Side {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.text = Some(window.text_system().clone());
         if self.rail {
             return self.rail(cx);
         }
@@ -1028,7 +1066,7 @@ impl Render for Side {
 #[cfg(test)]
 mod tests {
     // named, not `super::*`: that brings gpui's own `test` attribute in, over the standard one
-    use super::{Agent, Mark, Order, Row, State, agent_word, at_work_parts, finished_parts, older_line, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, name_parts, needs_line, needs_tag, order, rail_tip, seen_from, name_floor, title_floor};
+    use super::{Agent, Mark, Order, Row, State, agent_word, at_work_parts, finished_parts, older_line, agents, asking_line, at_work_tag, finished_tag, inbox_count, kept_cleared, name_parts, needs_line, needs_tag, order, rail_tip, seen_from, name_floor, title_floor, two_lines, tag_stays, line_room};
 
     /// The tech-lead and the design-lead (22/11, quatro-itens.md, item 8): two runs of the same title read alike in
     /// the column. A run is named there as the page names it (listing::name): its project first, always, then its
@@ -1044,30 +1082,57 @@ mod tests {
         aside.project = "horta".into();
         aside.title = "Plant the beans first".into();
         // at work: "set aside" at the right, faint; the whole sentence under the name
-        assert_eq!(at_work_parts(&aside), (("set aside".to_string(), crate::look::faint()), Some(("set aside by the agent that started it · step 2 of 2".to_string(), crate::look::dim()))));
+        assert_eq!(at_work_parts(&aside), (("set aside".to_string(), crate::look::faint()), Some(("by the agent that started it · step 2 of 2".to_string(), crate::look::dim()))));
         // a run at work otherwise: where it is at the right, nothing under
         assert_eq!(at_work_parts(&row("w", Mark::Working, "step 2 of 4, working")), (("step 2 of 4".to_string(), crate::look::blue()), None));
-        // two finished runs of one title: what tells them apart goes under, with what was delivered, never on top
+        // two finished runs of one title: what tells them apart goes under, never on top; what was delivered at the
+        // right when the name fits beside it, at the end of the line under when not
         let mut same = row("same-2", Mark::Delivered, "delivered");
         same.project = "horta".into();
         same.title = "Say what the garden is".into();
         same.apart = Some("started 02:47".into());
         let (shown, right, below) = finished_parts(&same, Some(1));
-        assert_eq!((name_parts(&shown), right, below), (("horta · ".to_string(), "Say what the garden is".to_string(), None), None, Some(("started 02:47 · delivered · 1 file".to_string(), crate::look::faint()))));
+        let delivered = Some(("delivered · 1 file".to_string(), crate::look::faint()));
+        assert_eq!((right.clone(), below.clone()), (delivered.clone(), None));
+        assert_eq!(two_lines(shown.apart.as_deref(), right.clone(), below.clone(), true), (delivered.clone(), Some(("started 02:47".to_string(), crate::look::faint()))));
+        assert_eq!(two_lines(shown.apart.as_deref(), right, below, false), (None, Some(("started 02:47 · delivered · 1 file".to_string(), crate::look::faint()))));
         // alone in its project: what was delivered at the right
         let alone = Row { apart: None, ..same.clone() };
         assert_eq!(finished_parts(&alone, Some(1)).1, Some(("delivered · 1 file".to_string(), crate::look::faint())));
         // the title keeps at least eight letters and its "…" when there is no room; a shorter one keeps all it has
         assert!(title_floor("Say what the garden is") >= title_floor("Say what") && title_floor("Say what the garden is") == title_floor("Say what the"));
         assert!(title_floor("Kale") < title_floor("Say what") && title_floor("") == 0.);
-        // the name never takes less than its project, what tells it apart and that much of its title: a long title,
-        // like a long word at its right, gives way down to there and never further
-        assert_eq!(name_floor("horta · ", "Say what the garden is", Some(" · started 02:47")), name_floor("horta · ", "Say what the", Some(" · started 02:47")));
-        assert!(name_floor("horta · ", "Say what the garden is", None) > name_floor("", "Say what the garden is", None));
+        // the name never takes less than its project and that much of its title
+        assert_eq!(name_floor("horta · ", "Say what the garden is"), name_floor("horta · ", "Say what the"));
+        assert!(name_floor("horta · ", "Say what the garden is") > name_floor("", "Say what the garden is"));
         // never an empty "· ·"
         let empty = Row { title: String::new(), ..same };
         let (project, title, apart) = name_parts(&empty);
         assert_eq!(format!("{project}{title}{}", apart.unwrap_or_default()), "horta · started 02:47");
+    }
+
+    /// The design-lead, 23/11, after 17f69ca0: "À direita, a etiqueta curta (\"delivered · 1 file\", \"set aside\") só
+    /// fica ali se o título couber inteiro ao lado dela. Se não couber, ela desce pra linha 2"; "Linha 2 (faint),
+    /// nesta ordem: started hh:mm (quando há) · o que a pessoa ainda tem a fazer · a etiqueta que desceu. O corte com
+    /// \"…\" é pelo fim, então o que corta primeiro é o \"delivered\""; "Run posta de lado: a linha 2 não repete o
+    /// \"set aside\" que já está à direita".
+    #[test]
+    fn asked_the_word_at_a_runs_right_stays_only_beside_its_whole_name_and_else_goes_under() {
+        // "horta · Name the garden in the readme" does not fit beside "delivered · 1 file" in the column's 292: the
+        // word goes under; a short name keeps it at its right
+        let room = line_room(292., true);
+        assert!(!tag_stays(37. * 6.4, 18. * 5.6, room));
+        assert!(tag_stays(29. * 5.4, 9. * 5.6, line_room(292., false)));
+        // a name exactly as wide as the room leaves none for the word
+        assert!(!tag_stays(room, 1., room));
+        // the word that went under comes last, so a cut at the end takes it first, after the run's own line
+        let line = Some(("blocked: the suite failed".to_string(), crate::look::dim()));
+        let tag = Some(("blocked · open it".to_string(), crate::look::red()));
+        assert_eq!(two_lines(None, tag.clone(), line.clone(), false), (None, Some(("blocked: the suite failed · blocked · open it".to_string(), crate::look::dim()))));
+        assert_eq!(two_lines(Some("started 02:47"), tag.clone(), line.clone(), true), (tag.clone(), Some(("started 02:47 · blocked: the suite failed".to_string(), crate::look::dim()))));
+        // alone, the word that went under keeps its colour; nothing at all, no line
+        assert_eq!(two_lines(None, tag.clone(), None, false), (None, tag));
+        assert_eq!(two_lines(None, None, None, false), (None, None));
     }
 
     #[test]

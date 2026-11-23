@@ -209,9 +209,12 @@ impl Render for Root {
         self.remember(window, cx);
         // the column narrower than its names is the rail (bars.rs)
         let rail = self.column_is_rail();
-        if self.side.read(cx).rail != rail {
+        let width = self.bars.column;
+        if self.side.read(cx).rail != rail || self.side.read(cx).width != width {
             self.side.update(cx, |s, cx| {
                 s.rail = rail;
+                // the column measures a run's name against its own width (side.rs, two_lines)
+                s.width = width;
                 cx.notify();
             });
         }
