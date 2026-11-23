@@ -799,6 +799,7 @@ impl Root {
         };
         let copied = match &branch {
             branch_card::Branch::Unmerged(u) => u.branch.clone(),
+            branch_card::Branch::Nothing { branch, .. } => branch.clone(),
             branch_card::Branch::Merged(_) => String::new(),
         };
         let (t1, t2) = (self.tabs.clone(), self.tabs.clone());

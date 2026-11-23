@@ -19,11 +19,21 @@ pub enum Branch {
     Unmerged(Unmerged),
     /// Merged: "Merged into “main” in horta. Nothing was pushed."
     Merged(String),
+    /// The person's branch has the change already: "Nothing to merge: “main” in horta already has this change.", with
+    /// Copy of the branch, neither Merge nor Undo (the design-lead, 23/11).
+    Nothing { said: String, branch: String },
 }
 
 /// `Branch` of run `r` of the record in `home`: None for a run that delivered nothing on a branch, or whose merge was
-/// undone.
+/// undone. A run the engine marks merged when its merge found nothing new is Nothing, never Merged: asked first
+/// (listing::already_in, the fullstack's word, 23/11).
 pub fn of(home: &Path, r: &Run) -> Option<Branch> {
+    if listing::already_in(home, r) {
+        let setup = jaynes_shell::store::Store::open(&home.join("record.sqlite3")).and_then(|s| s.setup(&r.id)).unwrap_or_default();
+        let into = listing::into_of(home, &r.id);
+        let said = listing::nothing_to_merge_said(if into.is_empty() { "your branch" } else { &into }, &project_of(home, &r.id));
+        return Some(Branch::Nothing { said, branch: setup["branch"].as_str().unwrap_or_default().to_string() });
+    }
     if let Some(u) = listing::unmerged(home, r) {
         return Some(Branch::Unmerged(u));
     }
@@ -52,15 +62,18 @@ pub struct Shown {
     pub git: Option<String>,
     /// Once merged, in place of the branch's line, with Undo the merge.
     pub merged: Option<String>,
+    /// Nothing to merge, in text, and the branch its Copy copies.
+    pub nothing: Option<(String, String)>,
 }
 
 pub fn shown(b: &Branch) -> Shown {
     match b {
         Branch::Unmerged(u) => {
             let (amber, git) = u.not_landed().map_or((None, None), |(a, g)| (Some(a), Some(g)));
-            Shown { line: Some(u.line()), button: u.button().map(|b| (b, u.says())), not_landed: amber, git: git.filter(|g| !g.trim().is_empty()), merged: None }
+            Shown { line: Some(u.line()), button: u.button().map(|b| (b, u.says())), not_landed: amber, git: git.filter(|g| !g.trim().is_empty()), ..Shown::default() }
         }
         Branch::Merged(said) => Shown { merged: Some(said.clone()), ..Shown::default() },
+        Branch::Nothing { said, branch } => Shown { nothing: Some((said.clone(), branch.clone())), ..Shown::default() },
     }
 }
 
@@ -91,6 +104,15 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
     let shown = shown(b);
     let text = |t: String| div().text_size(px(13.)).text_color(rgb(look::text())).child(t);
     let On { copy, merge, undo, git } = on;
+    // one Copy only: the branch's line and the nothing-to-merge line never show together
+    let mut copy = Some(copy);
+    let copy_button = |copy: &mut Option<Press>| {
+        let b = island::button("branch-copy".into(), if s.copied { "Copied" } else { "Copy" }, false, look::grey());
+        match copy.take() {
+            Some(c) => b.on_click(c),
+            None => b,
+        }
+    };
     div()
         .mx(px(14.))
         .mt(px(10.))
@@ -122,9 +144,10 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
                             .child(div().font_family(look::MONO_FONT).text_size(px(12.5)).text_color(rgb(look::text())).child(branch))
                             .child(text(after)),
                     )
-                    .child(island::button("branch-copy".into(), if s.copied { "Copied" } else { "Copy" }, false, look::grey()).on_click(copy)),
+                    .child(copy_button(&mut copy)),
             )
         })
+        .when_some(shown.nothing, |d, (said, _)| d.child(div().flex().items_center().gap(px(12.)).child(div().flex_1().min_w_0().child(text(said))).child(copy_button(&mut copy))))
         .when_some(shown.button, |d, (label, says)| {
             d.child(
                 div()
@@ -197,8 +220,14 @@ mod tests {
         assert!(conflict.button.is_none() && conflict.line.is_some());
         assert_eq!(conflict.not_landed.as_deref(), Some("Not merged: the change conflicts with what “main” has now. The branch “jaynes/same-2” still has it, so you can merge it by hand."));
         assert_eq!(conflict.git.as_deref(), Some("CONFLICT (content): Merge conflict in README.md"));
-        // merged: that line alone, with Undo the merge
+        // merged: that line alone, with Undo the merge (a merge that found nothing new is never this: of() asks
+        // listing::already_in first)
         let merged = shown(&Branch::Merged(jaynes_shell::listing::merged_said("main", "horta")));
         assert_eq!(merged, Shown { merged: Some("Merged into “main” in horta. Nothing was pushed.".into()), ..Shown::default() });
+        // the person's branch has the change already (the design-lead, 23/11: "o caso \"nada a juntar\" vira \"Nothing
+        // to merge: “main” in horta already has this change.\", sem Undo e sem âmbar"): that line in text, Copy of the
+        // branch, neither Merge nor Undo
+        let nothing = shown(&Branch::Nothing { said: jaynes_shell::listing::nothing_to_merge_said("main", "horta"), branch: "jaynes/same-3".into() });
+        assert_eq!(nothing, Shown { nothing: Some(("Nothing to merge: “main” in horta already has this change.".into(), "jaynes/same-3".into())), ..Shown::default() });
     }
 }
