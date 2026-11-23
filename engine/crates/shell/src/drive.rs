@@ -70,6 +70,8 @@ pub const RUN_ENV: &[&str] = &[
     "PATH", "GOROOT", "GOPATH", "GOBIN", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "JAVA_HOME", "NVM_DIR", "NVM_BIN",
     "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL", "PYENV_ROOT", "PYENV_VERSION", "RBENV_ROOT", "ASDF_DIR", "ASDF_DATA_DIR",
     "MISE_DATA_DIR", "MISE_CONFIG_DIR", "HOMEBREW_PREFIX", "DEVELOPER_DIR", "SDKROOT",
+    // where the browser tools keep the browsers they downloaded, which a project's tests start
+    "PLAYWRIGHT_BROWSERS_PATH", "PUPPETEER_CACHE_DIR",
 ];
 
 /// This process's values of [`RUN_ENV`], for the setup of a run it starts.
@@ -1587,6 +1589,7 @@ impl<'a> Driver<'a> {
         let mut reads = self.setup.copy.as_ref().map(|c| c.reads()).unwrap_or_default();
         if let Ok(home) = std::env::var("HOME").map(PathBuf::from).and_then(|h| std::fs::canonicalize(h).map_err(|_| std::env::VarError::NotPresent)) {
             reads.extend(crate::project::toolchains(&std::env::var("PATH").unwrap_or_default(), &home));
+            reads.extend(crate::project::browsers(&home, |k| std::env::var(k).ok()));
         }
         let mut env: Vec<(String, String)> = vec![("JAYNES_OUTPUT".into(), exchange.join("output.json").display().to_string())];
         // the toolchains' caches inside the box's own folder, offline

@@ -1086,6 +1086,82 @@ mod git_tests {
     }
 }
 
+/// The browsers Playwright downloads, each in a folder `<name>-<revision>` of its cache (`PLAYWRIGHT_BROWSERS` in
+/// jaynes_box.py).
+pub const PLAYWRIGHT_BROWSERS: &[&str] = &["chromium", "chromium_headless_shell", "chromium_tip_of_tree",
+    "chromium_tip_of_tree_headless_shell", "firefox", "firefox_beta", "webkit", "ffmpeg", "winldd", "android"];
+/// The browsers Puppeteer downloads, each in a folder of its name in its cache (`PUPPETEER_BROWSERS` there).
+pub const PUPPETEER_BROWSERS: &[&str] = &["chrome", "chrome-headless-shell", "chromium", "firefox", "chromedriver"];
+
+/// Where the browser tools keep the browsers they download, as `browser_caches` in jaynes_box.py finds them:
+/// Playwright's and Puppeteer's places the environment names (`var`), when whole paths, and their own under `home`.
+/// Playwright's MCP server keeps a whole browser profile there too, with the person's cookies and logins, which no
+/// box reads.
+pub fn browser_caches(home: &Path, var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+    let named = ["PLAYWRIGHT_BROWSERS_PATH", "PUPPETEER_CACHE_DIR"].iter().filter_map(|k| var(k)).map(PathBuf::from)
+        .filter(|p| p.is_absolute());
+    named.chain([home.join("Library/Caches/ms-playwright"), home.join(".cache/ms-playwright"), home.join(".cache/puppeteer")]).collect()
+}
+
+/// The browsers installed in the browser tools' caches, where they are, for the agent's box to read and run as the
+/// check's does: a project whose tests start the browser Playwright or Puppeteer downloaded runs them in both. Only
+/// the installed browsers, never the rest of those caches.
+pub fn browsers(home: &Path, var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+    let installed = |name: &str| PUPPETEER_BROWSERS.contains(&name) || PLAYWRIGHT_BROWSERS.iter().any(|b| {
+        name.strip_prefix(b).and_then(|r| r.strip_prefix('-')).is_some_and(|r| !r.is_empty() && r.bytes().all(|c| c.is_ascii_digit()))
+    });
+    let mut out = Vec::new();
+    for cache in browser_caches(home, var) {
+        let Ok(inside) = std::fs::read_dir(&cache) else { continue };
+        let mut found: Vec<PathBuf> = inside.flatten().map(|e| e.path())
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(installed) && p.is_dir()).collect();
+        found.sort();
+        for p in found.into_iter().filter_map(|p| std::fs::canonicalize(p).ok()) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+
+    #[test]
+    fn the_browsers_installed_in_playwright_s_and_puppeteer_s_caches_are_read_and_nothing_else_of_them() {
+        let base = std::env::temp_dir().join(format!("jaynes-browsers-{}", std::process::id()));
+        let _gone = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let named = base.join("elsewhere");
+        for d in ["Library/Caches/ms-playwright/chromium_headless_shell-1255", "Library/Caches/ms-playwright/mcp-chrome-f5334aa/Default",
+                  "Library/Caches/ms-playwright/b", "Library/Caches/ms-playwright/firefox-beta", ".cache/puppeteer/chrome/mac_arm-140.0.1",
+                  ".cache/puppeteer/profile", ".cache/ms-playwright/webkit-2182"] {
+            std::fs::create_dir_all(home.join(d)).expect("dir");
+        }
+        std::fs::create_dir_all(named.join("firefox-1490")).expect("dir");
+        std::fs::create_dir_all(named.join("mcp-chrome-2")).expect("dir");
+        // a file of an installed browser's name is no install
+        std::fs::write(home.join("Library/Caches/ms-playwright/chromium-1169"), "").expect("write");
+        let home = std::fs::canonicalize(&home).expect("home");
+        let named = std::fs::canonicalize(&named).expect("named");
+        let var = |k: &str| (k == "PLAYWRIGHT_BROWSERS_PATH").then(|| named.display().to_string());
+        assert_eq!(browsers(&home, var), vec![named.join("firefox-1490"), home.join("Library/Caches/ms-playwright/chromium_headless_shell-1255"),
+                                             home.join(".cache/ms-playwright/webkit-2182"), home.join(".cache/puppeteer/chrome")]);
+        // the names the box reads back in jaynes_box.py are these
+        let box_py = include_str!("../../../python/jaynes_box.py");
+        let quoted = |name: &str| -> Vec<String> {
+            let at = box_py.find(&format!("{name} = (")).unwrap_or_else(|| panic!("{name} in jaynes_box.py"));
+            let body = &box_py[at..at + box_py[at..].find(')').expect("end")];
+            body.split('"').skip(1).step_by(2).map(str::to_string).collect()
+        };
+        assert_eq!(quoted("PLAYWRIGHT_BROWSERS"), PLAYWRIGHT_BROWSERS);
+        assert_eq!(quoted("PUPPETEER_BROWSERS"), PUPPETEER_BROWSERS);
+        let _gone = std::fs::remove_dir_all(&base);
+    }
+}
+
 #[cfg(test)]
 mod toolchain_tests {
     use super::*;
