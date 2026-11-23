@@ -255,7 +255,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 Ok(role) => {
                     println!("✔ {} {} reads: {}", role.manifest.role, role.manifest.version, role.manifest.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" → "));
                     // what each step does to the world as resolved, and each way the project's content can reach the network
-                    for line in role.effects().into_iter().chain(role.flows_told()).chain(role.claims_listed()).chain(role.requires_listed()) {
+                    for line in role.effects().into_iter().chain(role.shown_told()).chain(role.flows_told()).chain(role.claims_listed()).chain(role.requires_listed()) {
                         println!("  {line}");
                     }
                     // what the author should know and is no error: a key that limits nothing, a step that makes every run risky

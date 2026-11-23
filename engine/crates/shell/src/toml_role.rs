@@ -25,6 +25,7 @@
 //! | `stop` verdicts, holds, from_risk, release, budget, audit_rate, answers | the same names |
 //! | `from_risk`, `attempts`, `fixes`, `hidden`, `about` | the same names |
 //! | `model` (`small` or `default`), `turns` | the same names: Jaynes names the model of each size |
+//! | `delivered` (`false`: drawn only for the person to choose from) | `delivered`: its `write` paths stay in the run and never go into the delivery |
 //!
 //! The rest is the role's side of the protocol: `instructions` and `output` (the prompt and its schema), `use`
 //! and `with` (a step of Jaynes's own, from the menu), `script` (a step of the role's own: a file of its folder),
@@ -331,6 +332,8 @@ struct StepFile {
     model: jaynes_core::manifest::StepModel,
     /// At most this many turns of the agent's model in one attempt.
     turns: Option<u32>,
+    /// false: what the step writes is drawn only for the person to choose from, and never delivered.
+    delivered: Option<bool>,
     instructions: Option<String>,
     #[serde(rename = "use")]
     uses: Option<String>,
@@ -1602,6 +1605,7 @@ impl TomlRole {
                 about: if s.about.is_empty() { s.uses.as_deref().and_then(menu_step).map(|m| m.about.to_string()).unwrap_or_default() } else { s.about.clone() },
                 model: s.model,
                 turns: s.turns,
+                delivered: s.delivered.unwrap_or(true),
             });
             let script = s.script.clone().filter(|_| s.by == By::Role);
             extras.insert(s.name.clone(), StepExtra { instructions, schema, uses, script, checks: impls, check_ports, show: s.show.clone() });
@@ -1989,6 +1993,24 @@ impl TomlRole {
             }
         }
         flows
+    }
+
+    /// What never reaches the person's project, as `jaynes check` prints it: each step drawn only for the person to
+    /// choose from, with the paths it draws in, and each delivered step that may write in them, whose change there is
+    /// left out too. Empty when the role delivers all it writes.
+    pub fn shown_told(&self) -> Vec<String> {
+        let steps = &self.manifest.steps;
+        let mut told = Vec::new();
+        for shown in steps.iter().filter(|s| !s.delivered) {
+            let paths = shown.reach.write.join(", ");
+            told.push(format!("{} draws {paths} for you to choose from: kept in the run's record and on its page, never merged into your project", shown.name));
+            for other in steps.iter().filter(|s| s.delivered && s.reach.project == ProjectAccess::Write) {
+                if shown.reach.write.iter().any(|p| other.reach.write.iter().any(|w| !w.starts_with('!') && may_meet(w, p))) {
+                    told.push(format!("what {} writes in {paths} is left out of the merge too", other.name));
+                }
+            }
+        }
+        told
     }
 
     /// The ways told by [`TomlRole::flows`] as `jaynes check` prints them: each way, or that there is none and why.
@@ -2763,6 +2785,20 @@ pub fn serve(dir: &Path, library: &Path) {
     println!("{}", serde_json::to_string(&reply).unwrap_or_default());
 }
 
+/// Whether two write paths (globs like `design/identity/**`) may name the same file: compared part by part up to the
+/// first part with a wildcard in either, where they may. Said, never refused, so a guess that two may meet is safe.
+fn may_meet(a: &str, b: &str) -> bool {
+    for (x, y) in a.split('/').zip(b.split('/')) {
+        if x.contains('*') || y.contains('*') {
+            return true;
+        }
+        if x != y {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2837,6 +2873,42 @@ files = { type = "array", items = "string" }
         assert!(e.contains("step tidy goes on in the session of change, which works with another model"), "{e}");
         let same = two.replacen("needs = [\"runner\"]", "needs = [\"runner\"]\nmodel = \"small\"", 1);
         TomlRole::load(&role("continue-same-model", &same)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    }
+
+    /// The tech-lead, 22/11, item 2 of the queue: what Jaynes draws only for the person to choose from (identity's
+    /// boards, screen-layouts' layouts) stays in the run's record and on its page, and never goes into the person's
+    /// project; the merge takes only what the role delivers. The boards stay in the run's tree, where later steps and
+    /// their checks read them (screen-layouts' matches-layout reads the chosen layout); only the delivery leaves them out.
+    #[test]
+    fn asked_what_is_drawn_only_for_the_person_to_choose_stays_out_of_their_project() {
+        let boards = "[[step]]\nname = \"boards\"\nneeds = [\"runner\"]\ndelivered = false\nreach = { project = \"write\", write = [\"design/identity/**\"] }\ninstructions = \"Draw three boards.\"\n\n[step.output]\npages = { type = \"array\", items = \"string\" }\n\n";
+        let with = |b: &str| GOOD.replacen("[[step]]\nname = \"change\"", &format!("{b}[[step]]\nname = \"change\""), 1);
+        let r = TomlRole::load(&role("shown-only", &with(boards))).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let step = |n: &str| r.manifest.steps.iter().find(|s| s.name == n).cloned().expect("the step");
+        assert!(!step("boards").delivered, "the boards are never delivered");
+        assert!(step("change").delivered && step("runner").delivered, "left out, a step is delivered as before");
+        let json = serde_json::to_value(&r.manifest).expect("json");
+        let steps = json["steps"].as_array().cloned().unwrap_or_default();
+        assert!(steps.iter().filter(|s| s["name"] != "boards").all(|s| s.get("delivered").is_none()), "a role that says nothing describes itself as before: {json}");
+        // jaynes check says what never reaches the project, and what of a delivered step's change is left out with it
+        assert_eq!(
+            r.shown_told(),
+            vec![
+                "boards draws design/identity/** for you to choose from: kept in the run's record and on its page, never merged into your project".to_string(),
+                "what change writes in design/identity/** is left out of the merge too".to_string(),
+            ]
+        );
+        let narrow = TomlRole::load(&role("shown-only-narrow", &with(boards).replacen("write = [\"**\"], commands", "write = [\"src/**\"], commands", 1))).expect("reads");
+        assert_eq!(narrow.shown_told().len(), 1, "a delivered step that cannot write there is not named: {:?}", narrow.shown_told());
+        assert!(TomlRole::load(&role("shown-none", GOOD)).expect("reads").shown_told().is_empty(), "a role that delivers all says nothing");
+        for (name, from, to, says) in [
+            ("shown-everywhere", "write = [\"design/identity/**\"]", "write = [\"**\"]", "step boards is never delivered and may write anywhere: name in write the folders it draws in, which are never merged"),
+            ("shown-negated", "write = [\"design/identity/**\"]", "write = [\"design/**\", \"!design/keep/**\"]", "step boards is never delivered: write names only the folders it draws in, with no ! in them"),
+            ("shown-reads", "reach = { project = \"write\", write = [\"design/identity/**\"] }", "reach = { project = \"read\" }", "step boards writes nothing of the project, so delivered = false leaves nothing out"),
+        ] {
+            let e = errors(name, &with(boards).replacen(from, to, 1));
+            assert!(e.contains(says), "{name}:\n{e}");
+        }
     }
 
     /// A role whose fetch step, a step of Jaynes's own that downloads addresses an agent chose, reaches as given.

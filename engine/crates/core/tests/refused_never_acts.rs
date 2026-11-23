@@ -41,7 +41,7 @@ fn running(effect: Effect) -> (Run, u32) {
         idempotent: false,
         about: String::new(),
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
     };
     let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![make], target: Default::default(), delivery: Default::default() };
     let out = decide(None, &Input::Start {

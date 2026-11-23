@@ -102,6 +102,11 @@ pub struct StepDecl {
     /// cap but the agent program's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<u32>,
+    /// Whether what the step writes is part of what the run delivers. false: the step draws only for the person to
+    /// choose from (identity's boards); its paths, the step's `reach.write`, stay in the run's tree, where later steps
+    /// and their checks read them, and in the run's record and on its page, and never go into the delivery.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub delivered: bool,
 }
 
 /// The size of model a step's agent works with.
@@ -345,6 +350,14 @@ pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn yes() -> bool {
+    true
+}
+
+pub(crate) fn is_true(b: &bool) -> bool {
+    *b
+}
+
 impl Manifest {
     pub fn index(&self, name: &str) -> Option<usize> {
         self.steps.iter().position(|s| s.name == name)
@@ -498,6 +511,16 @@ impl Manifest {
             }
             if s.turns == Some(0) {
                 errors.push(format!("{at} gives its agent no turn: turns is at least 1"));
+            }
+            // a step never delivered names the folders it draws in: only they stay out of the delivery, never all
+            if !s.delivered {
+                if s.reach.project != ProjectAccess::Write || s.reach.write.is_empty() {
+                    errors.push(format!("{at} writes nothing of the project, so delivered = false leaves nothing out"));
+                } else if s.reach.write.iter().any(|w| w.starts_with('!')) {
+                    errors.push(format!("{at} is never delivered: write names only the folders it draws in, with no ! in them"));
+                } else if s.reach.write.iter().any(|w| w.split('/').all(|part| part.chars().all(|c| c == '*'))) {
+                    errors.push(format!("{at} is never delivered and may write anywhere: name in write the folders it draws in, which are never merged"));
+                }
             }
             if s.session == SessionKind::Continue {
                 let before = self.steps[..i].iter().rev().find(|b| b.executor == Executor::Agent);

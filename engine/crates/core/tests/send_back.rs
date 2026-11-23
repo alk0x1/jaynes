@@ -29,7 +29,7 @@ fn manifest() -> Manifest {
         hidden: false,
         idempotent: false,
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
         about: String::new(),
     };
     Manifest { role: "fix-bug".into(), version: "1".into(), protocol: 1, steps: vec![fix], target: Default::default(), delivery: Default::default() }

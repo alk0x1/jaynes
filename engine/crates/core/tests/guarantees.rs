@@ -59,7 +59,7 @@ fn cases_from_high(rng: &mut Rng) -> Manifest {
         hidden: false,
         idempotent: false,
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
         about: String::new(),
     };
     let mut cases = step("s0", Vec::new(), Reach { project: ProjectAccess::Read, commands: true, ..Reach::default() }, Vec::new());
@@ -188,7 +188,7 @@ fn role(rng: &mut Rng) -> Manifest {
                 hidden, idempotent: false,
                 about: String::new(),
                 model: Default::default(),
-                turns: None,
+                turns: None, delivered: true,
             });
         }
         let delivery = if rng.chance(30) { jaynes_core::manifest::DeliveryKind::Merge } else { jaynes_core::manifest::DeliveryKind::Branch };
@@ -212,7 +212,7 @@ fn role(rng: &mut Rng) -> Manifest {
         hidden: false, idempotent: false,
         about: String::new(),
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
     };
     Manifest { role: "random".to_string(), version: "1".to_string(), protocol: 1, steps: vec![one], target: Default::default(), delivery: Default::default() }
 }
@@ -1277,7 +1277,7 @@ fn step(name: &str, executor: Executor) -> StepDecl {
         hidden: false, idempotent: false,
         about: String::new(),
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
     }
 }
 

@@ -41,7 +41,7 @@ fn build() -> StepDecl {
         idempotent: false,
         about: String::new(),
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
     }
 }
 

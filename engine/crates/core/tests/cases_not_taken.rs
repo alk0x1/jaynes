@@ -28,7 +28,7 @@ fn step(name: &str, needs: &[&str]) -> StepDecl {
         hidden: false,
         idempotent: false,
         model: Default::default(),
-        turns: None,
+        turns: None, delivered: true,
         about: String::new(),
     }
 }

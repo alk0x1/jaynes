@@ -2630,7 +2630,7 @@ mod tests {
             name: "change".into(), needs: vec![], executor: Executor::Agent, session: SessionKind::Fresh, reach: Reach::default(),
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
             model: Default::default(),
-            turns: None,
+            turns: None, delivered: true,
         };
         let manifest = Manifest { role: "r".into(), version: "1".into(), protocol: 1, steps: vec![step], target: Default::default(), delivery: Default::default() };
         let start = Input::Start { run: "old".into(), request: "x".into(), manifest, role_fingerprint: jaynes_core::Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
@@ -2771,7 +2771,7 @@ mod tests {
             name: "look".into(), needs: vec![], executor: Executor::Person, session: SessionKind::Fresh, reach: Reach::default(),
             effect: Default::default(), checks: vec![], stop: None, from_risk: Default::default(), attempts: 3, fixes: 2, hidden: false, idempotent: false, about: String::new(),
             model: Default::default(),
-            turns: None,
+            turns: None, delivered: true,
         };
         let mut look = step.clone();
         look.name = "look".into();
@@ -3016,7 +3016,7 @@ mod tests {
             idempotent: false,
             about: String::new(),
             model: Default::default(),
-            turns: None,
+            turns: None, delivered: true,
         };
         stack.stop = Some(jaynes_core::manifest::StopDecl {
             verdicts: vec![jaynes_core::question::VerdictKind::Keep, jaynes_core::question::VerdictKind::Change, jaynes_core::question::VerdictKind::Drop],
