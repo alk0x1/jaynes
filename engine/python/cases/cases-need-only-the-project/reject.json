@@ -245,5 +245,369 @@
     }
    ]
   }
+ },
+ {
+  "id": "git-command-builtin",
+  "expect": "reject",
+  "hole": "git behind the shell's command builtin",
+  "output": {
+   "cases": [
+    {
+     "says": "The last commit is there",
+     "run": "command git log -1 >/dev/null"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-exec",
+  "expect": "reject",
+  "hole": "git behind exec",
+  "output": {
+   "cases": [
+    {
+     "says": "The head is a commit",
+     "run": "exec git rev-parse HEAD"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-backslash",
+  "expect": "reject",
+  "hole": "git written with a backslash, which the shell reads as git",
+  "output": {
+   "cases": [
+    {
+     "says": "The history has the render",
+     "run": "\\git log --oneline -- recibo/render.py | grep -q ."
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-quoted-name",
+  "expect": "reject",
+  "hole": "the command's name in quotes, still git",
+  "output": {
+   "cases": [
+    {
+     "says": "The old render is kept",
+     "run": "\"git\" show HEAD:recibo/render.py | grep -q def"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-split-quotes",
+  "expect": "reject",
+  "hole": "git spelled across quotes, gi''t",
+  "output": {
+   "cases": [
+    {
+     "says": "The repository knows the file",
+     "run": "gi''t ls-files | grep -q render"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-via-xargs",
+  "expect": "reject",
+  "hole": "git run by xargs",
+  "output": {
+   "cases": [
+    {
+     "says": "Each test file has history",
+     "run": "ls tests | xargs git log --oneline -- | grep -q ."
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-find-exec",
+  "expect": "reject",
+  "hole": "git run by find -exec",
+  "output": {
+   "cases": [
+    {
+     "says": "Every test has a commit",
+     "run": "find tests -name '*.py' -exec git log -1 -- {} \\;"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-timeout",
+  "expect": "reject",
+  "hole": "git behind timeout",
+  "output": {
+   "cases": [
+    {
+     "says": "Git answers in time",
+     "run": "timeout 5 git status --short"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-nice",
+  "expect": "reject",
+  "hole": "git behind nice",
+  "output": {
+   "cases": [
+    {
+     "says": "The diff is small",
+     "run": "nice git diff --stat HEAD~1"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-substitution-name",
+  "expect": "reject",
+  "hole": "the command's name made by a substitution",
+  "output": {
+   "cases": [
+    {
+     "says": "The history says total",
+     "run": "$(echo git) log -p | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-backtick-name",
+  "expect": "reject",
+  "hole": "the command's name made by backticks",
+  "output": {
+   "cases": [
+    {
+     "says": "The head names a tree",
+     "run": "`printf git` cat-file -p HEAD | grep -q tree"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-bash-lc",
+  "expect": "reject",
+  "hole": "git in bash -lc rather than sh -c",
+  "output": {
+   "cases": [
+    {
+     "says": "The branch is main",
+     "run": "bash -lc 'git branch --show-current' | grep -q main"
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-python-subprocess",
+  "expect": "reject",
+  "hole": "git from python's subprocess",
+  "output": {
+   "cases": [
+    {
+     "says": "The log is not empty",
+     "run": "python3 -c \"import subprocess; assert subprocess.run(['git','log','-1']).returncode == 0\""
+    }
+   ]
+  }
+ },
+ {
+  "id": "git-perl-system",
+  "expect": "reject",
+  "hole": "git from perl's system",
+  "output": {
+   "cases": [
+    {
+     "says": "The history is there",
+     "run": "perl -e 'exit system(\"git log -1 >/dev/null\")'"
+    }
+   ]
+  }
+ },
+ {
+  "id": "dot-git-cd",
+  "expect": "reject",
+  "hole": "reading git's files after going into .git",
+  "output": {
+   "cases": [
+    {
+     "says": "The head names a branch",
+     "run": "cd .git && grep -q ref HEAD"
+    }
+   ]
+  }
+ },
+ {
+  "id": "dot-git-ls",
+  "expect": "reject",
+  "hole": "listing git's folder",
+  "output": {
+   "cases": [
+    {
+     "says": "The repository has packs",
+     "run": "ls -a .git/objects | grep -q pack"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-dev-tcp",
+  "expect": "reject",
+  "hole": "bash's /dev/tcp, the internet with no program named",
+  "output": {
+   "cases": [
+    {
+     "says": "The receipt server answers",
+     "run": "bash -c 'exec 3<>/dev/tcp/example.com/80'"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-ssh",
+  "expect": "reject",
+  "hole": "ssh to another machine",
+  "output": {
+   "cases": [
+    {
+     "says": "The server has the same total",
+     "run": "ssh example.com cat recibo/render.py | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-rsync-remote",
+  "expect": "reject",
+  "hole": "rsync from a remote host",
+  "output": {
+   "cases": [
+    {
+     "says": "The published render agrees",
+     "run": "rsync example.com:recibo/render.py /dev/null"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-node-fetch",
+  "expect": "reject",
+  "hole": "node's fetch",
+  "output": {
+   "cases": [
+    {
+     "says": "The online table answers",
+     "run": "node -e \"fetch('https://example.com').then(r => process.exit(r.ok ? 0 : 1))\""
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-git-clone",
+  "expect": "reject",
+  "hole": "cloning from the internet",
+  "output": {
+   "cases": [
+    {
+     "says": "The upstream has the fix",
+     "run": "git clone -q https://example.com/recibo.git up && grep -q total up/recibo/render.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-ping",
+  "expect": "reject",
+  "hole": "ping to a host",
+  "output": {
+   "cases": [
+    {
+     "says": "The network is up",
+     "run": "ping -c 1 example.com"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-uv-install",
+  "expect": "reject",
+  "hole": "uv installing from the index",
+  "output": {
+   "cases": [
+    {
+     "says": "The suite passes with its packages",
+     "run": "uv pip install pytest && python3 -m pytest -q"
+    }
+   ]
+  }
+ },
+ {
+  "id": "net-go-get",
+  "expect": "reject",
+  "hole": "go fetching a module",
+  "output": {
+   "cases": [
+    {
+     "says": "The module builds",
+     "run": "go get example.com/recibo && go test ./..."
+    }
+   ]
+  }
+ },
+ {
+  "id": "copy-cp-tmp",
+  "expect": "reject",
+  "hole": "a copy of the whole project in /tmp",
+  "output": {
+   "cases": [
+    {
+     "says": "The copy without the fix fails",
+     "run": "cp -R . /tmp/recibo-copy && cd /tmp/recibo-copy && ! python3 -m pytest -q"
+    }
+   ]
+  }
+ },
+ {
+  "id": "copy-rsync-local",
+  "expect": "reject",
+  "hole": "the project copied by rsync to a folder of its own",
+  "output": {
+   "cases": [
+    {
+     "says": "A copy of before fails",
+     "run": "rsync -a ./ /tmp/before/ && ! python3 -m pytest -q /tmp/before/tests"
+    }
+   ]
+  }
+ },
+ {
+  "id": "copy-tar-pipe",
+  "expect": "reject",
+  "hole": "the project copied by tar through a pipe",
+  "output": {
+   "cases": [
+    {
+     "says": "A copy fails without the fix",
+     "run": "mkdir -p /tmp/t && tar cf - . | (cd /tmp/t && tar xf -) && ! python3 -m pytest -q /tmp/t"
+    }
+   ]
+  }
+ },
+ {
+  "id": "copy-tmpdir-var",
+  "expect": "reject",
+  "hole": "a copy made under $TMPDIR, no mktemp named",
+  "output": {
+   "cases": [
+    {
+     "says": "The tests fail on the old code",
+     "run": "d=$TMPDIR/old; mkdir -p \"$d\"; cp -R recibo tests \"$d\"; cd \"$d\"; ! python3 -m pytest -q"
+    }
+   ]
+  }
  }
 ]

@@ -167,5 +167,161 @@
     }
    ]
   }
+ },
+ {
+  "id": "word-git-argument",
+  "expect": "accept",
+  "keeps": "git as a word searched for, never run",
+  "output": {
+   "cases": [
+    {
+     "says": "The README says how to clone",
+     "run": "grep -q git README.md"
+    }
+   ]
+  }
+ },
+ {
+  "id": "word-curl-in-docs",
+  "expect": "accept",
+  "keeps": "curl as a word in a file read",
+  "output": {
+   "cases": [
+    {
+     "says": "The docs show the API",
+     "run": "grep -rq curl docs"
+    }
+   ]
+  }
+ },
+ {
+  "id": "eval-inside-word",
+  "expect": "accept",
+  "keeps": "eval inside another word",
+  "output": {
+   "cases": [
+    {
+     "says": "The render evaluates the total",
+     "run": "grep -q evaluate recibo/render.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "mktemp-in-file-name",
+  "expect": "accept",
+  "keeps": "mktemp in the name of a test file",
+  "output": {
+   "cases": [
+    {
+     "says": "The temp-file test passes",
+     "run": "python3 -m pytest -q tests/test_mktemp_names.py"
+    }
+   ]
+  }
+ },
+ {
+  "id": "variable-as-argument",
+  "expect": "accept",
+  "keeps": "a variable given to a command, not run as one",
+  "output": {
+   "cases": [
+    {
+     "says": "Each test file runs",
+     "run": "for f in tests/test_*.py; do python3 -m pytest -q \"$f\" || exit 1; done"
+    }
+   ]
+  }
+ },
+ {
+  "id": "substitution-of-a-file",
+  "expect": "accept",
+  "keeps": "a substitution that reads a project file",
+  "output": {
+   "cases": [
+    {
+     "says": "The render is not empty",
+     "run": "x=$(cat recibo/render.py); test -n \"$x\""
+    }
+   ]
+  }
+ },
+ {
+  "id": "npm-test-no-install",
+  "expect": "accept",
+  "keeps": "npm running the project's own tests, nothing installed",
+  "output": {
+   "cases": [
+    {
+     "says": "The front end's tests pass",
+     "run": "npm test"
+    }
+   ]
+  }
+ },
+ {
+  "id": "make-dir",
+  "expect": "accept",
+  "keeps": "make told the project's folder",
+  "output": {
+   "cases": [
+    {
+     "says": "The suite passes",
+     "run": "make -C . test"
+    }
+   ]
+  }
+ },
+ {
+  "id": "pytest-not-network",
+  "expect": "accept",
+  "keeps": "pytest choosing tests by name",
+  "output": {
+   "cases": [
+    {
+     "says": "The offline tests pass",
+     "run": "python3 -m pytest -q -k 'not network'"
+    }
+   ]
+  }
+ },
+ {
+  "id": "pipe-to-grep",
+  "expect": "accept",
+  "keeps": "a pipe between plain tools",
+  "output": {
+   "cases": [
+    {
+     "says": "The total is printed",
+     "run": "printf '%s\\n' total | grep -q total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "python-m-module",
+  "expect": "accept",
+  "keeps": "the project's own module run with -m",
+  "output": {
+   "cases": [
+    {
+     "says": "The module prints the total",
+     "run": "python3 -m recibo.render | grep -q Total"
+    }
+   ]
+  }
+ },
+ {
+  "id": "dev-null",
+  "expect": "accept",
+  "keeps": "writing to /dev/null, no folder of its own",
+  "output": {
+   "cases": [
+    {
+     "says": "The render compiles",
+     "run": "python3 -m py_compile recibo/render.py > /dev/null"
+    }
+   ]
+  }
  }
 ]
