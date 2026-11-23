@@ -3274,8 +3274,9 @@ with = {{ pages = "read.sources" }}
         ("small-change", "468ec9b9df7cef331a38e16751ae4c7757bb8594b22d54ef2756cb200f260c33"),
         // its cases step refuses zero cases since 18/11 (field-required): a check more, a manifest of its own; since
         // 21/11 it is 4.0.0, asking "Is this the bug?" with answers and checking for plain words: another one again;
-        // since 22/11 its cases step refuses a case the fix cannot be judged on (cases-need-only-the-project)
-        ("fix-bug", "39da80b675ef10c82bed589891bb6a08aa4a339d094cd62ee9b609aebe541254"),
+        // since 22/11 its cases step refuses a case the fix cannot be judged on (cases-need-only-the-project), and
+        // since 23/11 writes a refused case again once (fixes = 1)
+        ("fix-bug", "c8ee7af54b8d62e4e384bba2f92b14ce6c53058c8f81f81614107a0c1e598b55"),
         ("directions", "c7b31e8f0f7142e16301e90bba6f5df7898bad43afa638f337c22736c5cf2b84"),
     ];
 
@@ -3980,13 +3981,13 @@ unchecked = "only the person can say, and the role asks them only whether it is 
         // without not_taken: each is refused at its line, naming what a run at low risk does not take (the claims
         // are read once the promises read)
         let e = TomlRole::load(&cases_from_high("not-taken-claim", &promise_not_taken)).expect_err("refused").join("\n");
-        assert!(e.contains(&format!("role.toml:129: the claim {ON_THE_CASES:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
+        assert!(e.contains(&format!("role.toml:130: the claim {ON_THE_CASES:?} rests on cases, which a run at low risk does not take: say in not_taken what holds on such a run")), "{e}");
         // a promise is left to its proof, which breaks it on a low run and says how to tell what holds there
         let r = TomlRole::load(&cases_from_high("not-taken-promise", &|t| saying_not_taken(t).replacen(&format!("not_taken = \"{NOT_TAKEN}\"\n"), "", 1))).unwrap_or_else(|e| panic!("{}", e.join("\n")));
         let broken: Vec<Proof> = r.promises.iter().map(|(_, p)| if p.says == MERGED_AFTER { Proof::Broken { path: vec!["low risk".into(), "merge, before the check proof of fix passed".into()] } } else { Proof::Proved { states: 7 } }).collect();
         let (lines, all) = r.prove_lines(&broken);
         assert!(!all);
-        assert!(lines.contains(&format!("✘ {MERGED_AFTER:?} (role.toml:114): fails\n   low risk → merge, before the check proof of fix passed\n   a run at low risk does not take cases: if the role means that, say in not_taken what holds on such a run")), "{lines:?}");
+        assert!(lines.contains(&format!("✘ {MERGED_AFTER:?} (role.toml:115): fails\n   low risk → merge, before the check proof of fix passed\n   a run at low risk does not take cases: if the role means that, say in not_taken what holds on such a run")), "{lines:?}");
         // with it: the role reads, and says it where the author and the person read the claim
         let r = TomlRole::load(&cases_from_high("not-taken", &saying_not_taken)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
         let promise = &r.promises.iter().find(|(_, p)| p.says == MERGED_AFTER).expect("promise").1;
@@ -4259,6 +4260,8 @@ script = "requires/changelog.sh"
         // a check the agent that writes the cases knows, so a case it cannot keep goes back to it, never to the fix
         let check = cases.checks.iter().find(|c| c.name == "cases-need-only-the-project").expect("the check");
         assert_eq!(check.kind, CheckKind::Open);
+        // the engineer lead, 23/11 (T2): a case refused is written again once, in the same session
+        assert_eq!(cases.fixes, 1, "a case refused is written again once");
         assert_eq!(fix.extras["cases"].checks["cases-need-only-the-project"], CheckImpl::Menu { uses: "cases-need-only-the-project".into(), with: Default::default() });
         // and it is told before it writes them
         let told = std::fs::read_to_string(dir.join("cases.md")).expect("cases.md");

@@ -22,6 +22,7 @@ name = "cases"
 hidden = true
 reach = { project = "read", commands = true }
 attempts = 2
+fixes = 1
 about = "Writes, from the request alone, the checks the fix will be judged by."
 instructions = "cases.md"
 checks = ["output-follows-schema", { use = "field-required", field = "cases" }, "cases-need-only-the-project"]
