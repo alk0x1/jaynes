@@ -1531,14 +1531,33 @@ impl TomlRole {
                 }
                 for (o, field) in &st.offers_default {
                     let name = offer_word(*o);
-                    let ty = s.output.as_ref().and_then(|t| t.get(field)).map(|f| match f {
+                    let type_of = |f: &toml::Value| match f {
                         toml::Value::String(t) => t.clone(),
                         toml::Value::Table(t) => t.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         _ => String::new(),
-                    });
+                    };
+                    let output = s.output.as_ref();
                     if !st.offers.contains(o) {
                         errs.push(format!("offers_default names {name}, which this stop does not offer: offers = [\"{name}\"]"));
-                    } else if ty.as_deref() != Some("boolean") {
+                    } else if let Some((list, each)) = field.split_once('.') {
+                        // a field of the items the stop shows: the mark follows the one the person picks
+                        let shown = s.show.as_ref().and_then(|sh| sh.each.as_deref()) == Some(list);
+                        let ty = output
+                            .and_then(|t| t.get(list))
+                            .and_then(|l| l.as_table())
+                            .filter(|l| l.get("type").and_then(|v| v.as_str()) == Some("array"))
+                            .and_then(|l| l.get("items"))
+                            .and_then(|i| i.as_table())
+                            .and_then(|i| i.get("fields"))
+                            .and_then(|f| f.as_table())
+                            .and_then(|f| f.get(each))
+                            .map(type_of);
+                        if !shown {
+                            errs.push(format!("offers_default names {field}, a field of {list}, which this stop does not show: show = {{ each = \"{list}\", ... }}"));
+                        } else if ty.as_deref() != Some("boolean") {
+                            errs.push(format!("offers_default names {field}, which the items of {list} do not declare as a boolean: fields = {{ {each} = \"boolean\" }}"));
+                        }
+                    } else if output.and_then(|t| t.get(field)).map(type_of).as_deref() != Some("boolean") {
                         errs.push(format!("offers_default names {field}, which the step's output does not declare as a boolean: {field} = \"boolean\""));
                     }
                 }

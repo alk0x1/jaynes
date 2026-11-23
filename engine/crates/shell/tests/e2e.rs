@@ -1414,6 +1414,11 @@ esac
             .env("PYTHONPATH", "")
             .env("JAYNES_PAGE_KEY", "k3y"),
     );
+    // the stop offers the box, marked beforehand: the stack serves HTTP
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let stop = jaynes_shell::stop::waiting(&s.home, &store.state("grant").expect("state").expect("run")).expect("waits");
+    assert!(stop.offers.len() == 1 && stop.offers[0].marked && stop.offers[0].marked_for.is_empty(), "{:?}", stop.offers);
+    drop(store);
     let grant = format!(r#"{{"run":"grant","action":"grant","question":"{id}","offer":"test_servers"}}"#);
     // without the key it is an agent's, and refused
     let r = post(port, "/api/act", &grant, "");
@@ -1446,6 +1451,58 @@ esac
     // the project's choice stays, as the command's would
     let prefs = jaynes_shell::project_prefs::load(&s.home, &s.project).expect("prefs").ports.expect("ports");
     assert!(prefs.servers && !prefs.any && prefs.freed_ports.is_empty(), "{prefs:?}");
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "only macOS's box keeps tests from serving")]
+fn at_a_stop_that_chooses_a_stack_the_test_servers_box_is_marked_as_the_stack_the_person_picks_says() {
+    // the roles-engineer's scaffold (23/11): the stack stop chooses one of up to three, and only the chosen stack
+    // says whether the project serves HTTP; the box follows the item the person picks
+    let s = scratch("grant-each");
+    let base = s.home.parent().expect("base").to_path_buf();
+    let role = base.join("stacks");
+    std::fs::create_dir_all(&role).expect("dir");
+    let toml = r#"
+role = "stacks"
+version = "1.0.0"
+
+[[step]]
+name = "stack"
+reach = { project = "read" }
+instructions = "Propose stacks for {{request}}."
+stop = { ask = "Which stack?", choose = true, holds = true, offers = ["test_servers"], offers_default = { test_servers = "stacks.serves_http" } }
+show = { each = "stacks", id = "{{name}}", label = "{{name}}" }
+
+[step.output]
+stacks = { type = "array", max_items = 3, items = { type = "object", fields = { name = "string", serves_http = "boolean" } } }
+"#;
+    std::fs::write(role.join("role.toml"), toml).expect("write");
+    // a field the items do not declare as a boolean, or of a list the stop does not show, is refused
+    for (name, text, says) in [
+        ("not-bool", toml.replace("serves_http = \"boolean\"", "serves_http = \"string\""), "offers_default names stacks.serves_http, which the items of stacks do not declare as a boolean"),
+        ("not-shown", toml.replace("\"stacks.serves_http\"", "\"others.serves_http\""), "offers_default names others.serves_http, a field of others, which this stop does not show"),
+    ] {
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("role.toml"), text).expect("write");
+        let (ok, out) = engine(&s, &["check", dir.to_str().expect("path")]);
+        assert!(!ok && out.contains(says), "{name}: {out}");
+    }
+    let agent = r#"printf '{"stacks":[{"name":"Go with templates","serves_http":true},{"name":"A command line tool","serves_http":false}]}' > .jaynes/output.json"#;
+    let (ok, out) = engine(&s, &[
+        "start", "--run", "each", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        "--request", "a small tool", "--agent", &format!("command:{agent}"),
+    ]);
+    assert!(ok, "{out}");
+    let store = jaynes_shell::store::Store::open(&s.home.join("record.sqlite3")).expect("store");
+    let run = store.state("each").expect("state").expect("run");
+    let stop = jaynes_shell::stop::waiting(&s.home, &run).expect("waits at the stack stop");
+    assert_eq!(stop.offers.len(), 1, "{stop:?}");
+    let offered = &stop.offers[0];
+    assert_eq!(offered.offer, jaynes_core::manifest::Offer::TestServers);
+    assert!(offered.marked, "the first stack serves HTTP: {offered:?}");
+    let each: Vec<(&str, bool)> = offered.marked_for.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(each, [("A command line tool", false), ("Go with templates", true)], "{offered:?}");
 }
 
 #[test]

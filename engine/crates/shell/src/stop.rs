@@ -87,8 +87,12 @@ pub struct Offered {
     pub says: String,
     /// What granting it does and what it still keeps, under the box.
     pub then: String,
-    /// The box is marked beforehand, as the step's output says (the role's offers_default).
+    /// The box is marked beforehand, as the step's output says (the role's offers_default): for a field of the
+    /// items, as the first item says.
     pub marked: bool,
+    /// For a field of the items the stop shows, how each item marks the box, by its id: when the person picks
+    /// another item, the box follows it, unless they set the box themselves. Empty for a field of the whole output.
+    pub marked_for: BTreeMap<String, bool>,
 }
 
 /// What `q`'s stop offers the person to grant and they have not: on macOS only, where the box keeps tests from
@@ -101,14 +105,42 @@ pub fn offered(store: Option<&crate::store::Store>, run: &Run, q: &jaynes_core::
     }
     let Some(i) = run.manifest.index(&q.question.step) else { return Vec::new() };
     let Some(stop) = run.manifest.steps[i].stop.as_ref() else { return Vec::new() };
-    let state = &run.steps[i];
-    let output = state.done.as_ref().map(|d| &d.output).or(state.pending.as_ref().map(|p| &p.output)).and_then(|d| store?.get(d).ok());
+    // the output the stop shows: the step's last delivery, as the record keeps it ({"output", "tree"})
+    let step = &q.question.step;
+    let delivered = store.and_then(|st| {
+        let events = st.events(&run.id).ok()?;
+        let digest = events.iter().rev().find_map(|e| match e {
+            jaynes_core::event::Event::AttemptDelivered { step: s, output, .. } if s == step => Some(output.clone()),
+            _ => None,
+        })?;
+        st.get(&digest).ok()
+    });
+    let output = delivered.map(|d| d["output"].clone());
     let servers = run.ports.as_ref().is_some_and(|p| p.servers || p.any);
     stop.offers
         .list
         .iter()
         .filter(|o| !run.granted.contains(o) && !(**o == Offer::TestServers && servers))
-        .map(|o| Offered {
+        .map(|o| {
+            let field = stop.offers.marked_by.get(o);
+            let marked_for: BTreeMap<String, bool> = match field.and_then(|f| f.split_once('.')) {
+                Some((list, each)) => {
+                    let elements = output.as_ref().and_then(|out| out[list].as_array().cloned()).unwrap_or_default();
+                    // the items are the list's elements in order, as the role showed them
+                    if elements.len() == q.question.items.len() {
+                        q.question.items.iter().zip(&elements).map(|(it, e)| (it.id.clone(), e[each].as_bool().unwrap_or(false))).collect()
+                    } else {
+                        BTreeMap::new()
+                    }
+                }
+                None => BTreeMap::new(),
+            };
+            let marked = match field {
+                Some(f) if f.contains('.') => q.question.items.first().and_then(|it| marked_for.get(&it.id)).copied().unwrap_or(false),
+                Some(f) => output.as_ref().and_then(|out| out.get(f.as_str())?.as_bool()).unwrap_or(false),
+                None => false,
+            };
+            Offered {
             offer: *o,
             says: match o {
                 Offer::TestServers => TEST_SERVERS_SAYS.into(),
@@ -116,7 +148,9 @@ pub fn offered(store: Option<&crate::store::Store>, run: &Run, q: &jaynes_core::
             then: match o {
                 Offer::TestServers => TEST_SERVERS_THEN.into(),
             },
-            marked: stop.offers.marked_by.get(o).and_then(|f| output.as_ref()?.get(f)?.as_bool()).unwrap_or(false),
+            marked,
+            marked_for,
+        }
         })
         .collect()
 }

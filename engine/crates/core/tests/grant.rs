@@ -112,7 +112,7 @@ fn the_person_grants_the_project_s_test_servers_at_a_stop_that_offers_them_and_t
     // the stop stays open for the answer, and nothing else moved
     assert!(run.questions[&q].open());
     // once
-    assert_eq!(feed(&mut run, grant(&q, By::Person)).unwrap_err(), "you already let this project's tests start their own test servers in this run");
+    assert_eq!(feed(&mut run, grant(&q, By::Person)).expect_err("refused"), "you already let this project's tests start their own test servers in this run");
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn an_agent_or_a_rule_never_grants_even_at_a_stop_an_agent_may_release() {
     let mut run = run(vec![Offer::TestServers]);
     let q = asked(&run);
     for by in [By::Agent { who: "claude".into() }, By::Rule { rule: "routine".into() }] {
-        let refused = feed(&mut run, grant(&q, by.clone())).unwrap_err();
+        let refused = feed(&mut run, grant(&q, by.clone())).expect_err("refused");
         assert_eq!(refused, "only you let this project's tests start their own test servers: an agent never does", "{by:?}");
     }
     assert!(run.granted.is_empty());
@@ -131,16 +131,16 @@ fn only_what_an_open_stop_offers_is_granted() {
     // a stop that offers nothing
     let mut plain = run(Vec::new());
     let q = asked(&plain);
-    assert_eq!(feed(&mut plain, grant(&q, By::Person)).unwrap_err(), "this stop does not offer that");
+    assert_eq!(feed(&mut plain, grant(&q, By::Person)).expect_err("refused"), "this stop does not offer that");
     // a question there is not
     let mut run = run(vec![Offer::TestServers]);
-    assert_eq!(feed(&mut run, grant("nope", By::Person)).unwrap_err(), "there is no question nope");
+    assert_eq!(feed(&mut run, grant("nope", By::Person)).expect_err("refused"), "there is no question nope");
     // a stop already answered
     let q = asked(&run);
     let shown = run.questions[&q].question.shown();
     let answer = Answer { back: Default::default(), question: q.clone(), shown, verdicts: Default::default(), by: By::Person, context: String::new() };
     feed(&mut run, Input::Answer { answer }).expect("answered");
-    assert_eq!(feed(&mut run, grant(&q, By::Person)).unwrap_err(), "this stop was already answered, or replaced by a newer one");
+    assert_eq!(feed(&mut run, grant(&q, By::Person)).expect_err("refused"), "this stop was already answered, or replaced by a newer one");
 }
 
 #[test]
@@ -150,12 +150,12 @@ fn a_role_marks_beforehand_only_what_its_stop_offers_and_offers_each_once() {
     twice.offers.marked_by.insert(Offer::TestServers, "serves_http".into());
     stacks.stop = Some(twice);
     let m = Manifest { role: "scaffold".into(), version: "1".into(), protocol: 1, steps: vec![stacks.clone()], target: Default::default(), delivery: Default::default() };
-    assert!(m.validate().unwrap_err().iter().any(|e| e.contains("offers the same thing twice")), "{:?}", m.validate());
+    assert!(m.validate().expect_err("refused").iter().any(|e| e.contains("offers the same thing twice")), "{:?}", m.validate());
     let mut unoffered = stop(Vec::new());
     unoffered.offers.marked_by.insert(Offer::TestServers, "serves_http".into());
     stacks.stop = Some(unoffered);
     let m = Manifest { steps: vec![stacks], ..m };
-    assert!(m.validate().unwrap_err().iter().any(|e| e.contains("marks TestServers beforehand and does not offer it")), "{:?}", m.validate());
+    assert!(m.validate().expect_err("refused").iter().any(|e| e.contains("marks TestServers beforehand and does not offer it")), "{:?}", m.validate());
 }
 
 #[test]

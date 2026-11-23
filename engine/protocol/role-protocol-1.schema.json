@@ -414,6 +414,35 @@
         }
       ]
     },
+    "Offer": {
+      "description": "What a stop may let the person grant with their answer, beside their verdicts: only the person, never an agent.",
+      "oneOf": [
+        {
+          "const": "test_servers",
+          "description": "The project's tests start their own test servers on ports the system picks, as `jaynes project test-servers\nDIR` lets them: never the ports of the usual databases and caches, which only that command lets, naming them.",
+          "type": "string"
+        }
+      ]
+    },
+    "Offers": {
+      "description": "What a stop offers the person to grant, and the field of its step's output that marks each beforehand.",
+      "properties": {
+        "list": {
+          "items": {
+            "$ref": "#/$defs/Offer"
+          },
+          "type": "array"
+        },
+        "marked_by": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "For an offer, the boolean field of the step's output that marks it beforehand; one not named starts unmarked.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "Photo": {
       "description": "The window a page is photographed in, in CSS pixels, and whether down to its last line when taller.",
       "properties": {
@@ -1282,6 +1311,10 @@
         "note": {
           "description": "A line of the role's under the question, said before the person looks, such as \"The layout of your screens\ncomes later.\" at a stop that keeps only colours and fonts. Empty: nothing is said.",
           "type": "string"
+        },
+        "offers": {
+          "$ref": "#/$defs/Offers",
+          "description": "What the person may grant with their answer at this stop, such as the project's test servers at the first stop\nof a new project: only the person, and only while the stop is open."
         },
         "redo": {
           "description": "The earlier step whose work this stop asks about, when the step that asks only reviews it: what the person\nsends back goes to that step, and this one looks again at what comes back before the person sees it.",
