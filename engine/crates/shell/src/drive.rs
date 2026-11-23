@@ -1070,8 +1070,9 @@ impl<'a> Driver<'a> {
                 }
                 break;
             };
-            // the person continues as the project's ports stand now: what they chose since the start goes on record first
-            if matches!(input, Input::Continue { .. } | Input::SendBack { .. }) {
+            // the person continues as the project's ports stand now: what they chose since the start goes on record first,
+            // before a Continue, a redo or any other answer, a correction, a resume (T9, the real user's of 23/11)
+            if matches!(input, Input::Continue { .. } | Input::SendBack { .. } | Input::Answer { .. } | Input::Correct { .. } | Input::Resume { .. }) {
                 self.ports_now()?;
             }
             // A turn whose agent a halt stopped is interrupted, so it spends no attempt and runs again on resume.
@@ -1138,6 +1139,13 @@ impl<'a> Driver<'a> {
                 // What came from outside goes first before an agent's or a role's turn starts: a run abandoned or
                 // halted meanwhile starts no turn, and the turn it had begun counts as interrupted.
                 if matches!(c, Command::RunAgent(_) | Command::RunRole { .. } | Command::RunChecks { .. }) {
+                    // every turn runs as the project's ports stand now: what the person chose while the run waited
+                    // counts from its next turn, a redo's or a correction's as a Continue's (T9, the real user's of
+                    // 23/11), and goes on record first
+                    self.ports_now()?;
+                    if let Some(now) = self.store.state(&self.setup.run)? {
+                        state = now;
+                    }
                     let mut came = Vec::new();
                     while let Some(input) = self.store.inbox_take(&self.setup.run)? {
                         came.push(input);

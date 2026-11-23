@@ -353,3 +353,48 @@ fn a_port_the_person_let_the_project_s_tests_use_the_agent_s_commands_serve_on_a
     assert_eq!(said, vec![format!("served on {port}")], "{out}");
     assert!(out.contains("finished: delivered"), "{out}");
 }
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box has a network of its own)")]
+fn test_servers_the_person_lets_while_a_run_waits_count_from_its_redo_and_go_on_its_record() {
+    // the real user's vazio-x (23/11, T9): the person let the project's test servers while the run waited at a stop,
+    // answered redo, and the agent's next turn still ran with "allowLocalBinding": false
+    let s = Scratch::new("servers-redo");
+    let project = s.path("project").to_str().expect("path").to_string();
+    claude_asking(&s, &["python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen(); \
+                         socket.create_connection(s.getsockname(), timeout=3).close(); print(\"served on its own port\")'".to_string()]);
+    let role = s.path("waits");
+    std::fs::create_dir_all(&role).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "waits"
+version = "1.0.0"
+
+[[step]]
+name = "change"
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Make the change: {{request}}"
+checks = [{ use = "field-required", field = "summary" }]
+stop = { ask = "Keep this change?", verdicts = ["keep", "redo"], holds = true }
+
+[step.output]
+summary = { type = "string", about = "what changed" }
+files = { type = "array", items = "string" }
+"#).expect("write");
+    let (out, turns) = s.start("waits", &role);
+    assert_eq!(turns.len(), 1, "{out}");
+    let said = |s: &Scratch| -> Vec<String> { serde_json::from_str(&std::fs::read_to_string(s.path("claude.said")).expect("said")).expect("json") };
+    assert!(said(&s)[0].starts_with("failed: "), "{:?}", said(&s));
+    // the run waits at its stop; the person lets the test servers at a terminal, then answers redo
+    assert!(s.at_terminal(&["project", "test-servers", &project], "y\n").contains("Done."));
+    let q = s.events("waits").into_iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"]["id"].as_str().expect("id").to_string();
+    let answered = s.at_terminal(&["answer", "waits", &q, "change=redo:again", "--send"], "");
+    let e = s.events("waits");
+    let types: Vec<&str> = e.iter().filter_map(|x| x["type"].as_str()).collect();
+    let turns = std::fs::read_to_string(s.path("claude.args")).unwrap_or_default().lines().count();
+    assert_eq!((turns, said(&s)), (2, vec!["served on its own port".to_string()]), "{answered}\n{types:?}");
+    // on the record before the agent's second turn, as `jaynes project test-servers` has it
+    let chosen = types.iter().position(|t| *t == "PortsChosen").unwrap_or_else(|| panic!("{types:?}"));
+    let second = types.iter().enumerate().filter(|(_, t)| **t == "AttemptStarted").nth(1).map(|(i, _)| i).unwrap_or_else(|| panic!("{types:?}"));
+    assert!(chosen < second, "{types:?}");
+    assert_eq!(e[chosen]["servers"], true, "{}", e[chosen]);
+}
