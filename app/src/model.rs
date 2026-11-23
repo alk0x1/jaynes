@@ -170,6 +170,20 @@ fn plain_lines(listing: &mut Listing) {
     }
 }
 
+/// Who stopped a run, when its mark says it and not its record's halt: a run Jaynes stopped while it ran has no halt in
+/// its record yet; a run its agent set aside, its card says so ("Set aside by the agent that started it at
+/// “change”", the design-lead, 23/11).
+fn said_when_halted(mark: Mark, stopped: bool) -> Option<&'static str> {
+    match mark {
+        Mark::SetAside => Some(SET_ASIDE_SAID),
+        _ if stopped => Some(jaynes_shell::drive::JAYNES_STOPPED_SAID),
+        _ => None,
+    }
+}
+
+/// What the card of a run its agent set aside says of who stopped it.
+const SET_ASIDE_SAID: &str = "set aside by the agent that started it";
+
 /// Every run's list row and details, read from the record and the runs' folders.
 fn snapshot(home: &Path) -> Result<Snapshot, String> {
     let entries = listing::entries(home)?;
@@ -182,13 +196,15 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
     let mut files = HashMap::new();
     let mut halted = HashMap::new();
     let mut threads = HashMap::new();
-    let halts: Vec<&str> = listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| r.mark == Mark::Halted).map(|r| r.id.as_str()).collect();
+    let halts: Vec<(&str, Mark)> = listing.projects.iter().flat_map(|(_, rows)| rows).filter(|r| matches!(r.mark, Mark::Halted | Mark::SetAside)).map(|r| (r.id.as_str(), r.mark)).collect();
     if !halts.is_empty() {
         let store = jaynes_shell::store::Store::open(&home.join("record.sqlite3"))?;
-        for id in halts {
-            // a run whose process is gone has no halt in its record yet: Jaynes stopped while it ran
+        for (id, mark) in halts {
             let stopped = entries.iter().any(|e| e.run.id == id && e.stopped);
-            let who = if stopped { jaynes_shell::drive::JAYNES_STOPPED_SAID.to_string() } else { halted_by(&store.events(id)?) };
+            let who = match said_when_halted(mark, stopped) {
+                Some(said) => said.to_string(),
+                None => halted_by(&store.events(id)?),
+            };
             halted.insert(id.to_owned(), who);
         }
     }
@@ -259,7 +275,18 @@ fn watch(tx: async_channel::Sender<Result<Snapshot, String>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{delivered_files, halted_by, plain_lines};
+    use super::{Mark, delivered_files, halted_by, plain_lines, said_when_halted};
+
+    /// The design-lead, 23/11, on the picture aside-card: a run its agent set aside read "Halted at “change”"; its
+    /// card says "Set aside by the agent that started it at “change”". A run Jaynes stopped says so too; the others,
+    /// who halted them in the record.
+    #[test]
+    fn asked_the_card_of_a_run_set_aside_says_its_agent_set_it_aside() {
+        let who = said_when_halted(Mark::SetAside, false).unwrap_or("halted");
+        assert_eq!(crate::tabs::halted_said(who, Some("change")), "Set aside by the agent that started it at “change”");
+        assert_eq!(said_when_halted(Mark::Halted, true), Some(jaynes_shell::drive::JAYNES_STOPPED_SAID));
+        assert_eq!(said_when_halted(Mark::Halted, false), None);
+    }
     use jaynes_core::event::Event;
     use jaynes_core::question::By;
     use jaynes_core::manifest::Manifest;
