@@ -881,22 +881,62 @@ def hidden_cases_pass(call: Call, params: Params) -> Any:
     return Pass()
 
 
-# git run as a command: at the start, after ; & | ( { ` or $(, past variables set before it and env, command, exec
-_GIT = re.compile(r"(?:^|[;&|({`\n]|\$\()\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
-                  r"(?:(?:env(?:\s+-\S+)*(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S*)*|command|exec|sudo)\s+)?git(?=$|[\s;&|)`])")
+# where a shell starts a command: at the start, after ; & | ( { ` ! or $(, and past what may stand before the
+# command itself (variables set for it, env, command, exec, sudo, time, nohup, xargs)
+_AT = (r"(?:^|[;&|({`\n!]|\$\()\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
+       r"(?:(?:env(?:\s+-\S+)*(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S*)*|command|exec|sudo|time|nohup|xargs(?:\s+-\S+)*)\s+)?")
+_END = r"(?=$|[\s;&|)`'\"])"
+# git run as a command, by its name or a whole path to it
+_GIT = re.compile(_AT + r"(?:\S*/)?git" + _END)
+# git's own files: the folder .git, never .github nor .gitignore
+_DOT_GIT = re.compile(r"(?:^|[\s'\"=:(<>])(?:\./)?\.git(?=/|$|[\s;&|)'\"<>])")
+# a command named through a variable or built by eval, so what it runs is not written in the case
+_UNSAID = re.compile(_AT + r"(?:[\"']?\$\{?[A-Za-z_]|eval" + _END + ")")
+# what reaches the internet: a program that only talks to hosts, a package manager fetching, code that opens a
+# connection from python -c or node -e
+_NET = re.compile(_AT + r"(?:\S*/)?(?:(curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|npx)" + _END
+                  + r"|(pip[0-9.]*\s+install|python[0-9.]*\s+-m\s+pip\s+install|uv\s+(?:pip\s+install|add|sync)"
+                  r"|npm\s+(?:install|i|ci|add)|pnpm\s+(?:install|i|add)|yarn\s+(?:install|add)|gem\s+install"
+                  r"|bundle\s+install|cargo\s+(?:install|fetch|add)|go\s+(?:get|install|mod\s+download)"
+                  r"|poetry\s+install|brew\s+install|apt(?:-get)?\s+install)" + _END + ")")
+_CODE_RUN = re.compile(r"\b(?:python[0-9.]*|node)(?:\s+-\S+)*\s+-[ce]\b")
+_CODE_NET = re.compile(r"\b(urllib|urlopen|http\.client|requests\.|socket\.|httpx|aiohttp|fetch\(|https?\.get)")
+# what builds a copy of the project, or a stand-in of its code, outside it
+_OWN_COPY = re.compile(r"(\bmktemp\b|(?<![\w.~])/(?:private/)?(?:var/)?tmp\b|\$\{?TMPDIR\b"
+                       r"|\b(?:PYTHONPATH|NODE_PATH|RUBYLIB|PERL5LIB|CLASSPATH)=)")
 # what a shell is told to run with -c, quoted
 _SHELL_C = re.compile(r"\b(?:sh|bash|zsh|dash)\s+-c\s+(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\")")
 
 
-def _runs_git(command: str) -> bool:
-    return bool(_GIT.search(command)) or any(_runs_git(a or b) for a, b in _SHELL_C.findall(command))
+def _not_judged_there(command: str) -> str:
+    """Why a case's command cannot be judged on a copy of the project's files with no git history and no internet,
+    read from its words before it runs: empty when nothing in them says so. What a shell runs with -c is read too."""
+    if _GIT.search(command):
+        return "runs git"
+    if _DOT_GIT.search(command):
+        return "reads git's own files (.git), which the copy has not"
+    if _UNSAID.search(command):
+        return "names the command it runs through a variable or eval, so what it runs is not in its words: write the command"
+    net = _NET.search(command)
+    if net:
+        return f"reaches the internet ({(net.group(1) or net.group(2)).split()[0]})"
+    if _CODE_RUN.search(command):
+        code = _CODE_NET.search(command)
+        if code:
+            return f"reaches the internet ({code.group(1).rstrip('.(')})"
+    copy = _OWN_COPY.search(command)
+    if copy:
+        return (f"builds a copy of the project or a stand-in of its code outside it ({copy.group(1).rstrip('=')}), "
+                "and so judges that instead of the fix")
+    return next((r for a, b in _SHELL_C.findall(command) if (r := _not_judged_there(a or b))), "")
 
 
 def cases_need_only_the_project(call: Call, params: Params) -> Any:
     """Each case a hidden step writes (``cases``: ``says`` and ``run``) can be judged where the fix will be: on a copy
-    of the project's files in the box, with no git history and no internet. A case that runs git, or that run on the
-    project as it is now says it found no git repository or reaches what the box refuses, fails on every fix, right
-    or wrong, and the run blocks on it (the real-user, 22/11). Not told: a case that needs something else the copy
+    of the project's files in the box, with no git history and no internet. A case that runs git, reads git's own
+    files, reaches the internet, builds a copy or a stand-in of the project of its own, or names its command through a
+    variable, read in its words, or that run on the project as it is now says it found no git repository or reaches
+    what the box refuses, fails on every fix, right or wrong, and the run blocks on it (the real-user, 22/11). Not told: a case that needs something else the copy
     lacks fails as a case about something new does, and the two cannot be told apart from outside."""
     output = call.get("output") if isinstance(call.get("output"), dict) else {}
     cases = output.get("cases") if isinstance(output.get("cases"), list) else []
@@ -907,8 +947,9 @@ def cases_need_only_the_project(call: Call, params: Params) -> Any:
         case = case if isinstance(case, dict) else {}
         says, command = str(case.get("says", "")), str(case.get("run", ""))
         label = f"case {n} (\u201c{says}\u201d)"
-        if _runs_git(command):
-            reasons.append(f"{label} {where.format('runs git')}")
+        why = _not_judged_there(command)
+        if why:
+            reasons.append(f"{label} {where.format(why)}")
             continue
         if not call.get("project") or expands(command, URL):
             continue
