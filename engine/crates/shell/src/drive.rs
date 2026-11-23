@@ -1105,11 +1105,12 @@ impl<'a> Driver<'a> {
     }
 
     /// Put the copy where step `i` works: the base with the changes of the earlier steps it uses, and, when it
-    /// runs again, its own previous change on top.
-    fn prepare(&self, run: &Run, i: usize) -> Result<(), String> {
-        let Some(copy) = &self.setup.copy else { return Ok(()) };
+    /// runs again, its own previous change on top, unless the person asked it to start over; after an attempt of this
+    /// round that failed, what that attempt left, uncommitted, as it left it. Whether that attempt's files are there.
+    fn prepare(&self, run: &Run, i: usize) -> Result<bool, String> {
+        let Some(copy) = &self.setup.copy else { return Ok(false) };
         if run.manifest.steps[i].reach.project == ProjectAccess::None {
-            return Ok(());
+            return Ok(false);
         }
         let writers: Vec<String> = run
             .sources(i)
@@ -1122,13 +1123,36 @@ impl<'a> Driver<'a> {
         let mut parents = self.parents();
         parents.insert(name.clone(), parent);
         std::fs::write(self.setup.dir.join("project-parents.json"), serde_json::to_string(&parents).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        if run.manifest.steps[i].reach.project == ProjectAccess::Write && run.steps[i].round > 0 {
+        let s = &run.steps[i];
+        if run.manifest.steps[i].reach.project == ProjectAccess::Write && s.round > 0 && !s.afresh {
             let own = self.unplanted_changes(std::slice::from_ref(&name));
             let mut all = self.unplanted_changes(&writers);
             all.extend(own);
             copy.compose(&all).map(|_| ())?;
         }
-        Ok(())
+        let tried = self.tried().get(&name).filter(|t| s.tried && t.0 == s.round).map(|t| t.1.clone());
+        match tried {
+            Some(t) if copy.lay_tried(&t)? => Ok(true),
+            Some(_) => {
+                say(&format!("{name}: the files of its last attempt were kept over another state of the copy: it starts from the copy as it is"));
+                Ok(false)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// What the failed attempt of each step left, by step: its round, and the change kept over the state it started from.
+    fn tried(&self) -> std::collections::BTreeMap<String, (u32, String)> {
+        std::fs::read_to_string(self.setup.dir.join("project-tried.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    fn keep_tried(&self, step: &str, kept: Option<(u32, String)>) -> Result<(), String> {
+        let mut t = self.tried();
+        match kept {
+            Some(k) => t.insert(step.to_string(), k),
+            None => t.remove(step),
+        };
+        std::fs::write(self.setup.dir.join("project-tried.json"), serde_json::to_string(&t).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
     }
 
     /// The merges the run made, oldest first.
@@ -1153,8 +1177,20 @@ impl<'a> Driver<'a> {
                 continue;
             }
             match done {
-                Some((output, round)) => self.commit_done(step, output, round)?,
-                None => copy.discard()?,
+                Some((output, round)) => {
+                    self.keep_tried(step, None)?;
+                    self.commit_done(step, output, round)?
+                }
+                None => {
+                    // an agent's next attempt starts from what this one left (the tech-lead, 22/11): kept beside the copy
+                    let decl = &run.manifest.steps[i];
+                    if decl.executor == jaynes_core::manifest::Executor::Agent {
+                        let s = &run.steps[i];
+                        let kept = copy.keep_tried(&decl.reach.write, &format!("{step}, round {}, attempt {}, failed", s.round, s.attempt))?;
+                        self.keep_tried(step, kept.map(|c| (s.round, c)))?;
+                    }
+                    copy.discard()?
+                }
             }
         }
         Ok(())
@@ -1346,10 +1382,14 @@ impl<'a> Driver<'a> {
             Err(e) => return fault(e),
         };
         let previous = self.output_of(&turn.previous);
-        if turn.fix == 0
-            && let Err(e) = self.prepare(run, i) {
-                return fault(e);
+        let left = if turn.fix == 0 {
+            match self.prepare(run, i) {
+                Ok(left) => left,
+                Err(e) => return fault(e),
             }
+        } else {
+            false
+        };
         let prompt = if turn.fix == 0 {
             let reply = self.setup.role.call(Call::Prompt {
                 step: turn.step.clone(),
@@ -1394,7 +1434,11 @@ impl<'a> Driver<'a> {
             let name = &run.manifest.steps[i].name;
             let read = run.manifest.steps[i].stop.is_some()
                 || run.manifest.steps.iter().any(|s| s.stop.as_ref().and_then(|st| st.redo.as_deref()) == Some(name.as_str()));
-            compose(&run.request, &text, &schema, &turn, &given, read)
+            let mut p = compose(&run.request, &text, &schema, &turn, &given, read);
+            if left {
+                p.push_str(LEFT_BY_THE_LAST_ATTEMPT);
+            }
+            p
         } else {
             let _gone = std::fs::remove_file(exchange.join("output.json"));
             let _gone = std::fs::remove_file(exchange.join(IMPOSSIBLE));
@@ -1993,6 +2037,9 @@ fn write_exchange(exchange: &Path, given: &[Given], previous: Option<&Value>) ->
 
 /// The prompt of an attempt: the role's instructions, then what Jaynes says the same way for every role.
 /// `read` says whether the person reads what the step makes at a stop: then the agent writes them a reply beside it.
+/// Said to an attempt that starts from the files the attempt before it left.
+pub const LEFT_BY_THE_LAST_ATTEMPT: &str = "\n# Your last attempt's files\n\nThe project is as your last attempt left it, uncommitted: start from these files, change what made it fail, and do not make again what is already there.\n";
+
 pub fn compose(request: &str, text: &str, schema: &Value, turn: &AgentTurn, given: &[Given], read: bool) -> String {
     let mut p = String::new();
     p.push_str(&format!("# The request\n\n{request}\n\n# Your step: {}\n\n{text}\n\n", turn.step));

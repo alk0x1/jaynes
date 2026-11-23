@@ -1844,7 +1844,7 @@ fn an_agent_that_says_the_request_cannot_be_done_asks_the_person_and_spends_no_a
 }
 
 #[test]
-fn an_attempt_cut_off_from_outside_goes_on_in_its_session_and_a_failed_one_starts_afresh() {
+fn an_attempt_cut_off_from_outside_goes_on_in_its_session_and_so_does_a_failed_one() {
     let (mut run, cmds) = start(vec![step("build", Executor::Agent)]);
     probe_ok(&mut run, cmds);
     // the session is known as soon as the turn starts
@@ -1858,11 +1858,12 @@ fn an_attempt_cut_off_from_outside_goes_on_in_its_session_and_a_failed_one_start
     let c = probe_ok(&mut run, c);
     let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("again");
     assert_eq!((turn.attempt, turn.session.as_deref(), run.steps[0].spent), (2, Some("s1"), 0));
-    // the agent's own failure: the next attempt starts afresh
+    // the agent's own failure: the next attempt goes on in that session too, told why it failed (the tech-lead, 22/11)
     feed(&mut run, Input::SessionStarted { step: "build".to_string(), attempt: 2, session: "s1".to_string(), confirmed: Default::default() });
     let c = feed(&mut run, Input::AttemptEnded { step: "build".to_string(), attempt: 2, fix: 0, outcome: AttemptOutcome::Failed { reasons: vec!["no output".to_string()], usage: Usage::default() } });
     let turn = c.iter().find_map(|c| match c { Command::RunAgent(t) => Some(t.clone()), _ => None }).expect("again");
-    assert_eq!((turn.attempt, turn.session.as_deref()), (3, None));
+    assert_eq!((turn.attempt, turn.session.as_deref(), run.steps[0].spent), (3, Some("s1"), 1));
+    assert_eq!(turn.failure, vec!["no output".to_string()]);
 }
 
 #[test]

@@ -148,9 +148,14 @@ pub struct StepState {
     /// The tokens the attempts in `session` used, all told: what a round that goes on in it carries.
     #[serde(default, skip_serializing_if = "nothing_carried")]
     pub carried: u64,
-    /// The person dropped everything the step showed last, and nothing was delivered since: its next round is new.
+    /// The person asked this round to start over (they dropped everything the step showed last, or sent it all back
+    /// to be done again without a word): it starts from nothing, in a new session, with no previous output.
+    #[serde(default, alias = "dropped_all", skip_serializing_if = "std::ops::Not::not")]
+    pub afresh: bool,
+    /// An attempt of this round ended without the step being done: the next goes on in its session, from the files it
+    /// left, told why it failed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub dropped_all: bool,
+    pub tried: bool,
     /// What the checks said of the last attempt they judged. For the person: an agent's turn never carries it.
     #[serde(default)]
     pub checks: Vec<crate::event::CheckRecord>,
@@ -431,12 +436,25 @@ impl Run {
                 if *fix == 0 {
                     self.counts.attempts += 1;
                 }
+                // a session another step's attempts went on in carries what they spent there
+                let inherited = session.as_ref().map(|new| {
+                    self.steps.iter().filter(|o| o.session.as_ref() == Some(new)).map(|o| o.carried).max().unwrap_or(0)
+                });
                 if let Some(s) = self.step_mut(step) {
                     s.attempt = *attempt;
                     s.unjudged = false;
                     s.status = Status::Running { attempt: *attempt, fix: *fix };
-                    if session.is_some() {
-                        s.session = session.clone();
+                    match session {
+                        // a new session: what the step's earlier ones carried is not in it
+                        None if *fix == 0 => {
+                            s.session = None;
+                            s.carried = 0;
+                        }
+                        Some(new) if s.session.as_ref() != Some(new) => {
+                            s.carried = inherited.unwrap_or(0);
+                            s.session = Some(new.clone());
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -445,7 +463,6 @@ impl Run {
                 let acts = self.manifest.index(step).is_some_and(|i| self.manifest.steps[i].effect.acts() && !self.manifest.steps[i].repeats_safely());
                 if let Some(s) = self.step_mut(step) {
                     s.carry(session.as_ref(), usage.tokens);
-                    s.dropped_all = false;
                     s.acted |= acts;
                     s.resume = None;
                     s.pending = Some(Pending { output: output.clone(), items: items.clone(), changed: changed.clone(), tree: tree.clone(), reply: reply.clone() });
@@ -462,7 +479,14 @@ impl Run {
                     self.counts.spent += 1;
                 }
                 if let Some(s) = self.step_mut(step) {
-                    s.resume = None;
+                    // the next attempt goes on in the session this one ran in, from the files it left
+                    if let Some(ran) = s.resume.take() {
+                        s.carry(Some(&ran), usage.tokens);
+                        s.session = Some(ran);
+                    } else if let Some(ran) = s.session.clone() {
+                        s.carry(Some(&ran), usage.tokens);
+                    }
+                    s.tried = true;
                     if *spent {
                         s.spent += 1;
                         // Only the agent's own failure is told to its next attempt: a fault of Jaynes may name
@@ -484,6 +508,7 @@ impl Run {
                 if let Some(s) = self.step_mut(step) {
                     s.carry(session.as_ref(), usage.tokens);
                     s.resume = None;
+                    s.tried = true;
                     s.pending = None;
                     s.status = Status::Idle;
                     if session.is_some() {
@@ -542,6 +567,8 @@ impl Run {
                     s.pending = None;
                     s.unjudged = false;
                     s.failure.clear();
+                    s.tried = false;
+                    s.afresh = false;
                     // what a choice kept alone was already answered: the question stays the round's
                     if let Some(q) = s.narrow.take() {
                         s.question = Some(q);
@@ -558,6 +585,7 @@ impl Run {
                     s.round = *round;
                     s.status = Status::Idle;
                     s.spent = 0;
+                    s.tried = false;
                     s.notes = notes.clone();
                     s.failure.clear();
                     s.pending = None;
@@ -675,8 +703,7 @@ impl Run {
                     s.locks.remove(&item.id);
                 }
                 let here = s.done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
-                let drops_all = answer.sends_back() && answer.drops_all(&question);
-                s.dropped_all = drops_all;
+                let over = answer.sends_back() && answer.starts_over(&question);
                 for item in &question.items {
                     match answer.verdict(&item.id) {
                         Verdict::Keep => {
@@ -695,12 +722,14 @@ impl Run {
                     s.dropped.retain(|x| &x.id != id);
                     s.dropped_from.remove(id);
                 }
+                // what an earlier round kept stays as it is: the step goes on from what it made
+                s.afresh = over && s.locks.is_empty();
                 // what goes back to the step that made the work may not bring back what was dropped there either
                 let maker = self.manifest.steps[i].stop.as_ref().and_then(|st| st.redo.clone()).and_then(|r| self.manifest.index(&r));
                 if let Some(j) = maker.filter(|_| answer.sends_back() && answer.kept_alone(&question).is_none()) {
                     let made = self.steps[j].done.as_ref().map(|d| d.output.clone()).unwrap_or_default();
                     let m = &mut self.steps[j];
-                    m.dropped_all = drops_all;
+                    m.afresh = over && m.locks.is_empty();
                     for item in &question.items {
                         if answer.verdict(&item.id) == Verdict::Drop && !m.dropped.contains(item) {
                             m.dropped.push(item.clone());
