@@ -288,6 +288,11 @@ pub struct Tabs {
     pub facts: Option<crate::run_actions::Facts>,
     /// Where and why the open run is blocked, read with its story; None when it is not.
     pub blocked: Option<BlockedSaid>,
+    /// Where the open run's change is, when it delivered on a branch (branch_card.rs), read with its story.
+    pub branch: Option<crate::branch_card::Branch>,
+    /// When the branch was last copied, and whether git's words under the card are open.
+    pub branch_copied_at: Option<std::time::Instant>,
+    pub branch_git_open: bool,
     /// The run whose blocked card shows its raw reason (Details open): only that run's.
     details_open: Option<String>,
     /// The run whose card shows, and the cases whose fold over what they printed is open in it.
@@ -322,7 +327,7 @@ impl Tabs {
             }
             cx.background_executor().timer(Duration::from_secs(1)).await;
         });
-        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, details_open: None, printed_open: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
+        Tabs { runs, agents, open: None, agent: None, inbox: false, changes: None, story: Vec::new(), summary: None, facts: None, blocked: None, branch: None, branch_copied_at: None, branch_git_open: false, details_open: None, printed_open: None, copied_at: None, scroll: ScrollHandle::new(), seek: None, lit: None, order: Vec::new(), closed: HashMap::new(), _poll: poll }
     }
 
     /// Reads a run's story and shows it, if its tab is still the one open when the reading ends.
@@ -340,19 +345,21 @@ impl Tabs {
                     jaynes_core::run::Phase::Blocked { .. } => jaynes_shell::listing::blocked(&home, r),
                     _ => None,
                 });
-                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()), facts, blocked)
+                let branch = run.as_ref().and_then(|r| crate::branch_card::of(&home, r));
+                (jaynes_shell::listing::story(&home, &at), jaynes_shell::listing::summary(&home, &at).ok().map(|s| s.markdown()), facts, blocked, branch)
             })
             .await;
-        let (told, summary, facts, blocked) = told;
+        let (told, summary, facts, blocked, branch) = told;
         this.update(cx, |t, cx| {
             // in the role's order: the files' times do not say it (a copy of a run, a step sent back)
             let order: Vec<String> = t.runs.read(cx).snap.details.get(&id).map(|d| d.stages.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
             let told = in_role_order(told, &order);
-            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary || t.facts != facts || t.blocked != blocked) {
+            if t.open.as_deref() == Some(id.as_str()) && (t.story != told || t.summary != summary || t.facts != facts || t.blocked != blocked || t.branch != branch) {
                 t.story = told;
                 t.summary = summary;
                 t.facts = facts;
                 t.blocked = blocked;
+                t.branch = branch;
                 t.go_to_seek();
                 cx.notify();
             }
@@ -469,6 +476,8 @@ impl Tabs {
             self.copied_at = None;
             self.facts = None;
             self.blocked = None;
+            self.branch = None;
+            self.branch_git_open = false;
             self.seek = None;
             self.lit = None;
             self.scroll.set_offset(point(px(0.), px(0.)));
@@ -671,7 +680,7 @@ impl Tabs {
 }
 
 /// How long the summary's button says Copied.
-const COPIED_FOR: Duration = Duration::from_millis(2500);
+pub const COPIED_FOR: Duration = Duration::from_millis(2500);
 
 impl Tabs {
     /// A finished run's summary under its story: what it did for someone who was not there, drawn from its Markdown,
@@ -720,6 +729,24 @@ impl Tabs {
                     .child(button),
             )
             .child(text)
+    }
+
+    /// The branch of the open run on the clipboard, as the card's Copy copies it; the Copy says Copied for a moment.
+    pub fn copy_branch(&mut self, branch: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(branch));
+        self.branch_copied_at = Some(std::time::Instant::now());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_FOR).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+
+    /// git's words under the card, opened or closed.
+    pub fn flip_branch_git(&mut self, cx: &mut Context<Self>) {
+        self.branch_git_open = !self.branch_git_open;
+        cx.notify();
     }
 
     /// The summary on the clipboard, as its button copies it; the button says Copied for a moment.

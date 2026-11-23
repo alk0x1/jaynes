@@ -17,6 +17,7 @@ mod ask;
 mod inbox;
 mod answer;
 mod bench;
+mod branch_card;
 mod changes;
 mod compare;
 mod core_bin;
@@ -778,11 +779,39 @@ impl Root {
             let controls = self.controls_row(cx);
             return Some(tabs::halted_block(&title, controls));
         }
-        let (said, details_open, printed_open) = self.tabs.read(cx).blocked()?;
+        let Some((said, details_open, printed_open)) = self.tabs.read(cx).blocked() else { return self.branch_head(cx) };
         let controls = self.controls_row(cx);
         let (tabs, folds) = (self.tabs.clone(), self.tabs.clone());
         let on_printed: tabs::OnCase = std::rc::Rc::new(move |i, _, cx| folds.update(cx, |t, cx| t.flip_printed(i, cx)));
         Some(tabs::blocked_block(&said, details_open, &printed_open, controls, move |_, cx| tabs.update(cx, |t, cx| t.flip_details(cx)), on_printed))
+    }
+
+    /// The card at the top of the tab of a run that delivered on a branch: where its change is, with Copy and Merge;
+    /// once merged, with Undo the merge (branch_card.rs).
+    fn branch_head(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let tabs = self.tabs.read(cx);
+        let (run, branch) = (tabs.open.clone()?, tabs.branch.clone()?);
+        let state = branch_card::State {
+            copied: tabs.branch_copied_at.is_some_and(|t| t.elapsed() < tabs::COPIED_FOR),
+            git_open: tabs.branch_git_open,
+            undo_armed: self.armed.as_ref().is_some_and(|a| a.holds(Some(&run), run_actions::Act::Undo, std::time::Instant::now())),
+            refused: self.act_said.clone(),
+        };
+        let copied = match &branch {
+            branch_card::Branch::Unmerged(u) => u.branch.clone(),
+            branch_card::Branch::Merged(_) => String::new(),
+        };
+        let (t1, t2) = (self.tabs.clone(), self.tabs.clone());
+        let (merge_run, undo_run) = (run.clone(), run);
+        let root = cx.entity();
+        let root2 = root.clone();
+        let on = branch_card::On {
+            copy: Box::new(move |_, _, cx| t1.update(cx, |t, cx| t.copy_branch(copied.clone(), cx))),
+            merge: Box::new(move |_, _, cx| root.update(cx, |r, cx| r.press(merge_run.clone(), run_actions::Act::Merge, cx))),
+            undo: Box::new(move |_, _, cx| root2.update(cx, |r, cx| r.press(undo_run.clone(), run_actions::Act::Undo, cx))),
+            git: Box::new(move |_, _, cx| t2.update(cx, |t, cx| t.flip_branch_git(cx))),
+        };
+        Some(branch_card::card(&branch, &state, on))
     }
 
     /// The open run's controls in a row.
@@ -2530,7 +2559,7 @@ pub(crate) fn later_on_line(cx: &mut App) {
 #[cfg(feature = "test-driver")]
 pub(crate) fn press_act(word: String, cx: &mut App) {
     use run_actions::Act;
-    let Some(act) = [Act::Halt, Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon].into_iter().find(|a| a.word() == word) else { return };
+    let Some(act) = [Act::Halt, Act::Resume, Act::Continue, Act::RaiseRisk, Act::RaiseCeiling, Act::Abandon, Act::Merge, Act::Undo].into_iter().find(|a| a.word() == word) else { return };
     let Some(main) = MAIN.with(|m| m.get()) else { return };
     let _ = main.update(cx, |_, window, cx| {
         if let Some(Some(root)) = window.root::<Root>() {
