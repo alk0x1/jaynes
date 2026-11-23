@@ -1342,7 +1342,10 @@ fn reach_html(u: &crate::listing::Unmerged) -> String {
     let button = u.button().map(|b| format!("<div class=\"rmerge\"><button class=\"act primary\" data-act=\"merge\">{}</button><span class=\"odim\">{}</span></div>", ticks(&b), ticks(&u.says()))).unwrap_or_default();
     let failed = u
         .not_landed()
-        .map(|(said, git)| format!("<div class=\"rfail\">{}</div><details class=\"git\"><summary>▸ {}</summary><pre class=\"said\">{}</pre></details>", ticks(&said), crate::listing::WHAT_GIT_SAID, esc(&git)))
+        .map(|(said, git)| {
+            let under = if git.trim().is_empty() { String::new() } else { format!("<details class=\"git\"><summary>▸ {}</summary><pre class=\"said\">{}</pre></details>", crate::listing::WHAT_GIT_SAID, esc(&git)) };
+            format!("<div class=\"rfail\">{}</div>{under}", ticks(&said))
+        })
         .unwrap_or_default();
     format!("<div class=\"reach\">{line}{failed}{button}</div>")
 }
@@ -3854,6 +3857,7 @@ mod tests {
         let dirty = reach_html(&u(None, crate::listing::not_landed("jaynes/r17 at 1a2b3c; not merged: your checkout of main has uncommitted changes")));
         assert!(dirty.contains(line) && dirty.contains(button), "the button stays: {dirty}");
         assert!(dirty.contains("<div class=\"rfail\">Not merged: your checkout of “main” has changes you have not committed. Commit or stash them, then merge again.</div>"), "{dirty}");
+        assert!(!dirty.contains("What git said"), "nothing of git's to show, no fold: {dirty}");
         let git = "CONFLICT (content): Merge conflict in greeting.txt";
         let conflict = reach_html(&u(None, crate::listing::not_landed(&format!("jaynes/r17 at 1a2b3c; not merged: it conflicts with what main has now: {git}"))));
         assert!(conflict.contains(line) && !conflict.contains("data-act=\"merge\""), "Copy stays, the button goes: {conflict}");
