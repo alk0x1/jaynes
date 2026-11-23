@@ -186,7 +186,10 @@ fn snapshot(home: &Path) -> Result<Snapshot, String> {
     if !halts.is_empty() {
         let store = jaynes_shell::store::Store::open(&home.join("record.sqlite3"))?;
         for id in halts {
-            halted.insert(id.to_owned(), halted_by(&store.events(id)?));
+            // a run whose process is gone has no halt in its record yet: Jaynes stopped while it ran
+            let stopped = entries.iter().any(|e| e.run.id == id && e.stopped);
+            let who = if stopped { jaynes_shell::drive::JAYNES_STOPPED_SAID.to_string() } else { halted_by(&store.events(id)?) };
+            halted.insert(id.to_owned(), who);
         }
     }
     for e in &entries {

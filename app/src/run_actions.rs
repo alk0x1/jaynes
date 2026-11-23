@@ -76,6 +76,9 @@ pub struct Facts {
     pub delivered: bool,
     /// Started on an older engine no longer on this machine: every control goes to that engine, and is refused.
     pub gone: bool,
+    /// Jaynes stopped while it ran: it says it runs, and the process that drove it is gone (`drive::left_running`).
+    /// Nobody works on it; the person resumes it, as a halted run.
+    pub stopped: bool,
 }
 
 impl Facts {
@@ -91,6 +94,7 @@ impl Facts {
             stopped_by_ceiling: matches!(r.phase, Phase::Blocked { fault: jaynes_core::event::Fault::Ceiling, .. }),
             delivered: !r.finished() && r.delivered.is_some(),
             gone: jaynes_shell::stop::gone(&jaynes_shell::home(), r).is_some(),
+            stopped: jaynes_shell::drive::left_running(&jaynes_shell::home(), r),
         }
     }
 }
@@ -101,10 +105,11 @@ pub fn acts(f: &Facts) -> Vec<Act> {
         return Vec::new();
     }
     let mut out = Vec::new();
-    if f.running && !f.halted {
+    // a run Jaynes stopped while it ran says it runs, and nothing does: resumed, never halted
+    if f.running && !f.halted && !f.stopped {
         out.push(Act::Halt);
     }
-    if f.halted {
+    if f.halted || f.stopped {
         out.push(Act::Resume);
     }
     if f.blocked {
@@ -160,7 +165,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn facts() -> Facts {
-        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false, gone: false }
+        Facts { finished: false, halted: false, running: true, blocked: false, low_risk: false, risk_adds_steps: true, near_ceiling: false, stopped_by_ceiling: false, delivered: false, gone: false, stopped: false }
     }
 
     #[test]
@@ -178,6 +183,17 @@ mod tests {
         assert!(acts(&Facts { finished: true, ..facts() }).is_empty());
         // the design-lead, 22/11 (row 9): a run whose engine left the Mac refuses Abandon too, so nothing shows
         assert!(acts(&Facts { gone: true, halted: true, ..facts() }).is_empty());
+    }
+
+    // the engineer lead, 22/11, from the real-user's identity run: a pkill outside Jaynes ended its start without a
+    // word, and the run said "working, running" with nobody driving it; the engine now says "Jaynes stopped while it
+    // ran" and the person resumes it, so the app offers Resume, never a Halt of what nothing runs
+    #[test]
+    fn asked_a_run_jaynes_stopped_while_it_ran_is_resumed_from_its_tab() {
+        assert_eq!(acts(&Facts { stopped: true, ..facts() }), [Act::Resume, Act::Abandon]);
+        assert_eq!(acts(&Facts { stopped: true, low_risk: true, ..facts() }), [Act::Resume, Act::RaiseRisk, Act::Abandon]);
+        // the card over its controls says what happened, in the engine's words, where it stopped
+        assert_eq!(crate::tabs::halted_said(jaynes_shell::drive::JAYNES_STOPPED_SAID, Some("change")), "Jaynes stopped while it ran at “change”");
     }
 
     #[test]

@@ -391,7 +391,7 @@ impl Tabs {
     /// The open run's block when it is halted: who halted it and at which step.
     pub fn halted(&self, cx: &App) -> Option<String> {
         let open = self.open.as_ref()?;
-        if !self.facts.is_some_and(|f| f.halted && !f.finished) {
+        if !self.facts.is_some_and(|f| (f.halted || f.stopped) && !f.finished) {
             return None;
         }
         let runs = self.runs.read(cx);
