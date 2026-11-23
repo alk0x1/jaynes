@@ -59,6 +59,7 @@ fn to_delivery(kind: DeliveryKind, files: &[&str]) -> (Run, Digest, bool) {
         about: String::new(),
         model: Default::default(),
         turns: None,
+        delivered: true,
     };
     let manifest = Manifest { role: "small-change".into(), version: "1".into(), protocol: 1, steps: vec![make], target: Default::default(), delivery: kind };
     let out = decide(None, &Input::Start {
