@@ -258,3 +258,98 @@ fn without_its_box_a_claude_code_agent_never_starts_and_the_turn_is_jaynes_s_fau
     assert_eq!((&fault["type"], &fault["step"], &fault["spent"]), (&serde_json::json!("AttemptFailed"), &serde_json::json!("change"), &serde_json::json!(false)), "{fault}");
     assert!(out.contains("blocked (Jaynes)"), "{out}");
 }
+
+/// A command run at a terminal, as when the person types it (`Scratch::at_terminal`): the program and its arguments follow.
+/// Python's pty is the same on macOS and Linux, where script(1) takes its arguments differently. The terminal is opened
+/// here and its program's side stays open here too, so what the program wrote before it ended is read whole and never
+/// thrown away with the terminal (a test once read an empty `open-ports` on CI); the program's end is waited for, not
+/// the terminal's, so a process it left holding the terminal never keeps the test waiting. When no terminal can be
+/// had, the helper says why on its output, where the test's message shows it. What TTY_TYPED holds is typed at the
+/// terminal, as the person answers a question.
+const TTY: &str = r#"
+import fcntl, os, select, sys, termios, time
+typed = os.environ.pop("TTY_TYPED", "")
+for tried in range(10):
+    try:
+        master, slave = os.openpty()
+        break
+    except OSError as e:
+        why = e
+        time.sleep(0.2)
+else:
+    print(f"the test's terminal could not be opened: {why}")
+    sys.exit(97)
+pid = os.fork()
+if pid == 0:
+    os.close(master)
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    for fd in (0, 1, 2):
+        os.dup2(slave, fd)
+    if slave > 2:
+        os.close(slave)
+    os.execvp(sys.argv[1], sys.argv[1:])
+# the slave stays open here too, so what the program wrote before it ended is never thrown away with the terminal
+if typed:
+    os.write(master, typed.encode())
+status = None
+while True:
+    ready, _, _ = select.select([master], [], [], 0.05)
+    if ready:
+        data = os.read(master, 65536)
+        if data:
+            os.write(1, data)
+            continue
+    if status is not None:
+        break
+    done, st = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = st
+sys.exit(os.waitstatus_to_exitcode(status))
+"#;
+
+/// Databases and caches whose ports Jaynes holds while the project's test servers run; never 5432, which a person's
+/// own Postgres may hold: the first free one is the test's.
+const HELD_FREE: [u16; 6] = [3306, 6379, 27017, 11211, 9200, 5672];
+
+/// A port free on 127.0.0.1, ::1, 0.0.0.0 and :: now, the first of `ports`.
+fn free_everywhere(ports: &[u16]) -> u16 {
+    use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
+    *ports.iter().find(|&&p| {
+        [Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into(), Ipv4Addr::UNSPECIFIED.into(), Ipv6Addr::UNSPECIFIED.into()]
+            .iter().all(|a: &std::net::IpAddr| TcpListener::bind((*a, p)).is_ok())
+    }).expect("one of the ports is free")
+}
+
+impl Scratch {
+    /// `jaynes` at a terminal, as the person types it, with `typed` as the answers.
+    fn at_terminal(&self, args: &[&str], typed: &str) -> String {
+        let out = Command::new("python3").args(["-c", TTY, BIN]).args(args)
+            .env("HOME", self.path("person"))
+            .env("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", self.path("bin").display()))
+            .env("JAYNES_ENGINE_HOME", self.path("home")).env("JAYNES_NO_PAGE", "1").env("JAYNES_PYTHON", "python3").env("PYTHONPATH", "")
+            .env("TTY_TYPED", typed)
+            .output().expect("terminal");
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+    }
+}
+
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "the window for test servers is macOS's box (Linux's box has a network of its own)")]
+fn a_port_the_person_let_the_project_s_tests_use_the_agent_s_commands_serve_on_as_the_checks_do() {
+    // the real-user's estoque (22/11): with the test servers on and a database's port let for the tests, the check
+    // served on it and the agent's commands could not, so the agent could not run the suite the check runs
+    let s = Scratch::new("freed");
+    let project = s.path("project").to_str().expect("path").to_string();
+    let port = free_everywhere(&HELD_FREE);
+    claude_asking(&s, &[format!("python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", {port})); s.listen(); \
+                                 socket.create_connection((\"127.0.0.1\", {port}), timeout=3).close(); print(\"served on {port}\")'")]);
+    assert!(s.at_terminal(&["project", "test-servers", &project], "y\n").contains("Done."));
+    let said = s.at_terminal(&["project", "test-servers", &project, &port.to_string()], "y\n");
+    assert!(said.contains("Done."), "{said}");
+    let (out, turns) = s.start("freed", &small_change());
+    assert_eq!(turns.len(), 1, "{out}");
+    let said: Vec<String> = serde_json::from_str(&std::fs::read_to_string(s.path("claude.said")).expect("said")).expect("json");
+    assert_eq!(said, vec![format!("served on {port}")], "{out}");
+    assert!(out.contains("finished: delivered"), "{out}");
+}

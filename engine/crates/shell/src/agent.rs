@@ -896,10 +896,12 @@ pub fn box_spec(spec: &Spec<'_>, python: &Path, library: &Path) -> Value {
     let (servers, any_port) = (spec.servers, spec.any_port);
     let writable = if reach.project == ProjectAccess::Read { cwd.join(crate::project::EXCHANGE) } else { cwd.to_path_buf() };
     let hide: Vec<String> = hidden(cwd, reads).into_iter().filter(|h| h != "~/").collect();
+    // the ports the step names and those the person let the project's tests use, as a check's commands get them
+    let local_ports: std::collections::BTreeSet<u16> = reach.local_ports.iter().chain(&spec.freed_ports).copied().collect();
     let mut spec = json!({
         "work": cwd, "writable": [writable], "readable": reads, "hidden": hide,
         "home": std::env::var("HOME").unwrap_or_default(), "engine": crate::home(),
-        "local_ports": reach.local_ports, "test_servers": servers && !any_port, "any_port": any_port,
+        "local_ports": local_ports, "test_servers": servers && !any_port, "any_port": any_port,
         "pwd": cwd.join(crate::project::EXCHANGE).join("tmp").join(AGENT_PWD),
         "python": python, "box": library.join("jaynes_box.py"),
         // the run's start environment, as the check's commands inherit it from the engine: Claude Code's shell gives
