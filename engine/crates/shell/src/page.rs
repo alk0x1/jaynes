@@ -1474,7 +1474,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
     let project_name = name.map(|n| n.project.clone()).filter(|p| !p.is_empty()).unwrap_or_else(|| "your project".into());
     let reach = match &unmerged {
         Some(u) => reach_html(u),
-        None if r.merged && !r.undone && !into.is_empty() => format!("<div class="reach"><div>{}</div></div>", ticks(&crate::listing::merged_said(&into, &project_name))),
+        None if r.merged && !r.undone && !into.is_empty() => format!("<div class=\"reach\"><div>{}</div></div>", ticks(&crate::listing::merged_said(&into, &project_name))),
         None => String::new(),
     };
     let phase = format!("{phase}{reach}");
