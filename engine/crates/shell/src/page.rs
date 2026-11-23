@@ -1474,7 +1474,8 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
         }
         tipped("abandon", "Abandon", "danger", r.delivered.is_some().then_some(crate::listing::ABANDON_DELIVERED_TIP));
     }
-    if (r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge || r.merged) && r.delivered.is_some() && !r.undone && already.is_none() {
+    // only what merged undoes: a run still on its branch, whatever kept it there, has nothing to take back
+    if (r.manifest.delivery == jaynes_core::manifest::DeliveryKind::Merge || r.merged) && r.delivered.is_some() && !r.undone && already.is_none() && unmerged.is_none() {
         tipped("undo", "Undo the merge", "danger", None);
     }
     let correct = if r.delivered.is_some() {
@@ -4115,6 +4116,27 @@ mod tests {
         // a delivery that said nothing of a merge, or one that landed, says no merge failed
         assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c; merged as 9f8e7d"), None);
         assert_eq!(crate::listing::not_landed("jaynes/r17 at 1a2b3c"), None);
+    }
+
+    // The engineer lead, 23/11: "O Undo num run que não fez merge é bug de 0.2.5, porque oferece desfazer o que não
+    // aconteceu"; the design-lead: also in Dirty and Conflict. A run delivered on a branch and not merged, whatever
+    // kept it there, offers no Undo; a run that merged still does.
+    #[test]
+    fn asked_a_run_whose_merge_did_not_happen_the_page_offers_no_undo() {
+        use crate::listing::{JudgedAgain, NotLanded, Unmerged};
+        let mut r = small_run(false);
+        r.phase = Phase::Finished { outcome: jaynes_core::event::Outcome::Delivered };
+        r.manifest.delivery = jaynes_core::manifest::DeliveryKind::Merge;
+        r.delivered = Some(jaynes_core::Digest("d".into()));
+        let judged = |fails| NotLanded::Judged(JudgedAgain { check: "tests".into(), step: "change".into(), fails, ..Default::default() });
+        for failed in [None, Some(NotLanded::Dirty { git: String::new() }), Some(NotLanded::Conflict { git: "CONFLICT".into() }), Some(judged(true)), Some(judged(false))] {
+            let u = Unmerged { branch: "jaynes/w".into(), into: "main".into(), project: "horta".into(), refused: None, failed: failed.clone() };
+            let page = run_html_of(&r, "", "", None, None, RunExtra { into: "main".into(), unmerged: Some(u), ..RunExtra::default() });
+            assert!(!page.contains("data-act=\"undo\""), "{failed:?}: {page}");
+        }
+        r.merged = true;
+        let page = run_html_of(&r, "", "", None, None, RunExtra { into: "main".into(), ..RunExtra::default() });
+        assert!(page.contains("data-act=\"undo\""), "merged, it still undoes: {page}");
     }
 
     // The design-lead's words for a merge a check run again refused (quatro-itens.md, judged_again, 23/11), both amber:
