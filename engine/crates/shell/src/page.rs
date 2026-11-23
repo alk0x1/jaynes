@@ -1366,7 +1366,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
     let data = json!({"run": r.id}).to_string();
     format!(
         "<div class=\"where\">{project}{role} {version} · run {id} · {risk} risk</div><h1>{title}</h1>{request}{why}{strip}{phase}{answers}\
-         <p class=\"sub\">Spent {sm} of {cm} min, {st}{cached} · {work}{back}{corr}</p>\
+         <p class=\"sub\">{spent}, {st}{cached} · {work}{back}{corr}</p>\
          {steps}\
          <div class=\"acts\">{buttons}</div>{passed}{correct}<div class=\"refused\" id=\"actmsg\"></div>{summary}{changes}<script id=\"rundata\" type=\"application/json\">{data}</script>",
         role = esc(&r.manifest.role),
@@ -1397,8 +1397,7 @@ fn run_html_of(r: &Run, changes: &str, summary: &str, halted_by: Option<&str>, n
             }
         },
         strip = strip(r, gone),
-        sm = r.spent.seconds / 60,
-        cm = r.ceiling.seconds / 60,
+        spent = esc(&crate::listing::spent(r.spent.seconds, r.ceiling.seconds)),
         // thousands as the run's summary writes them; what the cache gave only when it gave something (a count of
         // zero is left out; the spent against the ceiling stays, zero or not)
         // a turn whose stream said nothing yet is not counted yet, never 0 (agent::spent_now)
@@ -3246,7 +3245,7 @@ mod tests {
         // the design-lead, 22/11: the request shows under the title only when it says more (nome-da-run.md), and a
         // count of zero is left out (the tech-lead's counters): "1 attempt by the agent", not "…, 0 sent back"
         assert!(!run.contains("<p class=\"req\">Choose the stack</p>"), "the request said once");
-        assert!(run.contains("Spent 0 of 20 min, 0 of 2,000,000 tokens · 1 attempt by the agent</p>"), "no count of zero, and thousands as the summary writes them");
+        assert!(run.contains("Spent 0 s of 20 min, 0 of 2,000,000 tokens · 1 attempt by the agent</p>"), "no count of zero, and thousands as the summary writes them");
         // the page's ask goes to the engine as the person's; anyone else is refused by it
         let ask = json!({"run": "talk", "action": "ask", "question": q, "text": "and Rust?"});
         assert_eq!(act_in(&home, &page.exe, &ask, By::Agent { who: "x".into() }).err().as_deref(), Some("only you ask the agent at a stop"), "only the person asks");

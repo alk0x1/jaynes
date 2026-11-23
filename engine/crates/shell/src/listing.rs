@@ -539,6 +539,13 @@ fn standing(e: &Entry) -> (Mark, String) {
     }
 }
 
+/// What a run spent of its ceiling, as the page and the app say it: "Spent 58 s of 20 min" under a minute, then
+/// "Spent 3 of 20 min".
+pub fn spent(seconds: u64, ceiling_seconds: u64) -> String {
+    let ceiling = ceiling_seconds / 60;
+    if seconds < 60 { format!("Spent {seconds} s of {ceiling} min") } else { format!("Spent {} of {ceiling} min", seconds / 60) }
+}
+
 /// The request in at most 60 characters.
 pub fn short(s: &str) -> String {
     let s = s.trim();
@@ -3027,6 +3034,16 @@ mod tests {
             let page = crate::page::phase_word(e);
             assert!(page.contains(&format!(">{word}")) || page == *word, "{id}: the page says {page:?}");
         }
+    }
+
+    // The engineer lead, 0.2.5 (the re-measure): a run under a minute said "Spent 0 of 20 min" though it worked; the
+    // seconds are said until the first minute, then the minutes, as before, on the page and in the app.
+    #[test]
+    fn what_a_run_spent_is_said_in_seconds_under_a_minute() {
+        assert_eq!(spent(58, 1200), "Spent 58 s of 20 min");
+        assert_eq!(spent(0, 1200), "Spent 0 s of 20 min");
+        assert_eq!(spent(60, 1200), "Spent 1 of 20 min");
+        assert_eq!(spent(199, 3000), "Spent 3 of 50 min");
     }
 
     #[test]
