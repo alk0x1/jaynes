@@ -3818,7 +3818,7 @@ mod tests {
         let manifest: Manifest = serde_json::from_value(json!({"role": "r", "version": "1", "protocol": 1, "steps": [{"name": "change", "executor": "agent"}]})).expect("manifest");
         let start = Input::Start { run: "a".into(), request: "Plant the beans first".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: Some("claude 7".into()) };
         let mut events = decide(None, &start).expect("start").events;
-        let items = vec![Item { named: None, id: "greeting.txt".into(), label: "greeting.txt: 1 line".into(), digest: Digest("d".into()) }];
+        let items = vec![Item { named: None, options: Vec::new(), id: "greeting.txt".into(), label: "greeting.txt: 1 line".into(), digest: Digest("d".into()) }];
         events.push(Event::QuestionOpened {
             question: Question { rides: Vec::new(), id: "merge-1".into(), step: "change".into(), round: 0, kind: QuestionKind::Merge, items, offered: vec![VerdictKind::Keep, VerdictKind::Drop], holds: true, about: "This is what lands on your branch.".into(), choose: false, pass: 0, passes: 0, back: vec![] },
         });
@@ -3861,7 +3861,7 @@ mod tests {
         .expect("manifest");
         let start = Input::Start { run: "m".into(), request: "A new app".into(), manifest, role_fingerprint: Digest("f".into()), agent: "claude:m".into(), raise: None, attention: Default::default(), task: None, arm: None, never_merge: false, starter: None };
         let mut events = decide(None, &start).expect("start").events;
-        let items: Vec<Item> = (0..8).map(|i| Item { named: None, id: format!("src/f{i}.rs"), label: format!("src/f{i}.rs: new"), digest: Digest(format!("d{i}")) }).collect();
+        let items: Vec<Item> = (0..8).map(|i| Item { named: None, options: Vec::new(), id: format!("src/f{i}.rs"), label: format!("src/f{i}.rs: new"), digest: Digest(format!("d{i}")) }).collect();
         events.push(Event::QuestionOpened {
             question: Question { rides: Vec::new(),
                 id: "merge-1".into(), step: "scaffold".into(), round: 0, kind: QuestionKind::Merge, items, offered: vec![VerdictKind::Keep, VerdictKind::Drop],
