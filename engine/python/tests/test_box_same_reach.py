@@ -173,6 +173,87 @@ class TheAgentReachesWhatTheCheckReaches(unittest.TestCase):
         self.assertIn("a.txt", said)
         self.assertNotIn("unable to normalize", said)
 
+    def project_browser(self, cache: Path, install: str, program: str) -> Path:
+        """A browser as Playwright or Puppeteer downloads it into its cache under the home: a stand-in, never a real
+        browser, whose program reads a data file of its own install as Chrome reads icudtl.dat."""
+        exe = cache / install / program
+        exe.parent.mkdir(parents=True)
+        (exe.parent / "icudtl.dat").write_text("rendered by the project's own browser\n")
+        exe.write_text('#!/bin/sh\ncat "$(dirname "$0")/icudtl.dat"\n')
+        exe.chmod(0o755)
+        return exe
+
+    def test_the_project_s_own_browser_runs_in_the_agent_s_box_and_the_check_s(self):
+        """A project whose tests drive a browser that Playwright or Puppeteer downloaded runs them in the agent's box
+        as in the check's (the tech-lead, 23/11): the real-user's agents found the cache under the hidden home
+        refused, and the headless shell said "icudtl.dat not found in bundle"."""
+        self.outer["HOME"] = str(self.home)
+        playwright = self.project_browser(self.home / "Library" / "Caches" / "ms-playwright",
+                                          "chromium_headless_shell-1255", "chrome-headless-shell-mac-arm64/chrome-headless-shell")
+        puppeteer = self.project_browser(self.home / ".cache" / "puppeteer",
+                                         "chrome-headless-shell", "mac_arm-140.0.1/chrome-headless-shell-mac-arm64/chrome-headless-shell")
+        work = self.copy()
+        for exe in (playwright, puppeteer):
+            command = f"'{exe}' --headless --dump-dom about:blank 2>&1"
+            for who, (code, said) in (("the agent", self.agent_run(work, command)), ("the check", self.check_run(work, command))):
+                self.assertEqual((code, "rendered by the project's own browser" in said), (0, True), f"{who}, {exe}: {said}")
+
+    # where each browser and browser tool keeps a profile of the person's, with what macOS keeps of it beside: a
+    # cookie, saved login or history file of each, as the browser names it
+    PROFILES = {
+        "Chrome": ["Library/Application Support/Google/Chrome/Default/Cookies",
+                   "Library/Application Support/Google/Chrome/Default/Login Data",
+                   "Library/Application Support/Google/Chrome/Default/History",
+                   "Library/Caches/Google/Chrome/Default/Cache/Cache_Data/f_000001"],
+        "Safari": ["Library/Safari/History.db", "Library/Cookies/Cookies.binarycookies",
+                   "Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies",
+                   "Library/HTTPStorages/com.apple.Safari/httpstorages.sqlite",
+                   "Library/WebKit/com.apple.Safari/WebsiteData/LocalStorage/x", "Library/Caches/com.apple.Safari/Cache.db"],
+        "Firefox": ["Library/Application Support/Firefox/Profiles/a1.default-release/cookies.sqlite",
+                    "Library/Application Support/Firefox/Profiles/a1.default-release/logins.json",
+                    "Library/Application Support/Firefox/Profiles/a1.default-release/places.sqlite",
+                    "Library/Caches/Firefox/Profiles/a1.default-release/cache2/entries/A1"],
+        "Arc": ["Library/Application Support/Arc/User Data/Default/Cookies",
+                "Library/Caches/Arc/User Data/Default/Cache/x", "Library/Caches/company.thebrowser.Browser/Cache.db"],
+        "Edge": ["Library/Application Support/Microsoft Edge/Default/Cookies",
+                 "Library/Caches/Microsoft Edge/Default/Cache/x"],
+        "Brave": ["Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+                  "Library/Caches/BraveSoftware/Brave-Browser/Default/Cache/x"],
+        "Playwright": ["Library/Caches/ms-playwright/mcp-chrome-f5334aa/Default/Cookies",
+                       "Library/Caches/ms-playwright/mcp-chrome-f5334aa/Default/Login Data",
+                       "Library/Caches/ms-playwright/b/browser@04b564bc", ".cache/ms-playwright/mcp-chrome-1/Default/Cookies",
+                       "pw-browsers/mcp-chrome-2/Default/History"],
+        "Puppeteer": [".cache/puppeteer/profile/Default/Cookies", "puppeteer-cache/profile/Default/Login Data"],
+    }
+
+    def test_no_browser_profile_of_the_person_s_is_read_by_either_box_and_its_installed_program_is(self):
+        """Neither the agent's box nor the check's reads a profile of a browser or browser tool of the person's
+        (the tech-lead, 23/11), Playwright's MCP profile in its cache included, which the check's box read; the
+        browsers installed beside them in the tools' caches are read and run, wherever the person named the cache."""
+        self.outer.update({"HOME": str(self.home), "PLAYWRIGHT_BROWSERS_PATH": str(self.home / "pw-browsers"),
+                           "PUPPETEER_CACHE_DIR": str(self.home / "puppeteer-cache")})
+        for files in self.PROFILES.values():
+            for f in files:
+                (self.home / f).parent.mkdir(parents=True, exist_ok=True)
+                (self.home / f).write_text("the person's session\n")
+        installed = [self.project_browser(self.home / cache, install, program) for cache, install, program in (
+            ("Library/Caches/ms-playwright", "chromium-1255", "chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+            (".cache/ms-playwright", "firefox-1490", "firefox/Nightly.app/Contents/MacOS/firefox"),
+            ("pw-browsers", "webkit-2182", "pw_run.sh"),
+            (".cache/puppeteer", "chrome", "mac_arm-140.0.1/chrome-mac-arm64/chrome"),
+            ("puppeteer-cache", "chrome-headless-shell", "mac_arm-140.0.1/chrome-headless-shell"))]
+        work = self.copy()
+        tried = "; ".join(f"[ -r '{self.home / f}' ] && echo 'READ {b}: {f}'" for b, files in self.PROFILES.items()
+                          for f in files)
+        listed = "; ".join(f"ls '{(self.home / f).parent}' >/dev/null 2>&1 && echo 'LISTED {b}: {f}'"
+                           for b, files in self.PROFILES.items() for f in files)
+        ran = "; ".join(f"'{exe}' --headless" for exe in installed)
+        command = f"{tried}; {listed}; {ran}; true"
+        for who, (_, said) in (("the agent", self.agent_run(work, command)), ("the check", self.check_run(work, command))):
+            self.assertNotIn("READ ", said, f"{who}: {said}")
+            self.assertNotIn("LISTED ", said, f"{who}: {said}")
+            self.assertEqual(said.count("rendered by the project's own browser"), len(installed), f"{who}: {said}")
+
     def test_the_git_that_comes_with_the_mac_works_in_the_agent_s_box_and_the_check_s(self):
         """/usr/bin/git, the git of a Mac without Homebrew, is a shim that finds the real one through xcrun, and
         xcrun keeps a cache in the user's temporary folder (getconf DARWIN_USER_TEMP_DIR), whatever TMPDIR says:

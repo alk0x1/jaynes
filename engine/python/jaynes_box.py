@@ -92,7 +92,22 @@ SECRETS = (".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".n
            "Library/Application Support/Arc", "Library/Application Support/com.operasoftware.Opera",
            "Library/Application Support/Vivaldi", "Library/Application Support/zen", "Library/Application Support/librewolf",
            "Library/Application Support/Waterfox", "Library/Application Support/Floorp", "Library/Application Support/Orion",
-           "Library/Application Support/Thorium")
+           "Library/Application Support/Thorium",
+           # what the browsers keep of the pages browsed beside their profiles: caches, and the cookies macOS keeps
+           # for each app (HTTPStorages) and Safari's website data
+           "Library/Caches/Google", "Library/Caches/Chromium", "Library/Caches/com.apple.Safari", "Library/Caches/Firefox",
+           "Library/Caches/BraveSoftware", "Library/Caches/Microsoft Edge", "Library/Caches/Arc",
+           "Library/Caches/company.thebrowser.Browser", "Library/HTTPStorages", "Library/WebKit/com.apple.Safari")
+# Where browser tools download their browsers, beside what is the person's: Playwright's MCP server keeps a whole
+# browser profile there (mcp-chrome-<hash>, with the cookies, logins and history of what was browsed with it; the
+# check's box read them, 23/11). Every box hides these folders whole and reads back only the browsers installed in
+# them, so a profile under a new name is born hidden. Playwright names an install <browser>-<revision>; Puppeteer
+# keeps each browser in a folder of its name. The agent's reads in project.rs name the same (a test checks both say
+# the same).
+PLAYWRIGHT_BROWSERS = ("chromium", "chromium_headless_shell", "chromium_tip_of_tree", "chromium_tip_of_tree_headless_shell",
+                       "firefox", "firefox_beta", "webkit", "ffmpeg", "winldd", "android")
+PUPPETEER_BROWSERS = ("chrome", "chrome-headless-shell", "chromium", "firefox", "chromedriver")
+BROWSER_INSTALLS = re.compile(f"({'|'.join(PLAYWRIGHT_BROWSERS)})-[0-9]+|{'|'.join(PUPPETEER_BROWSERS)}")
 # The person's browsers: no command in a box starts one (the tech-lead's rule, 22/11), only Jaynes's own headless
 # Chrome (JAYNES_CHROME) and the one a photograph's box is made for. The agent's settings in agent.rs hide the same
 # (BROWSER_APPS, BROWSER_PLACES there; a test checks both say the same).
@@ -161,6 +176,30 @@ class Box:
     looked_up: tuple[Path, ...] = ()
 
 
+def browser_caches(home: Path, env=None) -> list[Path]:
+    """Where browser tools keep the browsers they download: Playwright's (PLAYWRIGHT_BROWSERS_PATH, or its place on
+    macOS and on Linux) and Puppeteer's (PUPPETEER_CACHE_DIR, or its place). A relative or "0" place is in the
+    project's own folder."""
+    env = os.environ if env is None else env
+    named = [Path(v) for v in (env.get("PLAYWRIGHT_BROWSERS_PATH"), env.get("PUPPETEER_CACHE_DIR")) if v and os.path.isabs(v)]
+    return named + [home / "Library" / "Caches" / "ms-playwright", home / ".cache" / "ms-playwright", home / ".cache" / "puppeteer"]
+
+
+def browser_installs(home: Path, env=None) -> list[Path]:
+    """The browsers installed in the browser tools' caches, the only things of those caches a box reads, as named and
+    where a link leads."""
+    out: list[Path] = []
+    for cache in browser_caches(home, env):
+        try:
+            inside = sorted(cache.iterdir())
+        except OSError:
+            continue
+        for p in inside:
+            if BROWSER_INSTALLS.fullmatch(p.name) and p.is_dir():
+                out += [x for x in dict.fromkeys((p, Path(os.path.realpath(p)))) if x not in out]
+    return out
+
+
 def hidden_paths(box: Box) -> list[Path]:
     """Everything the box may not read: where secrets usually live, what the engine keeps, the runs, and the
     box's own hidden folders. One list for every system's box; ``box.readable`` and the writable folders inside
@@ -170,7 +209,7 @@ def hidden_paths(box: Box) -> list[Path]:
     # a step's output under the runs
     runs = [engine / "runs"] if box.local or box.readable else []
     return ([box.home / s for s in SECRETS] + [engine / f for f in ENGINE_SECRETS] + [engine / "projects"]
-            + [old / f for f in OLD_ENGINE]
+            + [old / f for f in OLD_ENGINE] + browser_caches(box.home)
             + runs + list(box.hidden) + ([box.home] if box.hide_home else []))
 
 
@@ -280,9 +319,11 @@ def profile(box: Box) -> str:
     if box.readonly:  # after the allow it narrows: of two rules that match, the later one holds
         lines.append(f"(deny file-write* {_subpaths(box.readonly)})")
     lines.append(f"(deny file-read* {_subpaths(hidden_paths(box))})")
-    # the last rule that matches wins: what it may read inside the hidden is read again, but for its hidden folders
-    if box.readable:
-        lines.append(f"(allow file-read* {_subpaths(box.readable)})")
+    # the last rule that matches wins: what it may read inside the hidden is read again, but for its hidden folders;
+    # the browsers installed in the browser tools' caches too, never the rest of those caches
+    installs = browser_installs(box.home)
+    if box.readable or installs:
+        lines.append(f"(allow file-read* {_subpaths([*box.readable, *installs])})")
         if box.hidden:
             lines.append(f"(deny file-read* {_subpaths(box.hidden)})")
     if box.writable:
@@ -292,8 +333,8 @@ def profile(box: Box) -> str:
     # above the step's folder refused it EPERM; a link as it is named, never as it leads, since a rule names where a
     # link leads and the link itself stays hidden (uv's cpython-3.14-... to cpython-3.14.9-..., refused
     # "Operation not permitted" to the agent's .venv/bin/python, the real-user's runs of 22/11)
-    on_the_way = sorted({a for p in (*box.writable, *box.readable, *box.looked_up) for a in _chain(p)}
-                        | {str(a) for p in (*box.writable, *box.readable) for a in Path(os.path.realpath(p)).parents}
+    on_the_way = sorted({a for p in (*box.writable, *box.readable, *installs, *box.looked_up) for a in _chain(p)}
+                        | {str(a) for p in (*box.writable, *box.readable, *installs) for a in Path(os.path.realpath(p)).parents}
                         - {"/"})
     if on_the_way:
         lines.append(f"(allow file-read-metadata {_literals(on_the_way)})")

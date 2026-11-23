@@ -124,7 +124,7 @@ runs (`engine/model`). The chance in G17 is not proved there; a simulation of 3,
   `JAYNES_CHROME` names or else the one you installed, with no window and a profile of its own,
   and a role's own scripts may start that same Chrome to draw their pages; so where a role's
   script runs the project's code in its step, its app or its tests, that code can start that
-  Chrome too, still without your profiles. The agent's own commands do not start it. They can still read your other files that are not on the list of secrets, take a
+  Chrome too, still without your profiles. The agent's own commands do not start it. Neither the agent's box nor the check's box reads a browser profile of the person's: cookies, saved logins and history of any browser or browser tool (Chrome, Safari, Firefox, Arc, Edge, Brave, Playwright, Puppeteer). A browser's installed program may be reached; its profile never. They can still read your other files that are not on the list of secrets, take a
   port they are allowed in a way other machines on your network can reach while they run, and
   use as much CPU, memory and disk as the step's time allows. Elsewhere there is no box yet,
   and these commands do not run.
