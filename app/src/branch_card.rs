@@ -60,6 +60,10 @@ pub struct Shown {
     pub not_landed: Option<String>,
     /// git's own words, under "▸ What git said", closed; never in the sentence.
     pub git: Option<String>,
+    /// What heads those closed words: git's, or the check's when a check run again refused the merge.
+    pub said_label: &'static str,
+    /// Dim, in mono, under the amber line of a check that fails on what would land: what a merge leaves out.
+    pub left_out: Option<String>,
     /// Once merged, in place of the branch's line, with Undo the merge.
     pub merged: Option<String>,
     /// Nothing to merge, in text, and the branch its Copy copies.
@@ -70,7 +74,7 @@ pub fn shown(b: &Branch) -> Shown {
     match b {
         Branch::Unmerged(u) => {
             let (amber, git) = u.not_landed().map_or((None, None), |(a, g)| (Some(a), Some(g)));
-            Shown { line: Some(u.line()), button: u.button().map(|b| (b, u.says())), not_landed: amber, git: git.filter(|g| !g.trim().is_empty()), ..Shown::default() }
+            Shown { line: Some(u.line()), button: u.button().map(|b| (b, u.says())), not_landed: amber, git: git.filter(|g| !g.trim().is_empty()), said_label: u.said_label(), left_out: u.left_out(), ..Shown::default() }
         }
         Branch::Merged(said) => Shown { merged: Some(said.clone()), ..Shown::default() },
         Branch::Nothing { said, branch } => Shown { nothing: Some((said.clone(), branch.clone())), ..Shown::default() },
@@ -160,7 +164,9 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
             )
         })
         .when_some(shown.not_landed, |d, amber| d.child(div().text_size(px(12.5)).text_color(rgb(look::amber())).child(amber)))
+        .when_some(shown.left_out, |d, said| d.child(div().font_family(look::MONO_FONT).text_size(px(12.)).text_color(rgb(look::dim())).child(said)))
         .when_some(shown.git, |d, words| {
+            let said_label = shown.said_label;
             let open = s.git_open;
             d.child(
                 div()
@@ -174,7 +180,7 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
                             .text_size(px(11.5))
                             .text_color(rgb(look::faint()))
                             .hover(|d| d.text_color(rgb(look::dim())))
-                            .child(format!("{} {}", if open { "▾" } else { "▸" }, listing::WHAT_GIT_SAID))
+                            .child(format!("{} {}", if open { "▾" } else { "▸" }, said_label))
                             .on_click(git),
                     )
                     .when(open, |d| d.child(div().pl(px(12.)).font_family(look::MONO_FONT).text_size(px(12.)).line_height(px(18.)).text_color(rgb(look::faint())).child(words))),
@@ -190,7 +196,7 @@ pub fn card(b: &Branch, s: &State, on: On) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{Branch, Shown, shown};
-    use jaynes_shell::listing::{NotLanded, Unmerged};
+    use jaynes_shell::listing::{JudgedAgain, NotLanded, Unmerged};
 
     fn unmerged() -> Unmerged {
         Unmerged { branch: "jaynes/same-2".into(), into: "main".into(), project: "horta".into(), refused: None, failed: None }
@@ -229,5 +235,35 @@ mod tests {
         // branch, neither Merge nor Undo
         let nothing = shown(&Branch::Nothing { said: jaynes_shell::listing::nothing_to_merge_said("main", "horta"), branch: "jaynes/same-3".into() });
         assert_eq!(nothing, Shown { nothing: Some(("Nothing to merge: “main” in horta already has this change.".into(), "jaynes/same-3".into())), ..Shown::default() });
+    }
+
+    /// The design-lead's quatro-itens.md, "Merge recusado pela checagem de novo" (judged_again, 23/11), in the page's
+    /// words: a check that fails on what would land takes Merge away, says which check, lists what a merge leaves
+    /// out and keeps the check's own words closed under "What the check said"; one that could not judge keeps Merge
+    /// and says "Merging checks it again first."
+    #[test]
+    fn asked_a_merge_a_check_run_again_refuses_says_which_check_and_what_it_leaves_out_in_the_pages_words() {
+        let judged = |fails: bool| Unmerged {
+            failed: Some(NotLanded::Judged(JudgedAgain {
+                check: "pages-open".into(),
+                step: "design".into(),
+                fails,
+                reasons: vec!["design/a.html: no such file".into(), "design/b.html: no such file".into()],
+                left_out: vec!["design/a.html".into(), "design/b.html".into(), "design/c.html".into(), "design/d.html".into()],
+            })),
+            ..unmerged()
+        };
+        let fails = shown(&Branch::Unmerged(judged(true)));
+        assert!(fails.line.is_some() && fails.button.is_none());
+        assert_eq!(fails.not_landed.as_deref(), Some("Not merged: the check “pages-open” fails on what would land in “main”. A merge leaves out the files that were only for you to look at, and the change seems to need them."));
+        assert_eq!(fails.left_out.as_deref(), Some("Left out: design/a.html, design/b.html, design/c.html and 1 more."));
+        assert_eq!(fails.said_label, "What the check said");
+        assert_eq!(fails.git.as_deref(), Some("design/a.html: no such file\ndesign/b.html: no such file"));
+        let could_not = shown(&Branch::Unmerged(judged(false)));
+        assert_eq!(could_not.button, Some(("Merge into “main”".into(), "Merging checks it again first.".into())));
+        assert_eq!(could_not.not_landed.as_deref(), Some("Not merged: the check “pages-open” could not judge what would land in “main”."));
+        assert_eq!((could_not.left_out, could_not.said_label), (None, "What the check said"));
+        // git's own words keep their heading
+        assert_eq!(shown(&Branch::Unmerged(Unmerged { failed: Some(NotLanded::Conflict { git: "x".into() }), ..unmerged() })).said_label, "What git said");
     }
 }
