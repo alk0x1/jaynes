@@ -448,6 +448,7 @@ impl Event {
             Event::Continued { .. } => "Continued",
             Event::ChecksUnjudged { .. } => "ChecksUnjudged",
             Event::PortsChosen { .. } => "PortsChosen",
+            Event::Granted { .. } => "Granted",
             Event::Halted { .. } => "Halted",
             Event::Resumed { .. } => "Resumed",
             Event::DeliveryAsked { .. } => "DeliveryAsked",

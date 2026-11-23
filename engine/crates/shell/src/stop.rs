@@ -74,7 +74,57 @@ pub struct Stop {
     /// The run's engine, when an older one started it and is no longer on this machine: no answer reaches the run,
     /// and the card says so before Send.
     pub gone: Option<Gone>,
+    /// What the person may grant here beside their answer, each with its box marked or not beforehand: sent with the
+    /// answer as the page's act "grant", the person's alone (`Input::Grant`). Empty at most stops.
+    pub offers: Vec<Offered>,
 }
+
+/// Something a stop offers the person to grant, as the card shows it: a box to mark, with its words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offered {
+    pub offer: jaynes_core::manifest::Offer,
+    /// The box's words.
+    pub says: String,
+    /// What granting it does and what it still keeps, under the box.
+    pub then: String,
+    /// The box is marked beforehand, as the step's output says (the role's offers_default).
+    pub marked: bool,
+}
+
+/// What `q`'s stop offers the person to grant and they have not: on macOS only, where the box keeps tests from
+/// serving, and only while the project's test servers are not let yet. Marked beforehand by the boolean field the
+/// role names of the step's output.
+pub fn offered(store: Option<&crate::store::Store>, run: &Run, q: &jaynes_core::run::QuestionState) -> Vec<Offered> {
+    use jaynes_core::manifest::Offer;
+    if !q.open() || !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    let Some(i) = run.manifest.index(&q.question.step) else { return Vec::new() };
+    let Some(stop) = run.manifest.steps[i].stop.as_ref() else { return Vec::new() };
+    let state = &run.steps[i];
+    let output = state.done.as_ref().map(|d| &d.output).or(state.pending.as_ref().map(|p| &p.output)).and_then(|d| store?.get(d).ok());
+    let servers = run.ports.as_ref().is_some_and(|p| p.servers || p.any);
+    stop.offers
+        .list
+        .iter()
+        .filter(|o| !run.granted.contains(o) && !(**o == Offer::TestServers && servers))
+        .map(|o| Offered {
+            offer: *o,
+            says: match o {
+                Offer::TestServers => TEST_SERVERS_SAYS.into(),
+            },
+            then: match o {
+                Offer::TestServers => TEST_SERVERS_THEN.into(),
+            },
+            marked: stop.offers.marked_by.get(o).and_then(|f| output.as_ref()?.get(f)?.as_bool()).unwrap_or(false),
+        })
+        .collect()
+}
+
+/// The words of the box that lets a new project's tests start their own test servers (the tech-lead's T5, 23/11).
+pub const TEST_SERVERS_SAYS: &str = "Let this project's tests start their own test servers";
+/// What it does, under the box: as `jaynes project test-servers` says it, and what stays held.
+pub const TEST_SERVERS_THEN: &str = "As when you run the tests yourself, but they still cannot reach your services or the Jaynes page. Jaynes still holds the ports of the usual databases and caches.";
 
 /// An older engine a run started on, gone from the machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -415,6 +465,7 @@ fn stop_of(home: &Path, run: &Run, q: &jaynes_core::run::QuestionState) -> Stop 
         consequences: if permission { leave_consequences(run, &q.question.about) } else { BTreeMap::new() },
         wants,
         gone: gone(home, run),
+        offers: offered(store.as_ref(), run, q),
     }
 }
 

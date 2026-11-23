@@ -1750,6 +1750,7 @@ mod tests {
             consequences: Default::default(),
             wants: None,
             gone: None,
+            offers: Vec::new(),
         }
     }
 

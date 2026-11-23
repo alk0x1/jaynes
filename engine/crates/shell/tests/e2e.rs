@@ -1339,6 +1339,116 @@ fn the_page_answers_as_the_person_only_with_its_key() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "only macOS's box keeps tests from serving")]
+fn at_the_stack_stop_of_a_new_project_the_person_lets_its_tests_start_their_own_test_servers_and_only_with_the_page_s_key() {
+    // the tech-lead's T5 (23/11): the first stop of a new project offers its tests their own test servers, marked
+    // beforehand when the chosen stack serves HTTP; only the person's proof grants it, for this project, and never
+    // the ports of the usual databases and caches
+    let s = scratch("grant");
+    std::fs::write(s.project.join("Makefile"), "test:\n\tif [ -f serve.py ]; then python3 serve.py; fi\n\tgrep -q hello greeting.txt\n").expect("write");
+    for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "make"]] {
+        assert!(Command::new("git").arg("-C").arg(&s.project).args(&args).status().expect("git").success());
+    }
+    let base = s.home.parent().expect("base").to_path_buf();
+    let role = base.join("new-service");
+    std::fs::create_dir_all(&role).expect("dir");
+    std::fs::write(role.join("role.toml"), r#"
+role = "new-service"
+version = "1.0.0"
+
+[[step]]
+name = "runner"
+by = "jaynes"
+use = "find-suite"
+
+[[step]]
+name = "stack"
+reach = { project = "read" }
+instructions = "Pick the stack for {{request}}."
+stop = { ask = "Which stack?", verdicts = ["keep", "redo"], holds = true, offers = ["test_servers"], offers_default = { test_servers = "serves_http" } }
+show = { label = "{{stack}}" }
+
+[step.output]
+stack = "string"
+serves_http = "boolean"
+
+[[step]]
+name = "build"
+needs = ["runner", "stack"]
+reach = { project = "write", write = ["**"], commands = true }
+instructions = "Build {{stack.stack}}."
+checks = ["suite-passes"]
+"#).expect("write");
+    // a role whose default names a field the output does not declare as a boolean is refused
+    let wrong = base.join("wrong");
+    std::fs::create_dir_all(&wrong).expect("dir");
+    let text = std::fs::read_to_string(role.join("role.toml")).expect("read").replace("serves_http = \"boolean\"", "serves_http = \"string\"");
+    std::fs::write(wrong.join("role.toml"), text).expect("write");
+    let (ok, out) = engine(&s, &["check", wrong.to_str().expect("path")]);
+    assert!(!ok && out.contains("offers_default names serves_http, which the step's output does not declare as a boolean"), "{out}");
+    // the stack step picks one that serves HTTP; the build adds a test that starts its own server on a port the
+    // system picks
+    let agent = base.join("agent.sh");
+    std::fs::write(&agent, r##"p=$(cat)
+case "$p" in
+  *"# Your step: stack"*) printf '{"stack":"a Python service","serves_http":true}' > .jaynes/output.json ;;
+  *) printf 'import socket\ns = socket.socket()\ns.bind(("127.0.0.1", 0))\ns.listen(1)\n' > serve.py
+     printf '{}' > .jaynes/output.json ;;
+esac
+"##).expect("write");
+    let (ok, out) = engine(&s, &[
+        "start", "--run", "grant", "--role", role.to_str().expect("path"), "--project", s.project.to_str().expect("path"),
+        "--request", "a small service", "--agent", &format!("command:sh {}", agent.display()),
+    ]);
+    assert!(ok, "{out}");
+    let e = events(&s, "grant");
+    let q = e.iter().find(|e| e["type"] == "QuestionOpened").expect("asked")["question"].clone();
+    assert_eq!(q["step"], "stack", "{q}");
+    let shown = jaynes_core::question::Question::shown(&serde_json::from_value(q.clone()).expect("question")).0;
+    let id = q["id"].as_str().expect("id");
+    let (_page, port) = page_on_any_port(
+        jaynes()
+            .arg("page")
+            .env("JAYNES_ENGINE_HOME", &s.home).env("JAYNES_NO_PAGE", "1")
+            .env("JAYNES_PYTHON", python())
+            .env("PYTHONPATH", "")
+            .env("JAYNES_PAGE_KEY", "k3y"),
+    );
+    let grant = format!(r#"{{"run":"grant","action":"grant","question":"{id}","offer":"test_servers"}}"#);
+    // without the key it is an agent's, and refused
+    let r = post(port, "/api/act", &grant, "");
+    assert!(r["ok"] == false && r.to_string().contains("only you let this project's tests start their own test servers"), "{r}");
+    assert!(events(&s, "grant").iter().all(|e| e["type"] != "Granted"));
+    // with the key, the person's: then their answer
+    let r = post(port, "/api/act", &grant, "jaynes_key=k3y");
+    assert_eq!(r["ok"], true, "{r}");
+    let keep = format!(r#"{{"run":"grant","question":"{id}","shown":"{shown}","verdicts":{{}}}}"#);
+    let r = post(port, "/api/answer", &keep, "jaynes_key=k3y");
+    assert_eq!(r["ok"], true, "{r}");
+    let mut e = Vec::new();
+    for _ in 0..150 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        e = events(&s, "grant");
+        if e.iter().any(|e| e["type"] == "RunFinished") {
+            break;
+        }
+    }
+    let granted: Vec<&Value> = e.iter().filter(|e| e["type"] == "Granted").collect();
+    assert_eq!(granted.len(), 1, "{:?}", types(&e));
+    assert_eq!((granted[0]["offer"].as_str(), granted[0]["by"]["by"].as_str()), (Some("test_servers"), Some("person")), "{granted:?}");
+    // the run records it as jaynes project test-servers does: test servers, not every port, no database port freed
+    let chosen = e.iter().find(|e| e["type"] == "PortsChosen").unwrap_or_else(|| panic!("ports recorded: {:?}", types(&e)));
+    assert!(chosen["servers"] == true && chosen["any"] == false && chosen.get("freed_ports").is_none(), "{chosen}");
+    let finished = e.iter().find(|e| e["type"] == "RunFinished").unwrap_or_else(|| panic!("{:?}", types(&e)));
+    assert_eq!(finished["outcome"], "delivered", "{finished}");
+    // the build's suite served in the box on its first attempt
+    assert_eq!(e.iter().filter(|e| e["type"] == "AttemptStarted" && e["step"] == "build").count(), 1, "{:?}", types(&e));
+    // the project's choice stays, as the command's would
+    let prefs = jaynes_shell::project_prefs::load(&s.home, &s.project).expect("prefs").ports.expect("ports");
+    assert!(prefs.servers && !prefs.any && prefs.freed_ports.is_empty(), "{prefs:?}");
+}
+
+#[test]
 #[cfg_attr(not(target_os = "macos"), ignore = "needs the box for project commands, which Linux does not have yet (slice 2)")]
 fn sending_an_earlier_step_back_reruns_it_without_the_later_steps_changes() {
     let s = bug_project("redo");

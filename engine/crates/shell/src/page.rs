@@ -759,6 +759,13 @@ pub fn act_in(home: &std::path::Path, exe: &std::path::Path, body: &Value, by: B
                 None => Input::Continue { by, starter: None },
             },
             "abandon" => Input::Abandon { by, starter: None },
+            // what the stop offers beside the answer, such as a new project's test servers: the person's alone, and
+            // the core refuses it from anyone else (the tech-lead's T5, 23/11)
+            "grant" => Input::Grant {
+                question: body["question"].as_str().ok_or("which stop?")?.to_string(),
+                offer: serde_json::from_value(body["offer"].clone()).map_err(|_| format!("no offer {}", body["offer"]))?,
+                by,
+            },
             "raise-risk" => Input::RaiseRisk { to: jaynes_core::risk::Risk::High, by },
             "raise-ceiling" => {
                 let c = run.ceiling;

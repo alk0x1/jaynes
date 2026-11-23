@@ -1533,7 +1533,7 @@ impl TomlRole {
                     let name = offer_word(*o);
                     let ty = s.output.as_ref().and_then(|t| t.get(field)).map(|f| match f {
                         toml::Value::String(t) => t.clone(),
-                        toml::Value::Table(t) => text(t, "type"),
+                        toml::Value::Table(t) => t.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         _ => String::new(),
                     });
                     if !st.offers.contains(o) {

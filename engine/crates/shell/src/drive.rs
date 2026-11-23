@@ -1139,6 +1139,9 @@ impl<'a> Driver<'a> {
                                 for e in &events {
                                     narrate(e, &now);
                                 }
+                                if events.iter().any(|e| matches!(e, Event::Granted { offer: jaynes_core::manifest::Offer::TestServers, .. })) {
+                                    self.let_test_servers()?;
+                                }
                                 state = now;
                                 queue.extend(more.into_iter().filter_map(|m| self.carry_out_quietly(&state, m)));
                             }

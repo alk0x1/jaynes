@@ -49,7 +49,7 @@ mod tests {
     fn stop(run: &str, question: &str, title: &str) -> Stop {
         Stop {
             run: run.into(), question: question.into(), shown: String::new(), title: title.into(), asks: String::new(), step: "s".into(), permission: false, kind: jaynes_core::question::QuestionKind::Decision, choose: false,
-            offered: vec![], items: vec![], back: vec![], round: 0, about: String::new(), ahead: None, touch: None, into: String::new(), lands: vec![], passed: None, answers: Default::default(), note: String::new(), why: None, consequences: Default::default(), wants: None, gone: None,
+            offered: vec![], items: vec![], back: vec![], round: 0, about: String::new(), ahead: None, touch: None, into: String::new(), lands: vec![], passed: None, answers: Default::default(), note: String::new(), why: None, consequences: Default::default(), wants: None, gone: None, offers: Vec::new(),
         }
     }
 
