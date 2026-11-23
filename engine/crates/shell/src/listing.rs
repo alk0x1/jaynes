@@ -636,13 +636,18 @@ fn held_at_start_of<'a>(step: Option<&str>, fault: jaynes_core::event::Fault, re
     held(inner).filter(|h| !h.ports.is_empty())
 }
 
+/// The column's line of a run that delivered a change on its branch and did not merge it.
+pub const ON_A_BRANCH: &str = "on a branch · not merged yet";
+
 /// The mark and the line of a run nothing waits on.
 fn standing(e: &Entry) -> (Mark, String) {
     let r = &e.run;
     match &r.phase {
         Phase::Finished { outcome: Outcome::Abandoned } => (Mark::Abandoned, "abandoned".into()),
         Phase::Finished { outcome: Outcome::Delivered } if r.undone => (Mark::Undone, "reverted by you".into()),
-        Phase::Finished { outcome: Outcome::Delivered } if e.merged => (Mark::Merged, "merged".into()),
+        Phase::Finished { outcome: Outcome::Delivered } if e.merged || r.merged => (Mark::Merged, "merged".into()),
+        // a change on the run's branch, not in the person's folder (T7, the design-lead's words, item 5)
+        Phase::Finished { outcome: Outcome::Delivered } if !r.delivered_files().is_empty() => (Mark::Delivered, ON_A_BRANCH.into()),
         Phase::Finished { outcome: Outcome::Delivered } => (Mark::Delivered, "delivered".into()),
         _ if r.set_aside.is_some() => (Mark::SetAside, format!("set aside by the agent that started it · {}", where_in(r))),
         _ if e.stopped => (Mark::Halted, format!("{}, {}", where_in(r), crate::drive::JAYNES_STOPPED_SAID)),
@@ -3293,6 +3298,14 @@ mod tests {
         let mut r = run("delivered", "x");
         r.phase = Phase::Finished { outcome: Outcome::Delivered };
         cases.push(("delivered", entry(r.clone(), "/p", 1), "delivered"));
+        // a change delivered on its branch and not merged says where it is (T7, the design-lead's words, item 5)
+        let mut branch = r.clone();
+        branch.id = "on-branch".into();
+        let changed: jaynes_core::risk::Changed = serde_json::from_value(serde_json::json!({"what": "greeting.txt", "size": 2})).expect("changed");
+        branch.steps[0].done = Some(jaynes_core::run::Done { round: 1, output: jaynes_core::Digest("o".into()), items: vec![], reads: branch.reads(0), changed: vec![changed] });
+        cases.push(("delivered", entry(branch.clone(), "/p", 1), "on a branch · not merged yet"));
+        branch.id = "on-branch-merged".into();
+        cases.push(("merged", Entry { merged: true, ..entry(branch, "/p", 1) }, "merged"));
         r.id = "merged".into();
         cases.push(("merged", Entry { merged: true, ..entry(r.clone(), "/p", 1) }, "merged"));
         r.id = "undone".into();
