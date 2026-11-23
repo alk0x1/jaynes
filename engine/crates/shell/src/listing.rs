@@ -2333,7 +2333,7 @@ mod blocked_tests {
         );
         let b = blocked_said(Some("change"), Fault::Jaynes, &reason);
         assert_eq!(b.what, "The change is done. Jaynes could not check it.");
-        assert_eq!(b.why, "The project's tests tried to start Google Chrome, a browser of this Mac. The box Jaynes checks in starts none of your browsers, so their cookies, saved logins and history stay out of reach.");
+        assert_eq!(b.why, format!("The project's tests tried to start Google Chrome, a browser of {}. The box Jaynes checks in starts none of your browsers, so their cookies, saved logins and history stay out of reach.", this_machine()));
         assert_eq!(b.ways.iter().map(|w| w.says.as_str()).collect::<Vec<_>>(), [
             "Have the tests start a browser the project installs, as Playwright's or Puppeteer's, then Continue.",
             "Or abandon: the run ends and its change is not kept. Your project stays as it was.",
