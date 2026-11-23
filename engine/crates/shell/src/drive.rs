@@ -1555,7 +1555,7 @@ impl<'a> Driver<'a> {
                 let left_out = copy.head().is_ok_and(|h| h != head);
                 if let Some(why) = left_out.then(|| self.judged_again(run, &head)).flatten() {
                     reference.push_str(&format!("; not merged: {why}"));
-                    return (ok, reference);
+                    return (ok, reference, landed);
                 }
                 let merged = copy.land(&head, &self.setup.run);
                 // For the tests of recovery: die where a kill can fall, once the merge landed.
