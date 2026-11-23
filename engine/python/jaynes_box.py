@@ -172,6 +172,9 @@ class Box:
     runs: tuple[Path, ...] = ()  # when given, the only programs it may start (an agent program in a step without commands)
     browser: Path | None = None  # the one browser it may start, with its bundle's helpers: a photograph's Chrome
     hide_home: bool = False  # the whole home hidden but for its readable and writable folders: an agent's commands
+    # a box that is not ``local``, made for a photograph or a role's own script: it binds only ``ports`` (on the loopback,
+    # the page's never), and no other
+    bind_given_only: bool = False
     jaynes_chrome: str = ""  # the Chrome Jaynes photographs with, when the box's own environment does not name it
     # places its commands only look up, such as the folders of its PATH: their own metadata and that of every folder
     # and link on the way to them, never what they hold
@@ -367,6 +370,13 @@ def profile(box: Box) -> str:
         # a suite's own servers on socket files, such as the role tools: only in its own folders, a rule each, since
         # a socket rule with several paths holds only the first
         lines += [f"(allow network-outbound (remote unix-socket {_subpaths([p])}))" for p in box.writable]
+    if box.bind_given_only and not box.local:
+        # the profile allows by default: without this a photograph's Chrome or a role's script listens on any port, which
+        # the network reaches. Only the ports it was given, as the local box does (the page's never), and its own sockets
+        lines.append("(deny network-bind)")
+        lines += [f'(allow network-bind (local tcp "localhost:{int(p)}"))' for p in sorted(set(box.ports) - {PAGE_PORT})]
+        lines += [f"(allow network-bind (local unix-socket {_subpaths([p])}))" for p in box.writable]
+        lines += _chrome_socket()
     if box.runs:
         lines += ["(deny process-exec)", "(allow process-exec " + " ".join(f"(literal {_lit(p)})" for p in box.runs) + ")"]
     lines += _browsers_denied(box)
@@ -1874,7 +1884,7 @@ def run_step(command: str, *, project: Path | None, write: bool = False, source:
         reads += (*installed, LISTEN_PRELOAD)
         # a role's own script starts the Chrome Jaynes photographs with, as a photograph does
         argv = command_in_box(command, Box((work, scratch, out), ports=ports, readonly=readonly, readable=reads,
-                                           browser=_browser()))
+                                           browser=_browser(), bind_given_only=True))
         refusals = scratch / "jaynes-refused.txt"
         env = listen_said({**inherited(), **suite_environment(work, scratch), "JAYNES_OUTPUT": str(out / "output.json")},
                           refusals)
@@ -2107,7 +2117,8 @@ def photograph(target: str, out: Path, size: tuple[int, int] = SIZE, ports: tupl
             # the one browser it starts is the one chosen here, with its bundle's helpers: never another
             # a page file is read where it is, with what it links beside it, the engine's folder hidden but for that
             argv = command_in_box(script, Box((Path(tmp),), ports=ports, browser=Path(program),
-                                              readable=() if local else (Path(target).resolve().parent,)))
+                                              readable=() if local else (Path(target).resolve().parent,),
+                                              bind_given_only=True))
             # Chrome keeps its default folders under the home macOS reports; the box lets it write none there, so
             # it is given one of its own, inside the temporary folder
             env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
@@ -2143,7 +2154,7 @@ def _height(program: str, page: Path, size: tuple[int, int], ports: tuple[int, .
                 "--virtual-time-budget=2000", "--dump-dom", copy.as_uri()]
         try:
             argv = command_in_box(" ".join(shlex.quote(a) for a in argv), Box((Path(tmp),), ports=ports, browser=Path(program),
-                                                                                         readable=(page.resolve().parent,)))
+                                                                                         readable=(page.resolve().parent,), bind_given_only=True))
             env = {**inherited(), "TMPDIR": tmp, "CFFIXED_USER_HOME": tmp}
             code, said, _, late = _wait_in_box(argv, cwd=None, env=env, stdin=None, timeout=90, stderr_apart=True)
         except Unavailable as e:
