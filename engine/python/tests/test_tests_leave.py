@@ -155,9 +155,73 @@ class AskedTheContas(unittest.TestCase):
         whole = {"project": str(root), "source": str(root), "start": {"files": CONTAS_START}, "tests_leave": CONTAS_WORDS,
                  "given": [{"step": "runner", "output": {"kind": "pytest", "suite": "python3 -m pytest"}},
                            {"step": "reproduce", "output": {"tests": ["tests/relatorio_test.py"]}}]}
-        with mock.patch.object(menu.box, "run", side_effect=[box.Ran(1, "E   assert 10 == 210\n1 failed", "")]):
+        with mock.patch.object(menu.box, "run", side_effect=[box.Ran(0, "tests/relatorio_test.py::test_x\n", ""), box.Ran(1, "E   assert 10 == 210\n1 failed", "")]):
             got = menu.tests_pass(whole, {"suite_step": "runner", "tests_from": "reproduce"})
         self.assertIsInstance(got, Fail, got)
+
+
+# The real-user's contas, round of 16:08 on 76a06b8a (uso-real/achados/2026-11-23-03.md, runs r1795460919-451 and -455,
+# the fix-bug of a8d3944): "tests pass" counted a test the suite never ran. Case 2: reproduce wrote its test in
+# tests/relatorio_test.py, which the pyproject as the run began does not collect; the agent added "*_test.py" to
+# python_files with nobody's leave, and tests-pass ran the file by its path (pytest runs a file it is given even when no
+# pattern matches it) and the suite (which as the start defined it never holds that file): green. Case 1: the test is in
+# tests/test_linha.py, which the suite as the start defined it does collect.
+def _collected_by(pyproject: str, files: list[str]) -> list[str]:
+    import fnmatch
+    import re
+    got = re.search(r"python_files\s*=\s*\[(.*?)\]", pyproject)
+    patterns = re.findall(r"\"([^\"]+)\"", got.group(1)) if got else ["test_*.py"]
+    return [f for f in files if any(fnmatch.fnmatch(Path(f).name, g) for g in patterns)]
+
+
+class TheTestOfTheBugIsAmongTheOnesRun(unittest.TestCase):
+    def judged(self, tests: list[str], now: dict[str, str], check: str = "tests_pass", **call: object) -> tuple[object, list[str]]:
+        root = project(now)
+        ran_commands: list[str] = []
+        files = ["tests/relatorio_test.py", "tests/test_linha.py"]
+
+        def run(where: Path, command: str, **kw: object) -> box.Ran:
+            ran_commands.append(command)
+            if "--collect-only" in command:  # what pytest lists, by the pyproject it reads: the start's when put back
+                seen = (kw.get("over") or {}).get("pyproject.toml") or (Path(where) / "pyproject.toml").read_text()
+                listed = "".join(f"{f}::test_x\n" for f in _collected_by(seen, files))
+                return box.Ran(0, listed, listed)
+            if Path(where) != root:
+                return box.Ran(1, "E   ModuleNotFoundError: No module named 'contas'\n", "")
+            return box.Ran(0, "6 passed", "6 passed")
+        whole = {"project": str(root), "source": str(root), "start": {"files": CONTAS_START},
+                 "given": [{"step": "runner", "output": {"kind": "pytest", "suite": "python3 -m pytest"}},
+                           {"step": "reproduce", "output": {"tests": tests}}], **call}
+        params = {"suite_step": "runner", "tests_from": "reproduce"}
+        with mock.patch.object(menu.box, "run", side_effect=run):
+            return getattr(menu, check)(whole, params), ran_commands
+
+    def test_case_2_a_test_the_suite_of_the_start_never_collects_is_refused_and_says_why(self):
+        got, _ = self.judged(["tests/relatorio_test.py"], CONTAS_NOW)
+        self.assertIsInstance(got, Fail, got)
+        said = " ".join(got.reasons)
+        self.assertIn("tests/relatorio_test.py", said)
+        self.assertIn("does not collect", said)
+        self.assertIn("pyproject.toml", said)
+
+    def test_case_2_with_the_person_s_leave_the_suite_as_the_agent_left_it_collects_it_and_it_passes(self):
+        got, _ = self.judged(["tests/relatorio_test.py"], CONTAS_NOW, tests_leave=CONTAS_WORDS)
+        self.assertIsInstance(got, Pass, got)
+
+    def test_with_the_leave_a_suite_left_that_no_longer_collects_the_test_is_refused(self):
+        now = {**CONTAS_NOW, "pyproject.toml": "[tool.pytest.ini_options]\npython_files = [\"test_*.py\"]\n# changed\n"}
+        got, _ = self.judged(["tests/relatorio_test.py"], now, tests_leave=CONTAS_WORDS)
+        self.assertIsInstance(got, Fail, got)
+        self.assertIn("does not collect", " ".join(got.reasons))
+
+    def test_case_1_a_test_the_suite_of_the_start_collects_still_passes(self):
+        got, _ = self.judged(["tests/test_linha.py"], CONTAS_NOW)
+        self.assertIsInstance(got, Pass, got)
+
+    def test_suite_passes_asked_for_the_tests_of_a_step_refuses_the_same(self):
+        got, _ = self.judged(["tests/relatorio_test.py"], CONTAS_NOW, check="suite_passes")
+        self.assertIsInstance(got, Fail, got)
+        self.assertIn("does not collect", " ".join(got.reasons))
 
 
 if __name__ == "__main__":

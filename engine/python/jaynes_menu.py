@@ -666,6 +666,43 @@ def _left(call: Call, began: dict[str, str | None] | None) -> bool:
     return bool(began) and bool(str(call.get("tests_leave") or "").strip())
 
 
+def _collected(call: Call, runner: dict[str, Any], tests: list[str], began: dict[str, str | None] | None,
+               left: bool) -> list[str] | None | Blocked:
+    """The files of ``tests`` the suite does not collect, as the project defined it when the run began, or as the
+    agent left it with the person's leave (``left``); empty when it collects them all; None when Jaynes cannot tell
+    (the runner is not pytest, or its listing failed for another reason). A test the suite never runs shows nothing
+    when it passes: pytest runs a file it is given by its path whatever ``python_files`` says."""
+    if runner.get("kind") != "pytest" or not runner.get("suite"):
+        return None
+    ran = _box(call, f"{runner['suite']} --collect-only -q", over=None if left or not began else began)
+    if isinstance(ran, Blocked):
+        return ran
+    if ran.code not in (0, 5):
+        return None
+    listed = {line.split("::", 1)[0].strip() for line in ran.printed.splitlines() if "::" in line}
+    if ran.code == 0 and not listed:  # not the listing of node ids: a runner configured to print another way
+        return None
+    return [t for t in tests if t not in listed]
+
+
+def _not_collected(missing: list[str], began: dict[str, str | None] | None, left: bool) -> Fail:
+    names = ", ".join(missing)
+    how = "as the agent left it, with the person's leave" if left else "as the project defined it when the run began"
+    changed = ""
+    if not left and began:
+        changed = (f" The run changed {', '.join(began)}, which decides what the suite runs, and changing how the tests "
+                   "are defined is the person's to allow: ask them, in plain words, instead of changing it, or put the "
+                   "test where the suite collects it.")
+    return Fail(f"{names} {'is' if len(missing) == 1 else 'are'} not among the tests the suite runs {how}: "
+                f"`--collect-only` does not collect {'it' if len(missing) == 1 else 'them'}, so the suite passing "
+                f"says nothing of the bug, and the test alone passing by its path does not show the fix.{changed}")
+
+
+def _named_tests(call: Call, params: Params) -> list[str]:
+    step = str(params.get("tests_from") or "")
+    return [in_project(str(t)) or str(t) for t in (_given(call).get(step) or {}).get("tests") or []] if step else []
+
+
 def suite_passes(call: Call, params: Params) -> Any:
     runner = _suite(call, params)
     command = str(runner.get("suite") or "")
@@ -675,6 +712,13 @@ def suite_passes(call: Call, params: Params) -> Any:
     if emptied:
         return emptied
     began = _began(call, runner)
+    tests = _named_tests(call, params)
+    if tests:
+        missing = _collected(call, runner, tests, began, _left(call, began))
+        if isinstance(missing, Blocked):
+            return missing
+        if missing:
+            return _not_collected(missing, began, _left(call, began))
     if _left(call, began):
         return _passes(call, runner, command, "the suite fails", began, left=True) or Pass(tests_changed=sorted(began or {}))
     return _passes(call, runner, command, "the suite fails", began) or Pass()
@@ -868,6 +912,11 @@ def tests_pass(call: Call, params: Params) -> Any:
         return emptied
     picked, began = _for_files(runner, tests), _began(call, runner)
     left = _left(call, began)
+    missing = _collected(call, runner, tests, began, left)
+    if isinstance(missing, Blocked):
+        return missing
+    if missing:
+        return _not_collected(missing, began, left)
     for what, command in [("the tests still fail", picked)] + ([("the suite fails", runner["suite"])] if picked != runner["suite"] else []):
         failed = _passes(call, runner, command, what, began, left=left)
         if failed:
