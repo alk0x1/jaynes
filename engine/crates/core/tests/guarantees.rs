@@ -2190,7 +2190,7 @@ fn g9_an_agent_may_release_a_marked_stop_and_nothing_irreversible_rests_on_it() 
 #[test]
 fn g9_the_person_sends_back_what_an_agent_let_through() {
     let mut change = step("change", Executor::Agent);
-    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new() });
+    change.stop = Some(StopDecl { verdicts: vec![VerdictKind::Keep, VerdictKind::Redo], holds: true, from_risk: Risk::Low, release: true, budget: None, audit_rate: jaynes_core::manifest::Rate(0.1), about: String::new(), choose: false, redo: None, rounds: None, answers: Default::default(), note: String::new(), offers: Default::default() });
     let mut tests = step("tests", Executor::Agent);
     tests.needs = vec!["change".to_string()];
     let mut push = step("push", Executor::Role);

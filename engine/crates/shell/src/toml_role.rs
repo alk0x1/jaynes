@@ -616,6 +616,7 @@ const MENU_CHECKS: &[MenuCheck] = &[
         auto: &[],
         about: |_| "each case can be judged where the fix will be, a copy of the project's files with no git history and no internet".into(),
         runs: true,
+        project_tests: false,
     },
     MenuCheck {
         name: "output-follows-schema",
