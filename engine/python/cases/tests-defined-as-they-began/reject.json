@@ -1,0 +1,242 @@
+[
+ {
+  "id": "python-files-widened",
+  "hole": "the fix that added *_test.py to pyproject's python_files without the person's leave (the real-user's contas, 23/11)",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "pytest",
+     "suite": "python3 -m pytest",
+     "each": "python3 -m pytest",
+     "found": "pyproject.toml"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "project": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\", \"*_test.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 31\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "conftest-added",
+  "hole": "a conftest.py added, which can change what every test does",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "pytest",
+     "suite": "python3 -m pytest",
+     "each": "python3 -m pytest",
+     "found": "pyproject.toml"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "project": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n",
+   "tests/conftest.py": "collect_ignore = ['test_relatorio.py']\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "pytest-ini-added",
+  "hole": "a pytest.ini added, which pytest reads before pyproject.toml",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "pytest",
+     "suite": "python3 -m pytest",
+     "each": "python3 -m pytest",
+     "found": "pyproject.toml"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "project": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n",
+   "pytest.ini": "[pytest]\npython_files = *.py\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "dotted-key-under-tool",
+  "hole": "pytest's settings set by a dotted key under [tool]",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "pytest",
+     "suite": "python3 -m pytest",
+     "each": "python3 -m pytest",
+     "found": "pyproject.toml"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "project": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool]\npytest.ini_options.addopts = \"-k existe\"\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "pytest-ini-removed",
+  "hole": "the pytest.ini of the start removed",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "pytest",
+     "suite": "python3 -m pytest",
+     "each": "python3 -m pytest",
+     "found": "pyproject.toml"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n",
+   "pytest.ini": "[pytest]\npython_files = test_*.py\n"
+  },
+  "project": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "make-script-emptied",
+  "hole": "the script the test target runs made to pass whatever",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "make",
+     "suite": "make test",
+     "each": "",
+     "found": "Makefile test target"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "Makefile": "test:\n\tsh tests/run.sh\n",
+   "tests/run.sh": "grep -q hi g.txt\n",
+   "g.txt": "hi\n"
+  },
+  "project": {
+   "Makefile": "test:\n\tsh tests/run.sh\n",
+   "tests/run.sh": "true\n",
+   "g.txt": "hi\n"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "node-test-script",
+  "hole": "package.json's test script changed",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "node",
+     "suite": "npm test",
+     "each": "",
+     "found": "package.json test script"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "package.json": "{\"name\": \"a\", \"scripts\": {\"test\": \"node --test\"}}"
+  },
+  "project": {
+   "package.json": "{\"name\": \"a\", \"scripts\": {\"test\": \"true\"}}"
+  },
+  "expect": "reject"
+ },
+ {
+  "id": "empty-leave",
+  "hole": "a leave of blank words is no leave",
+  "with": {
+   "suite_step": "runner"
+  },
+  "given": [
+   {
+    "step": "runner",
+    "output": {
+     "kind": "pytest",
+     "suite": "python3 -m pytest",
+     "each": "python3 -m pytest",
+     "found": "pyproject.toml"
+    }
+   }
+  ],
+  "output": {},
+  "start": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "project": {
+   "pyproject.toml": "[project]\nname = \"contas\"\nversion = \"0.1.0\"\n\n[dependency-groups]\ndev = [\"pytest>=8\"]\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\npython_files = [\"test_*.py\", \"*_test.py\"]\n",
+   "contas/relatorio.py": "def ultimo_dia(mes):\n    return 30\n",
+   "tests/test_relatorio.py": "def test_existe():\n    pass\n"
+  },
+  "expect": "reject",
+  "tests_leave": "   "
+ }
+]

@@ -610,6 +610,16 @@ const MENU_CHECKS: &[MenuCheck] = &[
         project_tests: true,
     },
     MenuCheck {
+        name: "tests-defined-as-they-began",
+        kind: CheckKind::Open,
+        params: &[],
+        auto: &[Auto::Suite],
+        about: |_| "the step left how the project's tests are defined as the run began (pytest's settings, conftest.py, the \
+                    Makefile, package.json's test scripts), unless the person let it change".into(),
+        runs: false,
+        project_tests: false,
+    },
+    MenuCheck {
         name: "hidden-cases-pass",
         kind: CheckKind::Hidden,
         params: &[],
@@ -755,6 +765,7 @@ fn menu_cases(name: &str) -> Option<(&'static str, &'static str)> {
         "suite-passes" => cases!("suite-passes"),
         "tests-fail-for-the-bug" => cases!("tests-fail-for-the-bug"),
         "tests-pass" => cases!("tests-pass"),
+        "tests-defined-as-they-began" => cases!("tests-defined-as-they-began"),
         "hidden-cases-pass" => cases!("hidden-cases-pass"),
         "cases-need-only-the-project" => cases!("cases-need-only-the-project"),
         "output-follows-schema" => cases!("output-follows-schema"),

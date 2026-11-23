@@ -706,6 +706,66 @@ def _named_tests(call: Call, params: Params) -> list[str]:
     return [in_project(str(t)) or str(t) for t in (_given(call).get(step) or {}).get("tests") or []] if step else []
 
 
+# A header of a TOML or ini table, [name] or [[name]], with a comment after it
+HEADER = re.compile(r"^\s*\[\[?(.*?)\]\]?\s*(#.*)?$")
+
+
+def _test_settings(kind: str, path: str, text: str | None) -> str | None:
+    """What of ``path``, a file of the definition of a ``kind`` runner's suite, says how the tests run: pytest's own
+    tables of pyproject.toml ([tool.pytest...], and [tool] whole, where a dotted key can set them), setup.cfg's
+    [tool:pytest] and tox.ini's [pytest], package.json's test scripts, and every other file whole. None for a file
+    that is not there."""
+    if text is None:
+        return None
+    if kind == "node" and path == "package.json":
+        return json.dumps({k: _scripts(text)[1].get(k) for k in NODE_SCRIPTS}, sort_keys=True)
+    if kind != "pytest" or path not in ("pyproject.toml", "setup.cfg", "tox.ini"):
+        return text
+    def ours(name: str) -> bool:
+        if path == "pyproject.toml":
+            return name == "tool" or name == "tool.pytest" or name.startswith("tool.pytest.")
+        return name == ("tool:pytest" if path == "setup.cfg" else "pytest")
+    kept: list[str] = []
+    table: str | None = None
+    for line in text.split("\n"):
+        header = HEADER.match(line)
+        if header:
+            table = re.sub(r"[\s\"']", "", header.group(1))
+        on = ours(table) if table is not None else path == "pyproject.toml" and "pytest" in line
+        if on and line.strip():
+            kept.append(line.rstrip())
+    return "\n".join(kept)
+
+
+def tests_defined_as_they_began(call: Call, params: Params) -> Any:
+    """The step left how the project's tests are defined as it was when the run began: the files that say what the
+    suite runs, as suite-passes holds them, compared by what in them says how the tests run. A step that changed
+    that passes only with the person's leave in their words (T1), and says the files; without it, it is refused,
+    whatever the change: a test the suite of the start does not collect is written where it does, or the step says
+    it cannot be, for the person to decide (the real-user's contas, 23/11)."""
+    runner = _suite(call, params)
+    kind, suite = str(runner.get("kind") or ""), str(runner.get("suite") or "")
+    if not suite:
+        return Pass()
+    start = _start_reader(call)
+    if start is None or not call.get("project"):
+        return Blocked("Jaynes cannot see how the project stood when the run began, so it cannot tell whether the "
+                       "step changed how its tests are defined")
+    then, now = _definition(kind, start, suite), _definition(kind, _now(Path(call["project"])), suite)
+    if then is None or now is None:
+        return Blocked("a file that defines the project's tests cannot be read")
+    changed = sorted(p for p in set(then) | set(now) if _test_settings(kind, p, then.get(p)) != _test_settings(kind, p, now.get(p)))
+    if not changed:
+        return Pass()
+    if str(call.get("tests_leave") or "").strip():
+        return Pass(tests_changed=changed)
+    one = len(changed) == 1
+    return Fail(f"the step changed how the project's tests are defined ({', '.join(changed)}), and the person has not "
+                f"let the run change that. Put {'it' if one else 'them'} back as {'it was' if one else 'they were'} "
+                "when the run began, and write tests where the suite as it began runs them; if none can be, say so "
+                "in the output, and the person decides")
+
+
 def suite_passes(call: Call, params: Params) -> Any:
     runner = _suite(call, params)
     command = str(runner.get("suite") or "")
@@ -2481,7 +2541,7 @@ def judge_case(use: str, params: Params, case: dict[str, Any]) -> Any:
             target.write_text(text)
         start = case.get("start")
         call = {"output": case.get("output"), "given": case.get("given") or [], "request": case.get("request") or "",
-                "project": folder if files else None, "source": None, "without": case.get("without") or [],
+                "project": folder if files else None, "source": None, "without": case.get("without") or [], "tests_leave": case.get("tests_leave"),
                 "start": {"files": start} if isinstance(start, dict) else None}
         if use == "script":
             return script(call, params)
@@ -2509,6 +2569,7 @@ CHECKS: dict[str, Callable[[Call, Params], Any]] = {
     "suite-passes": suite_passes,
     "tests-fail-for-the-bug": tests_fail_for_the_bug,
     "tests-pass": tests_pass,
+    "tests-defined-as-they-began": tests_defined_as_they_began,
     "hidden-cases-pass": hidden_cases_pass,
     "cases-need-only-the-project": cases_need_only_the_project,
     "output-follows-schema": output_follows_schema,
