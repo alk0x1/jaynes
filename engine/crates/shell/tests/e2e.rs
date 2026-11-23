@@ -1900,6 +1900,9 @@ fn asked_a_run_delivered_on_a_branch_shows_the_branch_and_merges_into_the_folder
     let s = scratch("horta");
     let out = start(&s, "horta", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
     assert!(out.contains("finished: delivered"), "{out}");
+    // a second run makes the same change, on a branch of its own
+    let twin = start(&s, "horta-2", &format!("perl -pi -e 's/hello/hi/' greeting.txt && {OUTPUT}"));
+    assert!(twin.contains("finished: delivered"), "{twin}");
     assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "on its branch, not in the folder");
     let (_page, port) = page_on_any_port(
         jaynes()
@@ -1936,6 +1939,13 @@ fn asked_a_run_delivered_on_a_branch_shows_the_branch_and_merges_into_the_folder
     // the summary says where it went: merged, not only on its branch
     let (ok, told) = engine(&s, &["summary", "horta"]);
     assert!(ok && told.contains("merged as"), "{told}");
+    // the twin brings what main has now: nothing to merge, said, no button, and a merge asked of it refused
+    let twin = http(port, &format!("GET /run/horta-2 HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {me}\r\n\r\n"));
+    assert!(twin.contains("Nothing to merge: “main” in project already has this change.") && twin.contains("data-copy=\"jaynes/horta-2\""), "{twin}");
+    assert!(!twin.contains("data-act=\"merge\"") && !twin.contains("data-act=\"undo\"") && !twin.contains("not merged yet"), "{twin}");
+    let nothing = post(port, "/api/act", r#"{"run":"horta-2","action":"merge"}"#, me);
+    assert_eq!((nothing["ok"].as_bool(), nothing["refused"].as_str()), (Some(false), Some("Nothing to merge: “main” in project already has this change.")), "{nothing}");
+    assert!(open_merge(&s, "horta-2").is_none(), "no stop opened for it");
     // Undo takes it back
     assert_eq!(post(port, "/api/act", r#"{"run":"horta","action":"undo","note":"not now"}"#, me)["ok"], true);
     assert_eq!(std::fs::read_to_string(s.project.join("greeting.txt")).expect("read"), "hello\n", "undone");
