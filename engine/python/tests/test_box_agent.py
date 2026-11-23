@@ -112,6 +112,20 @@ class TheAgentSCommandsRunInJaynesSBox(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertNotIn("ran\n", said)
 
+    def test_a_command_it_refuses_leaves_why_where_the_turn_reads_it_as_jaynes_s_fault(self):
+        # A7 of the guarantees' audit (23/11): the box script's own refusal, as the leave server's, is kept in the
+        # file the spec names, beside the turn's box, and the turn ends as Jaynes's fault
+        failed = self.tmp / "turn" / "box-failed"
+        failed.parent.mkdir()
+        code, said = self.agent_run("echo ran", self.spec(work=str(self.tmp / "gone"), failed=str(failed)))
+        self.assertEqual(code, 126, said)
+        self.assertNotIn("ran\n", said)
+        self.assertIn("is not there", failed.read_text())
+        # a file of another name is never written: the spec names where the mark goes, nothing else
+        other = self.tmp / "turn" / "elsewhere"
+        self.agent_run("echo ran", self.spec(work=str(self.tmp / "gone"), failed=str(other)))
+        self.assertFalse(other.exists())
+
     def test_its_box_comes_whole_in_the_command_and_no_file_can_widen_it(self):
         # the leave server reads the turn's box once, as it starts, and gives it in each command: a file the agent's
         # own tools may write is never read again

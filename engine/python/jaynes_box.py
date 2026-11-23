@@ -2318,12 +2318,30 @@ def _agent_wait(argv: list[str], start: Path, env: dict[str, str], said: Path) -
     return 1 if stopped else proc.returncode
 
 
+AGENT_BOX_FAILED = "box-failed"
+
+
+def _refused_command(spec: Any, why: str) -> int:
+    """A command of the agent's that ran nothing: why, on its output, and in the file the turn's box names
+    (``failed``, beside the box's file: agent.rs reads it there), so the turn ends as Jaynes's fault, never the
+    agent's failure. Only a file of that name is written."""
+    print(f"Jaynes ran none of this command: {why}", file=sys.stderr)
+    failed = spec.get("failed") if isinstance(spec, dict) else None
+    if isinstance(failed, str) and Path(failed).name == AGENT_BOX_FAILED:
+        try:
+            Path(failed).write_text(why)
+        except OSError:
+            pass
+    return 126
+
+
 def agent_run(spec_path: Path | str, command: str) -> int:
     """Run one of an agent's shell commands in its box, with this process's standard streams, and say its exit code.
     The box is a file, or its text itself (a ``str``), as the leave server gives it in each command, read once as it
     started: never a file the agent's own tools may write. What the engine keeps is found from the spec's
     ``engine``, never from the command's environment."""
     proxy = None
+    spec: Any = None
     try:
         spec = json.loads(spec_path if isinstance(spec_path, str) else spec_path.read_text())
         if not isinstance(spec, dict):
@@ -2344,11 +2362,9 @@ def agent_run(spec_path: Path | str, command: str) -> int:
         argv = [str(SANDBOX_EXEC), "-p", profile(b), "/bin/bash", "-c", AGENT_SCRIPT, "jaynes-agent", str(start), command,
                 str(pwd)]
     except AgentRefused as e:
-        print(f"Jaynes ran none of this command: {e}", file=sys.stderr)
-        return 126
+        return _refused_command(spec, str(e))
     except (OSError, ValueError) as e:
-        print(f"Jaynes ran none of this command: it could not read the turn's box ({e})", file=sys.stderr)
-        return 126
+        return _refused_command(spec, f"it could not read the turn's box ({e})")
     said = refusals / "said.txt"
     env = listen_said({k: v for k, v in inherited().items() if k != "JAYNES_ENGINE_HOME"} | adds, said)
     holds = tuple(p for p in HELD_PORTS if p not in b.local_ports and p not in b.reserved) if b.window else ()

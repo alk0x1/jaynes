@@ -880,8 +880,11 @@ impl Claude {
         let library = self.library.as_ref().ok_or("Jaynes has no box library to run the agent's commands in")?;
         let python = std::env::var("JAYNES_PYTHON").ok().filter(|p| !p.is_empty()).map(PathBuf::from).or_else(|| binary("python3"))
             .ok_or("Jaynes found no python3 to run its box for the agent's commands")?;
-        let box_spec = box_spec(spec, &python, library);
+        let mut box_spec = box_spec(spec, &python, library);
         let at = own.join("box.json");
+        // where the box script keeps why it refused a command of the turn, as the leave server does, so the turn ends
+        // as Jaynes's fault (A7 of the guarantees' audit, 23/11)
+        box_spec["failed"] = json!(at.with_file_name(crate::permit::BOX_FAILED));
         std::fs::write(&at, box_spec.to_string()).map_err(|e| format!("Jaynes could not write the box of the agent's commands: {e}"))?;
         // each turn starts at the step's top
         let _gone = std::fs::remove_file(spec.cwd.join(crate::project::EXCHANGE).join("tmp").join(AGENT_PWD));

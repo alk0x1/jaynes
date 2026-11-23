@@ -259,6 +259,29 @@ fn without_its_box_a_claude_code_agent_never_starts_and_the_turn_is_jaynes_s_fau
     assert!(out.contains("blocked (Jaynes)"), "{out}");
 }
 
+#[test]
+#[cfg_attr(not(target_os = "macos"), ignore = "Jaynes's box is macOS's sandbox-exec")]
+fn a_command_the_box_script_refuses_in_the_middle_of_a_turn_ends_it_as_jaynes_s_fault() {
+    // A7 of the guarantees' audit (23/11): the box tried before the agent starts works, then the box script refuses a
+    // command of the turn (here the box it is given says too little); the command runs nothing and the turn is
+    // Jaynes's fault, as when the leave server refuses, never the agent's failure
+    let s = Scratch::new("midbox");
+    claude_asking(&s, &["pwd -P".into()]);
+    let broken = "#!/bin/sh\ncase \"$*\" in *'agent-run --spec'*) exec /usr/bin/python3 -c 'import json,os,sys; a=sys.argv[1:]; i=a.index(\"--spec\"); b=json.loads(a[i+1]); b.pop(\"pwd\"); a[i+1]=json.dumps(b); os.execv(\"/usr/bin/python3\", [\"/usr/bin/python3\", *a])' \"$@\";; esac\nexec /usr/bin/python3 \"$@\"\n";
+    std::fs::write(s.path("bin").join("python3"), broken).expect("write");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(s.path("bin").join("python3"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let (out, turns) = s.start("midbox", &small_change());
+    assert_eq!(turns.len(), 1, "Claude Code started: {out}");
+    let said: Vec<String> = serde_json::from_str(&std::fs::read_to_string(s.path("claude.said")).expect("said")).expect("json");
+    assert!(said[0].starts_with("failed: Jaynes ran none of this command: the turn's box says too little"), "{said:?}");
+    let e = s.events("midbox");
+    let fault = e.iter().find(|e| e["type"] == "AttemptFailed").unwrap_or_else(|| panic!("no fault: {out}\n{e:?}"));
+    assert_eq!((&fault["step"], &fault["spent"]), (&serde_json::json!("change"), &serde_json::json!(false)), "{fault}");
+    assert!(fault.to_string().contains("says too little"), "{fault}");
+    assert!(out.contains("blocked (Jaynes)"), "{out}");
+}
+
 /// A command run at a terminal, as when the person types it (`Scratch::at_terminal`): the program and its arguments follow.
 /// Python's pty is the same on macOS and Linux, where script(1) takes its arguments differently. The terminal is opened
 /// here and its program's side stays open here too, so what the program wrote before it ended is read whole and never
